@@ -1,0 +1,94 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Release (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: linux-x86_64
+            binary: ham-cli
+            archive_ext: tar.gz
+          - os: windows-latest
+            platform: windows-x86_64
+            binary: ham-cli.exe
+            archive_ext: zip
+          - os: macos-latest
+            platform: macos
+            binary: ham-cli
+            archive_ext: tar.gz
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build release binary
+        run: cargo build --release --workspace --bin ham-cli
+
+      - name: Package artifact
+        id: package
+        shell: pwsh
+        run: |
+          $platform = "${{ matrix.platform }}"
+          if ($platform -eq "macos") {
+            $arch = (uname -m).Trim()
+            if ($arch -eq "arm64") {
+              $platform = "macos-aarch64"
+            } else {
+              $platform = "macos-x86_64"
+            }
+          }
+
+          $artifactBase = "ham-platform-$platform"
+          $dist = "dist/$artifactBase"
+          New-Item -ItemType Directory -Force -Path $dist | Out-Null
+
+          $sourceBinary = "target/release/${{ matrix.binary }}"
+          $destBinary = if ("${{ runner.os }}" -eq "Windows") {
+            "$dist/ham-platform.exe"
+          } else {
+            "$dist/ham-platform"
+          }
+          Copy-Item $sourceBinary $destBinary
+
+          Copy-Item README.md "$dist/README.md"
+
+          if ("${{ matrix.archive_ext }}" -eq "zip") {
+            $archive = "dist/$artifactBase.zip"
+            Compress-Archive -Path "$dist/*" -DestinationPath $archive -Force
+          } else {
+            $archive = "dist/$artifactBase.tar.gz"
+            tar -czf $archive -C dist $artifactBase
+          }
+
+          "artifact=$archive" >> $env:GITHUB_OUTPUT
+          "artifact_name=$(Split-Path $archive -Leaf)" >> $env:GITHUB_OUTPUT
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.package.outputs.artifact_name }}
+          path: ${{ steps.package.outputs.artifact }}
+
+      - name: Upload GitHub Release asset
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ steps.package.outputs.artifact }}
+          fail_on_unmatched_files: true

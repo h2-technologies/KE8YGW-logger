@@ -42,3 +42,70 @@ cargo test
 The initial test suite verifies event hash chaining, valid and tampered chain
 verification, tombstone projection behavior, plugin capability rejection, and
 event bus publication for accepted proposals.
+
+## Local Development Commands
+
+This repository uses [`just`](https://github.com/casey/just) to keep local
+commands aligned with CI.
+
+```powershell
+just fmt      # format all Rust code
+just check    # cargo check for all workspace crates and targets
+just clippy   # clippy for all workspace crates and targets, warnings are errors
+just test     # run all workspace tests
+just build    # debug build for all workspace crates
+just release  # release build for all workspace crates
+just ci       # formatting check, clippy, tests, and debug build
+```
+
+If `just` is not installed, the underlying commands are standard Cargo commands:
+
+```powershell
+cargo fmt --all
+cargo check --workspace --all-targets
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+cargo build --workspace
+cargo build --release --workspace
+```
+
+## CI
+
+GitHub Actions runs on pushes to `main` and on pull requests. The CI workflow
+uses a Windows, Linux, and macOS matrix, caches Cargo dependencies, installs
+`just`, and runs:
+
+```powershell
+just ci
+```
+
+CI fails on formatting drift, clippy warnings, test failures, or build failures.
+
+## Release Builds
+
+To build release binaries locally:
+
+```powershell
+just release
+```
+
+Tagged releases are automated from git tags matching `v*.*.*`, for example:
+
+```powershell
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+The release workflow builds `ham-cli` in release mode on:
+
+- `ubuntu-latest`
+- `windows-latest`
+- `macos-latest`
+
+It packages the binary as `ham-platform` and uploads archives to the GitHub
+Release:
+
+- `ham-platform-linux-x86_64.tar.gz`
+- `ham-platform-windows-x86_64.zip`
+- `ham-platform-macos-aarch64.tar.gz` or `ham-platform-macos-x86_64.tar.gz`,
+  depending on the runner architecture
