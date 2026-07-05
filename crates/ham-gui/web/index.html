@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Ham Platform</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div id="app" class="app-shell" data-theme="dark">
+      <aside class="activity-bar" aria-label="Primary workspaces">
+        <button class="activity-item is-active" data-workspace="dashboard" aria-label="Dashboard">DB</button>
+        <button class="activity-item" data-workspace="casual-logger" aria-label="Casual Logger">CL</button>
+        <button class="activity-item" data-workspace="pota-sota" aria-label="POTA/SOTA">PS</button>
+        <button class="activity-item" data-workspace="net-control" aria-label="Net Control">NC</button>
+        <button class="activity-item" data-workspace="em-comm" aria-label="EmComm">EC</button>
+        <button class="activity-item" data-workspace="contesting" aria-label="Contesting">CT</button>
+      </aside>
+
+      <header class="top-toolbar">
+        <div>
+          <p class="eyebrow">KE8YGW Logger</p>
+          <h1 id="workspace-title">Dashboard</h1>
+        </div>
+        <label class="workspace-select">
+          <span>Workspace</span>
+          <select id="workspace-selector" aria-label="Workspace selector"></select>
+        </label>
+        <button id="command-button" class="toolbar-button" type="button">Command Palette</button>
+        <button id="plugins-button" class="toolbar-button" type="button">Plugins</button>
+        <button id="settings-button" class="toolbar-button" type="button">Settings</button>
+      </header>
+
+      <main class="workspace-shell">
+        <section class="panel-region center-region" aria-label="Workspace panels">
+          <div id="center-panels" class="panel-grid"></div>
+        </section>
+        <aside class="panel-region inspector-region" aria-label="Inspector and context panels">
+          <div class="region-heading">Inspector</div>
+          <div id="right-panels" class="stack"></div>
+        </aside>
+      </main>
+
+      <section class="bottom-region" aria-label="Bottom panels">
+        <div id="bottom-panels" class="stack horizontal"></div>
+      </section>
+
+      <footer class="status-bar" aria-label="Status bar">
+        <span id="status-sync">Sync: Local only</span>
+        <span id="status-workspace">Workspace: Dashboard</span>
+        <span id="status-plugins">Plugins: 0 enabled</span>
+        <span id="status-bus">Event bus: disconnected</span>
+        <span id="status-events">Runtime events: 0</span>
+        <span id="status-errors">Errors: 0</span>
+      </footer>
+
+      <dialog id="command-palette" class="command-palette" aria-label="Command palette">
+        <div class="palette-inner">
+          <input id="command-search" type="search" placeholder="Type a command or workspace" aria-label="Command search" />
+          <div id="command-results" class="command-results" role="listbox"></div>
+        </div>
+      </dialog>
+
+      <div id="overlay" class="overlay" hidden>
+        <section class="screen" aria-live="polite">
+          <header class="screen-header">
+            <div>
+              <p class="eyebrow" id="screen-eyebrow">Shell</p>
+              <h2 id="screen-title">Settings</h2>
+            </div>
+            <button id="close-screen" class="toolbar-button" type="button">Close</button>
+          </header>
+          <div id="screen-body" class="screen-body"></div>
+        </section>
+      </div>
+    </div>
+    <script src="/app.js"></script>
+  </body>
+</html>

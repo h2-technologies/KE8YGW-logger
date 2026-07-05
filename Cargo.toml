@@ -4,6 +4,7 @@ members = [
     "crates/ham-plugin-sdk",
     "crates/ham-sync",
     "crates/ham-cli",
+    "crates/ham-gui",
 ]
 resolver = "2"
 

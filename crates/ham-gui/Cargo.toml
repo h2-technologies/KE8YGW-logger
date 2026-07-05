@@ -1,0 +1,22 @@
+[package]
+name = "ham-gui"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+chrono.workspace = true
+ham-core = { path = "../ham-core" }
+ham-plugin-sdk = { path = "../ham-plugin-sdk" }
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+uuid.workspace = true
+
+[lib]
+name = "ham_gui"
+path = "src/lib.rs"
+
+[[bin]]
+name = "ham-gui"
+path = "src/main.rs"

@@ -18,15 +18,15 @@ jobs:
         include:
           - os: ubuntu-latest
             platform: linux-x86_64
-            binary: ham-cli
+            binary: ham-gui
             archive_ext: tar.gz
           - os: windows-latest
             platform: windows-x86_64
-            binary: ham-cli.exe
+            binary: ham-gui.exe
             archive_ext: zip
           - os: macos-latest
             platform: macos
-            binary: ham-cli
+            binary: ham-gui
             archive_ext: tar.gz
 
     steps:
@@ -40,7 +40,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Build release binary
-        run: cargo build --release --workspace --bin ham-cli
+        run: cargo build --release --workspace --bin ham-gui
 
       - name: Package artifact
         id: package

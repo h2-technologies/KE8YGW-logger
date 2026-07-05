@@ -19,4 +19,7 @@ build:
 release:
     cargo build --release --workspace
 
+gui:
+    cargo run -p ham-gui --bin ham-gui
+
 ci: fmt-check clippy test build
