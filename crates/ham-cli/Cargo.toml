@@ -1,0 +1,12 @@
+[package]
+name = "ham-cli"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+ham-core = { path = "../ham-core" }
+
+[[bin]]
+name = "ham-cli"
+path = "src/main.rs"
