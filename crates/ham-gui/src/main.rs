@@ -10,17 +10,19 @@ use std::{
 };
 
 use ham_core::{
-    default_official_event_log_path, export_adif, import_adif, submit_proposal, AdifImportOptions,
-    CoreEventEnvelope, JsonlLogbookEventStore, LogbookEventStore, NewLogbookEvent, OperatorRole,
-    Projection, ProposalContext, RuntimeEventFilter, RuntimeEventSeverity, RuntimeLogConfig,
+    default_official_event_log_path, export_adif, export_adif_with_activations, import_adif,
+    submit_proposal, AdifImportOptions, CoreEventEnvelope, JsonlLogbookEventStore,
+    LogbookEventStore, NewLogbookEvent, OperatorRole, Projection, ProposalContext,
+    RuntimeEventFilter, RuntimeEventSeverity, RuntimeLogConfig,
 };
 use ham_gui::{
     mock::{capability_labels, mock_plugins},
     CommandRegistry, GuiRuntimeBridge, GuiShellState, RuntimeBridgeStatus, RuntimeEventInput,
 };
 use ham_plugin_sdk::{
-    PluginCapability, PluginManifest, ProposalEnvelope, PROPOSAL_QSO_CREATE, PROPOSAL_QSO_DELETE,
-    PROPOSAL_QSO_NOTE_ADD, PROPOSAL_QSO_RESTORE,
+    PluginCapability, PluginManifest, ProposalEnvelope, PROPOSAL_ACTIVATION_END,
+    PROPOSAL_ACTIVATION_START, PROPOSAL_QSO_ACTIVATION_LINK, PROPOSAL_QSO_CREATE,
+    PROPOSAL_QSO_DELETE, PROPOSAL_QSO_NOTE_ADD, PROPOSAL_QSO_RESTORE,
 };
 use ham_sync::{
     build_handshake_response, metadata_for_event, preview_pull_from_events, pull_missing_events,
@@ -276,6 +278,7 @@ fn handle_client(state: Arc<AppState>, mut stream: TcpStream) {
             }
         }
         ("GET", "/api/qsos") => json_response(&qso_projection_payload(&state, query)),
+        ("GET", "/api/activations") => json_response(&activation_projection_payload(&state)),
         ("GET", "/api/sync/state") => json_response(&sync_state_payload(&state)),
         ("GET", "/api/sync/list-logbooks") => json_response(&ListLogbooksResponse {
             logbooks: vec![logbook_head_summary(&state)],
@@ -297,6 +300,12 @@ fn handle_client(state: Arc<AppState>, mut stream: TcpStream) {
         ("POST", "/api/projections/rebuild") => handle_rebuild_projections(&state),
         ("POST", "/api/adif/import") => handle_adif_import(&state, &request.body),
         ("POST", "/api/adif/export") => handle_adif_export(&state, &request.body),
+        ("POST", "/api/activation/start") => handle_activation_start(&state, &request.body),
+        ("POST", "/api/activation/end") => handle_activation_end(&state, &request.body),
+        ("POST", "/api/activation/export-adif") => {
+            handle_activation_adif_export(&state, &request.body)
+        }
+        ("POST", "/api/qso/portable-create") => handle_portable_qso_create(&state, &request.body),
         ("POST", "/api/qso/create") => handle_qso_create(&state, &request.body),
         ("POST", "/api/qso/delete") => {
             handle_qso_simple_action(&state, &request.body, PROPOSAL_QSO_DELETE)
@@ -384,6 +393,24 @@ struct ApiQsoRecord {
     last_event_hash: String,
 }
 
+#[derive(Debug, Serialize)]
+struct ApiActivationPayload {
+    activations: Vec<ApiActivationRecord>,
+    active_activation: Option<ApiActivationRecord>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ApiActivationRecord {
+    activation_id: uuid::Uuid,
+    payload: Value,
+    status: String,
+    qso_count: usize,
+    unique_callsign_count: usize,
+    band_summary: HashMap<String, usize>,
+    mode_summary: HashMap<String, usize>,
+    note_history: Vec<Value>,
+}
+
 #[derive(Debug, Deserialize)]
 struct CreateQsoRequest {
     contacted_callsign: String,
@@ -391,6 +418,22 @@ struct CreateQsoRequest {
     frequency_hz: Option<u64>,
     band: Option<String>,
     notes: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct StartActivationRequest {
+    activation_type: String,
+    reference: String,
+    station_callsign: String,
+    operator_callsign: String,
+    grid: Option<String>,
+    location_name: Option<String>,
+    notes: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct EndActivationRequest {
+    activation_id: uuid::Uuid,
 }
 
 #[derive(Debug, Deserialize)]
@@ -522,6 +565,27 @@ fn proposal_context() -> ProposalContext {
     }
 }
 
+fn pota_sota_context() -> ProposalContext {
+    ProposalContext {
+        plugin_manifest: PluginManifest {
+            plugin_id: "plugin.pota-sota".to_owned(),
+            name: "POTA/SOTA Tools".to_owned(),
+            version: env!("CARGO_PKG_VERSION").to_owned(),
+            capabilities: vec![
+                PluginCapability::ActivationCreate,
+                PluginCapability::ActivationUpdate,
+                PluginCapability::ActivationEnd,
+                PluginCapability::ActivationView,
+                PluginCapability::QsoCreate,
+                PluginCapability::QsoCorrect,
+                PluginCapability::QsoNoteAdd,
+                PluginCapability::AdifExport,
+            ],
+        },
+        operator_role: OperatorRole::Admin,
+    }
+}
+
 fn qso_projection_payload(state: &AppState, query: &str) -> ApiQsoPayload {
     let include_deleted = parse_query(query)
         .get("include_deleted")
@@ -545,6 +609,38 @@ fn qso_projection_payload(state: &AppState, query: &str) -> ApiQsoPayload {
         .collect();
 
     ApiQsoPayload { qsos }
+}
+
+fn activation_projection_payload(state: &AppState) -> ApiActivationPayload {
+    let projection = state
+        .proposal_runtime
+        .block_on(state.store.rebuild_activation_projections(state.logbook_id))
+        .unwrap_or_else(|_| ham_core::ActivationProjection::new());
+    let activations = projection
+        .list(true)
+        .into_iter()
+        .map(api_activation_record)
+        .collect::<Vec<_>>();
+    let active_activation = projection
+        .active_for_station_operator("KE8YGW", "KE8YGW")
+        .map(api_activation_record);
+    ApiActivationPayload {
+        activations,
+        active_activation,
+    }
+}
+
+fn api_activation_record(record: &ham_core::ActivationRecord) -> ApiActivationRecord {
+    ApiActivationRecord {
+        activation_id: record.activation_id,
+        payload: record.payload.clone(),
+        status: record.status.clone(),
+        qso_count: record.qso_count,
+        unique_callsign_count: record.unique_callsign_count,
+        band_summary: record.band_summary.clone(),
+        mode_summary: record.mode_summary.clone(),
+        note_history: record.note_history.clone(),
+    }
 }
 
 fn handle_qso_create(state: &AppState, body: &[u8]) -> Vec<u8> {
@@ -571,6 +667,103 @@ fn handle_qso_create(state: &AppState, body: &[u8]) -> Vec<u8> {
     }
 
     submit_gui_proposal(state, PROPOSAL_QSO_CREATE, None, payload)
+}
+
+fn handle_portable_qso_create(state: &AppState, body: &[u8]) -> Vec<u8> {
+    handle_qso_create_with_activation(state, body)
+}
+
+fn handle_qso_create_with_activation(state: &AppState, body: &[u8]) -> Vec<u8> {
+    let Ok(request) = serde_json::from_slice::<CreateQsoRequest>(body) else {
+        return json_error(400, "invalid portable QSO create JSON");
+    };
+    let active = activation_projection_payload(state).active_activation;
+    let mut payload = json!({
+        "station_callsign": "KE8YGW",
+        "operator_callsign": "KE8YGW",
+        "contacted_callsign": request.contacted_callsign.trim().to_ascii_uppercase(),
+        "started_at": chrono::Utc::now().to_rfc3339(),
+        "mode": request.mode.trim().to_ascii_uppercase(),
+        "source": "plugin/pota-sota"
+    });
+    if let Some(frequency_hz) = request.frequency_hz {
+        payload["frequency_hz"] = json!(frequency_hz);
+    }
+    if let Some(band) = request.band.filter(|band| !band.trim().is_empty()) {
+        payload["band"] = json!(band);
+    }
+    if let Some(notes) = request.notes.filter(|notes| !notes.trim().is_empty()) {
+        payload["notes"] = json!(notes);
+    }
+    if let Some(active) = active {
+        payload["activation_id"] = json!(active.activation_id);
+        if let Some(kind) = active
+            .payload
+            .get("activation_type")
+            .and_then(Value::as_str)
+        {
+            payload["my_sig"] = json!(kind.to_ascii_uppercase());
+        }
+        if let Some(reference) = active
+            .payload
+            .get("park_id")
+            .or_else(|| active.payload.get("summit_id"))
+            .and_then(Value::as_str)
+        {
+            payload["my_sig_info"] = json!(reference);
+        }
+        if let Some(grid) = active.payload.get("grid").and_then(Value::as_str) {
+            payload["grid"] = json!(grid);
+        }
+    }
+    let proposal = ProposalEnvelope::new(
+        PROPOSAL_QSO_CREATE,
+        state.logbook_id,
+        None,
+        None,
+        state.bridge.status().device_id,
+        "plugin.pota-sota",
+        1,
+        payload,
+    );
+    let qso = match state.proposal_runtime.block_on(submit_proposal(
+        state.store.as_ref(),
+        &state.bridge,
+        &pota_sota_context(),
+        proposal,
+    )) {
+        Ok(outcome) => outcome,
+        Err(error) => {
+            return json_response_with_status(
+                400,
+                &json!({"ok": false, "error": error.to_string()}),
+            )
+        }
+    };
+    if let (Some(active), Some(qso_id)) = (
+        activation_projection_payload(state).active_activation,
+        qso.official_event.entity_id,
+    ) {
+        let link = ProposalEnvelope::new(
+            PROPOSAL_QSO_ACTIVATION_LINK,
+            state.logbook_id,
+            Some(qso_id),
+            None,
+            state.bridge.status().device_id,
+            "plugin.pota-sota",
+            1,
+            json!({"activation_id": active.activation_id}),
+        );
+        let _ = state.proposal_runtime.block_on(submit_proposal(
+            state.store.as_ref(),
+            &state.bridge,
+            &pota_sota_context(),
+            link,
+        ));
+    }
+    json_response(
+        &json!({"ok": true, "event": qso.official_event, "projection": qso_projection_payload(state, "include_deleted=true"), "activations": activation_projection_payload(state)}),
+    )
 }
 
 fn handle_qso_simple_action(state: &AppState, body: &[u8], proposal_type: &str) -> Vec<u8> {
@@ -732,6 +925,168 @@ fn handle_adif_export(state: &AppState, body: &[u8]) -> Vec<u8> {
         redacted_payload: None,
         error: None,
     });
+    json_response(&json!({"ok": true, "path": request.path}))
+}
+
+fn handle_activation_start(state: &AppState, body: &[u8]) -> Vec<u8> {
+    let Ok(request) = serde_json::from_slice::<StartActivationRequest>(body) else {
+        return json_error(400, "invalid activation start JSON");
+    };
+    let kind = request.activation_type.trim().to_ascii_lowercase();
+    let mut payload = json!({
+        "activation_type": kind,
+        "station_callsign": request.station_callsign.trim().to_ascii_uppercase(),
+        "operator_callsign": request.operator_callsign.trim().to_ascii_uppercase(),
+        "started_at": chrono::Utc::now().to_rfc3339(),
+        "status": "active"
+    });
+    if kind == "pota" {
+        payload["park_id"] = json!(request.reference.trim().to_ascii_uppercase());
+    } else if kind == "sota" {
+        payload["summit_id"] = json!(request.reference.trim().to_ascii_uppercase());
+    } else {
+        payload["reference"] = json!(request.reference.trim());
+    }
+    if let Some(grid) = request.grid.filter(|value| !value.trim().is_empty()) {
+        payload["grid"] = json!(grid.trim().to_ascii_uppercase());
+    }
+    if let Some(location) = request
+        .location_name
+        .filter(|value| !value.trim().is_empty())
+    {
+        payload["location_name"] = json!(location);
+    }
+    if let Some(notes) = request.notes.filter(|value| !value.trim().is_empty()) {
+        payload["notes"] = json!(notes);
+    }
+    let proposal = ProposalEnvelope::new(
+        PROPOSAL_ACTIVATION_START,
+        state.logbook_id,
+        None,
+        None,
+        state.bridge.status().device_id,
+        "plugin.pota-sota",
+        1,
+        payload,
+    );
+    match state.proposal_runtime.block_on(submit_proposal(
+        state.store.as_ref(),
+        &state.bridge,
+        &pota_sota_context(),
+        proposal,
+    )) {
+        Ok(outcome) => {
+            let _ = publish_gui_runtime(
+                state,
+                "activation.started",
+                RuntimeEventSeverity::Info,
+                "Portable activation started",
+                Some(json!(&outcome.official_event)),
+                None,
+            );
+            json_response(
+                &json!({"ok": true, "event": outcome.official_event, "activations": activation_projection_payload(state)}),
+            )
+        }
+        Err(error) => {
+            json_response_with_status(400, &json!({"ok": false, "error": error.to_string()}))
+        }
+    }
+}
+
+fn handle_activation_end(state: &AppState, body: &[u8]) -> Vec<u8> {
+    let Ok(request) = serde_json::from_slice::<EndActivationRequest>(body) else {
+        return json_error(400, "invalid activation end JSON");
+    };
+    let started_at = state
+        .proposal_runtime
+        .block_on(state.store.rebuild_activation_projections(state.logbook_id))
+        .ok()
+        .and_then(|projection| projection.get(request.activation_id).cloned())
+        .and_then(|record| {
+            record
+                .payload
+                .get("started_at")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+        })
+        .unwrap_or_else(|| chrono::Utc::now().to_rfc3339());
+    let proposal = ProposalEnvelope::new(
+        PROPOSAL_ACTIVATION_END,
+        state.logbook_id,
+        Some(request.activation_id),
+        None,
+        state.bridge.status().device_id,
+        "plugin.pota-sota",
+        1,
+        json!({"started_at": started_at, "ended_at": chrono::Utc::now().to_rfc3339()}),
+    );
+    match state.proposal_runtime.block_on(submit_proposal(
+        state.store.as_ref(),
+        &state.bridge,
+        &pota_sota_context(),
+        proposal,
+    )) {
+        Ok(outcome) => {
+            let _ = publish_gui_runtime(
+                state,
+                "activation.ended",
+                RuntimeEventSeverity::Info,
+                "Portable activation ended",
+                Some(json!(&outcome.official_event)),
+                None,
+            );
+            json_response(
+                &json!({"ok": true, "event": outcome.official_event, "activations": activation_projection_payload(state)}),
+            )
+        }
+        Err(error) => {
+            json_response_with_status(400, &json!({"ok": false, "error": error.to_string()}))
+        }
+    }
+}
+
+fn handle_activation_adif_export(state: &AppState, body: &[u8]) -> Vec<u8> {
+    let Ok(request) = serde_json::from_slice::<PathRequest>(body) else {
+        return json_error(400, "invalid activation ADIF export JSON");
+    };
+    let _ = publish_gui_runtime(
+        state,
+        "export.activation.adif.started",
+        RuntimeEventSeverity::Info,
+        "Exporting activation ADIF",
+        None,
+        None,
+    );
+    let qsos = match state
+        .proposal_runtime
+        .block_on(state.store.rebuild_projections(state.logbook_id))
+    {
+        Ok(projection) => projection,
+        Err(error) => return json_error(400, error.to_string()),
+    };
+    let activations = match state
+        .proposal_runtime
+        .block_on(state.store.rebuild_activation_projections(state.logbook_id))
+    {
+        Ok(projection) => projection,
+        Err(error) => return json_error(400, error.to_string()),
+    };
+    let adif = export_adif_with_activations(&qsos, Some(&activations), false);
+    if let Err(error) = fs::write(&request.path, adif) {
+        return json_error(
+            400,
+            format!("failed to write activation ADIF file: {error}"),
+        );
+    }
+    let _ = publish_gui_runtime(
+        state,
+        "export.activation.adif.completed",
+        RuntimeEventSeverity::Info,
+        "Activation ADIF exported",
+        Some(json!({"path": request.path})),
+        None,
+    );
     json_response(&json!({"ok": true, "path": request.path}))
 }
 

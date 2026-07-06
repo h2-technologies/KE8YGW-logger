@@ -11,8 +11,12 @@ use tokio::sync::RwLock;
 use uuid::Uuid;
 
 use crate::event::{CoreEventEnvelope, NewLogbookEvent};
-use crate::projection::{Projection, QsoCurrentStateProjection};
+use crate::projection::{ActivationProjection, Projection, QsoCurrentStateProjection};
 use ham_plugin_sdk::{
+    OFFICIAL_LOG_ACTIVATION_CANCELLED, OFFICIAL_LOG_ACTIVATION_CREATED,
+    OFFICIAL_LOG_ACTIVATION_ENDED, OFFICIAL_LOG_ACTIVATION_NOTE_ADDED,
+    OFFICIAL_LOG_ACTIVATION_STARTED, OFFICIAL_LOG_ACTIVATION_UPDATED,
+    OFFICIAL_LOG_QSO_ACTIVATION_LINKED, OFFICIAL_LOG_QSO_ACTIVATION_UNLINKED,
     OFFICIAL_LOG_QSO_CORRECTED, OFFICIAL_LOG_QSO_CREATED, OFFICIAL_LOG_QSO_DELETED,
     OFFICIAL_LOG_QSO_NOTE_ADDED, OFFICIAL_LOG_QSO_RESTORED,
 };
@@ -89,6 +93,10 @@ pub trait LogbookEventStore: Send + Sync {
         &self,
         logbook_id: Uuid,
     ) -> Result<QsoCurrentStateProjection, StoreError>;
+    async fn rebuild_activation_projections(
+        &self,
+        logbook_id: Uuid,
+    ) -> Result<ActivationProjection, StoreError>;
 }
 
 #[derive(Debug)]
@@ -209,6 +217,13 @@ impl LogbookEventStore for JsonlLogbookEventStore {
         logbook_id: Uuid,
     ) -> Result<QsoCurrentStateProjection, StoreError> {
         self.memory.rebuild_projections(logbook_id).await
+    }
+
+    async fn rebuild_activation_projections(
+        &self,
+        logbook_id: Uuid,
+    ) -> Result<ActivationProjection, StoreError> {
+        self.memory.rebuild_activation_projections(logbook_id).await
     }
 }
 
@@ -405,6 +420,18 @@ impl LogbookEventStore for InMemoryLogbookEventStore {
             .map_err(|error| StoreError::Projection(error.to_string()))?;
         Ok(projection)
     }
+
+    async fn rebuild_activation_projections(
+        &self,
+        logbook_id: Uuid,
+    ) -> Result<ActivationProjection, StoreError> {
+        let events = self.list_events(logbook_id).await?;
+        let mut projection = ActivationProjection::new();
+        projection
+            .rebuild(&events)
+            .map_err(|error| StoreError::Projection(error.to_string()))?;
+        Ok(projection)
+    }
 }
 
 pub fn validate_supported_remote_event(event: &CoreEventEnvelope) -> Result<(), StoreError> {
@@ -428,6 +455,14 @@ pub fn validate_supported_remote_event(event: &CoreEventEnvelope) -> Result<(), 
             | OFFICIAL_LOG_QSO_DELETED
             | OFFICIAL_LOG_QSO_RESTORED
             | OFFICIAL_LOG_QSO_NOTE_ADDED
+            | OFFICIAL_LOG_ACTIVATION_CREATED
+            | OFFICIAL_LOG_ACTIVATION_UPDATED
+            | OFFICIAL_LOG_ACTIVATION_STARTED
+            | OFFICIAL_LOG_ACTIVATION_ENDED
+            | OFFICIAL_LOG_ACTIVATION_CANCELLED
+            | OFFICIAL_LOG_ACTIVATION_NOTE_ADDED
+            | OFFICIAL_LOG_QSO_ACTIVATION_LINKED
+            | OFFICIAL_LOG_QSO_ACTIVATION_UNLINKED
     ) {
         return Err(StoreError::UnsupportedEventType {
             event_id: event.event_id,

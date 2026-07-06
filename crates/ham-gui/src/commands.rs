@@ -86,6 +86,55 @@ impl CommandRegistry {
             command("adif.import", "Import ADIF", "Logging", None, None),
             command("adif.export", "Export ADIF", "Logging", None, None),
             command(
+                "activation.start-pota",
+                "Start POTA Activation",
+                "POTA/SOTA",
+                None,
+                Some(WorkspaceId::PotaSota),
+            ),
+            command(
+                "activation.start-sota",
+                "Start SOTA Activation",
+                "POTA/SOTA",
+                None,
+                Some(WorkspaceId::PotaSota),
+            ),
+            command(
+                "activation.end-current",
+                "End Current Activation",
+                "POTA/SOTA",
+                None,
+                Some(WorkspaceId::PotaSota),
+            ),
+            command(
+                "activation.workspace",
+                "Open POTA/SOTA Workspace",
+                "POTA/SOTA",
+                None,
+                Some(WorkspaceId::PotaSota),
+            ),
+            command(
+                "activation.export-adif",
+                "Export Current Activation ADIF",
+                "POTA/SOTA",
+                None,
+                Some(WorkspaceId::PotaSota),
+            ),
+            command(
+                "activation.link-selected-qso",
+                "Link Selected QSO to Activation",
+                "POTA/SOTA",
+                None,
+                Some(WorkspaceId::PotaSota),
+            ),
+            command(
+                "activation.unlink-selected-qso",
+                "Unlink Selected QSO from Activation",
+                "POTA/SOTA",
+                None,
+                Some(WorkspaceId::PotaSota),
+            ),
+            command(
                 "official-log.verify-chain",
                 "Verify Log Chain",
                 "Diagnostics",
@@ -284,6 +333,8 @@ mod tests {
         assert!(ids.contains(&"event-bus.copy-latest-error"));
         assert!(ids.contains(&"adif.import"));
         assert!(ids.contains(&"adif.export"));
+        assert!(ids.contains(&"activation.start-pota"));
+        assert!(ids.contains(&"activation.export-adif"));
         assert!(ids.contains(&"official-log.verify-chain"));
         assert!(ids.contains(&"projection.rebuild"));
         assert!(ids.contains(&"sync.discovery.start"));

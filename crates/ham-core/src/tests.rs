@@ -1,8 +1,10 @@
 use chrono::Utc;
 use ham_plugin_sdk::{
-    PluginCapability, PluginManifest, ProposalEnvelope, OFFICIAL_LOG_QSO_CORRECTED,
-    OFFICIAL_LOG_QSO_CREATED, OFFICIAL_LOG_QSO_DELETED, OFFICIAL_LOG_QSO_NOTE_ADDED,
-    OFFICIAL_LOG_QSO_RESTORED, PROPOSAL_QSO_CREATE, PROPOSAL_QSO_DELETE,
+    PluginCapability, PluginManifest, ProposalEnvelope, OFFICIAL_LOG_ACTIVATION_STARTED,
+    OFFICIAL_LOG_QSO_ACTIVATION_LINKED, OFFICIAL_LOG_QSO_CORRECTED, OFFICIAL_LOG_QSO_CREATED,
+    OFFICIAL_LOG_QSO_DELETED, OFFICIAL_LOG_QSO_NOTE_ADDED, OFFICIAL_LOG_QSO_RESTORED,
+    PROPOSAL_ACTIVATION_END, PROPOSAL_ACTIVATION_START, PROPOSAL_QSO_ACTIVATION_LINK,
+    PROPOSAL_QSO_CREATE, PROPOSAL_QSO_DELETE, PROPOSAL_QSO_RESTORE,
 };
 use serde_json::json;
 use std::{fs, path::PathBuf};
@@ -13,6 +15,43 @@ use crate::{
     LogbookEventStore, NewLogbookEvent, OperatorRole, Projection, ProposalContext,
     ProposalValidationError, QsoCurrentStateProjection,
 };
+
+fn activation_payload(kind: &str) -> serde_json::Value {
+    let mut payload = json!({
+        "activation_type": kind,
+        "station_callsign": "KE8YGW",
+        "operator_callsign": "KE8YGW",
+        "started_at": "2026-07-05T12:00:00Z",
+        "status": "active",
+        "grid": "EN91"
+    });
+    if kind.eq_ignore_ascii_case("pota") {
+        payload["park_id"] = json!("US-1234");
+        payload["park_name"] = json!("Test Park");
+    }
+    if kind.eq_ignore_ascii_case("sota") {
+        payload["summit_id"] = json!("W8O/NE-001");
+        payload["summit_name"] = json!("Test Summit");
+    }
+    payload
+}
+
+fn activation_context() -> ProposalContext {
+    ProposalContext {
+        plugin_manifest: plugin_manifest(vec![
+            PluginCapability::ActivationCreate,
+            PluginCapability::ActivationUpdate,
+            PluginCapability::ActivationEnd,
+            PluginCapability::QsoCreate,
+            PluginCapability::QsoCorrect,
+            PluginCapability::QsoDelete,
+            PluginCapability::QsoRestore,
+            PluginCapability::QsoNoteAdd,
+            PluginCapability::AdifExport,
+        ]),
+        operator_role: OperatorRole::Admin,
+    }
+}
 
 fn qso_payload() -> serde_json::Value {
     json!({
@@ -456,4 +495,265 @@ async fn qso_delete_requires_admin_role() {
         err,
         ProposalValidationError::PermissionDenied { .. }
     ));
+}
+
+#[tokio::test]
+async fn pota_activation_requires_park_id() {
+    let store = InMemoryLogbookEventStore::new();
+    let bus = InMemoryEventBus::default();
+    let mut payload = activation_payload("pota");
+    payload.as_object_mut().unwrap().remove("park_id");
+    let err = submit_proposal(
+        &store,
+        &bus,
+        &activation_context(),
+        proposal_for_logbook(PROPOSAL_ACTIVATION_START, Uuid::new_v4(), None, payload),
+    )
+    .await
+    .unwrap_err();
+
+    assert!(err.to_string().contains("park_id"));
+}
+
+#[tokio::test]
+async fn sota_activation_requires_summit_id() {
+    let store = InMemoryLogbookEventStore::new();
+    let bus = InMemoryEventBus::default();
+    let mut payload = activation_payload("sota");
+    payload.as_object_mut().unwrap().remove("summit_id");
+    let err = submit_proposal(
+        &store,
+        &bus,
+        &activation_context(),
+        proposal_for_logbook(PROPOSAL_ACTIVATION_START, Uuid::new_v4(), None, payload),
+    )
+    .await
+    .unwrap_err();
+
+    assert!(err.to_string().contains("summit_id"));
+}
+
+#[tokio::test]
+async fn activation_start_end_lifecycle_and_projection_rebuild() {
+    let store = InMemoryLogbookEventStore::new();
+    let bus = InMemoryEventBus::default();
+    let logbook_id = Uuid::new_v4();
+    let start = submit_proposal(
+        &store,
+        &bus,
+        &activation_context(),
+        proposal_for_logbook(
+            PROPOSAL_ACTIVATION_START,
+            logbook_id,
+            None,
+            activation_payload("pota"),
+        ),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        start.official_event.event_type,
+        OFFICIAL_LOG_ACTIVATION_STARTED
+    );
+    let activation_id = start.official_event.entity_id.unwrap();
+
+    submit_proposal(
+        &store,
+        &bus,
+        &activation_context(),
+        proposal_for_logbook(
+            PROPOSAL_ACTIVATION_END,
+            logbook_id,
+            Some(activation_id),
+            json!({
+                "started_at": "2026-07-05T12:00:00Z",
+                "ended_at": "2026-07-05T13:00:00Z"
+            }),
+        ),
+    )
+    .await
+    .unwrap();
+
+    let projection = store
+        .rebuild_activation_projections(logbook_id)
+        .await
+        .unwrap();
+    assert_eq!(projection.get(activation_id).unwrap().status, "ended");
+}
+
+#[tokio::test]
+async fn activation_end_requires_ended_after_started() {
+    let store = InMemoryLogbookEventStore::new();
+    let bus = InMemoryEventBus::default();
+    let logbook_id = Uuid::new_v4();
+    let start = submit_proposal(
+        &store,
+        &bus,
+        &activation_context(),
+        proposal_for_logbook(
+            PROPOSAL_ACTIVATION_START,
+            logbook_id,
+            None,
+            activation_payload("pota"),
+        ),
+    )
+    .await
+    .unwrap();
+    let err = submit_proposal(
+        &store,
+        &bus,
+        &activation_context(),
+        proposal_for_logbook(
+            PROPOSAL_ACTIVATION_END,
+            logbook_id,
+            start.official_event.entity_id,
+            json!({
+                "started_at": "2026-07-05T12:00:00Z",
+                "ended_at": "2026-07-05T11:59:00Z"
+            }),
+        ),
+    )
+    .await
+    .unwrap_err();
+    assert!(err.to_string().contains("ended_at"));
+}
+
+#[tokio::test]
+async fn qso_linking_updates_activation_projection_counts_and_delete_restore() {
+    let store = InMemoryLogbookEventStore::new();
+    let bus = InMemoryEventBus::default();
+    let logbook_id = Uuid::new_v4();
+    let activation = submit_proposal(
+        &store,
+        &bus,
+        &activation_context(),
+        proposal_for_logbook(
+            PROPOSAL_ACTIVATION_START,
+            logbook_id,
+            None,
+            activation_payload("pota"),
+        ),
+    )
+    .await
+    .unwrap();
+    let activation_id = activation.official_event.entity_id.unwrap();
+    let qso = submit_proposal(
+        &store,
+        &bus,
+        &activation_context(),
+        proposal_for_logbook(PROPOSAL_QSO_CREATE, logbook_id, None, qso_payload()),
+    )
+    .await
+    .unwrap();
+    let qso_id = qso.official_event.entity_id.unwrap();
+
+    let link = submit_proposal(
+        &store,
+        &bus,
+        &activation_context(),
+        proposal_for_logbook(
+            PROPOSAL_QSO_ACTIVATION_LINK,
+            logbook_id,
+            Some(qso_id),
+            json!({"activation_id": activation_id}),
+        ),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        link.official_event.event_type,
+        OFFICIAL_LOG_QSO_ACTIVATION_LINKED
+    );
+
+    let projection = store
+        .rebuild_activation_projections(logbook_id)
+        .await
+        .unwrap();
+    assert_eq!(projection.get(activation_id).unwrap().qso_count, 1);
+    assert_eq!(
+        projection.get(activation_id).unwrap().unique_callsign_count,
+        1
+    );
+
+    submit_proposal(
+        &store,
+        &bus,
+        &activation_context(),
+        proposal_for_logbook(PROPOSAL_QSO_DELETE, logbook_id, Some(qso_id), json!({})),
+    )
+    .await
+    .unwrap();
+    let projection = store
+        .rebuild_activation_projections(logbook_id)
+        .await
+        .unwrap();
+    assert_eq!(projection.get(activation_id).unwrap().qso_count, 0);
+
+    submit_proposal(
+        &store,
+        &bus,
+        &activation_context(),
+        proposal_for_logbook(PROPOSAL_QSO_RESTORE, logbook_id, Some(qso_id), json!({})),
+    )
+    .await
+    .unwrap();
+    let projection = store
+        .rebuild_activation_projections(logbook_id)
+        .await
+        .unwrap();
+    assert_eq!(projection.get(activation_id).unwrap().qso_count, 1);
+}
+
+#[tokio::test]
+async fn activation_adif_export_includes_pota_and_sota_fields() {
+    let store = InMemoryLogbookEventStore::new();
+    let bus = InMemoryEventBus::default();
+    let logbook_id = Uuid::new_v4();
+    for kind in ["pota", "sota"] {
+        let activation = submit_proposal(
+            &store,
+            &bus,
+            &activation_context(),
+            proposal_for_logbook(
+                PROPOSAL_ACTIVATION_START,
+                logbook_id,
+                None,
+                activation_payload(kind),
+            ),
+        )
+        .await
+        .unwrap();
+        let activation_id = activation.official_event.entity_id.unwrap();
+        let qso = submit_proposal(
+            &store,
+            &bus,
+            &activation_context(),
+            proposal_for_logbook(PROPOSAL_QSO_CREATE, logbook_id, None, qso_payload()),
+        )
+        .await
+        .unwrap();
+        submit_proposal(
+            &store,
+            &bus,
+            &activation_context(),
+            proposal_for_logbook(
+                PROPOSAL_QSO_ACTIVATION_LINK,
+                logbook_id,
+                qso.official_event.entity_id,
+                json!({"activation_id": activation_id}),
+            ),
+        )
+        .await
+        .unwrap();
+    }
+    let qsos = store.rebuild_projections(logbook_id).await.unwrap();
+    let activations = store
+        .rebuild_activation_projections(logbook_id)
+        .await
+        .unwrap();
+    let adif = crate::export_adif_with_activations(&qsos, Some(&activations), false);
+    assert!(adif.contains("<MY_SIG:4>POTA"));
+    assert!(adif.contains("<MY_SIG_INFO:7>US-1234"));
+    assert!(adif.contains("<MY_SIG:4>SOTA"));
+    assert!(adif.contains("<MY_SIG_INFO:10>W8O/NE-001"));
 }

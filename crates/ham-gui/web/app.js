@@ -5,6 +5,8 @@ const state = {
   runtimeEvents: [],
   runtimeStatus: null,
   qsos: [],
+  activations: [],
+  activeActivation: null,
   qsoError: "",
   importSummary: null,
   syncState: null,
@@ -36,6 +38,7 @@ async function boot() {
   bindShellControls();
   renderWorkspaceSelector();
   await refreshQsos();
+  await refreshActivations();
   await refreshSyncState();
   render();
   startRuntimeEventPolling();
@@ -126,6 +129,16 @@ function panelContent(panel) {
       return renderCallsignEntry();
     case "event-bus-monitor":
       return renderEventBusMonitor();
+    case "activation-setup":
+      return renderActivationSetup();
+    case "activation-progress":
+      return renderActivationProgress();
+    case "activation-recent-qsos":
+      return renderActivationRecentQsos();
+    case "portable-logger-entry":
+      return renderPortableLoggerEntry();
+    case "spots-alerts":
+      return `<p>Spots and alert feeds will connect to POTA/SOTA APIs in a future plugin update.</p>`;
     case "plugin-permissions":
       return state.plugins
         .map((plugin) => `<p><strong>${plugin.name}</strong><br />${plugin.requested_permissions.map((permission) => `<span class="pill">${permission}</span>`).join("")}</p>`)
@@ -136,8 +149,6 @@ function panelContent(panel) {
       return `<p>Rig control plugin surface placeholder.</p><button class="toolbar-button" disabled>Connect Rig</button>`;
     case "map-placeholder":
       return `<p>Map and activation geography placeholder. Future plugin should provide map tiles and overlays.</p>`;
-    case "pota-sota-activation":
-      return `<p>Activation reference, operator profile, and portable log context will appear here.</p>`;
     case "dx-cluster":
       return `<p>DX cluster feed placeholder. Network integrations stay plugin-owned.</p>`;
     case "ai-assistant":
@@ -216,6 +227,11 @@ function runCommand(commandId) {
   if (command.id === "diagnostics.open-folder") openScreen("diagnostics-folder");
   if (command.id === "adif.import") importAdifFromPrompt();
   if (command.id === "adif.export") exportAdifFromPrompt();
+  if (command.id === "activation.start-pota") startActivationFromPrompt("pota");
+  if (command.id === "activation.start-sota") startActivationFromPrompt("sota");
+  if (command.id === "activation.end-current") endCurrentActivation();
+  if (command.id === "activation.export-adif") exportActivationAdifFromPrompt();
+  if (command.id === "activation.workspace") switchWorkspace("pota-sota");
   if (command.id === "official-log.verify-chain") verifyLogChain();
   if (command.id === "projection.rebuild") rebuildProjections();
   if (command.id === "sync.discovery.start") startDiscovery();
@@ -400,6 +416,11 @@ function bindPanelControls() {
   if (qsoForm) {
     qsoForm.addEventListener("submit", submitQsoCreate);
   }
+  const activationForm = byId("activation-start-form");
+  if (activationForm) activationForm.addEventListener("submit", submitActivationStart);
+  const portableForm = byId("portable-qso-form");
+  if (portableForm) portableForm.addEventListener("submit", submitPortableQsoCreate);
+  byId("activation-end-button")?.addEventListener("click", endCurrentActivation);
 
   document.querySelectorAll("[data-qso-action]").forEach((button) => {
     button.addEventListener("click", () => {
@@ -506,6 +527,77 @@ function renderCallsignEntry() {
     <p>Submits a proposal to ham-core; the GUI does not write official events directly.</p>`;
 }
 
+function renderActivationSetup() {
+  const active = state.activeActivation;
+  return `<form id="activation-start-form" class="qso-form">
+      <label>Activation Type
+        <select name="activation_type" class="placeholder-control">
+          <option value="pota">POTA</option>
+          <option value="sota">SOTA</option>
+          <option value="portable">Generic Portable</option>
+        </select>
+      </label>
+      <label>Park/Summit Reference
+        <input name="reference" class="placeholder-control" placeholder="US-1234 or W8O/NE-001" required />
+      </label>
+      <label>Station Callsign
+        <input name="station_callsign" class="placeholder-control" value="KE8YGW" required />
+      </label>
+      <label>Operator Callsign
+        <input name="operator_callsign" class="placeholder-control" value="KE8YGW" required />
+      </label>
+      <label>Grid / Location
+        <input name="grid" class="placeholder-control" placeholder="EN91" />
+      </label>
+      <label>Notes
+        <input name="notes" class="placeholder-control" placeholder="Optional activation note" />
+      </label>
+      <button class="toolbar-button" type="submit">Start Activation</button>
+    </form>
+    <div class="monitor-actions">
+      <button id="activation-end-button" class="toolbar-button" type="button" ${active ? "" : "disabled"}>End Current Activation</button>
+    </div>`;
+}
+
+function renderActivationProgress() {
+  const active = state.activeActivation;
+  if (!active) return `<p class="muted">No active activation.</p>`;
+  const started = active.payload.started_at ? new Date(active.payload.started_at) : null;
+  const elapsed = started ? `${Math.max(0, Math.round((Date.now() - started.getTime()) / 60000))} min` : "unknown";
+  const reference = active.payload.park_id || active.payload.summit_id || active.payload.reference || "";
+  return `<div class="sync-summary">
+    <p><strong>${active.payload.activation_type?.toUpperCase() || "Portable"} ${reference}</strong></p>
+    <p>Status: ${active.status}</p>
+    <p>Elapsed: ${elapsed}</p>
+    <p>QSOs: ${active.qso_count} / Unique: ${active.unique_callsign_count}</p>
+    <p>Bands: ${Object.entries(active.band_summary).map(([band, count]) => `${band} ${count}`).join(", ") || "none"}</p>
+    <p>Modes: ${Object.entries(active.mode_summary).map(([mode, count]) => `${mode} ${count}`).join(", ") || "none"}</p>
+  </div>`;
+}
+
+function renderActivationRecentQsos() {
+  const active = state.activeActivation;
+  if (!active) return `<p class="muted">Start an activation to see linked QSOs.</p>`;
+  const qsos = state.qsos.filter((qso) => qso.payload.activation_id === active.activation_id);
+  if (!qsos.length) return `<p class="muted">No QSOs linked to this activation yet.</p>`;
+  return `<div class="qso-list">${qsos
+    .map((qso) => `<article class="qso-row"><strong>${qso.payload.contacted_callsign}</strong><span>${qso.payload.mode || ""} ${qso.payload.band || ""}</span><small>${qso.payload.started_at || ""}</small></article>`)
+    .join("")}</div>`;
+}
+
+function renderPortableLoggerEntry() {
+  const active = state.activeActivation;
+  return `<form id="portable-qso-form" class="qso-form">
+      <p class="muted">${active ? `Logging against ${active.payload.park_id || active.payload.summit_id || active.activation_id}` : "No active activation; QSO will be portable-source only."}</p>
+      <label>Callsign <input name="contacted_callsign" class="placeholder-control" required /></label>
+      <label>Mode <input name="mode" class="placeholder-control" value="SSB" required /></label>
+      <label>Band <input name="band" class="placeholder-control" placeholder="20m" /></label>
+      <label>Frequency Hz <input name="frequency_hz" class="placeholder-control" inputmode="numeric" /></label>
+      <label>Notes <input name="notes" class="placeholder-control" /></label>
+      <button class="toolbar-button" type="submit">Submit Portable QSO</button>
+    </form>`;
+}
+
 function renderRecentQsos() {
   if (!state.qsos.length) {
     return `<p class="muted">No visible QSOs yet. Create one from Callsign Entry.</p>`;
@@ -514,9 +606,11 @@ function renderRecentQsos() {
     ${state.qsos
       .map((qso) => {
         const payload = qso.payload;
+        const activation = state.activations.find((activation) => activation.activation_id === payload.activation_id);
+        const activationLabel = activation ? activation.payload.park_id || activation.payload.summit_id || activation.payload.reference || "Activation" : "";
         return `<article class="qso-row">
           <strong>${payload.contacted_callsign || "Unknown"}</strong>
-          <span>${payload.mode || ""} ${payload.band || ""} ${payload.frequency_hz || ""}</span>
+          <span>${payload.mode || ""} ${payload.band || ""} ${payload.frequency_hz || ""} ${activationLabel ? `<span class="pill">${activationLabel}</span>` : ""}</span>
           <small>${payload.started_at || ""}</small>
           <small>Notes: ${qso.note_history.length}</small>
           <div class="monitor-actions">
@@ -536,6 +630,12 @@ function renderRecentQsos() {
 async function refreshQsos(includeDeleted = false) {
   const payload = await fetch(`/api/qsos?include_deleted=${includeDeleted}`).then((response) => response.json());
   state.qsos = payload.qsos;
+}
+
+async function refreshActivations() {
+  const payload = await fetch("/api/activations").then((response) => response.json());
+  state.activations = payload.activations;
+  state.activeActivation = payload.active_activation;
 }
 
 async function submitQsoCreate(event) {
@@ -562,8 +662,94 @@ async function submitQsoCreate(event) {
     event.currentTarget.reset();
   }
   await refreshQsos();
+  await refreshActivations();
   await refreshRuntimeEvents();
   render();
+}
+
+async function submitPortableQsoCreate(event) {
+  event.preventDefault();
+  const form = new FormData(event.currentTarget);
+  const frequency = form.get("frequency_hz")?.toString().trim();
+  await fetch("/api/qso/portable-create", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      contacted_callsign: form.get("contacted_callsign")?.toString() || "",
+      mode: form.get("mode")?.toString() || "",
+      band: form.get("band")?.toString() || "",
+      notes: form.get("notes")?.toString() || "",
+      frequency_hz: frequency ? Number(frequency) : null,
+    }),
+  });
+  event.currentTarget.reset();
+  await refreshQsos();
+  await refreshActivations();
+  await refreshRuntimeEvents();
+  render();
+}
+
+async function submitActivationStart(event) {
+  event.preventDefault();
+  const form = new FormData(event.currentTarget);
+  await fetch("/api/activation/start", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      activation_type: form.get("activation_type")?.toString() || "pota",
+      reference: form.get("reference")?.toString() || "",
+      station_callsign: form.get("station_callsign")?.toString() || "KE8YGW",
+      operator_callsign: form.get("operator_callsign")?.toString() || "KE8YGW",
+      grid: form.get("grid")?.toString() || "",
+      notes: form.get("notes")?.toString() || "",
+    }),
+  });
+  event.currentTarget.reset();
+  await refreshActivations();
+  await refreshRuntimeEvents();
+  render();
+}
+
+function startActivationFromPrompt(kind) {
+  const reference = window.prompt(`${kind.toUpperCase()} reference`);
+  if (!reference) return;
+  fetch("/api/activation/start", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      activation_type: kind,
+      reference,
+      station_callsign: "KE8YGW",
+      operator_callsign: "KE8YGW",
+    }),
+  }).then(async () => {
+    await refreshActivations();
+    render();
+  });
+}
+
+async function endCurrentActivation() {
+  if (!state.activeActivation) return;
+  await fetch("/api/activation/end", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ activation_id: state.activeActivation.activation_id }),
+  });
+  await refreshActivations();
+  await refreshRuntimeEvents();
+  render();
+}
+
+async function exportActivationAdifFromPrompt() {
+  const path = window.prompt("Path to write activation ADIF export");
+  if (!path) return;
+  state.importSummary = await fetch("/api/activation/export-adif", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ path, include_deleted: false }),
+  }).then((response) => response.json());
+  await refreshRuntimeEvents();
+  openScreen("import-summary");
 }
 
 async function runQsoAction(action, qsoId) {
@@ -581,6 +767,7 @@ async function runQsoAction(action, qsoId) {
     body: JSON.stringify(payload),
   });
   await refreshQsos(action === "restore");
+  await refreshActivations();
   await refreshRuntimeEvents();
   render();
 }

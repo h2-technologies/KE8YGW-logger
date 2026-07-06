@@ -1,9 +1,15 @@
 use chrono::{DateTime, Utc};
 use ham_plugin_sdk::{
-    PluginCapability, PluginManifest, ProposalEnvelope, OFFICIAL_LOG_QSO_CORRECTED,
-    OFFICIAL_LOG_QSO_CREATED, OFFICIAL_LOG_QSO_DELETED, OFFICIAL_LOG_QSO_NOTE_ADDED,
-    OFFICIAL_LOG_QSO_RESTORED, PROPOSAL_QSO_CORRECT, PROPOSAL_QSO_CREATE, PROPOSAL_QSO_DELETE,
-    PROPOSAL_QSO_NOTE_ADD, PROPOSAL_QSO_RESTORE,
+    PluginCapability, PluginManifest, ProposalEnvelope, OFFICIAL_LOG_ACTIVATION_CANCELLED,
+    OFFICIAL_LOG_ACTIVATION_CREATED, OFFICIAL_LOG_ACTIVATION_ENDED,
+    OFFICIAL_LOG_ACTIVATION_NOTE_ADDED, OFFICIAL_LOG_ACTIVATION_STARTED,
+    OFFICIAL_LOG_ACTIVATION_UPDATED, OFFICIAL_LOG_QSO_ACTIVATION_LINKED,
+    OFFICIAL_LOG_QSO_ACTIVATION_UNLINKED, OFFICIAL_LOG_QSO_CORRECTED, OFFICIAL_LOG_QSO_CREATED,
+    OFFICIAL_LOG_QSO_DELETED, OFFICIAL_LOG_QSO_NOTE_ADDED, OFFICIAL_LOG_QSO_RESTORED,
+    PROPOSAL_ACTIVATION_CANCEL, PROPOSAL_ACTIVATION_CREATE, PROPOSAL_ACTIVATION_END,
+    PROPOSAL_ACTIVATION_NOTE_ADD, PROPOSAL_ACTIVATION_START, PROPOSAL_ACTIVATION_UPDATE,
+    PROPOSAL_QSO_ACTIVATION_LINK, PROPOSAL_QSO_ACTIVATION_UNLINK, PROPOSAL_QSO_CORRECT,
+    PROPOSAL_QSO_CREATE, PROPOSAL_QSO_DELETE, PROPOSAL_QSO_NOTE_ADD, PROPOSAL_QSO_RESTORE,
 };
 use serde_json::Value;
 use thiserror::Error;
@@ -34,6 +40,14 @@ impl OperatorRole {
                     | PROPOSAL_QSO_DELETE
                     | PROPOSAL_QSO_RESTORE
                     | PROPOSAL_QSO_NOTE_ADD
+                    | PROPOSAL_ACTIVATION_CREATE
+                    | PROPOSAL_ACTIVATION_UPDATE
+                    | PROPOSAL_ACTIVATION_START
+                    | PROPOSAL_ACTIVATION_END
+                    | PROPOSAL_ACTIVATION_CANCEL
+                    | PROPOSAL_ACTIVATION_NOTE_ADD
+                    | PROPOSAL_QSO_ACTIVATION_LINK
+                    | PROPOSAL_QSO_ACTIVATION_UNLINK
             ),
         }
     }
@@ -192,6 +206,16 @@ fn required_capability(proposal_type: &str) -> Result<PluginCapability, Proposal
         PROPOSAL_QSO_DELETE => Ok(PluginCapability::QsoDelete),
         PROPOSAL_QSO_RESTORE => Ok(PluginCapability::QsoRestore),
         PROPOSAL_QSO_NOTE_ADD => Ok(PluginCapability::QsoNoteAdd),
+        PROPOSAL_ACTIVATION_CREATE | PROPOSAL_ACTIVATION_START => {
+            Ok(PluginCapability::ActivationCreate)
+        }
+        PROPOSAL_ACTIVATION_UPDATE | PROPOSAL_ACTIVATION_NOTE_ADD => {
+            Ok(PluginCapability::ActivationUpdate)
+        }
+        PROPOSAL_ACTIVATION_END | PROPOSAL_ACTIVATION_CANCEL => Ok(PluginCapability::ActivationEnd),
+        PROPOSAL_QSO_ACTIVATION_LINK | PROPOSAL_QSO_ACTIVATION_UNLINK => {
+            Ok(PluginCapability::QsoCorrect)
+        }
         other => Err(ProposalValidationError::UnsupportedProposalType(
             other.to_owned(),
         )),
@@ -262,10 +286,138 @@ where
             }
             Ok(())
         }
+        PROPOSAL_ACTIVATION_CREATE => {
+            validate_activation_payload(payload, false)?;
+            Ok(())
+        }
+        PROPOSAL_ACTIVATION_START => {
+            validate_activation_payload(payload, true)?;
+            Ok(())
+        }
+        PROPOSAL_ACTIVATION_UPDATE => {
+            require_existing_activation(store, proposal).await?;
+            validate_ended_after_started(payload)?;
+            Ok(())
+        }
+        PROPOSAL_ACTIVATION_END => {
+            require_existing_activation(store, proposal).await?;
+            if !payload.get("ended_at").is_some_and(Value::is_string) {
+                return Err(ProposalValidationError::InvalidSchema(
+                    "activation end requires string field `ended_at`".to_owned(),
+                ));
+            }
+            validate_ended_after_started(payload)?;
+            Ok(())
+        }
+        PROPOSAL_ACTIVATION_CANCEL => {
+            require_existing_activation(store, proposal).await?;
+            Ok(())
+        }
+        PROPOSAL_ACTIVATION_NOTE_ADD => {
+            require_existing_activation(store, proposal).await?;
+            if !payload.get("note").is_some_and(Value::is_string) {
+                return Err(ProposalValidationError::InvalidSchema(
+                    "activation note_add requires string field `note`".to_owned(),
+                ));
+            }
+            Ok(())
+        }
+        PROPOSAL_QSO_ACTIVATION_LINK => {
+            require_existing_qso(store, proposal).await?;
+            let activation_id = payload
+                .get("activation_id")
+                .and_then(Value::as_str)
+                .and_then(|value| Uuid::parse_str(value).ok())
+                .ok_or_else(|| {
+                    ProposalValidationError::InvalidSchema(
+                        "qso activation link requires activation_id".to_owned(),
+                    )
+                })?;
+            let projection = store
+                .rebuild_activation_projections(proposal.logbook_id)
+                .await?;
+            let activation = projection.get(activation_id).ok_or_else(|| {
+                ProposalValidationError::InvalidSchema(format!(
+                    "activation_id {activation_id} does not exist"
+                ))
+            })?;
+            if matches!(activation.status.as_str(), "ended" | "cancelled") {
+                return Err(ProposalValidationError::InvalidSchema(
+                    "ended/cancelled activations cannot accept new linked QSOs in MVP".to_owned(),
+                ));
+            }
+            Ok(())
+        }
+        PROPOSAL_QSO_ACTIVATION_UNLINK => {
+            require_existing_qso(store, proposal).await?;
+            Ok(())
+        }
         other => Err(ProposalValidationError::UnsupportedProposalType(
             other.to_owned(),
         )),
     }
+}
+
+fn validate_activation_payload(
+    payload: &serde_json::Map<String, Value>,
+    require_started_at: bool,
+) -> Result<(), ProposalValidationError> {
+    for field in ["activation_type", "station_callsign", "operator_callsign"] {
+        if !payload.get(field).is_some_and(Value::is_string) {
+            return Err(ProposalValidationError::InvalidSchema(format!(
+                "activation requires string field `{field}`"
+            )));
+        }
+    }
+    if require_started_at && !payload.get("started_at").is_some_and(Value::is_string) {
+        return Err(ProposalValidationError::InvalidSchema(
+            "starting an activation requires started_at".to_owned(),
+        ));
+    }
+    match payload
+        .get("activation_type")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "pota" if !payload.get("park_id").is_some_and(Value::is_string) => {
+            return Err(ProposalValidationError::InvalidSchema(
+                "POTA activation requires park_id".to_owned(),
+            ));
+        }
+        "sota" if !payload.get("summit_id").is_some_and(Value::is_string) => {
+            return Err(ProposalValidationError::InvalidSchema(
+                "SOTA activation requires summit_id".to_owned(),
+            ));
+        }
+        _ => {}
+    }
+    validate_ended_after_started(payload)?;
+    Ok(())
+}
+
+fn validate_ended_after_started(
+    payload: &serde_json::Map<String, Value>,
+) -> Result<(), ProposalValidationError> {
+    let started_at = payload
+        .get("started_at")
+        .and_then(Value::as_str)
+        .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
+        .map(|value| value.with_timezone(&Utc));
+    let ended_at = payload
+        .get("ended_at")
+        .and_then(Value::as_str)
+        .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
+        .map(|value| value.with_timezone(&Utc));
+    if let (Some(started_at), Some(ended_at)) = (started_at, ended_at) {
+        if ended_at <= started_at {
+            return Err(ProposalValidationError::InvalidSchema(
+                "ended_at must be after started_at".to_owned(),
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn validate_started_at(
@@ -327,6 +479,25 @@ where
     Ok(qso_id)
 }
 
+async fn require_existing_activation<S>(
+    store: &S,
+    proposal: &ProposalEnvelope,
+) -> Result<Uuid, ProposalValidationError>
+where
+    S: LogbookEventStore,
+{
+    let activation_id = require_entity_id(proposal)?;
+    let projection = store
+        .rebuild_activation_projections(proposal.logbook_id)
+        .await?;
+    if projection.get(activation_id).is_none() {
+        return Err(ProposalValidationError::InvalidSchema(format!(
+            "activation_id {activation_id} does not exist"
+        )));
+    }
+    Ok(activation_id)
+}
+
 fn require_entity_id(proposal: &ProposalEnvelope) -> Result<Uuid, ProposalValidationError> {
     proposal.entity_id.ok_or_else(|| {
         ProposalValidationError::InvalidSchema(
@@ -357,6 +528,38 @@ fn to_official_event(
         ),
         PROPOSAL_QSO_NOTE_ADD => (
             OFFICIAL_LOG_QSO_NOTE_ADDED.to_owned(),
+            Some(require_entity_id(&proposal)?),
+        ),
+        PROPOSAL_ACTIVATION_CREATE => (
+            OFFICIAL_LOG_ACTIVATION_CREATED.to_owned(),
+            proposal.entity_id.or_else(|| Some(Uuid::new_v4())),
+        ),
+        PROPOSAL_ACTIVATION_START => (
+            OFFICIAL_LOG_ACTIVATION_STARTED.to_owned(),
+            proposal.entity_id.or_else(|| Some(Uuid::new_v4())),
+        ),
+        PROPOSAL_ACTIVATION_UPDATE => (
+            OFFICIAL_LOG_ACTIVATION_UPDATED.to_owned(),
+            Some(require_entity_id(&proposal)?),
+        ),
+        PROPOSAL_ACTIVATION_END => (
+            OFFICIAL_LOG_ACTIVATION_ENDED.to_owned(),
+            Some(require_entity_id(&proposal)?),
+        ),
+        PROPOSAL_ACTIVATION_CANCEL => (
+            OFFICIAL_LOG_ACTIVATION_CANCELLED.to_owned(),
+            Some(require_entity_id(&proposal)?),
+        ),
+        PROPOSAL_ACTIVATION_NOTE_ADD => (
+            OFFICIAL_LOG_ACTIVATION_NOTE_ADDED.to_owned(),
+            Some(require_entity_id(&proposal)?),
+        ),
+        PROPOSAL_QSO_ACTIVATION_LINK => (
+            OFFICIAL_LOG_QSO_ACTIVATION_LINKED.to_owned(),
+            Some(require_entity_id(&proposal)?),
+        ),
+        PROPOSAL_QSO_ACTIVATION_UNLINK => (
+            OFFICIAL_LOG_QSO_ACTIVATION_UNLINKED.to_owned(),
             Some(require_entity_id(&proposal)?),
         ),
         other => {

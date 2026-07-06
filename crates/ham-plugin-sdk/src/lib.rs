@@ -13,12 +13,28 @@ pub const PROPOSAL_QSO_CORRECT: &str = "proposal.qso.correct";
 pub const PROPOSAL_QSO_DELETE: &str = "proposal.qso.delete";
 pub const PROPOSAL_QSO_RESTORE: &str = "proposal.qso.restore";
 pub const PROPOSAL_QSO_NOTE_ADD: &str = "proposal.qso.note.add";
+pub const PROPOSAL_ACTIVATION_CREATE: &str = "proposal.activation.create";
+pub const PROPOSAL_ACTIVATION_UPDATE: &str = "proposal.activation.update";
+pub const PROPOSAL_ACTIVATION_START: &str = "proposal.activation.start";
+pub const PROPOSAL_ACTIVATION_END: &str = "proposal.activation.end";
+pub const PROPOSAL_ACTIVATION_CANCEL: &str = "proposal.activation.cancel";
+pub const PROPOSAL_ACTIVATION_NOTE_ADD: &str = "proposal.activation.note.add";
+pub const PROPOSAL_QSO_ACTIVATION_LINK: &str = "proposal.qso.activation.link";
+pub const PROPOSAL_QSO_ACTIVATION_UNLINK: &str = "proposal.qso.activation.unlink";
 
 pub const OFFICIAL_LOG_QSO_CREATED: &str = "official.log.qso.created";
 pub const OFFICIAL_LOG_QSO_CORRECTED: &str = "official.log.qso.corrected";
 pub const OFFICIAL_LOG_QSO_DELETED: &str = "official.log.qso.deleted";
 pub const OFFICIAL_LOG_QSO_RESTORED: &str = "official.log.qso.restored";
 pub const OFFICIAL_LOG_QSO_NOTE_ADDED: &str = "official.log.qso.note_added";
+pub const OFFICIAL_LOG_ACTIVATION_CREATED: &str = "official.log.activation.created";
+pub const OFFICIAL_LOG_ACTIVATION_UPDATED: &str = "official.log.activation.updated";
+pub const OFFICIAL_LOG_ACTIVATION_STARTED: &str = "official.log.activation.started";
+pub const OFFICIAL_LOG_ACTIVATION_ENDED: &str = "official.log.activation.ended";
+pub const OFFICIAL_LOG_ACTIVATION_CANCELLED: &str = "official.log.activation.cancelled";
+pub const OFFICIAL_LOG_ACTIVATION_NOTE_ADDED: &str = "official.log.activation.note_added";
+pub const OFFICIAL_LOG_QSO_ACTIVATION_LINKED: &str = "official.log.qso.activation_linked";
+pub const OFFICIAL_LOG_QSO_ACTIVATION_UNLINKED: &str = "official.log.qso.activation_unlinked";
 
 /// A capability granted to a plugin by the host application.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -29,6 +45,11 @@ pub enum PluginCapability {
     QsoRestore,
     QsoNoteAdd,
     QsoViewDeleted,
+    ActivationCreate,
+    ActivationUpdate,
+    ActivationEnd,
+    ActivationView,
+    AdifExport,
     Other(String),
 }
 
@@ -41,6 +62,11 @@ impl PluginCapability {
             Self::QsoRestore => "qso:restore",
             Self::QsoNoteAdd => "qso:note:add",
             Self::QsoViewDeleted => "qso:view-deleted",
+            Self::ActivationCreate => "activation.create",
+            Self::ActivationUpdate => "activation.update",
+            Self::ActivationEnd => "activation.end",
+            Self::ActivationView => "activation.view",
+            Self::AdifExport => "adif.export",
             Self::Other(value) => value,
         }
     }
@@ -68,6 +94,11 @@ impl<'de> Deserialize<'de> for PluginCapability {
             "qso:restore" => Self::QsoRestore,
             "qso:note:add" => Self::QsoNoteAdd,
             "qso:view-deleted" => Self::QsoViewDeleted,
+            "activation.create" => Self::ActivationCreate,
+            "activation.update" => Self::ActivationUpdate,
+            "activation.end" => Self::ActivationEnd,
+            "activation.view" => Self::ActivationView,
+            "adif.export" => Self::AdifExport,
             _ => Self::Other(value),
         })
     }

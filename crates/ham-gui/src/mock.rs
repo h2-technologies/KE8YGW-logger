@@ -29,7 +29,16 @@ pub fn mock_plugins() -> Vec<MockPlugin> {
             "plugin.pota-sota",
             "POTA/SOTA Tools",
             true,
-            ["activation.propose"],
+            [
+                "activation.create",
+                "activation.update",
+                "activation.end",
+                "activation.view",
+                "log.qso.create",
+                "log.qso.correct",
+                "log.qso.note.add",
+                "adif.export",
+            ],
         ),
         plugin("plugin.maps", "Maps", false, ["map.view"]),
         plugin("plugin.ai", "AI Assistant", false, ["ai.use"]),
@@ -49,6 +58,11 @@ pub fn capability_labels() -> Vec<String> {
         PluginCapability::QsoCreate,
         PluginCapability::QsoCorrect,
         PluginCapability::QsoDelete,
+        PluginCapability::ActivationCreate,
+        PluginCapability::ActivationUpdate,
+        PluginCapability::ActivationEnd,
+        PluginCapability::ActivationView,
+        PluginCapability::AdifExport,
     ]
     .into_iter()
     .map(|capability| capability.as_str().to_owned())

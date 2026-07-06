@@ -81,6 +81,67 @@ Recent QSOs are loaded from `/api/qsos`, which rebuilds the QSO projection from
 the official event store. Delete, restore, and note actions also go through
 proposal endpoints.
 
+## POTA/SOTA Activation Plugin
+
+The first operating-mode plugin is `plugin.pota-sota`. It uses the normal plugin
+manifest/capability model and does not write official events directly. The GUI
+panels submit activation and QSO proposals to `ham-core`; the core validates
+permissions and schemas, then appends official activation/QSO-link events to the
+same hash-chained official log.
+
+Requested plugin permissions:
+
+- `activation.create`
+- `activation.update`
+- `activation.end`
+- `activation.view`
+- `log.qso.create`
+- `log.qso.correct`
+- `log.qso.note.add`
+- `adif.export`
+
+Activation proposal types:
+
+- `proposal.activation.create`
+- `proposal.activation.update`
+- `proposal.activation.start`
+- `proposal.activation.end`
+- `proposal.activation.cancel`
+- `proposal.activation.note.add`
+- `proposal.qso.activation.link`
+- `proposal.qso.activation.unlink`
+
+Official activation event types:
+
+- `official.log.activation.created`
+- `official.log.activation.updated`
+- `official.log.activation.started`
+- `official.log.activation.ended`
+- `official.log.activation.cancelled`
+- `official.log.activation.note_added`
+- `official.log.qso.activation_linked`
+- `official.log.qso.activation_unlinked`
+
+The activation projection rebuilds from official events. It lists activations,
+finds the active activation for a station/operator, tracks status, notes, linked
+QSOs, QSO count, unique callsigns, and band/mode summaries. Deleted QSOs stop
+counting after projection replay; restored QSOs count again.
+
+The POTA/SOTA workspace includes Activation Setup, Activation Progress,
+Activation Recent QSOs, Portable Logger Entry, and a Spots/Alerts placeholder.
+Start an activation, then log contacts from Portable Logger Entry. New portable
+QSOs include activation metadata and are linked back to the active activation
+through a proposal. Recent QSOs display the activation reference when available.
+
+Activation ADIF export includes `MY_SIG` and `MY_SIG_INFO` for POTA/SOTA QSOs.
+POTA exports `MY_SIG=POTA` and the park reference; SOTA exports `MY_SIG=SOTA`
+and the summit reference. Deleted/cancelled QSOs are excluded by default.
+
+Current MVP limitations: one active activation per station/operator is assumed;
+multi-op, multi-park/multi-summit, spotting integration, online reference
+lookups, GPS auto-detection, offline reference caches, award tracking, and
+conflict review UX are future work.
+
 ## Durable Local Persistence
 
 The MVP durable official event store is JSON Lines. Each official event is

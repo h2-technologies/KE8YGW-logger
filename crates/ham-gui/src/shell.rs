@@ -156,10 +156,38 @@ pub fn default_panel_registry() -> Vec<PanelDefinition> {
             ],
         ),
         panel(
-            "pota-sota-activation",
-            "POTA/SOTA Activation",
+            "activation-setup",
+            "Activation Setup",
             "plugin.pota-sota",
-            ["activation.read", "activation.propose"],
+            ["activation.create", "activation.update", "activation.end"],
+            [WorkspaceId::PotaSota],
+        ),
+        panel(
+            "activation-progress",
+            "Activation Progress",
+            "plugin.pota-sota",
+            ["activation.view"],
+            [WorkspaceId::PotaSota],
+        ),
+        panel(
+            "activation-recent-qsos",
+            "Activation Recent QSOs",
+            "plugin.pota-sota",
+            ["activation.view", "logbook.read"],
+            [WorkspaceId::PotaSota],
+        ),
+        panel(
+            "portable-logger-entry",
+            "Portable Logger Entry",
+            "plugin.pota-sota",
+            ["log.qso.create"],
+            [WorkspaceId::PotaSota],
+        ),
+        panel(
+            "spots-alerts",
+            "Spots/Alerts",
+            "plugin.pota-sota",
+            ["network.read"],
             [WorkspaceId::PotaSota],
         ),
         panel(
@@ -223,10 +251,11 @@ fn default_layout(id: WorkspaceId) -> WorkspaceLayout {
             place("dx-cluster", PanelRegion::Bottom, 10),
         ],
         WorkspaceId::PotaSota => vec![
-            place("pota-sota-activation", PanelRegion::Center, 10),
-            place("map-placeholder", PanelRegion::Center, 20),
-            place("callsign-entry", PanelRegion::RightInspector, 10),
-            place("sync-status", PanelRegion::Bottom, 10),
+            place("activation-setup", PanelRegion::Center, 10),
+            place("portable-logger-entry", PanelRegion::Center, 20),
+            place("activation-progress", PanelRegion::RightInspector, 10),
+            place("activation-recent-qsos", PanelRegion::Bottom, 10),
+            place("spots-alerts", PanelRegion::Bottom, 20),
         ],
         WorkspaceId::NetControl => vec![
             place("callsign-entry", PanelRegion::Center, 10),
@@ -305,5 +334,6 @@ mod tests {
         assert_eq!(ids.len(), panels.len());
         assert!(ids.contains(&"event-bus-monitor"));
         assert!(ids.contains(&"callsign-entry"));
+        assert!(ids.contains(&"activation-setup"));
     }
 }

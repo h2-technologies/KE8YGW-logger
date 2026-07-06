@@ -9,14 +9,17 @@ pub mod runtime_log;
 pub mod store;
 
 pub use adif::{
-    export_adif, import_adif, parse_adif, AdifImportOptions, AdifImportSummary, DuplicatePolicy,
+    export_adif, export_adif_with_activations, import_adif, parse_adif, AdifImportOptions,
+    AdifImportSummary, DuplicatePolicy,
 };
 pub use bus::{
     redact_payload, BusEvent, EventBus, EventBusError, InMemoryEventBus, RuntimeDiagnosticEvent,
     RuntimeEventEnvelope, RuntimeEventFilter, RuntimeEventSeverity,
 };
 pub use event::{CoreEventEnvelope, NewLogbookEvent};
-pub use projection::{Projection, QsoCurrentStateProjection, QsoRecord};
+pub use projection::{
+    ActivationProjection, ActivationRecord, Projection, QsoCurrentStateProjection, QsoRecord,
+};
 pub use proposal::{
     submit_proposal, OperatorRole, ProposalContext, ProposalOutcome, ProposalValidationError,
 };
