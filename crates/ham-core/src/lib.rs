@@ -2,6 +2,7 @@
 
 pub mod adif;
 pub mod bus;
+pub mod diagnostics;
 pub mod event;
 pub mod lookup;
 pub mod projection;
@@ -17,6 +18,12 @@ pub use adif::{
 pub use bus::{
     redact_payload, BusEvent, EventBus, EventBusError, InMemoryEventBus, RuntimeDiagnosticEvent,
     RuntimeEventEnvelope, RuntimeEventFilter, RuntimeEventSeverity,
+};
+pub use diagnostics::{
+    action_timeline, build_diagnostic_bundle, bundle_content_hash, export_diagnostic_zip,
+    redact_for_report, ActionTimelineEntry, DiagnosticBundle, DiagnosticBundleFile,
+    DiagnosticBundleInput, DiagnosticBundleManifest, DiagnosticBundlePreview, DiagnosticReportType,
+    RedactionSummary, REPORT_FORMAT_VERSION,
 };
 pub use event::{CoreEventEnvelope, NewLogbookEvent};
 pub use lookup::{

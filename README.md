@@ -267,6 +267,87 @@ implemented, and multiple rigs are modeled but the GUI uses one active rig for
 autofill. Future work includes full Hamlib support, serial/TCP CAT, rotors,
 amplifiers, tuners, SO2R, and band-plan validation.
 
+## Diagnostic Report Bundles
+
+The app can create tester-friendly diagnostic reports without including official
+QSO history by default. Reports are ZIP files that can be saved locally or
+uploaded to an authenticated support endpoint on the sync server.
+
+Supported report types:
+
+- Basic report: runtime logs, app/core versions, platform/system info, enabled
+  plugins, recent errors, action timeline, redaction report, and user notes.
+- Sync report: Basic report plus sync status, peer/discovery summary, LAN/cloud
+  sync state, and divergence warnings.
+
+Bundle structure:
+
+```text
+ham-report-<timestamp>-<short-id>.zip
+manifest.json
+runtime-events.jsonl
+runtime-events.jsonl.1..5 when present
+system-info.json
+app-info.json
+plugins.json
+sync-status.json for Sync reports
+action-timeline.json
+redaction-report.json
+user-notes.txt
+```
+
+The manifest includes report format version, report type, generated time,
+app/core versions, platform, device/session IDs, safe account ID when paired,
+included files, bundle hash, and redaction summary.
+
+Privacy behavior:
+
+- Official QSO logs are not included by default.
+- Credentials, API keys, passwords, session tokens, and sync tokens are redacted.
+- Private profile/address fields are redacted.
+- Full AI prompts/responses are excluded by default.
+- Raw provider lookup metadata is redacted/excluded by default.
+- The redaction report describes removed categories without exposing removed
+  values.
+
+The action timeline includes recent important runtime events, usually from the
+last 15 minutes, with timestamp, event type, severity, source, plugin ID,
+correlation ID, workspace, payload summary, and error summary. It favors concise
+event summaries over full payloads.
+
+GUI workflow:
+
+1. Open Diagnostics and click `Report a Problem`, or use the command palette.
+2. Choose `Basic` or `Sync`.
+3. Add a short description and user notes.
+4. Click `Preview` to inspect included files and redaction summary.
+5. Click `Export ZIP` to save a local bundle. Native file dialogs are not wired
+   yet, so the MVP uses a typed output path.
+6. Click `Upload Report` to send the bundle to the support endpoint. Upload
+   requires cloud sync pairing/authentication first.
+
+Authenticated upload uses `POST /api/v1/reports` on the sync server. The server
+validates the sync token, stores report metadata and bundle bytes in the MVP
+in-memory backend, and returns a `report_id`, status, received time, and bundle
+hash. Report status starts as `submitted`; future support tooling can move it
+through `triaged`, `investigating`, `waiting_on_user`, `fixed`, and `closed`.
+
+Runtime report events include:
+
+- `diagnostics.report.started`
+- `diagnostics.bundle.created`
+- `diagnostics.redaction.completed`
+- `diagnostics.export.started`
+- `diagnostics.export.completed`
+- `diagnostics.upload.started`
+- `diagnostics.upload.completed`
+- `diagnostics.upload.failed`
+
+Current limitations: uploaded report storage is in-memory in the MVP sync
+server, screenshots are not attached, report status tracking has no dashboard,
+and official log excerpts are intentionally deferred until there is an explicit
+user-approved workflow.
+
 ## Durable Local Persistence
 
 The MVP durable official event store is JSON Lines. Each official event is

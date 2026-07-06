@@ -845,6 +845,63 @@ pub struct CloudPushEventsResponse {
     pub errors: Vec<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DiagnosticReportUploadType {
+    Basic,
+    Sync,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DiagnosticReportStatus {
+    Submitted,
+    Triaged,
+    Investigating,
+    WaitingOnUser,
+    Fixed,
+    Closed,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DiagnosticReportUploadRequest {
+    pub auth: CloudAuth,
+    pub report_type: DiagnosticReportUploadType,
+    pub app_version: String,
+    pub core_version: String,
+    pub platform: String,
+    pub plugin_list: Vec<String>,
+    pub sync_state_summary: Option<String>,
+    pub short_description: String,
+    pub bundle_hash: String,
+    pub bundle_bytes: Vec<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DiagnosticReportUploadResponse {
+    pub report_id: String,
+    pub status: DiagnosticReportStatus,
+    pub received_at: DateTime<Utc>,
+    pub bundle_hash: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DiagnosticReportMetadata {
+    pub report_id: String,
+    pub user_id: String,
+    pub account_id: String,
+    pub app_version: String,
+    pub core_version: String,
+    pub platform: String,
+    pub created_at: DateTime<Utc>,
+    pub report_type: DiagnosticReportUploadType,
+    pub plugin_list: Vec<String>,
+    pub sync_state_summary: Option<String>,
+    pub short_description: String,
+    pub bundle_hash: String,
+    pub status: DiagnosticReportStatus,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CloudSyncStatusResponse {
     pub connection_state: CloudConnectionState,
@@ -889,6 +946,13 @@ impl Default for CloudServerConfig {
 struct CloudAuthState {
     sessions_by_token: HashMap<String, CloudSession>,
     account_logbooks: HashMap<String, HashSet<Uuid>>,
+    reports: HashMap<String, StoredDiagnosticReport>,
+}
+
+#[derive(Debug, Clone)]
+struct StoredDiagnosticReport {
+    metadata: DiagnosticReportMetadata,
+    bundle_bytes: Vec<u8>,
 }
 
 #[derive(Debug, Clone)]
@@ -1142,6 +1206,66 @@ impl InMemoryCloudSyncServer {
         })
     }
 
+    pub async fn upload_report(
+        &self,
+        request: DiagnosticReportUploadRequest,
+    ) -> Result<DiagnosticReportUploadResponse, CloudSyncError> {
+        let session = self.authorize(&request.auth).await?;
+        if request.bundle_hash.trim().is_empty() || request.bundle_bytes.is_empty() {
+            return Err(CloudSyncError::Validation(
+                "diagnostic report bundle is empty".to_owned(),
+            ));
+        }
+        let report_id = format!("rpt-{}", Uuid::new_v4());
+        let received_at = Utc::now();
+        let metadata = DiagnosticReportMetadata {
+            report_id: report_id.clone(),
+            user_id: session.user_id,
+            account_id: session.account_id,
+            app_version: request.app_version,
+            core_version: request.core_version,
+            platform: request.platform,
+            created_at: received_at,
+            report_type: request.report_type,
+            plugin_list: request.plugin_list,
+            sync_state_summary: request.sync_state_summary,
+            short_description: request.short_description,
+            bundle_hash: request.bundle_hash.clone(),
+            status: DiagnosticReportStatus::Submitted,
+        };
+        self.auth.write().await.reports.insert(
+            report_id.clone(),
+            StoredDiagnosticReport {
+                metadata,
+                bundle_bytes: request.bundle_bytes,
+            },
+        );
+        Ok(DiagnosticReportUploadResponse {
+            report_id,
+            status: DiagnosticReportStatus::Submitted,
+            received_at,
+            bundle_hash: request.bundle_hash,
+        })
+    }
+
+    pub async fn report_metadata(
+        &self,
+        auth: &CloudAuth,
+        report_id: &str,
+    ) -> Result<DiagnosticReportMetadata, CloudSyncError> {
+        let session = self.authorize(auth).await?;
+        let auth = self.auth.read().await;
+        let report = auth
+            .reports
+            .get(report_id)
+            .ok_or_else(|| CloudSyncError::Validation("report not found".to_owned()))?;
+        if report.metadata.account_id != session.account_id {
+            return Err(CloudSyncError::Unauthenticated);
+        }
+        let _retained_size = report.bundle_bytes.len();
+        Ok(report.metadata.clone())
+    }
+
     pub async fn status(
         &self,
         auth: Option<&CloudAuth>,
@@ -1264,6 +1388,14 @@ impl CloudSyncClient {
             .await
     }
 
+    pub async fn upload_report(
+        &self,
+        mut request: DiagnosticReportUploadRequest,
+    ) -> Result<DiagnosticReportUploadResponse, CloudSyncError> {
+        request.auth = self.required_auth()?;
+        self.server.upload_report(request).await
+    }
+
     fn required_auth(&self) -> Result<CloudAuth, CloudSyncError> {
         self.auth.clone().ok_or(CloudSyncError::Unauthenticated)
     }
@@ -1380,6 +1512,23 @@ mod tests {
             .await
             .unwrap();
         client
+    }
+
+    fn sample_report_request(token: &str) -> DiagnosticReportUploadRequest {
+        DiagnosticReportUploadRequest {
+            auth: CloudAuth {
+                sync_token: token.to_owned(),
+            },
+            report_type: DiagnosticReportUploadType::Basic,
+            app_version: "0.1.0".to_owned(),
+            core_version: "0.1.0".to_owned(),
+            platform: "test".to_owned(),
+            plugin_list: vec!["core.gui".to_owned()],
+            sync_state_summary: None,
+            short_description: "problem".to_owned(),
+            bundle_hash: "hash".to_owned(),
+            bundle_bytes: b"PK report".to_vec(),
+        }
     }
 
     #[test]
@@ -1768,6 +1917,47 @@ mod tests {
             .await;
 
         assert!(!rejected.accepted);
+    }
+
+    #[tokio::test]
+    async fn report_upload_rejects_unauthenticated_request() {
+        let server = cloud_server();
+        let result = server.upload_report(sample_report_request("missing")).await;
+        assert_eq!(result.unwrap_err(), CloudSyncError::Unauthenticated);
+    }
+
+    #[tokio::test]
+    async fn report_upload_accepts_authenticated_request_and_returns_report_id() {
+        let logbook_id = Uuid::new_v4();
+        let client = paired_client(cloud_server(), logbook_id).await;
+        let auth = client.auth().unwrap().sync_token.clone();
+        let response = client
+            .upload_report(sample_report_request(&auth))
+            .await
+            .unwrap();
+
+        assert!(response.report_id.starts_with("rpt-"));
+        assert_eq!(response.status, DiagnosticReportStatus::Submitted);
+        assert_eq!(response.bundle_hash, "hash");
+    }
+
+    #[tokio::test]
+    async fn report_metadata_status_starts_submitted() {
+        let server = cloud_server();
+        let logbook_id = Uuid::new_v4();
+        let client = paired_client(server.clone(), logbook_id).await;
+        let auth = client.auth().unwrap().sync_token.clone();
+        let response = client
+            .upload_report(sample_report_request(&auth))
+            .await
+            .unwrap();
+        let metadata = server
+            .report_metadata(client.auth().unwrap(), response.report_id.as_str())
+            .await
+            .unwrap();
+
+        assert_eq!(metadata.status, DiagnosticReportStatus::Submitted);
+        assert_eq!(metadata.account_id, "acct-1");
     }
 
     #[tokio::test]

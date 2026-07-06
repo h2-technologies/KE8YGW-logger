@@ -8,8 +8,8 @@ use std::{
 
 use ham_sync::{
     CloudAuth, CloudHealthResponse, CloudPreviewPullRequest, CloudPullEventsRequest,
-    CloudPushEventsRequest, CloudServerConfig, CloudServiceMode, InMemoryCloudSyncServer,
-    PairDeviceRequest,
+    CloudPushEventsRequest, CloudServerConfig, CloudServiceMode, DiagnosticReportUploadRequest,
+    InMemoryCloudSyncServer, PairDeviceRequest,
 };
 use serde::Serialize;
 use serde_json::json;
@@ -145,6 +145,30 @@ fn handle_client(
                 Ok(payload) => json_response(&payload),
                 Err(error) => json_error(403, error.to_string()),
             },
+        },
+        ("POST", "/api/v1/reports") => {
+            match serde_json::from_slice::<DiagnosticReportUploadRequest>(&request.body) {
+                Ok(payload) => match runtime.block_on(server.upload_report(payload)) {
+                    Ok(payload) => json_response(&payload),
+                    Err(error) => match error {
+                        ham_sync::CloudSyncError::Unauthenticated => {
+                            json_error(401, error.to_string())
+                        }
+                        _ => json_error(403, error.to_string()),
+                    },
+                },
+                Err(error) => json_error(400, format!("invalid report upload request: {error}")),
+            }
+        }
+        ("GET", path) if path.starts_with("/api/v1/reports/") => match auth_from_query(query) {
+            Some(auth) => {
+                let report_id = path.trim_start_matches("/api/v1/reports/");
+                match runtime.block_on(server.report_metadata(&auth, report_id)) {
+                    Ok(payload) => json_response(&payload),
+                    Err(error) => json_error(403, error.to_string()),
+                }
+            }
+            None => json_error(401, "missing token"),
         },
         _ => json_error(404, "not found"),
     };

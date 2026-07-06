@@ -83,6 +83,34 @@ impl CommandRegistry {
                 None,
                 None,
             ),
+            command(
+                "diagnostics.report.problem",
+                "Report a Problem",
+                "Diagnostics",
+                None,
+                None,
+            ),
+            command(
+                "diagnostics.report.export",
+                "Export Diagnostic ZIP",
+                "Diagnostics",
+                None,
+                None,
+            ),
+            command(
+                "diagnostics.report.upload",
+                "Upload Diagnostic Report",
+                "Diagnostics",
+                None,
+                None,
+            ),
+            command(
+                "diagnostics.report.copy-last-id",
+                "Copy Last Report ID",
+                "Diagnostics",
+                None,
+                None,
+            ),
             command("adif.import", "Import ADIF", "Logging", None, None),
             command("adif.export", "Export ADIF", "Logging", None, None),
             command("lookup.callsign", "Lookup Callsign", "Lookup", None, None),
@@ -375,6 +403,10 @@ mod tests {
         assert!(ids.contains(&"toggle.event-bus-monitor"));
         assert!(ids.contains(&"event-bus.export"));
         assert!(ids.contains(&"event-bus.copy-latest-error"));
+        assert!(ids.contains(&"diagnostics.report.problem"));
+        assert!(ids.contains(&"diagnostics.report.export"));
+        assert!(ids.contains(&"diagnostics.report.upload"));
+        assert!(ids.contains(&"diagnostics.report.copy-last-id"));
         assert!(ids.contains(&"adif.import"));
         assert!(ids.contains(&"adif.export"));
         assert!(ids.contains(&"lookup.callsign"));

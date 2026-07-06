@@ -10,9 +10,10 @@ use std::{
 };
 
 use ham_core::{
-    default_official_event_log_path, export_adif, export_adif_with_activations, import_adif,
-    lookup_callsign_with_cache, publish_rig_runtime_event, submit_proposal,
-    suggestion_from_rig_state, AdifImportOptions, CoreEventEnvelope, JsonlLogbookEventStore,
+    build_diagnostic_bundle, default_official_event_log_path, export_adif,
+    export_adif_with_activations, export_diagnostic_zip, import_adif, lookup_callsign_with_cache,
+    publish_rig_runtime_event, submit_proposal, suggestion_from_rig_state, AdifImportOptions,
+    CoreEventEnvelope, DiagnosticBundleInput, DiagnosticReportType, JsonlLogbookEventStore,
     LocalPrefixProvider, LogbookEventStore, LookupCache, LookupCacheConfig, LookupProviderStatus,
     MockRigProvider, NewLogbookEvent, OperatorRole, Projection, ProposalContext,
     RigConnectionStatus, RigDevice, RigProvider, RigProviderStatus, RigState, RuntimeEventFilter,
@@ -31,11 +32,12 @@ use ham_sync::{
     build_handshake_response, metadata_for_event, preview_pull_from_events, pull_missing_events,
     CloudAuth, CloudConnectionState, CloudPreviewPullRequest, CloudPullEventsRequest,
     CloudPullEventsResponse, CloudPushEventsRequest, CloudPushEventsResponse, CloudServerConfig,
-    CloudSyncConfig, CloudSyncStatusResponse, DiscoveryPacket, GetEventMetadataResponse,
-    GetEventRangeResponse, HandshakeRequest, InMemoryCloudSyncServer, ListLogbooksResponse,
-    LocalPeerIdentity, LogbookHeadSummary, PairDeviceRequest, PeerObservation, PeerRecord,
-    PeerRegistry, PreviewPullRequest, PreviewPullResponse, PullEventsRequest, PullEventsResponse,
-    ReplicationStatus, SyncConfig, PROTOCOL_VERSION,
+    CloudSyncConfig, CloudSyncStatusResponse, DiagnosticReportUploadRequest,
+    DiagnosticReportUploadResponse, DiagnosticReportUploadType, DiscoveryPacket,
+    GetEventMetadataResponse, GetEventRangeResponse, HandshakeRequest, InMemoryCloudSyncServer,
+    ListLogbooksResponse, LocalPeerIdentity, LogbookHeadSummary, PairDeviceRequest,
+    PeerObservation, PeerRecord, PeerRegistry, PreviewPullRequest, PreviewPullResponse,
+    PullEventsRequest, PullEventsResponse, ReplicationStatus, SyncConfig, PROTOCOL_VERSION,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -148,6 +150,7 @@ fn main() {
         lookup_config: Mutex::new(LookupUiConfig::default()),
         rig_provider: MockRigProvider::default(),
         rig_config: Mutex::new(RigUiConfig::default()),
+        last_report: Mutex::new(None),
     });
 
     println!("ham-gui listening on http://{bound_addr}");
@@ -171,6 +174,7 @@ struct AppState {
     lookup_config: Mutex<LookupUiConfig>,
     rig_provider: MockRigProvider,
     rig_config: Mutex<RigUiConfig>,
+    last_report: Mutex<Option<DiagnosticReportUploadResponse>>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -344,6 +348,16 @@ fn handle_client(state: Arc<AppState>, mut stream: TcpStream) {
         ("POST", "/api/rig/disconnect") => handle_rig_disconnect(&state),
         ("POST", "/api/rig/refresh") => handle_rig_refresh(&state),
         ("POST", "/api/rig/mock/set") => handle_rig_mock_set(&state, &request.body),
+        ("GET", "/api/diagnostics/report-preview") => handle_report_preview(&state, query),
+        ("POST", "/api/diagnostics/report/export") => handle_report_export(&state, &request.body),
+        ("POST", "/api/diagnostics/report/upload") => handle_report_upload(&state, &request.body),
+        ("GET", "/api/diagnostics/report/last") => json_response(
+            &state
+                .last_report
+                .lock()
+                .expect("last report mutex should not be poisoned")
+                .clone(),
+        ),
         ("GET", "/api/sync/state") => json_response(&sync_state_payload(&state)),
         ("GET", "/api/sync/list-logbooks") => json_response(&ListLogbooksResponse {
             logbooks: vec![logbook_head_summary(&state)],
@@ -547,6 +561,14 @@ struct NoteQsoRequest {
 struct PathRequest {
     path: String,
     include_deleted: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+struct DiagnosticReportRequest {
+    report_type: Option<String>,
+    path: Option<String>,
+    user_notes: Option<String>,
+    short_description: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -768,6 +790,250 @@ fn handle_lookup_cache_clear(state: &AppState) -> Vec<u8> {
 
 fn handle_rig_status(state: &AppState) -> Vec<u8> {
     json_response(&rig_status_payload(state))
+}
+
+fn handle_report_preview(state: &AppState, query: &str) -> Vec<u8> {
+    let params = parse_query(query);
+    let report_type = parse_report_type(params.get("type").map(String::as_str));
+    let input = diagnostic_bundle_input(state, report_type, "");
+    json_response(&input.preview())
+}
+
+fn handle_report_export(state: &AppState, body: &[u8]) -> Vec<u8> {
+    let Ok(request) = serde_json::from_slice::<DiagnosticReportRequest>(body) else {
+        return json_error(400, "invalid diagnostic export JSON");
+    };
+    let Some(path) = request
+        .path
+        .as_deref()
+        .filter(|path| !path.trim().is_empty())
+    else {
+        return json_error(400, "missing output path");
+    };
+    let report_type = parse_report_type(request.report_type.as_deref());
+    let _ = publish_gui_runtime(
+        state,
+        "diagnostics.report.started",
+        RuntimeEventSeverity::Info,
+        "Diagnostic report generation started",
+        Some(json!({"report_type": report_type})),
+        None,
+    );
+    let _ = publish_gui_runtime(
+        state,
+        "diagnostics.export.started",
+        RuntimeEventSeverity::Info,
+        "Diagnostic ZIP export started",
+        Some(json!({"report_type": report_type, "path": path})),
+        None,
+    );
+    match build_diagnostic_bundle(diagnostic_bundle_input(
+        state,
+        report_type,
+        request.user_notes.as_deref().unwrap_or_default(),
+    )) {
+        Ok(bundle) => {
+            let _ = publish_gui_runtime(
+                state,
+                "diagnostics.bundle.created",
+                RuntimeEventSeverity::Info,
+                "Diagnostic bundle created",
+                Some(
+                    json!({"bundle_hash": bundle.manifest.bundle_hash, "files": bundle.manifest.included_files}),
+                ),
+                None,
+            );
+            let _ = publish_gui_runtime(
+                state,
+                "diagnostics.redaction.completed",
+                RuntimeEventSeverity::Info,
+                "Diagnostic redaction completed",
+                Some(json!(&bundle.manifest.redaction_summary)),
+                None,
+            );
+            if let Err(error) = export_diagnostic_zip(&bundle, std::path::Path::new(path)) {
+                return json_error(400, format!("failed to export diagnostic ZIP: {error}"));
+            }
+            let _ = publish_gui_runtime(
+                state,
+                "diagnostics.export.completed",
+                RuntimeEventSeverity::Info,
+                "Diagnostic ZIP export completed",
+                Some(json!({"path": path, "bundle_hash": bundle.manifest.bundle_hash})),
+                None,
+            );
+            json_response(&json!({
+                "ok": true,
+                "path": path,
+                "file_name": bundle.file_name,
+                "manifest": bundle.manifest
+            }))
+        }
+        Err(error) => json_error(400, format!("failed to build diagnostic bundle: {error}")),
+    }
+}
+
+fn handle_report_upload(state: &AppState, body: &[u8]) -> Vec<u8> {
+    let Ok(request) = serde_json::from_slice::<DiagnosticReportRequest>(body) else {
+        return json_error(400, "invalid diagnostic upload JSON");
+    };
+    let Some(auth) = cloud_auth(state) else {
+        return json_response_with_status(
+            401,
+            &json!({"ok": false, "error": "cloud sync authentication is required before upload"}),
+        );
+    };
+    let report_type = parse_report_type(request.report_type.as_deref());
+    let _ = publish_gui_runtime(
+        state,
+        "diagnostics.report.started",
+        RuntimeEventSeverity::Info,
+        "Diagnostic report generation started",
+        Some(json!({"report_type": report_type})),
+        None,
+    );
+    let _ = publish_gui_runtime(
+        state,
+        "diagnostics.upload.started",
+        RuntimeEventSeverity::Info,
+        "Diagnostic report upload started",
+        Some(json!({"report_type": report_type})),
+        None,
+    );
+    let bundle = match build_diagnostic_bundle(diagnostic_bundle_input(
+        state,
+        report_type,
+        request.user_notes.as_deref().unwrap_or_default(),
+    )) {
+        Ok(bundle) => bundle,
+        Err(error) => {
+            return json_error(400, format!("failed to build diagnostic bundle: {error}"))
+        }
+    };
+    let _ = publish_gui_runtime(
+        state,
+        "diagnostics.bundle.created",
+        RuntimeEventSeverity::Info,
+        "Diagnostic bundle created",
+        Some(
+            json!({"bundle_hash": bundle.manifest.bundle_hash, "files": bundle.manifest.included_files}),
+        ),
+        None,
+    );
+    let _ = publish_gui_runtime(
+        state,
+        "diagnostics.redaction.completed",
+        RuntimeEventSeverity::Info,
+        "Diagnostic redaction completed",
+        Some(json!(&bundle.manifest.redaction_summary)),
+        None,
+    );
+    let upload = DiagnosticReportUploadRequest {
+        auth,
+        report_type: match report_type {
+            DiagnosticReportType::Basic => DiagnosticReportUploadType::Basic,
+            DiagnosticReportType::Sync => DiagnosticReportUploadType::Sync,
+        },
+        app_version: env!("CARGO_PKG_VERSION").to_owned(),
+        core_version: env!("CARGO_PKG_VERSION").to_owned(),
+        platform: bundle.manifest.platform.clone(),
+        plugin_list: mock_plugins()
+            .into_iter()
+            .filter(|plugin| plugin.enabled)
+            .map(|plugin| plugin.plugin_id)
+            .collect(),
+        sync_state_summary: Some(sync_state_summary(state)),
+        short_description: request
+            .short_description
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| "No description provided".to_owned()),
+        bundle_hash: bundle.manifest.bundle_hash.clone(),
+        bundle_bytes: bundle.zip_bytes.clone(),
+    };
+    match state
+        .proposal_runtime
+        .block_on(state.cloud_server.upload_report(upload))
+    {
+        Ok(response) => {
+            *state
+                .last_report
+                .lock()
+                .expect("last report mutex should not be poisoned") = Some(response.clone());
+            let summary = format!("Diagnostic report uploaded as {}", response.report_id);
+            let _ = publish_gui_runtime(
+                state,
+                "diagnostics.upload.completed",
+                RuntimeEventSeverity::Info,
+                &summary,
+                Some(json!(&response)),
+                None,
+            );
+            json_response(&json!({"ok": true, "upload": response, "manifest": bundle.manifest}))
+        }
+        Err(error) => {
+            let _ = publish_gui_runtime(
+                state,
+                "diagnostics.upload.failed",
+                RuntimeEventSeverity::Error,
+                "Diagnostic report upload failed",
+                None,
+                Some(error.to_string()),
+            );
+            json_response_with_status(400, &json!({"ok": false, "error": error.to_string()}))
+        }
+    }
+}
+
+fn diagnostic_bundle_input(
+    state: &AppState,
+    report_type: DiagnosticReportType,
+    user_notes: &str,
+) -> DiagnosticBundleInput {
+    let status = state.bridge.status();
+    let sync_status = (report_type == DiagnosticReportType::Sync)
+        .then(|| serde_json::to_value(sync_state_payload(state)).unwrap_or_else(|_| json!({})));
+    DiagnosticBundleInput {
+        report_type,
+        runtime_log_dir: status.log_directory,
+        runtime_events: state.bridge.replay(RuntimeEventFilter::default(), 500),
+        app_version: env!("CARGO_PKG_VERSION").to_owned(),
+        core_version: env!("CARGO_PKG_VERSION").to_owned(),
+        device_id: status.device_id,
+        session_id: status.session_id,
+        account_id: state
+            .sync
+            .lock()
+            .expect("sync state mutex should not be poisoned")
+            .cloud_account_id
+            .clone(),
+        plugins: json!(mock_plugins()),
+        sync_status,
+        user_notes: user_notes.to_owned(),
+    }
+}
+
+fn parse_report_type(value: Option<&str>) -> DiagnosticReportType {
+    match value.unwrap_or("basic").to_ascii_lowercase().as_str() {
+        "sync" => DiagnosticReportType::Sync,
+        _ => DiagnosticReportType::Basic,
+    }
+}
+
+fn sync_state_summary(state: &AppState) -> String {
+    let sync = state
+        .sync
+        .lock()
+        .expect("sync state mutex should not be poisoned");
+    format!(
+        "lan_discovery={} cloud_enabled={} warnings={} divergence={}",
+        sync.discovery_running,
+        sync.cloud_config.enable_cloud_sync,
+        sync.warning_count,
+        sync.divergence
+            .clone()
+            .or_else(|| sync.cloud_divergence.clone())
+            .unwrap_or_else(|| "none".to_owned())
+    )
 }
 
 fn handle_rig_connect(state: &AppState) -> Vec<u8> {

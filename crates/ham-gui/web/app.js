@@ -13,6 +13,8 @@ const state = {
   acceptedRigFields: null,
   qsoError: "",
   importSummary: null,
+  reportPreview: null,
+  lastReport: null,
   syncState: null,
   selectedPeerId: null,
   activeWorkspace: "dashboard",
@@ -232,6 +234,10 @@ function runCommand(commandId) {
   if (command.id === "open.plugins") openScreen("plugins");
   if (command.id === "open.diagnostics") openScreen("diagnostics");
   if (command.id === "diagnostics.open-folder") openScreen("diagnostics-folder");
+  if (command.id === "diagnostics.report.problem") openReportProblemScreen();
+  if (command.id === "diagnostics.report.export") exportDiagnosticZipFromScreen();
+  if (command.id === "diagnostics.report.upload") uploadDiagnosticReportFromScreen();
+  if (command.id === "diagnostics.report.copy-last-id") copyLastReportId();
   if (command.id === "adif.import") importAdifFromPrompt();
   if (command.id === "adif.export") exportAdifFromPrompt();
   if (command.id === "lookup.callsign") lookupCallsignFromPrompt();
@@ -294,8 +300,19 @@ function openScreen(kind) {
   if (kind === "diagnostics") {
     eyebrow.textContent = "Diagnostics";
     title.textContent = "Diagnostic Report";
-    body.innerHTML = `<p class="muted">Future report export will include core event store, sync, plugin runtime, and GUI bridge state.</p>
+    body.innerHTML = `<div class="monitor-actions">
+        <button class="toolbar-button" type="button" onclick="openReportProblemScreen()">Report a Problem</button>
+        <button class="toolbar-button" type="button" onclick="openScreen('diagnostics-folder')">Open Diagnostics Folder</button>
+      </div>
       <div class="stack">${state.runtimeEvents.map(renderRuntimeEvent).join("")}</div>`;
+    return;
+  }
+
+  if (kind === "report-problem") {
+    eyebrow.textContent = "Diagnostics";
+    title.textContent = "Report a Problem";
+    body.innerHTML = renderReportProblem();
+    bindReportProblemControls();
     return;
   }
 
@@ -392,6 +409,55 @@ function renderCloudSettings() {
     <label>Sync Interval Seconds <input id="cloud-sync-interval" class="placeholder-control" inputmode="numeric" value="${config.sync_interval_seconds || 300}" /></label>
     <button id="cloud-connect-settings" class="toolbar-button" type="button">Pair / Connect</button>
   </div>`;
+}
+
+function renderReportProblem() {
+  const preview = state.reportPreview;
+  const lastReportId = state.lastReport?.report_id || state.lastReport?.upload?.report_id || "";
+  return `<div class="qso-form">
+    <label>Report Type
+      <select id="report-type" class="placeholder-control">
+        <option value="basic" ${preview?.report_type === "basic" ? "selected" : ""}>Basic</option>
+        <option value="sync" ${preview?.report_type === "sync" ? "selected" : ""}>Sync</option>
+      </select>
+    </label>
+    <label>Short Description
+      <input id="report-description" class="placeholder-control" placeholder="What went wrong?" />
+    </label>
+    <label>User Notes
+      <textarea id="report-notes" class="placeholder-control" rows="5" placeholder="Steps, expectations, anything useful"></textarea>
+    </label>
+    <label>Export Path
+      <input id="report-output-path" class="placeholder-control" placeholder="C:\\Temp\\ham-report.zip" />
+    </label>
+    <div class="monitor-actions">
+      <button id="report-refresh-preview" class="toolbar-button" type="button">Preview</button>
+      <button id="report-export" class="toolbar-button" type="button">Export ZIP</button>
+      <button id="report-upload" class="toolbar-button" type="button">Upload Report</button>
+      <button id="report-copy-id" class="toolbar-button" type="button" ${lastReportId ? "" : "disabled"}>Copy Report ID</button>
+    </div>
+    <div class="sync-summary">
+      <p><strong>Included files</strong></p>
+      <p>${preview?.included_files?.map((file) => `<span class="pill">${file}</span>`).join("") || "Click Preview to inspect bundle contents."}</p>
+      <p><strong>Redaction summary</strong></p>
+      <p>${preview ? redactionSummaryText(preview.redaction_summary) : "Official logs, credentials, full AI payloads, private profile fields, and raw provider metadata are excluded/redacted by default."}</p>
+      ${lastReportId ? `<p><strong>Last report ID:</strong> <span class="pill">${lastReportId}</span></p>` : ""}
+      ${state.importSummary ? `<pre class="path-block">${JSON.stringify(state.importSummary, null, 2)}</pre>` : ""}
+    </div>
+  </div>`;
+}
+
+function bindReportProblemControls() {
+  byId("report-refresh-preview")?.addEventListener("click", refreshReportPreview);
+  byId("report-export")?.addEventListener("click", exportDiagnosticZipFromScreen);
+  byId("report-upload")?.addEventListener("click", uploadDiagnosticReportFromScreen);
+  byId("report-copy-id")?.addEventListener("click", copyLastReportId);
+  byId("report-type")?.addEventListener("change", refreshReportPreview);
+}
+
+function redactionSummaryText(summary) {
+  if (!summary) return "";
+  return `${summary.secret_fields_redacted || 0} secret-like fields redacted; ${summary.private_profile_fields_redacted || 0} private profile fields redacted. Excluded: ${(summary.categories_removed || []).join(", ")}.`;
 }
 
 function renderEventBusMonitor() {
@@ -878,6 +944,62 @@ async function clearLookupCache() {
 async function showLookupProviderStatus() {
   state.importSummary = await fetch("/api/lookup/status").then((response) => response.json());
   openScreen("import-summary");
+}
+
+async function openReportProblemScreen() {
+  await refreshReportPreview();
+  openScreen("report-problem");
+}
+
+async function refreshReportPreview() {
+  const reportType = byId("report-type")?.value || "basic";
+  state.reportPreview = await fetch(`/api/diagnostics/report-preview?type=${encodeURIComponent(reportType)}`).then((response) =>
+    response.json(),
+  );
+  if (!byId("report-type")) return;
+  openScreen("report-problem");
+}
+
+async function exportDiagnosticZipFromScreen() {
+  const reportType = byId("report-type")?.value || "basic";
+  const path = byId("report-output-path")?.value || window.prompt("Path to write diagnostic ZIP");
+  if (!path) return;
+  const response = await fetch("/api/diagnostics/report/export", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      report_type: reportType,
+      path,
+      user_notes: byId("report-notes")?.value || "",
+      short_description: byId("report-description")?.value || "",
+    }),
+  });
+  state.importSummary = await response.json();
+  await refreshRuntimeEvents();
+  openScreen("report-problem");
+}
+
+async function uploadDiagnosticReportFromScreen() {
+  const reportType = byId("report-type")?.value || "basic";
+  const response = await fetch("/api/diagnostics/report/upload", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      report_type: reportType,
+      user_notes: byId("report-notes")?.value || "",
+      short_description: byId("report-description")?.value || "",
+    }),
+  });
+  const result = await response.json();
+  state.importSummary = result;
+  if (response.ok) state.lastReport = result.upload;
+  await refreshRuntimeEvents();
+  openScreen("report-problem");
+}
+
+function copyLastReportId() {
+  const reportId = state.lastReport?.report_id || state.lastReport?.upload?.report_id;
+  if (reportId) navigator.clipboard?.writeText(reportId);
 }
 
 async function connectRig() {
