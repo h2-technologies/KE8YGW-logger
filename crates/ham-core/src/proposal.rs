@@ -18,6 +18,7 @@ use uuid::Uuid;
 use crate::{
     bus::{BusEvent, EventBus, EventBusError, RuntimeEventEnvelope, RuntimeEventSeverity},
     event::{CoreEventEnvelope, NewLogbookEvent},
+    permissions::{check_plugin_permission, PermissionGrantSet},
     store::{LogbookEventStore, StoreError},
 };
 
@@ -57,6 +58,18 @@ impl OperatorRole {
 pub struct ProposalContext {
     pub plugin_manifest: PluginManifest,
     pub operator_role: OperatorRole,
+    pub permission_grants: PermissionGrantSet,
+}
+
+impl ProposalContext {
+    pub fn local_admin(plugin_manifest: PluginManifest, operator_role: OperatorRole) -> Self {
+        let permission_grants = PermissionGrantSet::grants_for_manifest(&plugin_manifest);
+        Self {
+            plugin_manifest,
+            operator_role,
+            permission_grants,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -73,6 +86,8 @@ pub enum ProposalValidationError {
     },
     #[error("plugin is missing required capability {0:?}")]
     MissingPluginCapability(PluginCapability),
+    #[error("plugin permission denied: {0}")]
+    PluginPermissionDenied(String),
     #[error("operator role {role:?} cannot submit {proposal_type}")]
     PermissionDenied {
         role: OperatorRole,
@@ -178,12 +193,57 @@ where
 
     let required_capability = required_capability(&proposal.proposal_type)?;
     if !context.plugin_manifest.has_capability(&required_capability) {
+        publish_permission_check_event(
+            bus,
+            &proposal,
+            "plugin.permission.check.denied",
+            RuntimeEventSeverity::Warn,
+            &required_capability,
+            "plugin manifest does not request required permission",
+        )
+        .await?;
         return Err(ProposalValidationError::MissingPluginCapability(
             required_capability,
         ));
     }
+    if let Err(error) = check_plugin_permission(
+        &context.plugin_manifest,
+        &context.permission_grants,
+        &required_capability,
+    ) {
+        publish_permission_check_event(
+            bus,
+            &proposal,
+            "plugin.permission.check.denied",
+            RuntimeEventSeverity::Warn,
+            &required_capability,
+            "plugin permission grant is missing or denied",
+        )
+        .await?;
+        return Err(ProposalValidationError::PluginPermissionDenied(
+            error.to_string(),
+        ));
+    }
+    publish_permission_check_event(
+        bus,
+        &proposal,
+        "plugin.permission.check.allowed",
+        RuntimeEventSeverity::Debug,
+        &required_capability,
+        "plugin permission check allowed",
+    )
+    .await?;
 
     if !context.operator_role.can_submit(&proposal.proposal_type) {
+        publish_permission_check_event(
+            bus,
+            &proposal,
+            "plugin.permission.check.denied",
+            RuntimeEventSeverity::Warn,
+            &required_capability,
+            "operator role cannot submit this proposal",
+        )
+        .await?;
         return Err(ProposalValidationError::PermissionDenied {
             role: context.operator_role,
             proposal_type: proposal.proposal_type,
@@ -212,7 +272,8 @@ fn required_capability(proposal_type: &str) -> Result<PluginCapability, Proposal
         PROPOSAL_ACTIVATION_UPDATE | PROPOSAL_ACTIVATION_NOTE_ADD => {
             Ok(PluginCapability::ActivationUpdate)
         }
-        PROPOSAL_ACTIVATION_END | PROPOSAL_ACTIVATION_CANCEL => Ok(PluginCapability::ActivationEnd),
+        PROPOSAL_ACTIVATION_END => Ok(PluginCapability::ActivationEnd),
+        PROPOSAL_ACTIVATION_CANCEL => Ok(PluginCapability::ActivationCancel),
         PROPOSAL_QSO_ACTIVATION_LINK | PROPOSAL_QSO_ACTIVATION_UNLINK => {
             Ok(PluginCapability::QsoCorrect)
         }
@@ -220,6 +281,38 @@ fn required_capability(proposal_type: &str) -> Result<PluginCapability, Proposal
             other.to_owned(),
         )),
     }
+}
+
+async fn publish_permission_check_event<B>(
+    bus: &B,
+    proposal: &ProposalEnvelope,
+    event_type: &str,
+    severity: RuntimeEventSeverity,
+    permission: &PluginCapability,
+    summary: &str,
+) -> Result<(), ProposalValidationError>
+where
+    B: EventBus,
+{
+    bus.publish(BusEvent::Runtime(RuntimeEventEnvelope::new(
+        event_type,
+        severity,
+        "ham-core",
+        Some(proposal.source_plugin_id.clone()),
+        proposal.proposal_id,
+        Uuid::new_v4(),
+        proposal.author_device_id,
+        None,
+        summary,
+        Some(serde_json::json!({
+            "plugin_id": proposal.source_plugin_id,
+            "permission_id": permission.as_str(),
+            "proposal_type": proposal.proposal_type,
+        })),
+        None,
+    )))
+    .await?;
+    Ok(())
 }
 
 async fn validate_qso_schema<S>(

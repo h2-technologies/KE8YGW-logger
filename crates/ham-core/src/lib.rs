@@ -5,6 +5,7 @@ pub mod bus;
 pub mod diagnostics;
 pub mod event;
 pub mod lookup;
+pub mod permissions;
 pub mod projection;
 pub mod proposal;
 pub mod rig;
@@ -31,6 +32,11 @@ pub use lookup::{
     validate_grid, CallsignLookupProvider, EntityInfo, GridInfo, LocalPrefixProvider, LookupCache,
     LookupCacheConfig, LookupError, LookupProviderStatus, LookupResult, LookupSuggestion,
     MockLookupProvider, QrzLookupProviderStub,
+};
+pub use permissions::{
+    check_plugin_permission, grant_builtin_defaults, JsonPermissionGrantStore, PermissionError,
+    PermissionGrant, PermissionGrantSet, PermissionGrantStatus, PermissionMetadata,
+    PermissionRegistry, PermissionRiskLevel, PermissionSettings,
 };
 pub use projection::{
     ActivationProjection, ActivationRecord, Projection, QsoCurrentStateProjection, QsoRecord,

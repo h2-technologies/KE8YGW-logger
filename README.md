@@ -203,6 +203,77 @@ Current limitations: QRZ, HamQTH, FCC/ULS lookup, DXCC database updates,
 distance/bearing display, award-needed hints, and auto-accept trusted lookups are
 future work.
 
+## Plugin Permission Model
+
+Plugins declare requested permissions in their manifest. A requested permission
+does not by itself grant access. The core checks both plugin permission grants
+and operator role permissions before writing official events or allowing
+privileged runtime actions.
+
+Manifest fields include:
+
+- `plugin_id`
+- `name`
+- `version`
+- `author`
+- `description`
+- `requested_permissions`
+- `optional_permissions`
+- `contributed_panels`
+- `contributed_commands`
+- `plugin_type`
+- `minimum_core_version`
+
+Permission metadata includes permission ID, category, display name, description,
+risk level, built-in default behavior, admin approval requirement, and a
+user-visible reason. Risk levels are `low`, `medium`, `high`, and `critical`.
+
+Important security rules:
+
+- External network lookup is separate from offline lookup.
+- Diagnostics upload is separate from diagnostics export and log viewing.
+- Rig read/state permissions are separate from rig write/PTT permissions.
+- Sync LAN/cloud pull and push permissions are separate.
+- UI panel registration does not imply data access.
+- Unknown manifest permissions are reported as invalid.
+- Permission grants are stored in local support/config storage, not the official
+  append-only log.
+
+Grant records include plugin ID, permission ID, status (`granted`, `denied`,
+`pending`, or `revoked`), optional operator ID, grant time, reason, scope, and
+future expiry. The MVP assumes the local operator is an admin for approval UI,
+but the core enforcement interface already separates plugin grants from operator
+role checks.
+
+The GUI Plugin Manager shows installed plugins, requested permissions, optional
+permissions, risk levels, grant status, contributed panels/commands, and actions
+to grant, deny, revoke, or approve low-risk permissions. High and critical
+permissions remain visibly risky and are not silently auto-granted. Denied
+actions return a clear error to the UI and publish runtime permission events.
+
+Runtime permission events include:
+
+- `plugin.permission.requested`
+- `plugin.permission.granted`
+- `plugin.permission.denied`
+- `plugin.permission.revoked`
+- `plugin.permission.check.allowed`
+- `plugin.permission.check.denied`
+- `plugin.manifest.loaded`
+- `plugin.manifest.invalid`
+- `plugin.disabled.permission_missing`
+
+Core enforcement currently covers QSO proposals, activation proposals, ADIF
+import/export, LAN/cloud sync actions, diagnostics export/upload, rig control
+commands, and callsign lookup/cache actions. A denied proposal never appends an
+official event, so the hash-chained official log remains protected by the core
+validator.
+
+Current MVP limitations: plugin loading is still static, plugins are not signed,
+there is no sandbox, grant scopes are mostly recorded rather than enforced, and
+organization-managed policy is future work. Future work includes signed plugins,
+runtime sandboxing, scoped grants, marketplace review, and managed policies.
+
 ## Rig Control And Frequency Autofill Plugin
 
 `plugin.rig-control` provides the first radio/device integration layer. Rig

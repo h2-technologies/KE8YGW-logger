@@ -103,15 +103,15 @@ async fn main() {
 }
 
 fn proposal_context() -> ProposalContext {
-    ProposalContext {
-        plugin_manifest: PluginManifest {
-            plugin_id: "ham-cli".to_owned(),
-            name: "Ham CLI".to_owned(),
-            version: env!("CARGO_PKG_VERSION").to_owned(),
-            capabilities: vec![PluginCapability::QsoCreate],
-        },
-        operator_role: OperatorRole::Logger,
-    }
+    ProposalContext::local_admin(
+        PluginManifest::new(
+            "ham-cli",
+            "Ham CLI",
+            env!("CARGO_PKG_VERSION"),
+            vec![PluginCapability::QsoCreate],
+        ),
+        OperatorRole::Logger,
+    )
 }
 
 fn print_usage() {

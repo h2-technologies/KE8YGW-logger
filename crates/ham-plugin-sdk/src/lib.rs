@@ -39,6 +39,7 @@ pub const OFFICIAL_LOG_QSO_ACTIVATION_UNLINKED: &str = "official.log.qso.activat
 /// A capability granted to a plugin by the host application.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum PluginCapability {
+    QsoView,
     QsoCreate,
     QsoCorrect,
     QsoDelete,
@@ -48,8 +49,16 @@ pub enum PluginCapability {
     ActivationCreate,
     ActivationUpdate,
     ActivationEnd,
+    ActivationCancel,
     ActivationView,
+    AdifImport,
     AdifExport,
+    SyncLanDiscovery,
+    SyncLanPull,
+    SyncLanPush,
+    SyncCloudConnect,
+    SyncCloudPull,
+    SyncCloudPush,
     LookupCallsign,
     LookupEntity,
     LookupGrid,
@@ -64,23 +73,39 @@ pub enum PluginCapability {
     RigControlSplit,
     RigReadState,
     RigConfigure,
+    DiagnosticsViewLogs,
+    DiagnosticsExport,
+    DiagnosticsUpload,
+    UiPanelRegister,
+    UiCommandRegister,
+    SettingsRead,
+    SettingsWrite,
     Other(String),
 }
 
 impl PluginCapability {
     pub fn as_str(&self) -> &str {
         match self {
-            Self::QsoCreate => "qso:create",
-            Self::QsoCorrect => "qso:correct",
-            Self::QsoDelete => "qso:delete",
-            Self::QsoRestore => "qso:restore",
-            Self::QsoNoteAdd => "qso:note:add",
-            Self::QsoViewDeleted => "qso:view-deleted",
+            Self::QsoView => "log.qso.view",
+            Self::QsoCreate => "log.qso.create",
+            Self::QsoCorrect => "log.qso.correct",
+            Self::QsoDelete => "log.qso.delete",
+            Self::QsoRestore => "log.qso.restore",
+            Self::QsoNoteAdd => "log.qso.note.add",
+            Self::QsoViewDeleted => "log.qso.view_deleted",
             Self::ActivationCreate => "activation.create",
             Self::ActivationUpdate => "activation.update",
             Self::ActivationEnd => "activation.end",
+            Self::ActivationCancel => "activation.cancel",
             Self::ActivationView => "activation.view",
+            Self::AdifImport => "adif.import",
             Self::AdifExport => "adif.export",
+            Self::SyncLanDiscovery => "sync.lan.discovery",
+            Self::SyncLanPull => "sync.lan.pull",
+            Self::SyncLanPush => "sync.lan.push",
+            Self::SyncCloudConnect => "sync.cloud.connect",
+            Self::SyncCloudPull => "sync.cloud.pull",
+            Self::SyncCloudPush => "sync.cloud.push",
             Self::LookupCallsign => "lookup.callsign",
             Self::LookupEntity => "lookup.entity",
             Self::LookupGrid => "lookup.grid",
@@ -95,6 +120,13 @@ impl PluginCapability {
             Self::RigControlSplit => "rig.control.split",
             Self::RigReadState => "rig.read.state",
             Self::RigConfigure => "rig.configure",
+            Self::DiagnosticsViewLogs => "diagnostics.view_logs",
+            Self::DiagnosticsExport => "diagnostics.export",
+            Self::DiagnosticsUpload => "diagnostics.upload",
+            Self::UiPanelRegister => "ui.panel.register",
+            Self::UiCommandRegister => "ui.command.register",
+            Self::SettingsRead => "settings.read",
+            Self::SettingsWrite => "settings.write",
             Self::Other(value) => value,
         }
     }
@@ -116,17 +148,26 @@ impl<'de> Deserialize<'de> for PluginCapability {
     {
         let value = String::deserialize(deserializer)?;
         Ok(match value.as_str() {
-            "qso:create" => Self::QsoCreate,
-            "qso:correct" => Self::QsoCorrect,
-            "qso:delete" => Self::QsoDelete,
-            "qso:restore" => Self::QsoRestore,
-            "qso:note:add" => Self::QsoNoteAdd,
-            "qso:view-deleted" => Self::QsoViewDeleted,
+            "log.qso.view" => Self::QsoView,
+            "qso:create" | "log.qso.create" => Self::QsoCreate,
+            "qso:correct" | "log.qso.correct" => Self::QsoCorrect,
+            "qso:delete" | "log.qso.delete" => Self::QsoDelete,
+            "qso:restore" | "log.qso.restore" => Self::QsoRestore,
+            "qso:note:add" | "log.qso.note.add" => Self::QsoNoteAdd,
+            "qso:view-deleted" | "log.qso.view_deleted" => Self::QsoViewDeleted,
             "activation.create" => Self::ActivationCreate,
             "activation.update" => Self::ActivationUpdate,
             "activation.end" => Self::ActivationEnd,
+            "activation.cancel" => Self::ActivationCancel,
             "activation.view" => Self::ActivationView,
+            "adif.import" => Self::AdifImport,
             "adif.export" => Self::AdifExport,
+            "sync.lan.discovery" => Self::SyncLanDiscovery,
+            "sync.lan.pull" => Self::SyncLanPull,
+            "sync.lan.push" => Self::SyncLanPush,
+            "sync.cloud.connect" => Self::SyncCloudConnect,
+            "sync.cloud.pull" => Self::SyncCloudPull,
+            "sync.cloud.push" => Self::SyncCloudPush,
             "lookup.callsign" => Self::LookupCallsign,
             "lookup.entity" => Self::LookupEntity,
             "lookup.grid" => Self::LookupGrid,
@@ -141,6 +182,13 @@ impl<'de> Deserialize<'de> for PluginCapability {
             "rig.control.split" => Self::RigControlSplit,
             "rig.read.state" => Self::RigReadState,
             "rig.configure" => Self::RigConfigure,
+            "diagnostics.view_logs" => Self::DiagnosticsViewLogs,
+            "diagnostics.export" => Self::DiagnosticsExport,
+            "diagnostics.upload" => Self::DiagnosticsUpload,
+            "ui.panel.register" => Self::UiPanelRegister,
+            "ui.command.register" => Self::UiCommandRegister,
+            "settings.read" => Self::SettingsRead,
+            "settings.write" => Self::SettingsWrite,
             _ => Self::Other(value),
         })
     }
@@ -152,13 +200,74 @@ pub struct PluginManifest {
     pub plugin_id: String,
     pub name: String,
     pub version: String,
+    #[serde(default)]
+    pub author: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub requested_permissions: Vec<PluginCapability>,
+    #[serde(default)]
+    pub optional_permissions: Vec<PluginCapability>,
+    #[serde(default)]
+    pub contributed_panels: Vec<String>,
+    #[serde(default)]
+    pub contributed_commands: Vec<String>,
+    #[serde(default)]
+    pub plugin_type: String,
+    #[serde(default)]
+    pub minimum_core_version: String,
     pub capabilities: Vec<PluginCapability>,
 }
 
 impl PluginManifest {
+    pub fn new(
+        plugin_id: impl Into<String>,
+        name: impl Into<String>,
+        version: impl Into<String>,
+        capabilities: Vec<PluginCapability>,
+    ) -> Self {
+        let capabilities = normalize_permissions(capabilities);
+        Self {
+            plugin_id: plugin_id.into(),
+            name: name.into(),
+            version: version.into(),
+            author: String::new(),
+            description: String::new(),
+            requested_permissions: capabilities.clone(),
+            optional_permissions: Vec::new(),
+            contributed_panels: Vec::new(),
+            contributed_commands: Vec::new(),
+            plugin_type: "builtin".to_owned(),
+            minimum_core_version: "0.1.0".to_owned(),
+            capabilities,
+        }
+    }
+
     pub fn has_capability(&self, capability: &PluginCapability) -> bool {
         self.capabilities.iter().any(|held| held == capability)
+            || self
+                .requested_permissions
+                .iter()
+                .any(|held| held == capability)
     }
+
+    pub fn requested_or_capabilities(&self) -> Vec<PluginCapability> {
+        if self.requested_permissions.is_empty() {
+            self.capabilities.clone()
+        } else {
+            self.requested_permissions.clone()
+        }
+    }
+}
+
+fn normalize_permissions(capabilities: Vec<PluginCapability>) -> Vec<PluginCapability> {
+    let mut normalized = Vec::new();
+    for capability in capabilities {
+        if !normalized.contains(&capability) {
+            normalized.push(capability);
+        }
+    }
+    normalized
 }
 
 /// A proposed operation submitted by a plugin.

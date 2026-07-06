@@ -12,8 +12,8 @@ use uuid::Uuid;
 
 use crate::{
     submit_proposal, BusEvent, EventBus, InMemoryEventBus, InMemoryLogbookEventStore,
-    LogbookEventStore, NewLogbookEvent, OperatorRole, Projection, ProposalContext,
-    ProposalValidationError, QsoCurrentStateProjection,
+    LogbookEventStore, NewLogbookEvent, OperatorRole, PermissionGrantSet, PermissionGrantStatus,
+    Projection, ProposalContext, ProposalValidationError, QsoCurrentStateProjection,
 };
 
 fn activation_payload(kind: &str) -> serde_json::Value {
@@ -37,11 +37,12 @@ fn activation_payload(kind: &str) -> serde_json::Value {
 }
 
 fn activation_context() -> ProposalContext {
-    ProposalContext {
-        plugin_manifest: plugin_manifest(vec![
+    ProposalContext::local_admin(
+        plugin_manifest(vec![
             PluginCapability::ActivationCreate,
             PluginCapability::ActivationUpdate,
             PluginCapability::ActivationEnd,
+            PluginCapability::ActivationCancel,
             PluginCapability::QsoCreate,
             PluginCapability::QsoCorrect,
             PluginCapability::QsoDelete,
@@ -49,8 +50,8 @@ fn activation_context() -> ProposalContext {
             PluginCapability::QsoNoteAdd,
             PluginCapability::AdifExport,
         ]),
-        operator_role: OperatorRole::Admin,
-    }
+        OperatorRole::Admin,
+    )
 }
 
 fn qso_payload() -> serde_json::Value {
@@ -67,12 +68,7 @@ fn qso_payload() -> serde_json::Value {
 }
 
 fn plugin_manifest(capabilities: Vec<PluginCapability>) -> PluginManifest {
-    PluginManifest {
-        plugin_id: "test-plugin".to_owned(),
-        name: "Test Plugin".to_owned(),
-        version: "0.1.0".to_owned(),
-        capabilities,
-    }
+    PluginManifest::new("test-plugin", "Test Plugin", "0.1.0", capabilities)
 }
 
 fn proposal(proposal_type: &str, entity_id: Option<Uuid>) -> ProposalEnvelope {
@@ -193,10 +189,10 @@ async fn valid_qso_create_proposal_creates_official_event() {
     let store = InMemoryLogbookEventStore::new();
     let bus = InMemoryEventBus::default();
     let logbook_id = Uuid::new_v4();
-    let context = ProposalContext {
-        plugin_manifest: plugin_manifest(vec![PluginCapability::QsoCreate]),
-        operator_role: OperatorRole::Logger,
-    };
+    let context = ProposalContext::local_admin(
+        plugin_manifest(vec![PluginCapability::QsoCreate]),
+        OperatorRole::Logger,
+    );
 
     let outcome = submit_proposal(
         &store,
@@ -216,10 +212,10 @@ async fn valid_qso_create_proposal_creates_official_event() {
 async fn invalid_qso_create_proposal_is_rejected() {
     let store = InMemoryLogbookEventStore::new();
     let bus = InMemoryEventBus::default();
-    let context = ProposalContext {
-        plugin_manifest: plugin_manifest(vec![PluginCapability::QsoCreate]),
-        operator_role: OperatorRole::Logger,
-    };
+    let context = ProposalContext::local_admin(
+        plugin_manifest(vec![PluginCapability::QsoCreate]),
+        OperatorRole::Logger,
+    );
     let mut payload = qso_payload();
     payload
         .as_object_mut()
@@ -430,10 +426,7 @@ async fn qso_deleted_hides_projection_without_removing_event() {
 async fn plugin_proposals_are_rejected_without_required_capability() {
     let store = InMemoryLogbookEventStore::new();
     let bus = InMemoryEventBus::default();
-    let context = ProposalContext {
-        plugin_manifest: plugin_manifest(vec![]),
-        operator_role: OperatorRole::Logger,
-    };
+    let context = ProposalContext::local_admin(plugin_manifest(vec![]), OperatorRole::Logger);
 
     let err = submit_proposal(&store, &bus, &context, proposal(PROPOSAL_QSO_CREATE, None))
         .await
@@ -446,14 +439,81 @@ async fn plugin_proposals_are_rejected_without_required_capability() {
 }
 
 #[tokio::test]
+async fn qso_create_denied_when_plugin_permission_not_granted() {
+    let store = InMemoryLogbookEventStore::new();
+    let bus = InMemoryEventBus::default();
+    let context = ProposalContext {
+        plugin_manifest: plugin_manifest(vec![PluginCapability::QsoCreate]),
+        operator_role: OperatorRole::Logger,
+        permission_grants: PermissionGrantSet::default(),
+    };
+
+    let err = submit_proposal(&store, &bus, &context, proposal(PROPOSAL_QSO_CREATE, None))
+        .await
+        .unwrap_err();
+
+    assert!(matches!(
+        err,
+        ProposalValidationError::PluginPermissionDenied(_)
+    ));
+}
+
+#[tokio::test]
+async fn qso_create_allowed_only_when_plugin_and_role_allow() {
+    let store = InMemoryLogbookEventStore::new();
+    let bus = InMemoryEventBus::default();
+    let context = ProposalContext::local_admin(
+        plugin_manifest(vec![PluginCapability::QsoCreate]),
+        OperatorRole::Logger,
+    );
+
+    let outcome = submit_proposal(&store, &bus, &context, proposal(PROPOSAL_QSO_CREATE, None))
+        .await
+        .unwrap();
+
+    assert_eq!(outcome.official_event.event_type, OFFICIAL_LOG_QSO_CREATED);
+}
+
+#[tokio::test]
+async fn runtime_event_is_published_for_denied_permission() {
+    let store = InMemoryLogbookEventStore::new();
+    let bus = InMemoryEventBus::default();
+    let mut receiver = bus.subscribe();
+    let mut grants = PermissionGrantSet::default();
+    grants.set_status(
+        "test-plugin",
+        PluginCapability::QsoCreate,
+        PermissionGrantStatus::Denied,
+        Some("test deny".to_owned()),
+    );
+    let context = ProposalContext {
+        plugin_manifest: plugin_manifest(vec![PluginCapability::QsoCreate]),
+        operator_role: OperatorRole::Logger,
+        permission_grants: grants,
+    };
+
+    let _ = submit_proposal(&store, &bus, &context, proposal(PROPOSAL_QSO_CREATE, None)).await;
+    let mut found = false;
+    for _ in 0..8 {
+        if let BusEvent::Runtime(event) = receiver.recv().await.unwrap() {
+            if event.event_type == "plugin.permission.check.denied" {
+                found = true;
+                break;
+            }
+        }
+    }
+    assert!(found);
+}
+
+#[tokio::test]
 async fn accepted_proposals_publish_an_event_on_the_event_bus() {
     let store = InMemoryLogbookEventStore::new();
     let bus = InMemoryEventBus::default();
     let mut receiver = bus.subscribe();
-    let context = ProposalContext {
-        plugin_manifest: plugin_manifest(vec![PluginCapability::QsoCreate]),
-        operator_role: OperatorRole::Logger,
-    };
+    let context = ProposalContext::local_admin(
+        plugin_manifest(vec![PluginCapability::QsoCreate]),
+        OperatorRole::Logger,
+    );
 
     let outcome = submit_proposal(&store, &bus, &context, proposal(PROPOSAL_QSO_CREATE, None))
         .await
@@ -477,10 +537,10 @@ async fn accepted_proposals_publish_an_event_on_the_event_bus() {
 async fn qso_delete_requires_admin_role() {
     let store = InMemoryLogbookEventStore::new();
     let bus = InMemoryEventBus::default();
-    let context = ProposalContext {
-        plugin_manifest: plugin_manifest(vec![PluginCapability::QsoDelete]),
-        operator_role: OperatorRole::Logger,
-    };
+    let context = ProposalContext::local_admin(
+        plugin_manifest(vec![PluginCapability::QsoDelete]),
+        OperatorRole::Logger,
+    );
 
     let err = submit_proposal(
         &store,

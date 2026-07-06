@@ -475,15 +475,15 @@ mod tests {
         let store = InMemoryLogbookEventStore::new();
         let bus = InMemoryEventBus::default();
         let logbook_id = Uuid::new_v4();
-        let context = ProposalContext {
-            plugin_manifest: PluginManifest {
-                plugin_id: "importer".to_owned(),
-                name: "Importer".to_owned(),
-                version: "0.1.0".to_owned(),
-                capabilities: vec![PluginCapability::QsoCreate],
-            },
-            operator_role: OperatorRole::Logger,
-        };
+        let context = ProposalContext::local_admin(
+            PluginManifest::new(
+                "importer",
+                "Importer",
+                "0.1.0",
+                vec![PluginCapability::QsoCreate],
+            ),
+            OperatorRole::Logger,
+        );
         let options = AdifImportOptions::mvp_default("KE8YGW", "importer", Uuid::new_v4());
         let summary = import_adif(
             &store,
@@ -507,15 +507,15 @@ mod tests {
         let store = InMemoryLogbookEventStore::new();
         let bus = InMemoryEventBus::default();
         let logbook_id = Uuid::new_v4();
-        let context = ProposalContext {
-            plugin_manifest: PluginManifest {
-                plugin_id: "importer".to_owned(),
-                name: "Importer".to_owned(),
-                version: "0.1.0".to_owned(),
-                capabilities: vec![PluginCapability::QsoCreate],
-            },
-            operator_role: OperatorRole::Logger,
-        };
+        let context = ProposalContext::local_admin(
+            PluginManifest::new(
+                "importer",
+                "Importer",
+                "0.1.0",
+                vec![PluginCapability::QsoCreate],
+            ),
+            OperatorRole::Logger,
+        );
         let options = AdifImportOptions::mvp_default("KE8YGW", "importer", Uuid::new_v4());
         let adif = "<CALL:5>K1ABC<QSO_DATE:8>20260705<TIME_ON:6>120000<BAND:3>20m<MODE:3>SSB<EOR><CALL:5>K1ABC<QSO_DATE:8>20260705<TIME_ON:6>120500<BAND:3>20m<MODE:3>SSB<EOR>";
         let summary = import_adif(&store, &bus, &context, logbook_id, adif, &options).await;

@@ -2,6 +2,7 @@ const state = {
   shell: null,
   commands: [],
   plugins: [],
+  permissionState: null,
   runtimeEvents: [],
   runtimeStatus: null,
   qsos: [],
@@ -47,6 +48,7 @@ async function boot() {
   await refreshActivations();
   await refreshRigStatus();
   await refreshSyncState();
+  await refreshPluginPermissions();
   render();
   startRuntimeEventPolling();
 }
@@ -150,7 +152,7 @@ function panelContent(panel) {
       return `<p>Spots and alert feeds will connect to POTA/SOTA APIs in a future plugin update.</p>`;
     case "plugin-permissions":
       return state.plugins
-        .map((plugin) => `<p><strong>${plugin.name}</strong><br />${plugin.requested_permissions.map((permission) => `<span class="pill">${permission}</span>`).join("")}</p>`)
+        .map((plugin) => `<p><strong>${plugin.name}</strong><br />${permissionSummary(plugin.plugin_id)}</p>`)
         .join("");
     case "sync-status":
       return renderSyncStatus();
@@ -294,6 +296,7 @@ function openScreen(kind) {
     eyebrow.textContent = "Plugin Runtime";
     title.textContent = "Plugin Manager";
     body.innerHTML = renderPluginManager();
+    bindPluginPermissionControls();
     return;
   }
 
@@ -342,23 +345,78 @@ function closeScreen() {
 }
 
 function renderPluginManager() {
-  return `<p class="muted">Enable and disable controls are placeholders until real plugin loading is implemented.</p>
+  const permissionState = state.permissionState;
+  return `<p class="muted">Enable and disable controls are placeholders until real plugin loading is implemented. Permission grants are active and enforced.</p>
     <div class="plugin-grid">
       ${state.plugins
         .map(
           (plugin) => `<article class="plugin-card">
             <h3>${plugin.name}</h3>
             <p class="muted">${plugin.plugin_id}</p>
-            <p>${plugin.requested_permissions.map((permission) => `<span class="pill">${permission}</span>`).join("")}</p>
+            <p>${permissionSummary(plugin.plugin_id)}</p>
+            <details>
+              <summary>Review permissions</summary>
+              <div class="stack">${(plugin.requested_permissions || [])
+                .map((permission) => renderPermissionReview(plugin.plugin_id, permission))
+                .join("")}</div>
+            </details>
             <button class="toolbar-button" disabled>${plugin.enabled ? "Enabled" : "Disabled"}</button>
+            <button class="toolbar-button" type="button" data-approve-low-risk="${plugin.plugin_id}">Approve Low Risk</button>
           </article>`,
         )
         .join("")}
     </div>`;
 }
 
+function permissionSummary(pluginId) {
+  const grants = permissionGrantsFor(pluginId);
+  const counts = grants.reduce((acc, grant) => {
+    acc[grant.status] = (acc[grant.status] || 0) + 1;
+    return acc;
+  }, {});
+  return `<span class="pill">granted ${counts.granted || 0}</span><span class="pill">pending ${counts.pending || 0}</span><span class="pill">denied ${counts.denied || 0}</span><span class="pill">revoked ${counts.revoked || 0}</span>`;
+}
+
+function renderPermissionReview(pluginId, permissionId) {
+  const metadata = permissionMetadata(permissionId);
+  const grant = permissionGrant(pluginId, permissionId);
+  const status = grant?.status || "pending";
+  const risk = metadata?.risk_level || "unknown";
+  return `<article class="sync-summary">
+    <p><strong>${metadata?.display_name || permissionId}</strong> <span class="pill">${permissionId}</span> <span class="severity severity-${risk === "critical" || risk === "high" ? "error" : risk === "medium" ? "warn" : "info"}">${risk}</span></p>
+    <p>${metadata?.user_visible_reason || "Plugin requested this permission."}</p>
+    <p>Status: <strong>${status}</strong>${risk === "high" || risk === "critical" ? ` <span class="event-error">Admin review recommended</span>` : ""}</p>
+    <div class="monitor-actions">
+      <button class="toolbar-button" type="button" data-permission-action="grant" data-plugin-id="${pluginId}" data-permission-id="${permissionId}">Grant</button>
+      <button class="toolbar-button" type="button" data-permission-action="deny" data-plugin-id="${pluginId}" data-permission-id="${permissionId}">Deny</button>
+      <button class="toolbar-button" type="button" data-permission-action="revoke" data-plugin-id="${pluginId}" data-permission-id="${permissionId}">Revoke</button>
+    </div>
+  </article>`;
+}
+
+function permissionMetadata(permissionId) {
+  return state.permissionState?.registry?.find((permission) => permission.permission_id === permissionId);
+}
+
+function permissionGrant(pluginId, permissionId) {
+  return state.permissionState?.grants?.grants?.find((grant) => grant.plugin_id === pluginId && grant.permission_id === permissionId);
+}
+
+function permissionGrantsFor(pluginId) {
+  return state.permissionState?.grants?.grants?.filter((grant) => grant.plugin_id === pluginId) || [];
+}
+
+function bindPluginPermissionControls() {
+  document.querySelectorAll("[data-permission-action]").forEach((button) => {
+    button.addEventListener("click", () => updatePluginPermission(button.dataset.permissionAction, button.dataset.pluginId, button.dataset.permissionId));
+  });
+  document.querySelectorAll("[data-approve-low-risk]").forEach((button) => {
+    button.addEventListener("click", () => approveLowRiskPermissions(button.dataset.approveLowRisk));
+  });
+}
+
 function renderSettings() {
-  const sections = ["General", "Appearance", "Callsign/Profile", "Sync", "Lookup/Enrichment", "Rig Control", "Plugins", "Diagnostics", "Keyboard Shortcuts"];
+  const sections = ["General", "Appearance", "Callsign/Profile", "Sync", "Lookup/Enrichment", "Rig Control", "Plugin Permissions", "Plugins", "Diagnostics", "Keyboard Shortcuts"];
   return `<div class="settings-grid">
     ${sections
       .map((section) =>
@@ -368,9 +426,21 @@ function renderSettings() {
             ? `<article class="settings-card"><h3>${section}</h3>${renderLookupSettings()}</article>`
           : section === "Rig Control"
             ? `<article class="settings-card"><h3>${section}</h3>${renderRigSettings()}</article>`
+          : section === "Plugin Permissions"
+            ? `<article class="settings-card"><h3>${section}</h3>${renderPermissionSettings()}</article>`
           : `<article class="settings-card"><h3>${section}</h3><p class="muted">Placeholder settings surface.</p></article>`,
       )
       .join("")}
+  </div>`;
+}
+
+function renderPermissionSettings() {
+  const settings = state.permissionState?.settings || {};
+  return `<div class="qso-form">
+    <label>Auto-grant built-in low/medium risk <input type="checkbox" ${settings.auto_grant_builtin_low_risk_permissions !== false ? "checked" : ""} disabled /></label>
+    <label>Confirm high-risk permissions <input type="checkbox" ${settings.require_confirmation_for_high_risk_permissions !== false ? "checked" : ""} disabled /></label>
+    <label>Allow external network plugins <input type="checkbox" ${settings.allow_external_network_plugins ? "checked" : ""} disabled /></label>
+    <label>Permission audit logging <input type="checkbox" ${settings.permission_audit_logging !== false ? "checked" : ""} disabled /></label>
   </div>`;
 }
 
@@ -835,6 +905,50 @@ async function refreshActivations() {
   const payload = await fetch("/api/activations").then((response) => response.json());
   state.activations = payload.activations;
   state.activeActivation = payload.active_activation;
+}
+
+async function refreshPluginPermissions() {
+  state.permissionState = await fetch("/api/plugins/permissions").then((response) => response.json());
+}
+
+async function updatePluginPermission(action, pluginId, permissionId) {
+  const endpoint = `/api/plugins/permissions/${action}`;
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      plugin_id: pluginId,
+      permission_id: permissionId,
+      reason: "Local admin MVP decision",
+    }),
+  });
+  const result = await response.json();
+  if (response.ok && result.permissions) state.permissionState = result.permissions;
+  state.importSummary = result;
+  await refreshRuntimeEvents();
+  openScreen("plugins");
+}
+
+async function approveLowRiskPermissions(pluginId) {
+  const plugin = state.plugins.find((candidate) => candidate.plugin_id === pluginId);
+  if (!plugin) return;
+  for (const permissionId of plugin.requested_permissions || []) {
+    const metadata = permissionMetadata(permissionId);
+    if (metadata?.risk_level === "low") {
+      await fetch("/api/plugins/permissions/grant", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          plugin_id: pluginId,
+          permission_id: permissionId,
+          reason: "Approved all low-risk permissions",
+        }),
+      });
+    }
+  }
+  await refreshPluginPermissions();
+  await refreshRuntimeEvents();
+  openScreen("plugins");
 }
 
 async function refreshRigStatus() {

@@ -13,9 +13,10 @@ use ham_core::{
     build_diagnostic_bundle, default_official_event_log_path, export_adif,
     export_adif_with_activations, export_diagnostic_zip, import_adif, lookup_callsign_with_cache,
     publish_rig_runtime_event, submit_proposal, suggestion_from_rig_state, AdifImportOptions,
-    CoreEventEnvelope, DiagnosticBundleInput, DiagnosticReportType, JsonlLogbookEventStore,
-    LocalPrefixProvider, LogbookEventStore, LookupCache, LookupCacheConfig, LookupProviderStatus,
-    MockRigProvider, NewLogbookEvent, OperatorRole, Projection, ProposalContext,
+    CoreEventEnvelope, DiagnosticBundleInput, DiagnosticReportType, JsonPermissionGrantStore,
+    JsonlLogbookEventStore, LocalPrefixProvider, LogbookEventStore, LookupCache, LookupCacheConfig,
+    LookupProviderStatus, MockRigProvider, NewLogbookEvent, OperatorRole, PermissionGrantSet,
+    PermissionGrantStatus, PermissionRegistry, PermissionSettings, Projection, ProposalContext,
     RigConnectionStatus, RigDevice, RigProvider, RigProviderStatus, RigState, RuntimeEventFilter,
     RuntimeEventSeverity, RuntimeLogConfig,
 };
@@ -77,6 +78,66 @@ fn main() {
     let proposal_runtime =
         tokio::runtime::Runtime::new().expect("creating GUI proposal runtime should succeed");
     let store_path = default_official_event_log_path();
+    let permission_store = JsonPermissionGrantStore::new(
+        RuntimeLogConfig::default_for_app()
+            .directory
+            .join("support")
+            .join("plugin-permissions.json"),
+    );
+    let permission_registry = PermissionRegistry::mvp_default();
+    let permission_settings = PermissionSettings::default();
+    let mut permission_grants = permission_store.load().unwrap_or_default();
+    let manifests = plugin_manifests();
+    ham_core::grant_builtin_defaults(
+        &manifests,
+        &permission_registry,
+        &permission_settings,
+        &mut permission_grants,
+    );
+    let _ = permission_store.save(&permission_grants);
+    for manifest in &manifests {
+        let validation = permission_registry.validate_manifest(manifest);
+        let _ = bridge.publish(RuntimeEventInput {
+            event_type: if validation.is_ok() {
+                "plugin.manifest.loaded".to_owned()
+            } else {
+                "plugin.manifest.invalid".to_owned()
+            },
+            severity: if validation.is_ok() {
+                RuntimeEventSeverity::Info
+            } else {
+                RuntimeEventSeverity::Warn
+            },
+            source: "ham-gui".to_owned(),
+            source_plugin_id: Some(manifest.plugin_id.clone()),
+            workspace_id: Some("dashboard".to_owned()),
+            payload_summary: format!("Plugin manifest loaded: {}", manifest.name),
+            redacted_payload: Some(json!({
+                "plugin_id": manifest.plugin_id,
+                "requested_permissions": manifest
+                    .requested_or_capabilities()
+                    .iter()
+                    .map(|permission| permission.as_str())
+                    .collect::<Vec<_>>()
+            })),
+            error: validation.err().map(|error| error.to_string()),
+        });
+        for permission in manifest.requested_or_capabilities() {
+            let _ = bridge.publish(RuntimeEventInput {
+                event_type: "plugin.permission.requested".to_owned(),
+                severity: RuntimeEventSeverity::Debug,
+                source: "ham-gui".to_owned(),
+                source_plugin_id: Some(manifest.plugin_id.clone()),
+                workspace_id: Some("dashboard".to_owned()),
+                payload_summary: format!("{} requested {}", manifest.name, permission.as_str()),
+                redacted_payload: Some(json!({
+                    "plugin_id": manifest.plugin_id,
+                    "permission_id": permission.as_str()
+                })),
+                error: None,
+            });
+        }
+    }
     let store = match JsonlLogbookEventStore::open(&store_path) {
         Ok(store) => Arc::new(store),
         Err(error) => {
@@ -151,6 +212,10 @@ fn main() {
         rig_provider: MockRigProvider::default(),
         rig_config: Mutex::new(RigUiConfig::default()),
         last_report: Mutex::new(None),
+        permission_registry,
+        permission_store,
+        permission_grants: Mutex::new(permission_grants),
+        permission_settings: Mutex::new(permission_settings),
     });
 
     println!("ham-gui listening on http://{bound_addr}");
@@ -175,6 +240,10 @@ struct AppState {
     rig_provider: MockRigProvider,
     rig_config: Mutex<RigUiConfig>,
     last_report: Mutex<Option<DiagnosticReportUploadResponse>>,
+    permission_registry: PermissionRegistry,
+    permission_store: JsonPermissionGrantStore,
+    permission_grants: Mutex<PermissionGrantSet>,
+    permission_settings: Mutex<PermissionSettings>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -317,6 +386,16 @@ fn handle_client(state: Arc<AppState>, mut stream: TcpStream) {
                 runtime_events: state.bridge.replay(filter, 250),
                 runtime_status: state.bridge.status(),
             })
+        }
+        ("GET", "/api/plugins/permissions") => handle_plugin_permissions(&state),
+        ("POST", "/api/plugins/permissions/grant") => {
+            handle_plugin_permission_action(&state, &request.body, PermissionGrantStatus::Granted)
+        }
+        ("POST", "/api/plugins/permissions/deny") => {
+            handle_plugin_permission_action(&state, &request.body, PermissionGrantStatus::Denied)
+        }
+        ("POST", "/api/plugins/permissions/revoke") => {
+            handle_plugin_permission_action(&state, &request.body, PermissionGrantStatus::Revoked)
         }
         ("GET", "/api/runtime-events/export") => {
             let params = parse_query(query);
@@ -572,6 +651,22 @@ struct DiagnosticReportRequest {
 }
 
 #[derive(Debug, Deserialize)]
+struct PermissionActionRequest {
+    plugin_id: String,
+    permission_id: String,
+    reason: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct PluginPermissionsPayload {
+    plugins: Vec<ham_gui::mock::MockPlugin>,
+    manifests: Vec<PluginManifest>,
+    registry: Vec<ham_core::PermissionMetadata>,
+    grants: PermissionGrantSet,
+    settings: PermissionSettings,
+}
+
+#[derive(Debug, Deserialize)]
 struct HandshakePeerRequest {
     peer_id: Option<String>,
 }
@@ -664,44 +759,137 @@ fn response_with_headers(
     response
 }
 
-fn proposal_context() -> ProposalContext {
+fn proposal_context(state: &AppState) -> ProposalContext {
+    context_for_manifest(state, core_gui_manifest(), OperatorRole::Admin)
+}
+
+fn pota_sota_context(state: &AppState) -> ProposalContext {
+    context_for_manifest(state, pota_sota_manifest(), OperatorRole::Admin)
+}
+
+fn context_for_manifest(
+    state: &AppState,
+    plugin_manifest: PluginManifest,
+    operator_role: OperatorRole,
+) -> ProposalContext {
     ProposalContext {
-        plugin_manifest: PluginManifest {
-            plugin_id: "core.gui".to_owned(),
-            name: "Core GUI".to_owned(),
-            version: env!("CARGO_PKG_VERSION").to_owned(),
-            capabilities: vec![
-                PluginCapability::QsoCreate,
-                PluginCapability::QsoCorrect,
-                PluginCapability::QsoDelete,
-                PluginCapability::QsoRestore,
-                PluginCapability::QsoNoteAdd,
-                PluginCapability::QsoViewDeleted,
-            ],
-        },
-        operator_role: OperatorRole::Admin,
+        plugin_manifest,
+        operator_role,
+        permission_grants: state
+            .permission_grants
+            .lock()
+            .expect("permission grants mutex should not be poisoned")
+            .clone(),
     }
 }
 
-fn pota_sota_context() -> ProposalContext {
-    ProposalContext {
-        plugin_manifest: PluginManifest {
-            plugin_id: "plugin.pota-sota".to_owned(),
-            name: "POTA/SOTA Tools".to_owned(),
-            version: env!("CARGO_PKG_VERSION").to_owned(),
-            capabilities: vec![
-                PluginCapability::ActivationCreate,
-                PluginCapability::ActivationUpdate,
-                PluginCapability::ActivationEnd,
-                PluginCapability::ActivationView,
-                PluginCapability::QsoCreate,
-                PluginCapability::QsoCorrect,
-                PluginCapability::QsoNoteAdd,
-                PluginCapability::AdifExport,
-            ],
-        },
-        operator_role: OperatorRole::Admin,
-    }
+fn core_gui_manifest() -> PluginManifest {
+    let mut manifest = PluginManifest::new(
+        "core.gui",
+        "Core GUI",
+        env!("CARGO_PKG_VERSION"),
+        vec![
+            PluginCapability::QsoView,
+            PluginCapability::QsoCreate,
+            PluginCapability::QsoCorrect,
+            PluginCapability::QsoDelete,
+            PluginCapability::QsoRestore,
+            PluginCapability::QsoNoteAdd,
+            PluginCapability::QsoViewDeleted,
+            PluginCapability::AdifImport,
+            PluginCapability::AdifExport,
+            PluginCapability::DiagnosticsViewLogs,
+            PluginCapability::DiagnosticsExport,
+            PluginCapability::DiagnosticsUpload,
+            PluginCapability::SyncLanDiscovery,
+            PluginCapability::SyncLanPull,
+            PluginCapability::SyncLanPush,
+            PluginCapability::SyncCloudConnect,
+            PluginCapability::SyncCloudPull,
+            PluginCapability::SyncCloudPush,
+            PluginCapability::SettingsRead,
+            PluginCapability::SettingsWrite,
+        ],
+    );
+    manifest.description = "Built-in GUI surfaces and local operator actions.".to_owned();
+    manifest.contributed_panels = vec!["recent-qsos".to_owned(), "event-bus-monitor".to_owned()];
+    manifest.contributed_commands = vec!["diagnostics.report.problem".to_owned()];
+    manifest
+}
+
+fn pota_sota_manifest() -> PluginManifest {
+    let mut manifest = PluginManifest::new(
+        "plugin.pota-sota",
+        "POTA/SOTA Tools",
+        env!("CARGO_PKG_VERSION"),
+        vec![
+            PluginCapability::ActivationView,
+            PluginCapability::ActivationCreate,
+            PluginCapability::ActivationUpdate,
+            PluginCapability::ActivationEnd,
+            PluginCapability::QsoCreate,
+            PluginCapability::QsoCorrect,
+            PluginCapability::QsoNoteAdd,
+            PluginCapability::AdifExport,
+        ],
+    );
+    manifest.description = "Portable activation workflow and activation-linked QSOs.".to_owned();
+    manifest.contributed_panels = vec![
+        "activation-setup".to_owned(),
+        "activation-progress".to_owned(),
+        "portable-logger-entry".to_owned(),
+    ];
+    manifest
+}
+
+fn lookup_manifest() -> PluginManifest {
+    let mut manifest = PluginManifest::new(
+        "plugin.callsign-lookup",
+        "Callsign Lookup",
+        env!("CARGO_PKG_VERSION"),
+        vec![
+            PluginCapability::LookupCallsign,
+            PluginCapability::LookupEntity,
+            PluginCapability::LookupGrid,
+            PluginCapability::LookupCacheRead,
+            PluginCapability::LookupCacheWrite,
+            PluginCapability::QsoSuggestFields,
+        ],
+    );
+    manifest.optional_permissions = vec![PluginCapability::NetworkExternalLookup];
+    manifest.description =
+        "Advisory callsign, prefix, grid, and cache-backed enrichment.".to_owned();
+    manifest
+}
+
+fn rig_manifest() -> PluginManifest {
+    let mut manifest = PluginManifest::new(
+        "plugin.rig-control",
+        "Rig Control",
+        env!("CARGO_PKG_VERSION"),
+        vec![
+            PluginCapability::RigView,
+            PluginCapability::RigReadState,
+            PluginCapability::RigConfigure,
+            PluginCapability::RigControlFrequency,
+            PluginCapability::RigControlMode,
+            PluginCapability::RigControlPtt,
+            PluginCapability::RigControlSplit,
+            PluginCapability::QsoSuggestFields,
+        ],
+    );
+    manifest.description = "Mock rig state and future CAT/Hamlib control.".to_owned();
+    manifest.contributed_panels = vec!["rig-control".to_owned()];
+    manifest
+}
+
+fn plugin_manifests() -> Vec<PluginManifest> {
+    vec![
+        core_gui_manifest(),
+        pota_sota_manifest(),
+        lookup_manifest(),
+        rig_manifest(),
+    ]
 }
 
 fn lookup_provider_status(state: &AppState) -> LookupProviderStatus {
@@ -734,7 +922,155 @@ fn handle_lookup_status(state: &AppState) -> Vec<u8> {
     }))
 }
 
+fn handle_plugin_permissions(state: &AppState) -> Vec<u8> {
+    json_response(&PluginPermissionsPayload {
+        plugins: mock_plugins(),
+        manifests: plugin_manifests(),
+        registry: state.permission_registry.all(),
+        grants: state
+            .permission_grants
+            .lock()
+            .expect("permission grants mutex should not be poisoned")
+            .clone(),
+        settings: state
+            .permission_settings
+            .lock()
+            .expect("permission settings mutex should not be poisoned")
+            .clone(),
+    })
+}
+
+fn handle_plugin_permission_action(
+    state: &AppState,
+    body: &[u8],
+    status: PermissionGrantStatus,
+) -> Vec<u8> {
+    let Ok(request) = serde_json::from_slice::<PermissionActionRequest>(body) else {
+        return json_error(400, "invalid permission action JSON");
+    };
+    let permission = parse_permission_id(&request.permission_id);
+    if state.permission_registry.get(&permission).is_none() {
+        let _ = publish_gui_runtime(
+            state,
+            "plugin.manifest.invalid",
+            RuntimeEventSeverity::Warn,
+            "Unknown plugin permission requested",
+            Some(json!({"permission_id": request.permission_id, "plugin_id": request.plugin_id})),
+            None,
+        );
+        return json_error(400, "unknown permission");
+    }
+    let grant = {
+        let mut grants = state
+            .permission_grants
+            .lock()
+            .expect("permission grants mutex should not be poisoned");
+        let grant = grants.set_status(
+            &request.plugin_id,
+            permission.clone(),
+            status,
+            request.reason.clone(),
+        );
+        if let Err(error) = state.permission_store.save(&grants) {
+            return json_error(500, format!("failed to save permission grants: {error}"));
+        }
+        grant
+    };
+    let event_type = match status {
+        PermissionGrantStatus::Granted => "plugin.permission.granted",
+        PermissionGrantStatus::Denied => "plugin.permission.denied",
+        PermissionGrantStatus::Pending => "plugin.permission.requested",
+        PermissionGrantStatus::Revoked => "plugin.permission.revoked",
+    };
+    let _ = publish_gui_runtime(
+        state,
+        event_type,
+        RuntimeEventSeverity::Info,
+        "Plugin permission state changed",
+        Some(json!(&grant)),
+        None,
+    );
+    json_response(
+        &json!({"ok": true, "grant": grant, "permissions": handle_plugin_permissions_payload(state)}),
+    )
+}
+
+fn handle_plugin_permissions_payload(state: &AppState) -> PluginPermissionsPayload {
+    PluginPermissionsPayload {
+        plugins: mock_plugins(),
+        manifests: plugin_manifests(),
+        registry: state.permission_registry.all(),
+        grants: state
+            .permission_grants
+            .lock()
+            .expect("permission grants mutex should not be poisoned")
+            .clone(),
+        settings: state
+            .permission_settings
+            .lock()
+            .expect("permission settings mutex should not be poisoned")
+            .clone(),
+    }
+}
+
+fn parse_permission_id(permission_id: &str) -> PluginCapability {
+    serde_json::from_value(json!(permission_id))
+        .unwrap_or_else(|_| PluginCapability::Other(permission_id.to_owned()))
+}
+
+fn ensure_gui_permission(
+    state: &AppState,
+    manifest: &PluginManifest,
+    permission: PluginCapability,
+    action_summary: &str,
+) -> Result<(), Vec<u8>> {
+    let grants = state
+        .permission_grants
+        .lock()
+        .expect("permission grants mutex should not be poisoned")
+        .clone();
+    match ham_core::check_plugin_permission(manifest, &grants, &permission) {
+        Ok(()) => {
+            let _ = publish_gui_runtime(
+                state,
+                "plugin.permission.check.allowed",
+                RuntimeEventSeverity::Debug,
+                action_summary,
+                Some(
+                    json!({"plugin_id": manifest.plugin_id, "permission_id": permission.as_str()}),
+                ),
+                None,
+            );
+            Ok(())
+        }
+        Err(error) => {
+            let _ = publish_gui_runtime(
+                state,
+                "plugin.permission.check.denied",
+                RuntimeEventSeverity::Warn,
+                action_summary,
+                Some(
+                    json!({"plugin_id": manifest.plugin_id, "permission_id": permission.as_str()}),
+                ),
+                Some(error.to_string()),
+            );
+            Err(json_response_with_status(
+                403,
+                &json!({"ok": false, "error": error.to_string()}),
+            ))
+        }
+    }
+}
+
 fn handle_lookup_callsign(state: &AppState, query: &str) -> Vec<u8> {
+    if let Err(response) = ensure_gui_permission(
+        state,
+        &lookup_manifest(),
+        PluginCapability::LookupCallsign,
+        "Callsign lookup permission check",
+    ) {
+        return response;
+    }
     let params = parse_query(query);
     let Some(callsign) = params
         .get("callsign")
@@ -774,6 +1110,14 @@ fn handle_lookup_callsign(state: &AppState, query: &str) -> Vec<u8> {
 }
 
 fn handle_lookup_cache_clear(state: &AppState) -> Vec<u8> {
+    if let Err(response) = ensure_gui_permission(
+        state,
+        &lookup_manifest(),
+        PluginCapability::LookupCacheWrite,
+        "Lookup cache write permission check",
+    ) {
+        return response;
+    }
     match state
         .proposal_runtime
         .block_on(ham_core::clear_lookup_cache(
@@ -789,6 +1133,14 @@ fn handle_lookup_cache_clear(state: &AppState) -> Vec<u8> {
 }
 
 fn handle_rig_status(state: &AppState) -> Vec<u8> {
+    if let Err(response) = ensure_gui_permission(
+        state,
+        &rig_manifest(),
+        PluginCapability::RigView,
+        "Rig view permission check",
+    ) {
+        return response;
+    }
     json_response(&rig_status_payload(state))
 }
 
@@ -800,6 +1152,14 @@ fn handle_report_preview(state: &AppState, query: &str) -> Vec<u8> {
 }
 
 fn handle_report_export(state: &AppState, body: &[u8]) -> Vec<u8> {
+    if let Err(response) = ensure_gui_permission(
+        state,
+        &core_gui_manifest(),
+        PluginCapability::DiagnosticsExport,
+        "Diagnostics export permission check",
+    ) {
+        return response;
+    }
     let Ok(request) = serde_json::from_slice::<DiagnosticReportRequest>(body) else {
         return json_error(400, "invalid diagnostic export JSON");
     };
@@ -874,6 +1234,14 @@ fn handle_report_export(state: &AppState, body: &[u8]) -> Vec<u8> {
 }
 
 fn handle_report_upload(state: &AppState, body: &[u8]) -> Vec<u8> {
+    if let Err(response) = ensure_gui_permission(
+        state,
+        &core_gui_manifest(),
+        PluginCapability::DiagnosticsUpload,
+        "Diagnostics upload permission check",
+    ) {
+        return response;
+    }
     let Ok(request) = serde_json::from_slice::<DiagnosticReportRequest>(body) else {
         return json_error(400, "invalid diagnostic upload JSON");
     };
@@ -1037,6 +1405,14 @@ fn sync_state_summary(state: &AppState) -> String {
 }
 
 fn handle_rig_connect(state: &AppState) -> Vec<u8> {
+    if let Err(response) = ensure_gui_permission(
+        state,
+        &rig_manifest(),
+        PluginCapability::RigConfigure,
+        "Rig configure permission check",
+    ) {
+        return response;
+    }
     let devices = state
         .proposal_runtime
         .block_on(state.rig_provider.list_supported_rigs());
@@ -1093,6 +1469,14 @@ fn handle_rig_connect(state: &AppState) -> Vec<u8> {
 }
 
 fn handle_rig_disconnect(state: &AppState) -> Vec<u8> {
+    if let Err(response) = ensure_gui_permission(
+        state,
+        &rig_manifest(),
+        PluginCapability::RigConfigure,
+        "Rig configure permission check",
+    ) {
+        return response;
+    }
     let devices = state
         .proposal_runtime
         .block_on(state.rig_provider.list_supported_rigs());
@@ -1122,6 +1506,14 @@ fn handle_rig_disconnect(state: &AppState) -> Vec<u8> {
 }
 
 fn handle_rig_refresh(state: &AppState) -> Vec<u8> {
+    if let Err(response) = ensure_gui_permission(
+        state,
+        &rig_manifest(),
+        PluginCapability::RigReadState,
+        "Rig state read permission check",
+    ) {
+        return response;
+    }
     let devices = state
         .proposal_runtime
         .block_on(state.rig_provider.list_supported_rigs());
@@ -1165,6 +1557,40 @@ fn handle_rig_mock_set(state: &AppState, body: &[u8]) -> Vec<u8> {
     let Ok(request) = serde_json::from_slice::<RigSetRequest>(body) else {
         return json_error(400, "invalid rig mock JSON");
     };
+    if request.frequency_hz.is_some() {
+        if let Err(response) = ensure_gui_permission(
+            state,
+            &rig_manifest(),
+            PluginCapability::RigControlFrequency,
+            "Rig frequency control permission check",
+        ) {
+            return response;
+        }
+    }
+    if request
+        .mode
+        .as_ref()
+        .is_some_and(|value| !value.trim().is_empty())
+    {
+        if let Err(response) = ensure_gui_permission(
+            state,
+            &rig_manifest(),
+            PluginCapability::RigControlMode,
+            "Rig mode control permission check",
+        ) {
+            return response;
+        }
+    }
+    if request.ptt.is_some() {
+        if let Err(response) = ensure_gui_permission(
+            state,
+            &rig_manifest(),
+            PluginCapability::RigControlPtt,
+            "Rig PTT control permission check",
+        ) {
+            return response;
+        }
+    }
     let devices = state
         .proposal_runtime
         .block_on(state.rig_provider.list_supported_rigs());
@@ -1470,7 +1896,7 @@ fn handle_qso_create_with_activation(state: &AppState, body: &[u8]) -> Vec<u8> {
     let qso = match state.proposal_runtime.block_on(submit_proposal(
         state.store.as_ref(),
         &state.bridge,
-        &pota_sota_context(),
+        &pota_sota_context(state),
         proposal,
     )) {
         Ok(outcome) => outcome,
@@ -1498,7 +1924,7 @@ fn handle_qso_create_with_activation(state: &AppState, body: &[u8]) -> Vec<u8> {
         let _ = state.proposal_runtime.block_on(submit_proposal(
             state.store.as_ref(),
             &state.bridge,
-            &pota_sota_context(),
+            &pota_sota_context(state),
             link,
         ));
     }
@@ -1621,7 +2047,7 @@ fn submit_gui_proposal(
     match state.proposal_runtime.block_on(submit_proposal(
         state.store.as_ref(),
         &state.bridge,
-        &proposal_context(),
+        &proposal_context(state),
         proposal,
     )) {
         Ok(outcome) => json_response(&json!({
@@ -1666,6 +2092,14 @@ fn handle_rebuild_projections(state: &AppState) -> Vec<u8> {
 }
 
 fn handle_adif_import(state: &AppState, body: &[u8]) -> Vec<u8> {
+    if let Err(response) = ensure_gui_permission(
+        state,
+        &core_gui_manifest(),
+        PluginCapability::AdifImport,
+        "ADIF import permission check",
+    ) {
+        return response;
+    }
     let Ok(request) = serde_json::from_slice::<PathRequest>(body) else {
         return json_error(400, "invalid ADIF import JSON");
     };
@@ -1688,7 +2122,7 @@ fn handle_adif_import(state: &AppState, body: &[u8]) -> Vec<u8> {
     let summary = state.proposal_runtime.block_on(import_adif(
         state.store.as_ref(),
         &state.bridge,
-        &proposal_context(),
+        &proposal_context(state),
         state.logbook_id,
         &input,
         &options,
@@ -1707,6 +2141,14 @@ fn handle_adif_import(state: &AppState, body: &[u8]) -> Vec<u8> {
 }
 
 fn handle_adif_export(state: &AppState, body: &[u8]) -> Vec<u8> {
+    if let Err(response) = ensure_gui_permission(
+        state,
+        &core_gui_manifest(),
+        PluginCapability::AdifExport,
+        "ADIF export permission check",
+    ) {
+        return response;
+    }
     let Ok(request) = serde_json::from_slice::<PathRequest>(body) else {
         return json_error(400, "invalid ADIF export JSON");
     };
@@ -1789,7 +2231,7 @@ fn handle_activation_start(state: &AppState, body: &[u8]) -> Vec<u8> {
     match state.proposal_runtime.block_on(submit_proposal(
         state.store.as_ref(),
         &state.bridge,
-        &pota_sota_context(),
+        &pota_sota_context(state),
         proposal,
     )) {
         Ok(outcome) => {
@@ -1841,7 +2283,7 @@ fn handle_activation_end(state: &AppState, body: &[u8]) -> Vec<u8> {
     match state.proposal_runtime.block_on(submit_proposal(
         state.store.as_ref(),
         &state.bridge,
-        &pota_sota_context(),
+        &pota_sota_context(state),
         proposal,
     )) {
         Ok(outcome) => {
@@ -1864,6 +2306,14 @@ fn handle_activation_end(state: &AppState, body: &[u8]) -> Vec<u8> {
 }
 
 fn handle_activation_adif_export(state: &AppState, body: &[u8]) -> Vec<u8> {
+    if let Err(response) = ensure_gui_permission(
+        state,
+        &pota_sota_manifest(),
+        PluginCapability::AdifExport,
+        "Activation ADIF export permission check",
+    ) {
+        return response;
+    }
     let Ok(request) = serde_json::from_slice::<PathRequest>(body) else {
         return json_error(400, "invalid activation ADIF export JSON");
     };
@@ -1952,6 +2402,14 @@ fn sync_state_payload(state: &AppState) -> SyncStatePayload {
 }
 
 fn handle_sync_discovery(state: &AppState, running: bool) -> Vec<u8> {
+    if let Err(response) = ensure_gui_permission(
+        state,
+        &core_gui_manifest(),
+        PluginCapability::SyncLanDiscovery,
+        "LAN discovery permission check",
+    ) {
+        return response;
+    }
     {
         let mut sync = state
             .sync
@@ -2126,6 +2584,14 @@ fn handle_sync_handshake(state: &AppState, body: &[u8]) -> Vec<u8> {
 }
 
 fn handle_sync_preview_pull(state: &AppState, body: &[u8]) -> Vec<u8> {
+    if let Err(response) = ensure_gui_permission(
+        state,
+        &core_gui_manifest(),
+        PluginCapability::SyncLanPull,
+        "LAN sync preview permission check",
+    ) {
+        return response;
+    }
     let request = serde_json::from_slice::<HandshakePeerRequest>(body)
         .unwrap_or(HandshakePeerRequest { peer_id: None });
     let Some(peer_id) = selected_peer_id(state, request.peer_id) else {
@@ -2192,6 +2658,14 @@ fn handle_sync_preview_pull(state: &AppState, body: &[u8]) -> Vec<u8> {
 }
 
 fn handle_sync_pull_events(state: &AppState, body: &[u8]) -> Vec<u8> {
+    if let Err(response) = ensure_gui_permission(
+        state,
+        &core_gui_manifest(),
+        PluginCapability::SyncLanPull,
+        "LAN sync pull permission check",
+    ) {
+        return response;
+    }
     let request = serde_json::from_slice::<HandshakePeerRequest>(body)
         .unwrap_or(HandshakePeerRequest { peer_id: None });
     let Some(peer_id) = selected_peer_id(state, request.peer_id) else {
@@ -2324,6 +2798,14 @@ fn handle_sync_pull_events(state: &AppState, body: &[u8]) -> Vec<u8> {
 }
 
 fn handle_cloud_connect(state: &AppState, body: &[u8]) -> Vec<u8> {
+    if let Err(response) = ensure_gui_permission(
+        state,
+        &core_gui_manifest(),
+        PluginCapability::SyncCloudConnect,
+        "Cloud sync connect permission check",
+    ) {
+        return response;
+    }
     let request =
         serde_json::from_slice::<CloudConnectRequest>(body).unwrap_or(CloudConnectRequest {
             server_url: None,
@@ -2448,6 +2930,14 @@ fn handle_cloud_connect(state: &AppState, body: &[u8]) -> Vec<u8> {
 }
 
 fn handle_cloud_push(state: &AppState) -> Vec<u8> {
+    if let Err(response) = ensure_gui_permission(
+        state,
+        &core_gui_manifest(),
+        PluginCapability::SyncCloudPush,
+        "Cloud sync push permission check",
+    ) {
+        return response;
+    }
     let Some(auth) = cloud_auth(state) else {
         return cloud_auth_error(state, "sync.cloud.push.failed");
     };
@@ -2531,6 +3021,14 @@ fn handle_cloud_push(state: &AppState) -> Vec<u8> {
 }
 
 fn handle_cloud_preview_pull(state: &AppState) -> Vec<u8> {
+    if let Err(response) = ensure_gui_permission(
+        state,
+        &core_gui_manifest(),
+        PluginCapability::SyncCloudPull,
+        "Cloud sync preview pull permission check",
+    ) {
+        return response;
+    }
     let Some(auth) = cloud_auth(state) else {
         return cloud_auth_error(state, "sync.cloud.preview_pull.failed");
     };
@@ -2592,6 +3090,14 @@ fn handle_cloud_preview_pull(state: &AppState) -> Vec<u8> {
 }
 
 fn handle_cloud_pull(state: &AppState) -> Vec<u8> {
+    if let Err(response) = ensure_gui_permission(
+        state,
+        &core_gui_manifest(),
+        PluginCapability::SyncCloudPull,
+        "Cloud sync pull permission check",
+    ) {
+        return response;
+    }
     let Some(auth) = cloud_auth(state) else {
         return cloud_auth_error(state, "sync.cloud.pull.failed");
     };
