@@ -7,6 +7,8 @@ const state = {
   qsos: [],
   activations: [],
   activeActivation: null,
+  lookupSuggestion: null,
+  acceptedLookupFields: null,
   qsoError: "",
   importSummary: null,
   syncState: null,
@@ -227,6 +229,9 @@ function runCommand(commandId) {
   if (command.id === "diagnostics.open-folder") openScreen("diagnostics-folder");
   if (command.id === "adif.import") importAdifFromPrompt();
   if (command.id === "adif.export") exportAdifFromPrompt();
+  if (command.id === "lookup.callsign") lookupCallsignFromPrompt();
+  if (command.id === "lookup.cache.clear") clearLookupCache();
+  if (command.id === "lookup.provider-status") showLookupProviderStatus();
   if (command.id === "activation.start-pota") startActivationFromPrompt("pota");
   if (command.id === "activation.start-sota") startActivationFromPrompt("sota");
   if (command.id === "activation.end-current") endCurrentActivation();
@@ -326,15 +331,28 @@ function renderPluginManager() {
 }
 
 function renderSettings() {
-  const sections = ["General", "Appearance", "Callsign/Profile", "Sync", "Plugins", "Diagnostics", "Keyboard Shortcuts"];
+  const sections = ["General", "Appearance", "Callsign/Profile", "Sync", "Lookup/Enrichment", "Plugins", "Diagnostics", "Keyboard Shortcuts"];
   return `<div class="settings-grid">
     ${sections
       .map((section) =>
         section === "Sync"
           ? `<article class="settings-card"><h3>${section}</h3>${renderCloudSettings()}</article>`
+          : section === "Lookup/Enrichment"
+            ? `<article class="settings-card"><h3>${section}</h3>${renderLookupSettings()}</article>`
           : `<article class="settings-card"><h3>${section}</h3><p class="muted">Placeholder settings surface.</p></article>`,
       )
       .join("")}
+  </div>`;
+}
+
+function renderLookupSettings() {
+  return `<div class="qso-form">
+    <label>Lookup Enabled <input type="checkbox" checked disabled /></label>
+    <label>Online Lookup <input type="checkbox" disabled /></label>
+    <label>Preferred Provider <input class="placeholder-control" value="local-prefix" disabled /></label>
+    <label>Cache TTL Days <input class="placeholder-control" value="30" disabled /></label>
+    <label>Provider Credentials <input class="placeholder-control" value="Not stored in MVP" disabled /></label>
+    <button class="toolbar-button" type="button" onclick="clearLookupCache()">Clear Lookup Cache</button>
   </div>`;
 }
 
@@ -415,11 +433,15 @@ function bindPanelControls() {
   const qsoForm = byId("qso-create-form");
   if (qsoForm) {
     qsoForm.addEventListener("submit", submitQsoCreate);
+    byId("lookup-callsign-button")?.addEventListener("click", () => lookupCallsign(byId("callsign-entry-input")?.value || ""));
+    byId("accept-lookup-button")?.addEventListener("click", acceptLookupSuggestion);
   }
   const activationForm = byId("activation-start-form");
   if (activationForm) activationForm.addEventListener("submit", submitActivationStart);
   const portableForm = byId("portable-qso-form");
   if (portableForm) portableForm.addEventListener("submit", submitPortableQsoCreate);
+  byId("portable-lookup-button")?.addEventListener("click", () => lookupCallsign(byId("portable-callsign-input")?.value || ""));
+  byId("portable-accept-lookup-button")?.addEventListener("click", acceptLookupSuggestion);
   byId("activation-end-button")?.addEventListener("click", endCurrentActivation);
 
   document.querySelectorAll("[data-qso-action]").forEach((button) => {
@@ -509,6 +531,11 @@ function renderCallsignEntry() {
       <label>Contacted callsign
         <input id="callsign-entry-input" name="contacted_callsign" class="placeholder-control" aria-label="Contacted callsign" placeholder="K1ABC" required />
       </label>
+      <div class="monitor-actions">
+        <button id="lookup-callsign-button" class="toolbar-button" type="button">Lookup</button>
+        <button id="accept-lookup-button" class="toolbar-button" type="button" ${state.lookupSuggestion ? "" : "disabled"}>Accept Suggestions</button>
+      </div>
+      ${renderLookupSuggestion()}
       <label>Mode
         <input name="mode" class="placeholder-control" aria-label="Mode" placeholder="SSB" required />
       </label>
@@ -589,13 +616,29 @@ function renderPortableLoggerEntry() {
   const active = state.activeActivation;
   return `<form id="portable-qso-form" class="qso-form">
       <p class="muted">${active ? `Logging against ${active.payload.park_id || active.payload.summit_id || active.activation_id}` : "No active activation; QSO will be portable-source only."}</p>
-      <label>Callsign <input name="contacted_callsign" class="placeholder-control" required /></label>
+      <label>Callsign <input id="portable-callsign-input" name="contacted_callsign" class="placeholder-control" required /></label>
+      <div class="monitor-actions">
+        <button id="portable-lookup-button" class="toolbar-button" type="button">Lookup</button>
+        <button id="portable-accept-lookup-button" class="toolbar-button" type="button" ${state.lookupSuggestion ? "" : "disabled"}>Accept Suggestions</button>
+      </div>
+      ${renderLookupSuggestion()}
       <label>Mode <input name="mode" class="placeholder-control" value="SSB" required /></label>
       <label>Band <input name="band" class="placeholder-control" placeholder="20m" /></label>
       <label>Frequency Hz <input name="frequency_hz" class="placeholder-control" inputmode="numeric" /></label>
       <label>Notes <input name="notes" class="placeholder-control" /></label>
       <button class="toolbar-button" type="submit">Submit Portable QSO</button>
     </form>`;
+}
+
+function renderLookupSuggestion() {
+  const suggestion = state.lookupSuggestion;
+  if (!suggestion) return `<p class="muted">Lookup suggestions will appear here and are not written until accepted.</p>`;
+  const fields = suggestion.suggested_fields || {};
+  return `<div class="sync-summary">
+    <p><strong>${suggestion.normalized_callsign}</strong> from ${suggestion.provider} (${Math.round((suggestion.confidence || 0) * 100)}%)</p>
+    <p>${fields.name || ""} ${fields.qth || ""}</p>
+    <p>${fields.grid || ""} ${fields.country || ""} ${fields.dxcc ? `DXCC ${fields.dxcc}` : ""}</p>
+  </div>`;
 }
 
 function renderRecentQsos() {
@@ -648,6 +691,7 @@ async function submitQsoCreate(event) {
     band: form.get("band")?.toString() || "",
     notes: form.get("notes")?.toString() || "",
     frequency_hz: frequency ? Number(frequency) : null,
+    ...(state.acceptedLookupFields || {}),
   };
   const response = await fetch("/api/qso/create", {
     method: "POST",
@@ -664,6 +708,8 @@ async function submitQsoCreate(event) {
   await refreshQsos();
   await refreshActivations();
   await refreshRuntimeEvents();
+  state.acceptedLookupFields = null;
+  state.lookupSuggestion = null;
   render();
 }
 
@@ -680,13 +726,58 @@ async function submitPortableQsoCreate(event) {
       band: form.get("band")?.toString() || "",
       notes: form.get("notes")?.toString() || "",
       frequency_hz: frequency ? Number(frequency) : null,
+      ...(state.acceptedLookupFields || {}),
     }),
   });
   event.currentTarget.reset();
   await refreshQsos();
   await refreshActivations();
   await refreshRuntimeEvents();
+  state.acceptedLookupFields = null;
+  state.lookupSuggestion = null;
   render();
+}
+
+async function lookupCallsign(callsign) {
+  if (!callsign) return;
+  const payload = await fetch(`/api/lookup/callsign?callsign=${encodeURIComponent(callsign)}`).then((response) => response.json());
+  state.lookupSuggestion = payload.suggestion || null;
+  await refreshRuntimeEvents();
+  render();
+}
+
+function acceptLookupSuggestion() {
+  if (!state.lookupSuggestion) return;
+  const fields = state.lookupSuggestion.suggested_fields || {};
+  state.acceptedLookupFields = {
+    name: fields.name || null,
+    qth: fields.qth || null,
+    grid: fields.grid || null,
+    country: fields.country || null,
+    dxcc: fields.dxcc || null,
+    cq_zone: fields.cq_zone || null,
+    itu_zone: fields.itu_zone || null,
+    lookup_source: fields.lookup_source || state.lookupSuggestion.provider,
+    lookup_confidence: fields.lookup_confidence || state.lookupSuggestion.confidence,
+    enriched_fields: fields.enriched_fields || [],
+  };
+  render();
+}
+
+function lookupCallsignFromPrompt() {
+  const callsign = window.prompt("Callsign to look up");
+  if (callsign) lookupCallsign(callsign);
+}
+
+async function clearLookupCache() {
+  state.importSummary = await fetch("/api/lookup/cache/clear", { method: "POST" }).then((response) => response.json());
+  await refreshRuntimeEvents();
+  openScreen("import-summary");
+}
+
+async function showLookupProviderStatus() {
+  state.importSummary = await fetch("/api/lookup/status").then((response) => response.json());
+  openScreen("import-summary");
 }
 
 async function submitActivationStart(event) {

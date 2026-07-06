@@ -50,6 +50,13 @@ pub enum PluginCapability {
     ActivationEnd,
     ActivationView,
     AdifExport,
+    LookupCallsign,
+    LookupEntity,
+    LookupGrid,
+    LookupCacheRead,
+    LookupCacheWrite,
+    NetworkExternalLookup,
+    QsoSuggestFields,
     Other(String),
 }
 
@@ -67,6 +74,13 @@ impl PluginCapability {
             Self::ActivationEnd => "activation.end",
             Self::ActivationView => "activation.view",
             Self::AdifExport => "adif.export",
+            Self::LookupCallsign => "lookup.callsign",
+            Self::LookupEntity => "lookup.entity",
+            Self::LookupGrid => "lookup.grid",
+            Self::LookupCacheRead => "cache.lookup.read",
+            Self::LookupCacheWrite => "cache.lookup.write",
+            Self::NetworkExternalLookup => "network.external.lookup",
+            Self::QsoSuggestFields => "log.qso.suggest_fields",
             Self::Other(value) => value,
         }
     }
@@ -99,6 +113,13 @@ impl<'de> Deserialize<'de> for PluginCapability {
             "activation.end" => Self::ActivationEnd,
             "activation.view" => Self::ActivationView,
             "adif.export" => Self::AdifExport,
+            "lookup.callsign" => Self::LookupCallsign,
+            "lookup.entity" => Self::LookupEntity,
+            "lookup.grid" => Self::LookupGrid,
+            "cache.lookup.read" => Self::LookupCacheRead,
+            "cache.lookup.write" => Self::LookupCacheWrite,
+            "network.external.lookup" => Self::NetworkExternalLookup,
+            "log.qso.suggest_fields" => Self::QsoSuggestFields,
             _ => Self::Other(value),
         })
     }

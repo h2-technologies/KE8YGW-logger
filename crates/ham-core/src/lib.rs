@@ -3,6 +3,7 @@
 pub mod adif;
 pub mod bus;
 pub mod event;
+pub mod lookup;
 pub mod projection;
 pub mod proposal;
 pub mod runtime_log;
@@ -17,6 +18,12 @@ pub use bus::{
     RuntimeEventEnvelope, RuntimeEventFilter, RuntimeEventSeverity,
 };
 pub use event::{CoreEventEnvelope, NewLogbookEvent};
+pub use lookup::{
+    clear_lookup_cache, grid_to_lat_lon, lookup_callsign_with_cache, normalize_callsign,
+    validate_grid, CallsignLookupProvider, EntityInfo, GridInfo, LocalPrefixProvider, LookupCache,
+    LookupCacheConfig, LookupError, LookupProviderStatus, LookupResult, LookupSuggestion,
+    MockLookupProvider, QrzLookupProviderStub,
+};
 pub use projection::{
     ActivationProjection, ActivationRecord, Projection, QsoCurrentStateProjection, QsoRecord,
 };

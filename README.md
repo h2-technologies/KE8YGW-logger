@@ -142,6 +142,67 @@ multi-op, multi-park/multi-summit, spotting integration, online reference
 lookups, GPS auto-detection, offline reference caches, award tracking, and
 conflict review UX are future work.
 
+## Callsign Lookup And Smart Autofill Plugin
+
+`plugin.callsign-lookup` provides advisory lookup/enrichment suggestions for the
+Casual Logger and POTA/SOTA Portable Logger. It does not write official QSO
+events directly. Lookup results are shown to the operator as suggestions; only
+accepted fields included in a submitted QSO form become part of a normal
+`proposal.qso.create` payload.
+
+Provider architecture:
+
+- `CallsignLookupProvider` defines callsign, grid, entity, and provider-status
+  methods.
+- `LocalPrefixProvider` provides offline prefix/entity inference.
+- `MockLookupProvider` supports tests and development.
+- `QrzLookupProviderStub` documents the future QRZ/HamQTH integration point
+  without requiring paid credentials.
+
+Current plugin permissions:
+
+- `lookup.callsign`
+- `lookup.entity`
+- `lookup.grid`
+- `cache.lookup.read`
+- `cache.lookup.write`
+- `log.qso.suggest_fields`
+- `network.external.lookup` for future online providers
+
+Lookup cache entries live outside official log storage and are not synced by
+default. Cache entries include provider, fetched time, expiry, and confidence.
+The default TTL is 30 days. Clearing the lookup cache publishes
+`lookup.cache.cleared`.
+
+Runtime lookup events include:
+
+- `lookup.callsign.started`
+- `lookup.callsign.cache_hit`
+- `lookup.callsign.cache_miss`
+- `lookup.callsign.completed`
+- `lookup.callsign.failed`
+- `lookup.entity.inferred`
+- `lookup.grid.validated`
+- `lookup.suggestion.created`
+- `lookup.cache.cleared`
+
+Privacy model: the MVP offline provider does not contact external services.
+Future online providers must avoid sending full logs, must not log API keys, and
+must redact secret-like fields before diagnostic persistence. Raw provider
+responses are not stored in official QSO events by default.
+
+Logger workflow:
+
+1. Enter a callsign in Casual Logger or Portable Logger Entry.
+2. Click `Lookup`, or use the `Lookup Callsign` command palette action.
+3. Review suggested name, QTH, grid, country/entity, DXCC, CQ zone, and ITU zone.
+4. Click `Accept Suggestions` to fill the pending form payload.
+5. Submit the QSO. Accepted fields flow through the regular QSO proposal path.
+
+Current limitations: QRZ, HamQTH, FCC/ULS lookup, DXCC database updates,
+distance/bearing display, award-needed hints, and auto-accept trusted lookups are
+future work.
+
 ## Durable Local Persistence
 
 The MVP durable official event store is JSON Lines. Each official event is

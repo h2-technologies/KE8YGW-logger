@@ -11,8 +11,9 @@ use std::{
 
 use ham_core::{
     default_official_event_log_path, export_adif, export_adif_with_activations, import_adif,
-    submit_proposal, AdifImportOptions, CoreEventEnvelope, JsonlLogbookEventStore,
-    LogbookEventStore, NewLogbookEvent, OperatorRole, Projection, ProposalContext,
+    lookup_callsign_with_cache, submit_proposal, AdifImportOptions, CoreEventEnvelope,
+    JsonlLogbookEventStore, LocalPrefixProvider, LogbookEventStore, LookupCache, LookupCacheConfig,
+    LookupProviderStatus, NewLogbookEvent, OperatorRole, Projection, ProposalContext,
     RuntimeEventFilter, RuntimeEventSeverity, RuntimeLogConfig,
 };
 use ham_gui::{
@@ -141,6 +142,8 @@ fn main() {
         proposal_runtime,
         sync: Mutex::new(SyncUiState::new(bound_addr.clone())),
         cloud_server: InMemoryCloudSyncServer::new(CloudServerConfig::default()),
+        lookup_cache: LookupCache::new(),
+        lookup_config: Mutex::new(LookupUiConfig::default()),
     });
 
     println!("ham-gui listening on http://{bound_addr}");
@@ -160,6 +163,29 @@ struct AppState {
     proposal_runtime: tokio::runtime::Runtime,
     sync: Mutex<SyncUiState>,
     cloud_server: InMemoryCloudSyncServer,
+    lookup_cache: LookupCache,
+    lookup_config: Mutex<LookupUiConfig>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct LookupUiConfig {
+    enable_lookup: bool,
+    enable_online_lookup: bool,
+    preferred_provider: String,
+    cache_ttl_days: i64,
+    offline_prefix_fallback_enabled: bool,
+}
+
+impl Default for LookupUiConfig {
+    fn default() -> Self {
+        Self {
+            enable_lookup: true,
+            enable_online_lookup: false,
+            preferred_provider: "local-prefix".to_owned(),
+            cache_ttl_days: 30,
+            offline_prefix_fallback_enabled: true,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -279,6 +305,9 @@ fn handle_client(state: Arc<AppState>, mut stream: TcpStream) {
         }
         ("GET", "/api/qsos") => json_response(&qso_projection_payload(&state, query)),
         ("GET", "/api/activations") => json_response(&activation_projection_payload(&state)),
+        ("GET", "/api/lookup/callsign") => handle_lookup_callsign(&state, query),
+        ("POST", "/api/lookup/cache/clear") => handle_lookup_cache_clear(&state),
+        ("GET", "/api/lookup/status") => handle_lookup_status(&state),
         ("GET", "/api/sync/state") => json_response(&sync_state_payload(&state)),
         ("GET", "/api/sync/list-logbooks") => json_response(&ListLogbooksResponse {
             logbooks: vec![logbook_head_summary(&state)],
@@ -418,6 +447,16 @@ struct CreateQsoRequest {
     frequency_hz: Option<u64>,
     band: Option<String>,
     notes: Option<String>,
+    name: Option<String>,
+    qth: Option<String>,
+    grid: Option<String>,
+    country: Option<String>,
+    dxcc: Option<u16>,
+    cq_zone: Option<u8>,
+    itu_zone: Option<u8>,
+    lookup_source: Option<String>,
+    lookup_confidence: Option<f32>,
+    enriched_fields: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -586,6 +625,90 @@ fn pota_sota_context() -> ProposalContext {
     }
 }
 
+fn lookup_provider_status(state: &AppState) -> LookupProviderStatus {
+    let config = state
+        .lookup_config
+        .lock()
+        .expect("lookup config mutex should not be poisoned")
+        .clone();
+    LookupProviderStatus {
+        provider_id: config.preferred_provider,
+        healthy: config.enable_lookup,
+        message: if config.enable_online_lookup {
+            "Online lookup is configured as a future stub; offline fallback is active".to_owned()
+        } else {
+            "Offline prefix resolver active".to_owned()
+        },
+        rate_limited: false,
+    }
+}
+
+fn handle_lookup_status(state: &AppState) -> Vec<u8> {
+    let config = state
+        .lookup_config
+        .lock()
+        .expect("lookup config mutex should not be poisoned")
+        .clone();
+    json_response(&json!({
+        "config": config,
+        "providers": [lookup_provider_status(state)]
+    }))
+}
+
+fn handle_lookup_callsign(state: &AppState, query: &str) -> Vec<u8> {
+    let params = parse_query(query);
+    let Some(callsign) = params
+        .get("callsign")
+        .filter(|value| !value.trim().is_empty())
+    else {
+        return json_error(400, "missing callsign");
+    };
+    let config = state
+        .lookup_config
+        .lock()
+        .expect("lookup config mutex should not be poisoned")
+        .clone();
+    if !config.enable_lookup {
+        return json_response_with_status(400, &json!({"ok": false, "error": "lookup disabled"}));
+    }
+    let provider = LocalPrefixProvider;
+    let result = state.proposal_runtime.block_on(lookup_callsign_with_cache(
+        &provider,
+        &state.lookup_cache,
+        &LookupCacheConfig {
+            ttl_days: config.cache_ttl_days,
+        },
+        &state.bridge,
+        callsign,
+        state.bridge.status().device_id,
+    ));
+    match result {
+        Ok(suggestion) => json_response(&json!({
+            "ok": true,
+            "suggestion": suggestion,
+            "provider_status": lookup_provider_status(state)
+        })),
+        Err(error) => {
+            json_response_with_status(400, &json!({"ok": false, "error": error.to_string()}))
+        }
+    }
+}
+
+fn handle_lookup_cache_clear(state: &AppState) -> Vec<u8> {
+    match state
+        .proposal_runtime
+        .block_on(ham_core::clear_lookup_cache(
+            &state.lookup_cache,
+            &state.bridge,
+            state.bridge.status().device_id,
+        )) {
+        Ok(()) => json_response(&json!({"ok": true})),
+        Err(error) => {
+            json_response_with_status(400, &json!({"ok": false, "error": error.to_string()}))
+        }
+    }
+}
+
 fn qso_projection_payload(state: &AppState, query: &str) -> ApiQsoPayload {
     let include_deleted = parse_query(query)
         .get("include_deleted")
@@ -659,12 +782,21 @@ fn handle_qso_create(state: &AppState, body: &[u8]) -> Vec<u8> {
     if let Some(frequency_hz) = request.frequency_hz {
         payload["frequency_hz"] = json!(frequency_hz);
     }
-    if let Some(band) = request.band.filter(|band| !band.trim().is_empty()) {
+    if let Some(band) = request
+        .band
+        .as_deref()
+        .filter(|band| !band.trim().is_empty())
+    {
         payload["band"] = json!(band);
     }
-    if let Some(notes) = request.notes.filter(|notes| !notes.trim().is_empty()) {
+    if let Some(notes) = request
+        .notes
+        .as_deref()
+        .filter(|notes| !notes.trim().is_empty())
+    {
         payload["notes"] = json!(notes);
     }
+    apply_accepted_lookup_fields(&mut payload, &request);
 
     submit_gui_proposal(state, PROPOSAL_QSO_CREATE, None, payload)
 }
@@ -689,12 +821,21 @@ fn handle_qso_create_with_activation(state: &AppState, body: &[u8]) -> Vec<u8> {
     if let Some(frequency_hz) = request.frequency_hz {
         payload["frequency_hz"] = json!(frequency_hz);
     }
-    if let Some(band) = request.band.filter(|band| !band.trim().is_empty()) {
+    if let Some(band) = request
+        .band
+        .as_deref()
+        .filter(|band| !band.trim().is_empty())
+    {
         payload["band"] = json!(band);
     }
-    if let Some(notes) = request.notes.filter(|notes| !notes.trim().is_empty()) {
+    if let Some(notes) = request
+        .notes
+        .as_deref()
+        .filter(|notes| !notes.trim().is_empty())
+    {
         payload["notes"] = json!(notes);
     }
+    apply_accepted_lookup_fields(&mut payload, &request);
     if let Some(active) = active {
         payload["activation_id"] = json!(active.activation_id);
         if let Some(kind) = active
@@ -764,6 +905,59 @@ fn handle_qso_create_with_activation(state: &AppState, body: &[u8]) -> Vec<u8> {
     json_response(
         &json!({"ok": true, "event": qso.official_event, "projection": qso_projection_payload(state, "include_deleted=true"), "activations": activation_projection_payload(state)}),
     )
+}
+
+fn apply_accepted_lookup_fields(payload: &mut Value, request: &CreateQsoRequest) {
+    if let Some(name) = request
+        .name
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        payload["name"] = json!(name);
+    }
+    if let Some(qth) = request
+        .qth
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        payload["qth"] = json!(qth);
+    }
+    if let Some(grid) = request
+        .grid
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        payload["grid"] = json!(grid.to_ascii_uppercase());
+    }
+    if let Some(country) = request
+        .country
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        payload["country"] = json!(country);
+    }
+    if let Some(dxcc) = request.dxcc {
+        payload["dxcc"] = json!(dxcc);
+    }
+    if let Some(cq_zone) = request.cq_zone {
+        payload["cq_zone"] = json!(cq_zone);
+    }
+    if let Some(itu_zone) = request.itu_zone {
+        payload["itu_zone"] = json!(itu_zone);
+    }
+    if let Some(source) = request
+        .lookup_source
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        payload["lookup_source"] = json!(source);
+    }
+    if let Some(confidence) = request.lookup_confidence {
+        payload["lookup_confidence"] = json!(confidence);
+    }
+    if let Some(fields) = &request.enriched_fields {
+        payload["enriched_fields"] = json!(fields);
+    }
 }
 
 fn handle_qso_simple_action(state: &AppState, body: &[u8], proposal_type: &str) -> Vec<u8> {

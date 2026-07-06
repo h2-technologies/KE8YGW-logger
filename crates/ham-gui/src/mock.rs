@@ -40,6 +40,19 @@ pub fn mock_plugins() -> Vec<MockPlugin> {
                 "adif.export",
             ],
         ),
+        plugin(
+            "plugin.callsign-lookup",
+            "Callsign Lookup",
+            true,
+            [
+                "lookup.callsign",
+                "lookup.entity",
+                "lookup.grid",
+                "cache.lookup.read",
+                "cache.lookup.write",
+                "log.qso.suggest_fields",
+            ],
+        ),
         plugin("plugin.maps", "Maps", false, ["map.view"]),
         plugin("plugin.ai", "AI Assistant", false, ["ai.use"]),
     ]
@@ -63,6 +76,12 @@ pub fn capability_labels() -> Vec<String> {
         PluginCapability::ActivationEnd,
         PluginCapability::ActivationView,
         PluginCapability::AdifExport,
+        PluginCapability::LookupCallsign,
+        PluginCapability::LookupEntity,
+        PluginCapability::LookupGrid,
+        PluginCapability::LookupCacheRead,
+        PluginCapability::LookupCacheWrite,
+        PluginCapability::QsoSuggestFields,
     ]
     .into_iter()
     .map(|capability| capability.as_str().to_owned())

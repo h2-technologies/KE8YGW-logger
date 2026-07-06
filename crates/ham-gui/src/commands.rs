@@ -85,6 +85,21 @@ impl CommandRegistry {
             ),
             command("adif.import", "Import ADIF", "Logging", None, None),
             command("adif.export", "Export ADIF", "Logging", None, None),
+            command("lookup.callsign", "Lookup Callsign", "Lookup", None, None),
+            command(
+                "lookup.cache.clear",
+                "Clear Lookup Cache",
+                "Lookup",
+                None,
+                None,
+            ),
+            command(
+                "lookup.provider-status",
+                "Show Lookup Provider Status",
+                "Lookup",
+                None,
+                None,
+            ),
             command(
                 "activation.start-pota",
                 "Start POTA Activation",
@@ -333,6 +348,8 @@ mod tests {
         assert!(ids.contains(&"event-bus.copy-latest-error"));
         assert!(ids.contains(&"adif.import"));
         assert!(ids.contains(&"adif.export"));
+        assert!(ids.contains(&"lookup.callsign"));
+        assert!(ids.contains(&"lookup.cache.clear"));
         assert!(ids.contains(&"activation.start-pota"));
         assert!(ids.contains(&"activation.export-adif"));
         assert!(ids.contains(&"official-log.verify-chain"));
