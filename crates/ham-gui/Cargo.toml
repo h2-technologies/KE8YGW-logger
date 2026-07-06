@@ -5,9 +5,11 @@ license.workspace = true
 version.workspace = true
 
 [dependencies]
+async-trait.workspace = true
 chrono.workspace = true
 ham-core = { path = "../ham-core" }
 ham-plugin-sdk = { path = "../ham-plugin-sdk" }
+ham-sync = { path = "../ham-sync" }
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true

@@ -83,6 +83,51 @@ impl CommandRegistry {
                 None,
                 None,
             ),
+            command("adif.import", "Import ADIF", "Logging", None, None),
+            command("adif.export", "Export ADIF", "Logging", None, None),
+            command(
+                "official-log.verify-chain",
+                "Verify Log Chain",
+                "Diagnostics",
+                None,
+                None,
+            ),
+            command(
+                "projection.rebuild",
+                "Rebuild Projections",
+                "Diagnostics",
+                None,
+                None,
+            ),
+            command(
+                "sync.discovery.start",
+                "Start LAN Discovery",
+                "Sync",
+                None,
+                None,
+            ),
+            command(
+                "sync.discovery.stop",
+                "Stop LAN Discovery",
+                "Sync",
+                None,
+                None,
+            ),
+            command("sync.peers.refresh", "Refresh Peers", "Sync", None, None),
+            command(
+                "sync.handshake.selected",
+                "Handshake with Selected Peer",
+                "Sync",
+                None,
+                None,
+            ),
+            command(
+                "sync.identity.copy",
+                "Copy Local Sync Identity",
+                "Sync",
+                None,
+                None,
+            ),
         ];
 
         commands.extend(WorkspaceId::ALL.into_iter().map(|workspace| {
@@ -160,5 +205,11 @@ mod tests {
         assert!(ids.contains(&"toggle.event-bus-monitor"));
         assert!(ids.contains(&"event-bus.export"));
         assert!(ids.contains(&"event-bus.copy-latest-error"));
+        assert!(ids.contains(&"adif.import"));
+        assert!(ids.contains(&"adif.export"));
+        assert!(ids.contains(&"official-log.verify-chain"));
+        assert!(ids.contains(&"projection.rebuild"));
+        assert!(ids.contains(&"sync.discovery.start"));
+        assert!(ids.contains(&"sync.identity.copy"));
     }
 }

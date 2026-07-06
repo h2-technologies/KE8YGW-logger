@@ -4,9 +4,10 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+use async_trait::async_trait;
 use ham_core::{
-    EventBus, InMemoryEventBus, RuntimeEventEnvelope, RuntimeEventFilter, RuntimeEventSeverity,
-    RuntimeJsonlLogWriter, RuntimeLogConfig,
+    BusEvent, EventBus, EventBusError, InMemoryEventBus, RuntimeEventEnvelope, RuntimeEventFilter,
+    RuntimeEventSeverity, RuntimeJsonlLogWriter, RuntimeLogConfig,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -166,5 +167,42 @@ impl GuiRuntimeBridge {
             error: None,
         })?;
         Ok(())
+    }
+}
+
+#[async_trait]
+impl EventBus for GuiRuntimeBridge {
+    async fn publish(&self, event: BusEvent) -> Result<usize, EventBusError> {
+        if let BusEvent::Runtime(runtime_event) = &event {
+            self.inner
+                .log_writer
+                .lock()
+                .expect("runtime log writer mutex should not be poisoned")
+                .append(runtime_event)?;
+
+            let mut status = self
+                .inner
+                .status
+                .lock()
+                .expect("runtime bridge status mutex should not be poisoned");
+            status.runtime_event_count += 1;
+            if runtime_event.severity == RuntimeEventSeverity::Error {
+                status.latest_error_count += 1;
+            }
+        }
+
+        self.inner.bus.publish(event).await
+    }
+
+    fn subscribe(&self) -> tokio::sync::broadcast::Receiver<BusEvent> {
+        self.inner.bus.subscribe()
+    }
+
+    async fn replay_runtime_events(
+        &self,
+        filter: RuntimeEventFilter,
+        limit: usize,
+    ) -> Vec<RuntimeEventEnvelope> {
+        self.inner.bus.replay_runtime_events(filter, limit).await
     }
 }

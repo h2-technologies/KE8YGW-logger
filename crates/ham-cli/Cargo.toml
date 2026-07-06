@@ -6,6 +6,9 @@ version.workspace = true
 
 [dependencies]
 ham-core = { path = "../ham-core" }
+ham-plugin-sdk = { path = "../ham-plugin-sdk" }
+tokio.workspace = true
+uuid.workspace = true
 
 [[bin]]
 name = "ham-cli"

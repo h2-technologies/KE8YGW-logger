@@ -11,10 +11,14 @@ use uuid::Uuid;
 pub const PROPOSAL_QSO_CREATE: &str = "proposal.qso.create";
 pub const PROPOSAL_QSO_CORRECT: &str = "proposal.qso.correct";
 pub const PROPOSAL_QSO_DELETE: &str = "proposal.qso.delete";
+pub const PROPOSAL_QSO_RESTORE: &str = "proposal.qso.restore";
+pub const PROPOSAL_QSO_NOTE_ADD: &str = "proposal.qso.note.add";
 
 pub const OFFICIAL_LOG_QSO_CREATED: &str = "official.log.qso.created";
 pub const OFFICIAL_LOG_QSO_CORRECTED: &str = "official.log.qso.corrected";
 pub const OFFICIAL_LOG_QSO_DELETED: &str = "official.log.qso.deleted";
+pub const OFFICIAL_LOG_QSO_RESTORED: &str = "official.log.qso.restored";
+pub const OFFICIAL_LOG_QSO_NOTE_ADDED: &str = "official.log.qso.note_added";
 
 /// A capability granted to a plugin by the host application.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -22,6 +26,9 @@ pub enum PluginCapability {
     QsoCreate,
     QsoCorrect,
     QsoDelete,
+    QsoRestore,
+    QsoNoteAdd,
+    QsoViewDeleted,
     Other(String),
 }
 
@@ -31,6 +38,9 @@ impl PluginCapability {
             Self::QsoCreate => "qso:create",
             Self::QsoCorrect => "qso:correct",
             Self::QsoDelete => "qso:delete",
+            Self::QsoRestore => "qso:restore",
+            Self::QsoNoteAdd => "qso:note:add",
+            Self::QsoViewDeleted => "qso:view-deleted",
             Self::Other(value) => value,
         }
     }
@@ -55,6 +65,9 @@ impl<'de> Deserialize<'de> for PluginCapability {
             "qso:create" => Self::QsoCreate,
             "qso:correct" => Self::QsoCorrect,
             "qso:delete" => Self::QsoDelete,
+            "qso:restore" => Self::QsoRestore,
+            "qso:note:add" => Self::QsoNoteAdd,
+            "qso:view-deleted" => Self::QsoViewDeleted,
             _ => Self::Other(value),
         })
     }

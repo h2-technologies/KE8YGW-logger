@@ -27,6 +27,8 @@
           <select id="workspace-selector" aria-label="Workspace selector"></select>
         </label>
         <button id="command-button" class="toolbar-button" type="button">Command Palette</button>
+        <button id="import-adif-button" class="toolbar-button" type="button">Import ADIF</button>
+        <button id="export-adif-button" class="toolbar-button" type="button">Export ADIF</button>
         <button id="plugins-button" class="toolbar-button" type="button">Plugins</button>
         <button id="settings-button" class="toolbar-button" type="button">Settings</button>
       </header>
@@ -52,6 +54,7 @@
         <span id="status-bus">Event bus: disconnected</span>
         <span id="status-events">Runtime events: 0</span>
         <span id="status-errors">Errors: 0</span>
+        <span id="status-sync-peers">Discovery: stopped / 0 peers</span>
       </footer>
 
       <dialog id="command-palette" class="command-palette" aria-label="Command palette">

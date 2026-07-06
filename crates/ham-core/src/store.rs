@@ -1,4 +1,9 @@
-use std::collections::HashMap;
+use std::{
+    collections::HashMap,
+    fs::{self, OpenOptions},
+    io::{self, BufRead, Write},
+    path::{Path, PathBuf},
+};
 
 use async_trait::async_trait;
 use thiserror::Error;
@@ -6,6 +11,7 @@ use tokio::sync::RwLock;
 use uuid::Uuid;
 
 use crate::event::{CoreEventEnvelope, NewLogbookEvent};
+use crate::projection::{Projection, QsoCurrentStateProjection};
 
 #[derive(Debug, Error)]
 pub enum StoreError {
@@ -13,6 +19,12 @@ pub enum StoreError {
     EventNotFound(Uuid),
     #[error("chain verification failed: {0}")]
     ChainVerification(#[from] ChainVerificationError),
+    #[error("projection rebuild failed: {0}")]
+    Projection(String),
+    #[error("event store I/O error: {0}")]
+    Io(#[from] io::Error),
+    #[error("event store serialization error: {0}")]
+    Serde(#[from] serde_json::Error),
 }
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
@@ -37,12 +49,141 @@ pub trait LogbookEventStore: Send + Sync {
     async fn append_event(&self, event: NewLogbookEvent) -> Result<CoreEventEnvelope, StoreError>;
     async fn get_event(&self, event_id: Uuid) -> Result<Option<CoreEventEnvelope>, StoreError>;
     async fn get_head(&self, logbook_id: Uuid) -> Result<Option<String>, StoreError>;
+    async fn list_events(&self, logbook_id: Uuid) -> Result<Vec<CoreEventEnvelope>, StoreError>;
     async fn list_events_after(
         &self,
         logbook_id: Uuid,
         after_hash: Option<String>,
     ) -> Result<Vec<CoreEventEnvelope>, StoreError>;
+    async fn load_since(
+        &self,
+        logbook_id: Uuid,
+        after_hash: Option<String>,
+    ) -> Result<Vec<CoreEventEnvelope>, StoreError> {
+        self.list_events_after(logbook_id, after_hash).await
+    }
     async fn verify_chain(&self, logbook_id: Uuid) -> Result<(), StoreError>;
+    async fn rebuild_projections(
+        &self,
+        logbook_id: Uuid,
+    ) -> Result<QsoCurrentStateProjection, StoreError>;
+}
+
+#[derive(Debug)]
+pub struct JsonlLogbookEventStore {
+    path: PathBuf,
+    memory: InMemoryLogbookEventStore,
+}
+
+impl JsonlLogbookEventStore {
+    pub fn open(path: impl Into<PathBuf>) -> Result<Self, StoreError> {
+        let path = path.into();
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+
+        let inner = load_inner_from_disk(&path)?;
+        Ok(Self {
+            path,
+            memory: InMemoryLogbookEventStore {
+                inner: RwLock::new(inner),
+            },
+        })
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    fn persist_event(&self, event: &CoreEventEnvelope) -> Result<(), StoreError> {
+        if let Some(parent) = self.path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let mut file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.path)?;
+        serde_json::to_writer(&mut file, event)?;
+        file.write_all(b"\n")?;
+        Ok(())
+    }
+}
+
+fn load_inner_from_disk(path: &Path) -> Result<InMemoryStoreInner, StoreError> {
+    let mut inner = InMemoryStoreInner::default();
+    if !path.exists() {
+        return Ok(inner);
+    }
+
+    let file = fs::File::open(path)?;
+    let reader = io::BufReader::new(file);
+    for line in reader.lines() {
+        let line = line?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        let event: CoreEventEnvelope = serde_json::from_str(&line)?;
+        inner
+            .events_by_logbook
+            .entry(event.logbook_id)
+            .or_default()
+            .push(event.event_id);
+        inner
+            .heads
+            .insert(event.logbook_id, event.event_hash.clone());
+        inner.events_by_id.insert(event.event_id, event);
+    }
+    Ok(inner)
+}
+
+#[async_trait]
+impl LogbookEventStore for JsonlLogbookEventStore {
+    async fn append_event(&self, event: NewLogbookEvent) -> Result<CoreEventEnvelope, StoreError> {
+        let official_event = self.memory.append_event(event).await?;
+        self.persist_event(&official_event)?;
+        Ok(official_event)
+    }
+
+    async fn get_event(&self, event_id: Uuid) -> Result<Option<CoreEventEnvelope>, StoreError> {
+        self.memory.get_event(event_id).await
+    }
+
+    async fn get_head(&self, logbook_id: Uuid) -> Result<Option<String>, StoreError> {
+        self.memory.get_head(logbook_id).await
+    }
+
+    async fn list_events(&self, logbook_id: Uuid) -> Result<Vec<CoreEventEnvelope>, StoreError> {
+        self.memory.list_events(logbook_id).await
+    }
+
+    async fn list_events_after(
+        &self,
+        logbook_id: Uuid,
+        after_hash: Option<String>,
+    ) -> Result<Vec<CoreEventEnvelope>, StoreError> {
+        self.memory.list_events_after(logbook_id, after_hash).await
+    }
+
+    async fn verify_chain(&self, logbook_id: Uuid) -> Result<(), StoreError> {
+        self.memory.verify_chain(logbook_id).await
+    }
+
+    async fn rebuild_projections(
+        &self,
+        logbook_id: Uuid,
+    ) -> Result<QsoCurrentStateProjection, StoreError> {
+        self.memory.rebuild_projections(logbook_id).await
+    }
+}
+
+pub fn default_official_event_log_path() -> PathBuf {
+    if let Ok(path) = std::env::var("HAM_PLATFORM_EVENT_LOG") {
+        return PathBuf::from(path);
+    }
+
+    crate::default_log_directory()
+        .join("official")
+        .join("official-events.jsonl")
 }
 
 #[derive(Debug, Default)]
@@ -97,6 +238,10 @@ impl LogbookEventStore for InMemoryLogbookEventStore {
 
     async fn get_head(&self, logbook_id: Uuid) -> Result<Option<String>, StoreError> {
         Ok(self.inner.read().await.heads.get(&logbook_id).cloned())
+    }
+
+    async fn list_events(&self, logbook_id: Uuid) -> Result<Vec<CoreEventEnvelope>, StoreError> {
+        self.list_events_after(logbook_id, None).await
     }
 
     async fn list_events_after(
@@ -173,5 +318,17 @@ impl LogbookEventStore for InMemoryLogbookEventStore {
         }
 
         Ok(())
+    }
+
+    async fn rebuild_projections(
+        &self,
+        logbook_id: Uuid,
+    ) -> Result<QsoCurrentStateProjection, StoreError> {
+        let events = self.list_events(logbook_id).await?;
+        let mut projection = QsoCurrentStateProjection::new();
+        projection
+            .rebuild(&events)
+            .map_err(|error| StoreError::Projection(error.to_string()))?;
+        Ok(projection)
     }
 }

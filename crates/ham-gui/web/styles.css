@@ -416,6 +416,32 @@ input {
   padding: 12px;
 }
 
+.qso-form,
+.qso-list {
+  display: grid;
+  gap: 10px;
+}
+
+.qso-form label {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.qso-row {
+  display: grid;
+  gap: 4px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #151719;
+  padding: 10px;
+}
+
+.qso-row span,
+.qso-row small {
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
 .pill {
   display: inline-flex;
   align-items: center;

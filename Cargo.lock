@@ -164,6 +164,9 @@ name = "ham-cli"
 version = "0.1.0"
 dependencies = [
  "ham-core",
+ "ham-plugin-sdk",
+ "tokio",
+ "uuid",
 ]
 
 [[package]]
@@ -185,9 +188,11 @@ dependencies = [
 name = "ham-gui"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "chrono",
  "ham-core",
  "ham-plugin-sdk",
+ "ham-sync",
  "serde",
  "serde_json",
  "tokio",
@@ -207,6 +212,13 @@ dependencies = [
 [[package]]
 name = "ham-sync"
 version = "0.1.0"
+dependencies = [
+ "chrono",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "uuid",
+]
 
 [[package]]
 name = "iana-time-zone"

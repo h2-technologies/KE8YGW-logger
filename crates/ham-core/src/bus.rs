@@ -183,6 +183,8 @@ fn is_secret_like_key(key: &str) -> bool {
 pub enum EventBusError {
     #[error("no active subscribers accepted the event")]
     NoSubscribers,
+    #[error("event bus I/O error: {0}")]
+    Io(#[from] std::io::Error),
 }
 
 /// Async publish/subscribe bus used by core services and future plugins.
