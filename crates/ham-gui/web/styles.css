@@ -442,6 +442,26 @@ input {
   overflow-wrap: anywhere;
 }
 
+.sync-panel {
+  display: grid;
+  gap: 10px;
+}
+
+.sync-summary {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 10px;
+  background: #151719;
+}
+
+.sync-summary p {
+  margin: 0 0 8px;
+}
+
+.sync-summary small {
+  overflow-wrap: anywhere;
+}
+
 .pill {
   display: inline-flex;
   align-items: center;

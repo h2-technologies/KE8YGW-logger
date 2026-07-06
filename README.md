@@ -8,7 +8,7 @@ sync, with room for emergency communications, net control, and contesting.
 
 - `ham-core`: append-only logbook events, event bus, proposal validation, event store, and projections.
 - `ham-plugin-sdk`: public plugin manifest, capability, proposal, and event constant types.
-- `ham-sync`: placeholder for future local-first synchronization.
+- `ham-sync`: local-first discovery, handshake, head comparison, and safe pull replication models.
 - `ham-cli`: placeholder command-line entry point.
 - `ham-gui`: initial GUI shell, workspace model, panel registry, command registry,
   and static web shell served by a small Rust binary.
@@ -150,8 +150,7 @@ cargo run -p ham-cli -- export-adif path\to\export.adi
 
 `ham-sync` defines the first local-first LAN sync layer. The MVP supports
 discovery packets, an in-memory peer registry, handshake request/response
-models, and logbook head comparison. Full event replication and merge are
-intentionally deferred.
+models, logbook head comparison, and user-initiated pull replication.
 
 Discovery uses configurable IPv4 and IPv6 multicast defaults:
 
@@ -182,9 +181,10 @@ exchanged, the MVP treats the result as unknown or diverged until the later
 replication protocol can compare event ancestry safely.
 
 The GUI Sync Status panel can start/stop discovery, refresh peers, handshake with
-a selected peer, and copy the local sync identity. The current implementation
-keeps peers in memory and includes a demo refresh path for local testing while
-the multicast service is finalized for real multi-device runs.
+a selected peer, preview a pull, pull missing events, and copy the local sync
+identity. The current implementation keeps peers in memory and includes a demo
+refresh path for local testing while the multicast service is finalized for real
+multi-device runs.
 
 Runtime events include:
 
@@ -197,8 +197,79 @@ Runtime events include:
 - `sync.handshake.error`
 
 Security limitations for MVP: peers are untrusted, no destructive commands are
-accepted, no remote official events are merged, and authentication/trust pairing
-is a TODO before automatic replication.
+accepted, automatic replication is disabled, and authentication/trust pairing is
+a TODO before unattended sync.
+
+## Safe LAN Event Replication
+
+Official log replication is pull-based for MVP. The GUI or an admin action must
+initiate replication from a selected peer. Peers do not push events into the
+local official log, and runtime diagnostic logs, credentials, and private config
+are never synced.
+
+The sync protocol models include:
+
+- `list_logbooks`
+- `get_head`
+- `get_events_since`
+- `get_event_metadata`
+- `preview_pull`
+- `pull_events`
+
+`Preview Pull` compares the local head with the remote event chain and reports
+how many official events would be pulled. It does not write anything. If the
+remote chain does not contain the local head, the preview reports divergence.
+
+`Pull Missing Events` requests full official event envelopes and verifies them
+before storage. The verifier checks:
+
+- deterministic event hash validity
+- supported schema version
+- supported official event type
+- matching logbook ID
+- first incoming `previous_hash` connects to the local head
+- incoming events chain together
+- duplicate event IDs are identical before they are ignored
+- duplicate event IDs with different content are rejected
+
+Accepted remote events are appended through the official `LogbookEventStore`
+replication API, preserving the original event metadata and hash. The store does
+not rewrite event IDs, timestamps, authorship, source device IDs, payloads, or
+hash input. After a successful pull, the GUI verifies the local chain and
+rebuilds QSO projections.
+
+If chains diverge, the MVP does not merge automatically. Divergence is stored in
+sync UI state, shown in the Sync Status panel, and emitted as
+`sync.divergence.detected`. Branch review, conflict resolution, signed events,
+device pairing, and cloud relay support are intentionally deferred.
+
+Replication runtime events include:
+
+- `sync.preview_pull.started`
+- `sync.preview_pull.completed`
+- `sync.pull.started`
+- `sync.pull.progress`
+- `sync.remote_event.received`
+- `sync.remote_event.accepted`
+- `sync.remote_event.rejected`
+- `sync.pull.completed`
+- `sync.pull.failed`
+- `sync.divergence.detected`
+- `projection.qso.rebuilt`
+
+To try the current GUI workflow locally:
+
+1. Run the GUI with `just gui`.
+2. Open the Dashboard Sync Status panel.
+3. Click `Refresh Peers` to add the demo LAN peer.
+4. Click `Preview Pull` to inspect available remote events.
+5. Click `Pull Missing` to append verified missing events and rebuild QSOs.
+
+For two real local instances, run two GUI processes on different ports and set
+separate `HAM_PLATFORM_EVENT_LOG` paths so they do not share the same JSONL
+store. Real peer-to-peer HTTP transport and trust pairing are the next sync
+tasks; the protocol messages added here are designed to be reused by that
+transport.
 
 ## GUI Architecture
 

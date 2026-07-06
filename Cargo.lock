@@ -214,9 +214,11 @@ name = "ham-sync"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "ham-core",
  "serde",
  "serde_json",
  "thiserror",
+ "tokio",
  "uuid",
 ]
 

@@ -25,8 +25,8 @@ pub use runtime_log::{
     DEFAULT_RUNTIME_LOG_RETAINED_FILES, RUNTIME_LOG_FILE_NAME,
 };
 pub use store::{
-    default_official_event_log_path, ChainVerificationError, InMemoryLogbookEventStore,
-    JsonlLogbookEventStore, LogbookEventStore,
+    default_official_event_log_path, validate_supported_remote_event, ChainVerificationError,
+    InMemoryLogbookEventStore, JsonlLogbookEventStore, LogbookEventStore, StoreError,
 };
 
 #[cfg(test)]

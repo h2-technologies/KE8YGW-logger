@@ -12,6 +12,10 @@ use uuid::Uuid;
 
 use crate::event::{CoreEventEnvelope, NewLogbookEvent};
 use crate::projection::{Projection, QsoCurrentStateProjection};
+use ham_plugin_sdk::{
+    OFFICIAL_LOG_QSO_CORRECTED, OFFICIAL_LOG_QSO_CREATED, OFFICIAL_LOG_QSO_DELETED,
+    OFFICIAL_LOG_QSO_NOTE_ADDED, OFFICIAL_LOG_QSO_RESTORED,
+};
 
 #[derive(Debug, Error)]
 pub enum StoreError {
@@ -25,6 +29,20 @@ pub enum StoreError {
     Io(#[from] io::Error),
     #[error("event store serialization error: {0}")]
     Serde(#[from] serde_json::Error),
+    #[error("remote event {event_id} has an invalid hash")]
+    InvalidRemoteHash { event_id: Uuid },
+    #[error("remote event {event_id} uses unsupported schema version {schema_version}")]
+    UnsupportedSchemaVersion { event_id: Uuid, schema_version: u32 },
+    #[error("remote event {event_id} has unsupported event type {event_type}")]
+    UnsupportedEventType { event_id: Uuid, event_type: String },
+    #[error("remote event {event_id} previous hash {actual:?} does not connect to local head {expected:?}")]
+    RemotePreviousHashMismatch {
+        event_id: Uuid,
+        expected: Option<String>,
+        actual: Option<String>,
+    },
+    #[error("remote event id {event_id} already exists with different content")]
+    DuplicateEventConflict { event_id: Uuid },
 }
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
@@ -47,6 +65,10 @@ pub enum ChainVerificationError {
 #[async_trait]
 pub trait LogbookEventStore: Send + Sync {
     async fn append_event(&self, event: NewLogbookEvent) -> Result<CoreEventEnvelope, StoreError>;
+    async fn append_verified_remote_event(
+        &self,
+        event: CoreEventEnvelope,
+    ) -> Result<CoreEventEnvelope, StoreError>;
     async fn get_event(&self, event_id: Uuid) -> Result<Option<CoreEventEnvelope>, StoreError>;
     async fn get_head(&self, logbook_id: Uuid) -> Result<Option<String>, StoreError>;
     async fn list_events(&self, logbook_id: Uuid) -> Result<Vec<CoreEventEnvelope>, StoreError>;
@@ -144,6 +166,20 @@ impl LogbookEventStore for JsonlLogbookEventStore {
         Ok(official_event)
     }
 
+    async fn append_verified_remote_event(
+        &self,
+        event: CoreEventEnvelope,
+    ) -> Result<CoreEventEnvelope, StoreError> {
+        if let Some(existing) = self.memory.get_event(event.event_id).await? {
+            if existing == event {
+                return Ok(existing);
+            }
+        }
+        let official_event = self.memory.append_verified_remote_event(event).await?;
+        self.persist_event(&official_event)?;
+        Ok(official_event)
+    }
+
     async fn get_event(&self, event_id: Uuid) -> Result<Option<CoreEventEnvelope>, StoreError> {
         self.memory.get_event(event_id).await
     }
@@ -230,6 +266,44 @@ impl LogbookEventStore for InMemoryLogbookEventStore {
             .insert(official_event.event_id, official_event.clone());
 
         Ok(official_event)
+    }
+
+    async fn append_verified_remote_event(
+        &self,
+        event: CoreEventEnvelope,
+    ) -> Result<CoreEventEnvelope, StoreError> {
+        validate_supported_remote_event(&event)?;
+
+        let mut inner = self.inner.write().await;
+        if let Some(existing) = inner.events_by_id.get(&event.event_id) {
+            if existing == &event {
+                return Ok(existing.clone());
+            }
+            return Err(StoreError::DuplicateEventConflict {
+                event_id: event.event_id,
+            });
+        }
+
+        let expected_previous_hash = inner.heads.get(&event.logbook_id).cloned();
+        if event.previous_hash != expected_previous_hash {
+            return Err(StoreError::RemotePreviousHashMismatch {
+                event_id: event.event_id,
+                expected: expected_previous_hash,
+                actual: event.previous_hash.clone(),
+            });
+        }
+
+        inner
+            .events_by_logbook
+            .entry(event.logbook_id)
+            .or_default()
+            .push(event.event_id);
+        inner
+            .heads
+            .insert(event.logbook_id, event.event_hash.clone());
+        inner.events_by_id.insert(event.event_id, event.clone());
+
+        Ok(event)
     }
 
     async fn get_event(&self, event_id: Uuid) -> Result<Option<CoreEventEnvelope>, StoreError> {
@@ -331,4 +405,35 @@ impl LogbookEventStore for InMemoryLogbookEventStore {
             .map_err(|error| StoreError::Projection(error.to_string()))?;
         Ok(projection)
     }
+}
+
+pub fn validate_supported_remote_event(event: &CoreEventEnvelope) -> Result<(), StoreError> {
+    if !event.hash_is_valid() {
+        return Err(StoreError::InvalidRemoteHash {
+            event_id: event.event_id,
+        });
+    }
+
+    if event.schema_version != 1 {
+        return Err(StoreError::UnsupportedSchemaVersion {
+            event_id: event.event_id,
+            schema_version: event.schema_version,
+        });
+    }
+
+    if !matches!(
+        event.event_type.as_str(),
+        OFFICIAL_LOG_QSO_CREATED
+            | OFFICIAL_LOG_QSO_CORRECTED
+            | OFFICIAL_LOG_QSO_DELETED
+            | OFFICIAL_LOG_QSO_RESTORED
+            | OFFICIAL_LOG_QSO_NOTE_ADDED
+    ) {
+        return Err(StoreError::UnsupportedEventType {
+            event_id: event.event_id,
+            event_type: event.event_type.clone(),
+        });
+    }
+
+    Ok(())
 }

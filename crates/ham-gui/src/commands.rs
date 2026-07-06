@@ -122,6 +122,41 @@ impl CommandRegistry {
                 None,
             ),
             command(
+                "sync.preview-pull.selected",
+                "Preview Pull From Peer",
+                "Sync",
+                None,
+                None,
+            ),
+            command(
+                "sync.pull.selected",
+                "Pull Missing Events From Peer",
+                "Sync",
+                None,
+                None,
+            ),
+            command(
+                "sync.verify-local-chain",
+                "Verify Local Chain",
+                "Sync",
+                None,
+                None,
+            ),
+            command(
+                "sync.rebuild-projections",
+                "Rebuild Projections",
+                "Sync",
+                None,
+                None,
+            ),
+            command(
+                "sync.diagnostics.copy",
+                "Copy Sync Diagnostic Summary",
+                "Sync",
+                None,
+                None,
+            ),
+            command(
                 "sync.identity.copy",
                 "Copy Local Sync Identity",
                 "Sync",
@@ -210,6 +245,9 @@ mod tests {
         assert!(ids.contains(&"official-log.verify-chain"));
         assert!(ids.contains(&"projection.rebuild"));
         assert!(ids.contains(&"sync.discovery.start"));
+        assert!(ids.contains(&"sync.preview-pull.selected"));
+        assert!(ids.contains(&"sync.pull.selected"));
+        assert!(ids.contains(&"sync.diagnostics.copy"));
         assert!(ids.contains(&"sync.identity.copy"));
     }
 }

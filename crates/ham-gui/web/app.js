@@ -84,7 +84,7 @@ function render() {
   byId("status-sync").textContent = `Sync: ${state.runtimeStatus?.sync_state || "Local only"}`;
   byId("status-events").textContent = `Runtime events: ${state.runtimeStatus?.runtime_event_count || state.runtimeEvents.length}`;
   byId("status-errors").textContent = `Errors: ${state.runtimeStatus?.latest_error_count || 0}`;
-  byId("status-sync-peers").textContent = `Discovery: ${state.syncState?.discovery_running ? "running" : "stopped"} / ${state.syncState?.peers?.length || 0} peers`;
+  byId("status-sync-peers").textContent = `Discovery: ${state.syncState?.discovery_running ? "running" : "stopped"} / ${state.syncState?.peers?.length || 0} peers / ${state.syncState?.warning_count || 0} warnings`;
 
   document.querySelectorAll(".activity-item").forEach((button) => {
     button.classList.toggle("is-active", button.dataset.workspace === state.activeWorkspace);
@@ -222,6 +222,11 @@ function runCommand(commandId) {
   if (command.id === "sync.discovery.stop") stopDiscovery();
   if (command.id === "sync.peers.refresh") refreshPeers();
   if (command.id === "sync.handshake.selected") handshakeSelectedPeer();
+  if (command.id === "sync.preview-pull.selected") previewPullSelectedPeer();
+  if (command.id === "sync.pull.selected") pullSelectedPeer();
+  if (command.id === "sync.verify-local-chain") verifyLogChain();
+  if (command.id === "sync.rebuild-projections") rebuildProjections();
+  if (command.id === "sync.diagnostics.copy") copySyncDiagnosticSummary();
   if (command.id === "sync.identity.copy") copyLocalSyncIdentity();
   if (command.id === "event-bus.open") switchWorkspace("dashboard");
   if (command.id === "event-bus.pause") toggleRuntimeStream();
@@ -389,6 +394,8 @@ function bindPanelControls() {
     byId("sync-stop-discovery").addEventListener("click", stopDiscovery);
     byId("sync-refresh-peers").addEventListener("click", refreshPeers);
     byId("sync-handshake").addEventListener("click", handshakeSelectedPeer);
+    byId("sync-preview-pull").addEventListener("click", previewPullSelectedPeer);
+    byId("sync-pull-events").addEventListener("click", pullSelectedPeer);
     byId("sync-copy-identity").addEventListener("click", copyLocalSyncIdentity);
   }
 }
@@ -599,7 +606,25 @@ function renderSyncStatus() {
       <button id="sync-stop-discovery" class="toolbar-button" type="button">Stop</button>
       <button id="sync-refresh-peers" class="toolbar-button" type="button">Refresh Peers</button>
       <button id="sync-handshake" class="toolbar-button" type="button">Handshake</button>
+      <button id="sync-preview-pull" class="toolbar-button" type="button">Preview Pull</button>
+      <button id="sync-pull-events" class="toolbar-button" type="button">Pull Missing</button>
       <button id="sync-copy-identity" class="toolbar-button" type="button">Copy Identity</button>
+    </div>
+    <div class="sync-summary">
+      <p><strong>Local head:</strong> <small>${sync.local_head?.head_hash || "genesis"}</small></p>
+      <p><strong>Remote head:</strong> <small>${sync.remote_head?.head_hash || "unknown"}</small></p>
+      <p><strong>Last sync:</strong> ${sync.last_sync_time || "never"}</p>
+      ${sync.divergence ? `<p class="event-error"><strong>Divergence:</strong> ${sync.divergence}</p>` : ""}
+      ${
+        sync.latest_preview
+          ? `<p><strong>Preview:</strong> ${sync.latest_preview.status} / ${sync.latest_preview.missing_event_count} events available</p>`
+          : ""
+      }
+      ${
+        sync.latest_pull
+          ? `<p><strong>Pull:</strong> ${sync.latest_pull.status} / accepted ${sync.latest_pull.accepted_count}, rejected ${sync.latest_pull.rejected_count}</p>`
+          : ""
+      }
     </div>
     <div class="qso-list">
       ${
@@ -616,6 +641,7 @@ function renderSyncStatus() {
       }
     </div>
     <pre class="path-block">${sync.latest_handshake ? JSON.stringify(sync.latest_handshake, null, 2) : "No handshake yet."}</pre>
+    <pre class="path-block">${sync.latest_preview ? JSON.stringify(sync.latest_preview, null, 2) : "No pull preview yet."}</pre>
   </div>`;
 }
 
@@ -652,8 +678,24 @@ function handshakeSelectedPeer() {
   syncPost("/api/sync/handshake", { peer_id: state.selectedPeerId });
 }
 
+async function previewPullSelectedPeer() {
+  const result = await syncPost("/api/sync/preview-pull", { peer_id: state.selectedPeerId });
+  state.importSummary = result.preview || result;
+}
+
+async function pullSelectedPeer() {
+  const result = await syncPost("/api/sync/pull-events", { peer_id: state.selectedPeerId });
+  state.importSummary = result.pull || result;
+  await refreshQsos();
+  render();
+}
+
 function copyLocalSyncIdentity() {
   if (state.syncState) navigator.clipboard?.writeText(JSON.stringify(state.syncState.identity, null, 2));
+}
+
+function copySyncDiagnosticSummary() {
+  if (state.syncState) navigator.clipboard?.writeText(JSON.stringify(state.syncState, null, 2));
 }
 
 boot().catch((error) => {

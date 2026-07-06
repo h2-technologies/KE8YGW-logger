@@ -7,6 +7,7 @@ use std::{
 };
 
 use chrono::{DateTime, Utc};
+use ham_core::{validate_supported_remote_event, CoreEventEnvelope, LogbookEventStore, StoreError};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use uuid::Uuid;
@@ -331,6 +332,385 @@ pub fn build_handshake_response(
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ListLogbooksRequest {
+    pub protocol_version: u16,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ListLogbooksResponse {
+    pub logbooks: Vec<LogbookHeadSummary>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GetHeadRequest {
+    pub logbook_id: Uuid,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GetEventRangeRequest {
+    pub logbook_id: Uuid,
+    pub after_hash: Option<String>,
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EventMetadata {
+    pub event_id: Uuid,
+    pub logbook_id: Uuid,
+    pub previous_hash: Option<String>,
+    pub event_hash: String,
+    pub timestamp: DateTime<Utc>,
+    pub event_type: String,
+    pub schema_version: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GetEventRangeResponse {
+    pub logbook_id: Uuid,
+    pub events: Vec<CoreEventEnvelope>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GetEventMetadataRequest {
+    pub logbook_id: Uuid,
+    pub after_hash: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GetEventMetadataResponse {
+    pub logbook_id: Uuid,
+    pub events: Vec<EventMetadata>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PreviewPullRequest {
+    pub peer_id: String,
+    pub logbook_id: Uuid,
+    pub local_head_hash: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PreviewPullResponse {
+    pub peer_id: String,
+    pub logbook_id: Uuid,
+    pub status: ReplicationStatus,
+    pub local_head_hash: Option<String>,
+    pub remote_head_hash: Option<String>,
+    pub missing_event_count: usize,
+    pub remote_event_count: usize,
+    pub events: Vec<EventMetadata>,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PullEventsRequest {
+    pub peer_id: String,
+    pub logbook_id: Uuid,
+    pub local_head_hash: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PullEventsResponse {
+    pub peer_id: String,
+    pub logbook_id: Uuid,
+    pub status: ReplicationStatus,
+    pub accepted_count: usize,
+    pub ignored_duplicate_count: usize,
+    pub rejected_count: usize,
+    pub local_head_hash: Option<String>,
+    pub remote_head_hash: Option<String>,
+    pub errors: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReplicationStatus {
+    InSync,
+    RemoteAhead,
+    Pulled,
+    Diverged,
+    Rejected,
+}
+
+#[derive(Debug, Error)]
+pub enum ReplicationError {
+    #[error("remote event {event_id} is for logbook {actual_logbook_id}, expected {expected_logbook_id}")]
+    LogbookMismatch {
+        event_id: Uuid,
+        expected_logbook_id: Uuid,
+        actual_logbook_id: Uuid,
+    },
+    #[error(
+        "remote event {event_id} previous hash {actual:?} does not match expected {expected:?}"
+    )]
+    PreviousHashMismatch {
+        event_id: Uuid,
+        expected: Option<String>,
+        actual: Option<String>,
+    },
+    #[error("remote chain diverged from local head {local_head_hash:?}")]
+    Diverged { local_head_hash: Option<String> },
+    #[error("store error: {0}")]
+    Store(#[from] StoreError),
+}
+
+pub fn metadata_for_event(event: &CoreEventEnvelope) -> EventMetadata {
+    EventMetadata {
+        event_id: event.event_id,
+        logbook_id: event.logbook_id,
+        previous_hash: event.previous_hash.clone(),
+        event_hash: event.event_hash.clone(),
+        timestamp: event.timestamp,
+        event_type: event.event_type.clone(),
+        schema_version: event.schema_version,
+    }
+}
+
+pub fn preview_pull_from_events(
+    request: PreviewPullRequest,
+    remote_events: &[CoreEventEnvelope],
+) -> PreviewPullResponse {
+    let remote_events = events_for_logbook(remote_events, request.logbook_id);
+    let remote_head_hash = remote_events.last().map(|event| event.event_hash.clone());
+
+    if request.local_head_hash == remote_head_hash {
+        return PreviewPullResponse {
+            peer_id: request.peer_id,
+            logbook_id: request.logbook_id,
+            status: ReplicationStatus::InSync,
+            local_head_hash: request.local_head_hash,
+            remote_head_hash,
+            missing_event_count: 0,
+            remote_event_count: remote_events.len(),
+            events: Vec::new(),
+            message: "Local and remote heads match".to_owned(),
+        };
+    }
+
+    let missing = match missing_events_after(&remote_events, request.local_head_hash.as_deref()) {
+        MissingEvents::Events(events) => events,
+        MissingEvents::Diverged => {
+            return PreviewPullResponse {
+                peer_id: request.peer_id,
+                logbook_id: request.logbook_id,
+                status: ReplicationStatus::Diverged,
+                local_head_hash: request.local_head_hash,
+                remote_head_hash,
+                missing_event_count: 0,
+                remote_event_count: remote_events.len(),
+                events: Vec::new(),
+                message: "Remote chain does not contain the local head".to_owned(),
+            };
+        }
+    };
+
+    PreviewPullResponse {
+        peer_id: request.peer_id,
+        logbook_id: request.logbook_id,
+        status: ReplicationStatus::RemoteAhead,
+        local_head_hash: request.local_head_hash,
+        remote_head_hash,
+        missing_event_count: missing.len(),
+        remote_event_count: remote_events.len(),
+        events: missing.iter().map(metadata_for_event).collect(),
+        message: format!("{} remote events are available to pull", missing.len()),
+    }
+}
+
+pub async fn pull_missing_events<S>(
+    store: &S,
+    request: PullEventsRequest,
+    remote_events: Vec<CoreEventEnvelope>,
+) -> PullEventsResponse
+where
+    S: LogbookEventStore,
+{
+    let local_head_hash = match store.get_head(request.logbook_id).await {
+        Ok(head) => head,
+        Err(error) => {
+            return PullEventsResponse::rejected(request, None, None, vec![error.to_string()]);
+        }
+    };
+    let remote_events = events_for_logbook(&remote_events, request.logbook_id);
+    let remote_head_hash = remote_events.last().map(|event| event.event_hash.clone());
+
+    if local_head_hash == remote_head_hash {
+        return PullEventsResponse {
+            peer_id: request.peer_id,
+            logbook_id: request.logbook_id,
+            status: ReplicationStatus::InSync,
+            accepted_count: 0,
+            ignored_duplicate_count: 0,
+            rejected_count: 0,
+            local_head_hash,
+            remote_head_hash,
+            errors: Vec::new(),
+        };
+    }
+
+    let missing = match missing_events_after(&remote_events, local_head_hash.as_deref()) {
+        MissingEvents::Events(events) => events,
+        MissingEvents::Diverged => {
+            return PullEventsResponse {
+                peer_id: request.peer_id,
+                logbook_id: request.logbook_id,
+                status: ReplicationStatus::Diverged,
+                accepted_count: 0,
+                ignored_duplicate_count: 0,
+                rejected_count: remote_events.len(),
+                local_head_hash,
+                remote_head_hash,
+                errors: vec!["remote chain does not contain the local head".to_owned()],
+            };
+        }
+    };
+
+    if let Err(error) = verify_incoming_chain(request.logbook_id, local_head_hash.clone(), &missing)
+    {
+        return PullEventsResponse {
+            peer_id: request.peer_id,
+            logbook_id: request.logbook_id,
+            status: match error {
+                ReplicationError::Diverged { .. }
+                | ReplicationError::PreviousHashMismatch { .. } => ReplicationStatus::Diverged,
+                _ => ReplicationStatus::Rejected,
+            },
+            accepted_count: 0,
+            ignored_duplicate_count: 0,
+            rejected_count: missing.len(),
+            local_head_hash,
+            remote_head_hash,
+            errors: vec![error.to_string()],
+        };
+    }
+
+    let mut accepted_count = 0usize;
+    let mut ignored_duplicate_count = 0usize;
+    let mut errors = Vec::new();
+    for event in missing {
+        let event_id = event.event_id;
+        match store.get_event(event_id).await {
+            Ok(Some(existing)) if existing == event => {
+                ignored_duplicate_count += 1;
+                continue;
+            }
+            Ok(Some(_)) => {
+                errors.push(format!(
+                    "event id {event_id} already exists with different content"
+                ));
+                break;
+            }
+            Ok(None) => {}
+            Err(error) => {
+                errors.push(error.to_string());
+                break;
+            }
+        }
+
+        match store.append_verified_remote_event(event).await {
+            Ok(_) => accepted_count += 1,
+            Err(error) => {
+                errors.push(error.to_string());
+                break;
+            }
+        }
+    }
+
+    let final_head = store.get_head(request.logbook_id).await.unwrap_or(None);
+    let status = if errors.is_empty() {
+        ReplicationStatus::Pulled
+    } else {
+        ReplicationStatus::Rejected
+    };
+    PullEventsResponse {
+        peer_id: request.peer_id,
+        logbook_id: request.logbook_id,
+        status,
+        accepted_count,
+        ignored_duplicate_count,
+        rejected_count: errors.len(),
+        local_head_hash: final_head,
+        remote_head_hash,
+        errors,
+    }
+}
+
+fn events_for_logbook(events: &[CoreEventEnvelope], logbook_id: Uuid) -> Vec<CoreEventEnvelope> {
+    events
+        .iter()
+        .filter(|event| event.logbook_id == logbook_id)
+        .cloned()
+        .collect()
+}
+
+enum MissingEvents {
+    Events(Vec<CoreEventEnvelope>),
+    Diverged,
+}
+
+fn missing_events_after(
+    remote_events: &[CoreEventEnvelope],
+    local_head_hash: Option<&str>,
+) -> MissingEvents {
+    match local_head_hash {
+        None => MissingEvents::Events(remote_events.to_vec()),
+        Some(hash) => remote_events
+            .iter()
+            .position(|event| event.event_hash == hash)
+            .map(|index| MissingEvents::Events(remote_events[index + 1..].to_vec()))
+            .unwrap_or(MissingEvents::Diverged),
+    }
+}
+
+pub fn verify_incoming_chain(
+    logbook_id: Uuid,
+    local_head_hash: Option<String>,
+    events: &[CoreEventEnvelope],
+) -> Result<(), ReplicationError> {
+    let mut expected_previous_hash = local_head_hash;
+    for event in events {
+        if event.logbook_id != logbook_id {
+            return Err(ReplicationError::LogbookMismatch {
+                event_id: event.event_id,
+                expected_logbook_id: logbook_id,
+                actual_logbook_id: event.logbook_id,
+            });
+        }
+        validate_supported_remote_event(event)?;
+        if event.previous_hash != expected_previous_hash {
+            return Err(ReplicationError::PreviousHashMismatch {
+                event_id: event.event_id,
+                expected: expected_previous_hash,
+                actual: event.previous_hash.clone(),
+            });
+        }
+        expected_previous_hash = Some(event.event_hash.clone());
+    }
+    Ok(())
+}
+
+impl PullEventsResponse {
+    fn rejected(
+        request: PullEventsRequest,
+        local_head_hash: Option<String>,
+        remote_head_hash: Option<String>,
+        errors: Vec<String>,
+    ) -> Self {
+        Self {
+            peer_id: request.peer_id,
+            logbook_id: request.logbook_id,
+            status: ReplicationStatus::Rejected,
+            accepted_count: 0,
+            ignored_duplicate_count: 0,
+            rejected_count: errors.len(),
+            local_head_hash,
+            remote_head_hash,
+            errors,
+        }
+    }
+}
+
 #[derive(Debug, Error)]
 pub enum DiscoveryServiceError {
     #[error("discovery I/O error: {0}")]
@@ -374,9 +754,49 @@ impl LanDiscoveryService {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ham_core::{CoreEventEnvelope, InMemoryLogbookEventStore, NewLogbookEvent};
+    use serde_json::json;
 
     fn local() -> LocalPeerIdentity {
         LocalPeerIdentity::new("Local", Some(9738))
+    }
+
+    fn new_event(logbook_id: Uuid, previous_hash: Option<String>) -> CoreEventEnvelope {
+        CoreEventEnvelope::from_new(
+            NewLogbookEvent {
+                event_type: "official.log.qso.created".to_owned(),
+                logbook_id,
+                entity_id: Some(Uuid::new_v4()),
+                author_operator_id: None,
+                station_callsign: "KE8YGW".to_owned(),
+                operator_callsign: Some("KE8YGW".to_owned()),
+                author_device_id: Uuid::new_v4(),
+                source_device_id: Uuid::new_v4(),
+                correlation_id: Uuid::new_v4(),
+                source_plugin_id: Some("sync-test".to_owned()),
+                schema_version: 1,
+                payload: json!({
+                    "qso_id": Uuid::new_v4(),
+                    "station_callsign": "KE8YGW",
+                    "operator_callsign": "KE8YGW",
+                    "contacted_callsign": "K1ABC",
+                    "started_at": "2026-07-05T12:00:00Z",
+                    "mode": "SSB"
+                }),
+            },
+            previous_hash,
+        )
+    }
+
+    fn remote_chain(logbook_id: Uuid, count: usize) -> Vec<CoreEventEnvelope> {
+        let mut events = Vec::new();
+        let mut previous_hash = None;
+        for _ in 0..count {
+            let event = new_event(logbook_id, previous_hash);
+            previous_hash = Some(event.event_hash.clone());
+            events.push(event);
+        }
+        events
     }
 
     #[test]
@@ -490,5 +910,232 @@ mod tests {
             compare_heads(&local(Some("a"), None), &local(Some("b"), None)),
             HeadComparisonStatus::Unknown
         );
+    }
+
+    #[test]
+    fn event_range_request_response_serializes() {
+        let logbook_id = Uuid::new_v4();
+        let events = remote_chain(logbook_id, 1);
+        let request = GetEventRangeRequest {
+            logbook_id,
+            after_hash: None,
+            limit: Some(100),
+        };
+        let response = GetEventRangeResponse { logbook_id, events };
+
+        let encoded_request = serde_json::to_string(&request).unwrap();
+        let encoded_response = serde_json::to_string(&response).unwrap();
+
+        assert_eq!(
+            serde_json::from_str::<GetEventRangeRequest>(&encoded_request)
+                .unwrap()
+                .logbook_id,
+            logbook_id
+        );
+        assert_eq!(
+            serde_json::from_str::<GetEventRangeResponse>(&encoded_response)
+                .unwrap()
+                .events
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn preview_pull_with_no_missing_events_is_in_sync() {
+        let logbook_id = Uuid::new_v4();
+        let remote = remote_chain(logbook_id, 2);
+        let response = preview_pull_from_events(
+            PreviewPullRequest {
+                peer_id: "peer".to_owned(),
+                logbook_id,
+                local_head_hash: remote.last().map(|event| event.event_hash.clone()),
+            },
+            &remote,
+        );
+
+        assert_eq!(response.status, ReplicationStatus::InSync);
+        assert_eq!(response.missing_event_count, 0);
+    }
+
+    #[test]
+    fn preview_pull_with_remote_ahead_counts_missing_events() {
+        let logbook_id = Uuid::new_v4();
+        let remote = remote_chain(logbook_id, 3);
+        let response = preview_pull_from_events(
+            PreviewPullRequest {
+                peer_id: "peer".to_owned(),
+                logbook_id,
+                local_head_hash: Some(remote[0].event_hash.clone()),
+            },
+            &remote,
+        );
+
+        assert_eq!(response.status, ReplicationStatus::RemoteAhead);
+        assert_eq!(response.missing_event_count, 2);
+    }
+
+    #[tokio::test]
+    async fn successful_pull_appends_valid_remote_events_and_updates_projection() {
+        let logbook_id = Uuid::new_v4();
+        let remote = remote_chain(logbook_id, 2);
+        let store = InMemoryLogbookEventStore::new();
+
+        let response = pull_missing_events(
+            &store,
+            PullEventsRequest {
+                peer_id: "peer".to_owned(),
+                logbook_id,
+                local_head_hash: None,
+            },
+            remote.clone(),
+        )
+        .await;
+
+        assert_eq!(response.status, ReplicationStatus::Pulled);
+        assert_eq!(response.accepted_count, 2);
+        assert_eq!(
+            store.get_head(logbook_id).await.unwrap(),
+            remote.last().map(|event| event.event_hash.clone())
+        );
+        let projection = store.rebuild_projections(logbook_id).await.unwrap();
+        assert_eq!(projection.list(false).len(), 2);
+    }
+
+    #[tokio::test]
+    async fn invalid_event_hash_is_rejected() {
+        let logbook_id = Uuid::new_v4();
+        let mut remote = remote_chain(logbook_id, 1);
+        remote[0].payload["mode"] = json!("CW");
+        let store = InMemoryLogbookEventStore::new();
+
+        let response = pull_missing_events(
+            &store,
+            PullEventsRequest {
+                peer_id: "peer".to_owned(),
+                logbook_id,
+                local_head_hash: None,
+            },
+            remote,
+        )
+        .await;
+
+        assert_eq!(response.status, ReplicationStatus::Rejected);
+        assert_eq!(response.accepted_count, 0);
+    }
+
+    #[tokio::test]
+    async fn broken_previous_hash_chain_is_rejected() {
+        let logbook_id = Uuid::new_v4();
+        let mut remote = remote_chain(logbook_id, 2);
+        remote[1].previous_hash = Some("not-the-first-hash".to_owned());
+        remote[1].event_hash = remote[1].calculate_hash();
+        let store = InMemoryLogbookEventStore::new();
+
+        let response = pull_missing_events(
+            &store,
+            PullEventsRequest {
+                peer_id: "peer".to_owned(),
+                logbook_id,
+                local_head_hash: None,
+            },
+            remote,
+        )
+        .await;
+
+        assert_eq!(response.status, ReplicationStatus::Diverged);
+        assert_eq!(response.accepted_count, 0);
+    }
+
+    #[tokio::test]
+    async fn duplicate_identical_event_is_ignored_safely() {
+        let logbook_id = Uuid::new_v4();
+        let remote = remote_chain(logbook_id, 1);
+        let store = InMemoryLogbookEventStore::new();
+        store
+            .append_verified_remote_event(remote[0].clone())
+            .await
+            .unwrap();
+
+        let response = pull_missing_events(
+            &store,
+            PullEventsRequest {
+                peer_id: "peer".to_owned(),
+                logbook_id,
+                local_head_hash: None,
+            },
+            remote,
+        )
+        .await;
+
+        assert_eq!(response.status, ReplicationStatus::InSync);
+        assert_eq!(store.list_events(logbook_id).await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn duplicate_event_id_with_different_hash_is_rejected() {
+        let logbook_id = Uuid::new_v4();
+        let local = remote_chain(logbook_id, 1);
+        let mut duplicate = new_event(logbook_id, Some(local[0].event_hash.clone()));
+        duplicate.event_id = local[0].event_id;
+        duplicate.event_hash = duplicate.calculate_hash();
+        let remote = vec![local[0].clone(), duplicate];
+        let store = InMemoryLogbookEventStore::new();
+        store
+            .append_verified_remote_event(local[0].clone())
+            .await
+            .unwrap();
+
+        let response = pull_missing_events(
+            &store,
+            PullEventsRequest {
+                peer_id: "peer".to_owned(),
+                logbook_id,
+                local_head_hash: None,
+            },
+            remote,
+        )
+        .await;
+
+        assert_eq!(response.status, ReplicationStatus::Rejected);
+        assert_eq!(store.list_events(logbook_id).await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn unsupported_schema_version_is_rejected() {
+        let logbook_id = Uuid::new_v4();
+        let mut remote = remote_chain(logbook_id, 1);
+        remote[0].schema_version = 99;
+        remote[0].event_hash = remote[0].calculate_hash();
+        let store = InMemoryLogbookEventStore::new();
+
+        let response = pull_missing_events(
+            &store,
+            PullEventsRequest {
+                peer_id: "peer".to_owned(),
+                logbook_id,
+                local_head_hash: None,
+            },
+            remote,
+        )
+        .await;
+
+        assert_eq!(response.status, ReplicationStatus::Rejected);
+    }
+
+    #[test]
+    fn divergence_is_detected_when_remote_lacks_local_head() {
+        let logbook_id = Uuid::new_v4();
+        let remote = remote_chain(logbook_id, 1);
+        let response = preview_pull_from_events(
+            PreviewPullRequest {
+                peer_id: "peer".to_owned(),
+                logbook_id,
+                local_head_hash: Some("local-only-head".to_owned()),
+            },
+            &remote,
+        );
+
+        assert_eq!(response.status, ReplicationStatus::Diverged);
     }
 }

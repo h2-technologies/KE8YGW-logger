@@ -11,8 +11,8 @@ use std::{
 
 use ham_core::{
     default_official_event_log_path, export_adif, import_adif, submit_proposal, AdifImportOptions,
-    JsonlLogbookEventStore, LogbookEventStore, OperatorRole, Projection, ProposalContext,
-    RuntimeEventFilter, RuntimeEventSeverity, RuntimeLogConfig,
+    CoreEventEnvelope, JsonlLogbookEventStore, LogbookEventStore, NewLogbookEvent, OperatorRole,
+    Projection, ProposalContext, RuntimeEventFilter, RuntimeEventSeverity, RuntimeLogConfig,
 };
 use ham_gui::{
     mock::{capability_labels, mock_plugins},
@@ -23,8 +23,11 @@ use ham_plugin_sdk::{
     PROPOSAL_QSO_NOTE_ADD, PROPOSAL_QSO_RESTORE,
 };
 use ham_sync::{
-    build_handshake_response, DiscoveryPacket, HandshakeRequest, LocalPeerIdentity,
-    LogbookHeadSummary, PeerObservation, PeerRecord, PeerRegistry, SyncConfig, PROTOCOL_VERSION,
+    build_handshake_response, metadata_for_event, preview_pull_from_events, pull_missing_events,
+    DiscoveryPacket, GetEventMetadataResponse, GetEventRangeResponse, HandshakeRequest,
+    ListLogbooksResponse, LocalPeerIdentity, LogbookHeadSummary, PeerObservation, PeerRecord,
+    PeerRegistry, PreviewPullRequest, PreviewPullResponse, PullEventsRequest, PullEventsResponse,
+    ReplicationStatus, SyncConfig, PROTOCOL_VERSION,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -159,6 +162,11 @@ struct SyncUiState {
     registry: PeerRegistry,
     discovery_running: bool,
     latest_handshake: Option<ham_sync::HandshakeResponse>,
+    latest_preview: Option<PreviewPullResponse>,
+    latest_pull: Option<PullEventsResponse>,
+    last_sync_time: Option<String>,
+    demo_remote_events: Vec<CoreEventEnvelope>,
+    divergence: Option<String>,
     warning_count: u64,
 }
 
@@ -173,6 +181,11 @@ impl SyncUiState {
             registry: PeerRegistry::default(),
             discovery_running: false,
             latest_handshake: None,
+            latest_preview: None,
+            latest_pull: None,
+            last_sync_time: None,
+            demo_remote_events: Vec::new(),
+            divergence: None,
             warning_count: 0,
         }
     }
@@ -235,10 +248,18 @@ fn handle_client(state: Arc<AppState>, mut stream: TcpStream) {
         }
         ("GET", "/api/qsos") => json_response(&qso_projection_payload(&state, query)),
         ("GET", "/api/sync/state") => json_response(&sync_state_payload(&state)),
+        ("GET", "/api/sync/list-logbooks") => json_response(&ListLogbooksResponse {
+            logbooks: vec![logbook_head_summary(&state)],
+        }),
+        ("GET", "/api/sync/get-head") => json_response(&logbook_head_summary(&state)),
+        ("GET", "/api/sync/events-since") => handle_sync_events_since(&state, query),
+        ("GET", "/api/sync/event-metadata") => handle_sync_event_metadata(&state, query),
         ("POST", "/api/sync/discovery/start") => handle_sync_discovery(&state, true),
         ("POST", "/api/sync/discovery/stop") => handle_sync_discovery(&state, false),
         ("POST", "/api/sync/peers/refresh") => handle_sync_refresh(&state),
         ("POST", "/api/sync/handshake") => handle_sync_handshake(&state, &request.body),
+        ("POST", "/api/sync/preview-pull") => handle_sync_preview_pull(&state, &request.body),
+        ("POST", "/api/sync/pull-events") => handle_sync_pull_events(&state, &request.body),
         ("GET", "/api/log/verify") => handle_verify_chain(&state),
         ("POST", "/api/projections/rebuild") => handle_rebuild_projections(&state),
         ("POST", "/api/adif/import") => handle_adif_import(&state, &request.body),
@@ -368,6 +389,12 @@ struct SyncStatePayload {
     discovery_running: bool,
     peers: Vec<PeerRecord>,
     latest_handshake: Option<ham_sync::HandshakeResponse>,
+    latest_preview: Option<PreviewPullResponse>,
+    latest_pull: Option<PullEventsResponse>,
+    last_sync_time: Option<String>,
+    local_head: LogbookHeadSummary,
+    remote_head: Option<LogbookHeadSummary>,
+    divergence: Option<String>,
     warning_count: u64,
 }
 
@@ -656,12 +683,27 @@ fn sync_state_payload(state: &AppState) -> SyncStatePayload {
         .sync
         .lock()
         .expect("sync state mutex should not be poisoned");
+    let local_head = logbook_head_summary(state);
+    let remote_head = sync
+        .demo_remote_events
+        .last()
+        .map(|event| LogbookHeadSummary {
+            logbook_id: event.logbook_id,
+            head_hash: Some(event.event_hash.clone()),
+            event_count: Some(sync.demo_remote_events.len() as u64),
+        });
     SyncStatePayload {
         config: sync.config.clone(),
         identity: sync.identity.clone(),
         discovery_running: sync.discovery_running,
         peers: sync.registry.list(),
         latest_handshake: sync.latest_handshake.clone(),
+        latest_preview: sync.latest_preview.clone(),
+        latest_pull: sync.latest_pull.clone(),
+        last_sync_time: sync.last_sync_time.clone(),
+        local_head,
+        remote_head,
+        divergence: sync.divergence.clone(),
         warning_count: sync.warning_count,
     }
 }
@@ -693,6 +735,7 @@ fn handle_sync_discovery(state: &AppState, running: bool) -> Vec<u8> {
 }
 
 fn handle_sync_refresh(state: &AppState) -> Vec<u8> {
+    let demo_remote_events = build_demo_remote_events(state);
     let mut sync = state
         .sync
         .lock()
@@ -704,6 +747,7 @@ fn handle_sync_refresh(state: &AppState) -> Vec<u8> {
     let observation = sync
         .registry
         .observe(&identity, packet, "127.0.0.1:9738".parse().unwrap());
+    sync.demo_remote_events = demo_remote_events;
     drop(sync);
     let event_type = match observation {
         PeerObservation::Discovered(_) => "network.peer.discovered",
@@ -722,6 +766,51 @@ fn handle_sync_refresh(state: &AppState) -> Vec<u8> {
         error: None,
     });
     json_response(&sync_state_payload(state))
+}
+
+fn handle_sync_events_since(state: &AppState, query: &str) -> Vec<u8> {
+    let params = parse_query(query);
+    let logbook_id = params
+        .get("logbook_id")
+        .and_then(|value| uuid::Uuid::parse_str(value).ok())
+        .unwrap_or(state.logbook_id);
+    let after_hash = params
+        .get("after_hash")
+        .filter(|value| !value.is_empty())
+        .cloned();
+    match state
+        .proposal_runtime
+        .block_on(state.store.list_events_after(logbook_id, after_hash))
+    {
+        Ok(events) => json_response(&GetEventRangeResponse { logbook_id, events }),
+        Err(error) => {
+            json_response_with_status(400, &json!({"ok": false, "error": error.to_string()}))
+        }
+    }
+}
+
+fn handle_sync_event_metadata(state: &AppState, query: &str) -> Vec<u8> {
+    let params = parse_query(query);
+    let logbook_id = params
+        .get("logbook_id")
+        .and_then(|value| uuid::Uuid::parse_str(value).ok())
+        .unwrap_or(state.logbook_id);
+    let after_hash = params
+        .get("after_hash")
+        .filter(|value| !value.is_empty())
+        .cloned();
+    match state
+        .proposal_runtime
+        .block_on(state.store.list_events_after(logbook_id, after_hash))
+    {
+        Ok(events) => json_response(&GetEventMetadataResponse {
+            logbook_id,
+            events: events.iter().map(metadata_for_event).collect(),
+        }),
+        Err(error) => {
+            json_response_with_status(400, &json!({"ok": false, "error": error.to_string()}))
+        }
+    }
 }
 
 fn handle_sync_handshake(state: &AppState, body: &[u8]) -> Vec<u8> {
@@ -793,6 +882,204 @@ fn handle_sync_handshake(state: &AppState, body: &[u8]) -> Vec<u8> {
     json_response(&json!({"ok": true, "handshake": response}))
 }
 
+fn handle_sync_preview_pull(state: &AppState, body: &[u8]) -> Vec<u8> {
+    let request = serde_json::from_slice::<HandshakePeerRequest>(body)
+        .unwrap_or(HandshakePeerRequest { peer_id: None });
+    let Some(peer_id) = selected_peer_id(state, request.peer_id) else {
+        return sync_no_peer_error(state, "sync.preview_pull.failed");
+    };
+
+    let _ = publish_gui_runtime(
+        state,
+        "sync.preview_pull.started",
+        RuntimeEventSeverity::Info,
+        "Previewing pull from selected peer",
+        None,
+        None,
+    );
+
+    let local_head = state
+        .proposal_runtime
+        .block_on(state.store.get_head(state.logbook_id))
+        .unwrap_or(None);
+    let remote_events = {
+        let sync = state
+            .sync
+            .lock()
+            .expect("sync state mutex should not be poisoned");
+        sync.demo_remote_events.clone()
+    };
+    let preview = preview_pull_from_events(
+        PreviewPullRequest {
+            peer_id,
+            logbook_id: state.logbook_id,
+            local_head_hash: local_head,
+        },
+        &remote_events,
+    );
+    {
+        let mut sync = state
+            .sync
+            .lock()
+            .expect("sync state mutex should not be poisoned");
+        if preview.status == ReplicationStatus::Diverged {
+            sync.divergence = Some(preview.message.clone());
+            sync.warning_count += 1;
+        }
+        sync.latest_preview = Some(preview.clone());
+    }
+    let event_type = if preview.status == ReplicationStatus::Diverged {
+        "sync.divergence.detected"
+    } else {
+        "sync.preview_pull.completed"
+    };
+    let _ = publish_gui_runtime(
+        state,
+        event_type,
+        if preview.status == ReplicationStatus::Diverged {
+            RuntimeEventSeverity::Warn
+        } else {
+            RuntimeEventSeverity::Info
+        },
+        &preview.message,
+        Some(json!(&preview)),
+        None,
+    );
+    json_response(&json!({"ok": true, "preview": preview}))
+}
+
+fn handle_sync_pull_events(state: &AppState, body: &[u8]) -> Vec<u8> {
+    let request = serde_json::from_slice::<HandshakePeerRequest>(body)
+        .unwrap_or(HandshakePeerRequest { peer_id: None });
+    let Some(peer_id) = selected_peer_id(state, request.peer_id) else {
+        return sync_no_peer_error(state, "sync.pull.failed");
+    };
+
+    let _ = publish_gui_runtime(
+        state,
+        "sync.pull.started",
+        RuntimeEventSeverity::Info,
+        "Pulling missing official events from selected peer",
+        None,
+        None,
+    );
+    let local_head = state
+        .proposal_runtime
+        .block_on(state.store.get_head(state.logbook_id))
+        .unwrap_or(None);
+    let remote_events = {
+        let sync = state
+            .sync
+            .lock()
+            .expect("sync state mutex should not be poisoned");
+        sync.demo_remote_events.clone()
+    };
+    for event in &remote_events {
+        let _ = publish_gui_runtime(
+            state,
+            "sync.remote_event.received",
+            RuntimeEventSeverity::Debug,
+            &format!("Received remote event metadata {}", event.event_hash),
+            Some(json!(metadata_for_event(event))),
+            None,
+        );
+    }
+    let pull = state.proposal_runtime.block_on(pull_missing_events(
+        state.store.as_ref(),
+        PullEventsRequest {
+            peer_id,
+            logbook_id: state.logbook_id,
+            local_head_hash: local_head,
+        },
+        remote_events,
+    ));
+    let severity = if matches!(
+        pull.status,
+        ReplicationStatus::Pulled | ReplicationStatus::InSync
+    ) {
+        RuntimeEventSeverity::Info
+    } else {
+        RuntimeEventSeverity::Warn
+    };
+    let event_type = match pull.status {
+        ReplicationStatus::Pulled | ReplicationStatus::InSync => "sync.pull.completed",
+        ReplicationStatus::Diverged => "sync.divergence.detected",
+        ReplicationStatus::Rejected | ReplicationStatus::RemoteAhead => "sync.pull.failed",
+    };
+    if pull.accepted_count > 0 {
+        let _ = publish_gui_runtime(
+            state,
+            "sync.remote_event.accepted",
+            RuntimeEventSeverity::Info,
+            &format!("Accepted {} remote official events", pull.accepted_count),
+            Some(json!(&pull)),
+            None,
+        );
+        let _ = publish_gui_runtime(
+            state,
+            "sync.pull.progress",
+            RuntimeEventSeverity::Info,
+            &format!("Pulled {} official events", pull.accepted_count),
+            Some(json!(&pull)),
+            None,
+        );
+    }
+    if pull.rejected_count > 0 {
+        let _ = publish_gui_runtime(
+            state,
+            "sync.remote_event.rejected",
+            RuntimeEventSeverity::Warn,
+            "One or more remote official events were rejected",
+            Some(json!(&pull)),
+            pull.errors.first().cloned(),
+        );
+    }
+    if matches!(
+        pull.status,
+        ReplicationStatus::Pulled | ReplicationStatus::InSync
+    ) {
+        let _ = state
+            .proposal_runtime
+            .block_on(state.store.verify_chain(state.logbook_id));
+        let projection = state
+            .proposal_runtime
+            .block_on(state.store.rebuild_projections(state.logbook_id));
+        let qso_count = projection
+            .as_ref()
+            .map(|projection| projection.list(false).len())
+            .unwrap_or_default();
+        let _ = publish_gui_runtime(
+            state,
+            "projection.qso.rebuilt",
+            RuntimeEventSeverity::Info,
+            &format!("QSO projection rebuilt after sync ({qso_count} visible QSOs)"),
+            None,
+            projection.err().map(|error| error.to_string()),
+        );
+    }
+    {
+        let mut sync = state
+            .sync
+            .lock()
+            .expect("sync state mutex should not be poisoned");
+        sync.latest_pull = Some(pull.clone());
+        sync.last_sync_time = Some(chrono::Utc::now().to_rfc3339());
+        if pull.status == ReplicationStatus::Diverged {
+            sync.divergence = pull.errors.first().cloned();
+            sync.warning_count += 1;
+        }
+    }
+    let _ = publish_gui_runtime(
+        state,
+        event_type,
+        severity,
+        &format!("Pull finished with status {:?}", pull.status),
+        Some(json!(&pull)),
+        pull.errors.first().cloned(),
+    );
+    json_response(&json!({"ok": pull.errors.is_empty(), "pull": pull}))
+}
+
 fn logbook_head_summary(state: &AppState) -> LogbookHeadSummary {
     let head_hash = state
         .proposal_runtime
@@ -808,6 +1095,96 @@ fn logbook_head_summary(state: &AppState) -> LogbookHeadSummary {
         head_hash,
         event_count,
     }
+}
+
+fn selected_peer_id(state: &AppState, requested: Option<String>) -> Option<String> {
+    let sync = state
+        .sync
+        .lock()
+        .expect("sync state mutex should not be poisoned");
+    requested.or_else(|| {
+        sync.registry
+            .list()
+            .into_iter()
+            .next()
+            .map(|peer| peer.peer_id)
+    })
+}
+
+fn sync_no_peer_error(state: &AppState, event_type: &str) -> Vec<u8> {
+    {
+        let mut sync = state
+            .sync
+            .lock()
+            .expect("sync state mutex should not be poisoned");
+        sync.warning_count += 1;
+    }
+    let _ = publish_gui_runtime(
+        state,
+        event_type,
+        RuntimeEventSeverity::Warn,
+        "No peer selected",
+        None,
+        Some("no discovered peers".to_owned()),
+    );
+    json_response_with_status(400, &json!({"ok": false, "error": "no discovered peers"}))
+}
+
+fn build_demo_remote_events(state: &AppState) -> Vec<CoreEventEnvelope> {
+    let mut events = state
+        .proposal_runtime
+        .block_on(state.store.list_events(state.logbook_id))
+        .unwrap_or_default();
+    let previous_hash = events.last().map(|event| event.event_hash.clone());
+    events.push(CoreEventEnvelope::from_new(
+        NewLogbookEvent {
+            event_type: ham_plugin_sdk::OFFICIAL_LOG_QSO_CREATED.to_owned(),
+            logbook_id: state.logbook_id,
+            entity_id: Some(uuid::Uuid::new_v4()),
+            author_operator_id: None,
+            station_callsign: "KE8YGW".to_owned(),
+            operator_callsign: Some("KE8YGW".to_owned()),
+            author_device_id: uuid::Uuid::parse_str("00000000-0000-4000-8000-0000000000aa")
+                .expect("demo device id is valid"),
+            source_device_id: uuid::Uuid::parse_str("00000000-0000-4000-8000-0000000000aa")
+                .expect("demo device id is valid"),
+            correlation_id: uuid::Uuid::new_v4(),
+            source_plugin_id: Some("sync.demo.peer".to_owned()),
+            schema_version: 1,
+            payload: json!({
+                "qso_id": uuid::Uuid::new_v4(),
+                "station_callsign": "KE8YGW",
+                "operator_callsign": "KE8YGW",
+                "contacted_callsign": "N0SYNC",
+                "started_at": chrono::Utc::now().to_rfc3339(),
+                "mode": "SSB",
+                "band": "20m",
+                "source": "sync-demo"
+            }),
+        },
+        previous_hash,
+    ));
+    events
+}
+
+fn publish_gui_runtime(
+    state: &AppState,
+    event_type: &str,
+    severity: RuntimeEventSeverity,
+    summary: &str,
+    redacted_payload: Option<Value>,
+    error: Option<String>,
+) -> std::io::Result<ham_core::RuntimeEventEnvelope> {
+    state.bridge.publish(RuntimeEventInput {
+        event_type: event_type.to_owned(),
+        severity,
+        source: "ham-sync".to_owned(),
+        source_plugin_id: None,
+        workspace_id: Some("dashboard".to_owned()),
+        payload_summary: summary.to_owned(),
+        redacted_payload,
+        error,
+    })
 }
 
 fn default_logbook_id() -> uuid::Uuid {
