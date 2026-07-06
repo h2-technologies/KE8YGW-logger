@@ -157,6 +157,48 @@ impl CommandRegistry {
                 None,
             ),
             command(
+                "sync.cloud.connect",
+                "Connect Cloud Sync",
+                "Sync",
+                None,
+                None,
+            ),
+            command(
+                "sync.cloud.push",
+                "Push Local Events to Cloud",
+                "Sync",
+                None,
+                None,
+            ),
+            command(
+                "sync.cloud.preview-pull",
+                "Preview Pull From Cloud",
+                "Sync",
+                None,
+                None,
+            ),
+            command(
+                "sync.cloud.pull",
+                "Pull Missing Events From Cloud",
+                "Sync",
+                None,
+                None,
+            ),
+            command(
+                "sync.cloud.settings",
+                "Open Cloud Sync Settings",
+                "Sync",
+                None,
+                None,
+            ),
+            command(
+                "sync.cloud.diagnostics.copy",
+                "Copy Cloud Sync Diagnostic Summary",
+                "Sync",
+                None,
+                None,
+            ),
+            command(
                 "sync.identity.copy",
                 "Copy Local Sync Identity",
                 "Sync",
@@ -248,6 +290,8 @@ mod tests {
         assert!(ids.contains(&"sync.preview-pull.selected"));
         assert!(ids.contains(&"sync.pull.selected"));
         assert!(ids.contains(&"sync.diagnostics.copy"));
+        assert!(ids.contains(&"sync.cloud.connect"));
+        assert!(ids.contains(&"sync.cloud.pull"));
         assert!(ids.contains(&"sync.identity.copy"));
     }
 }

@@ -227,6 +227,12 @@ function runCommand(commandId) {
   if (command.id === "sync.verify-local-chain") verifyLogChain();
   if (command.id === "sync.rebuild-projections") rebuildProjections();
   if (command.id === "sync.diagnostics.copy") copySyncDiagnosticSummary();
+  if (command.id === "sync.cloud.connect") connectCloudSyncFromPrompt();
+  if (command.id === "sync.cloud.push") pushCloudEvents();
+  if (command.id === "sync.cloud.preview-pull") previewCloudPull();
+  if (command.id === "sync.cloud.pull") pullCloudEvents();
+  if (command.id === "sync.cloud.settings") openScreen("settings");
+  if (command.id === "sync.cloud.diagnostics.copy") copyCloudSyncDiagnosticSummary();
   if (command.id === "sync.identity.copy") copyLocalSyncIdentity();
   if (command.id === "event-bus.open") switchWorkspace("dashboard");
   if (command.id === "event-bus.pause") toggleRuntimeStream();
@@ -280,6 +286,7 @@ function openScreen(kind) {
   eyebrow.textContent = "Application";
   title.textContent = "Settings";
   body.innerHTML = renderSettings();
+  byId("cloud-connect-settings")?.addEventListener("click", connectCloudSyncFromSettings);
 }
 
 function closeScreen() {
@@ -306,8 +313,26 @@ function renderSettings() {
   const sections = ["General", "Appearance", "Callsign/Profile", "Sync", "Plugins", "Diagnostics", "Keyboard Shortcuts"];
   return `<div class="settings-grid">
     ${sections
-      .map((section) => `<article class="settings-card"><h3>${section}</h3><p class="muted">Placeholder settings surface.</p></article>`)
+      .map((section) =>
+        section === "Sync"
+          ? `<article class="settings-card"><h3>${section}</h3>${renderCloudSettings()}</article>`
+          : `<article class="settings-card"><h3>${section}</h3><p class="muted">Placeholder settings surface.</p></article>`,
+      )
       .join("")}
+  </div>`;
+}
+
+function renderCloudSettings() {
+  const config = state.syncState?.cloud_config || {};
+  return `<div class="qso-form">
+    <label>Cloud Sync <input id="cloud-enabled" type="checkbox" ${config.enable_cloud_sync ? "checked" : ""} /></label>
+    <label>Server URL <input id="cloud-server-url" class="placeholder-control" value="${config.sync_server_url || "http://127.0.0.1:9740"}" /></label>
+    <label>Device Name <input id="cloud-device-name" class="placeholder-control" value="${config.device_name || "KE8YGW Logger Device"}" /></label>
+    <label>Prefer LAN <input id="cloud-prefer-lan" type="checkbox" ${config.prefer_lan_sync !== false ? "checked" : ""} /></label>
+    <label>Auto Push <input id="cloud-auto-push" type="checkbox" ${config.auto_push_enabled ? "checked" : ""} /></label>
+    <label>Auto Pull <input id="cloud-auto-pull" type="checkbox" ${config.auto_pull_enabled ? "checked" : ""} /></label>
+    <label>Sync Interval Seconds <input id="cloud-sync-interval" class="placeholder-control" inputmode="numeric" value="${config.sync_interval_seconds || 300}" /></label>
+    <button id="cloud-connect-settings" class="toolbar-button" type="button">Pair / Connect</button>
   </div>`;
 }
 
@@ -397,6 +422,10 @@ function bindPanelControls() {
     byId("sync-preview-pull").addEventListener("click", previewPullSelectedPeer);
     byId("sync-pull-events").addEventListener("click", pullSelectedPeer);
     byId("sync-copy-identity").addEventListener("click", copyLocalSyncIdentity);
+    byId("cloud-connect").addEventListener("click", connectCloudSyncFromPrompt);
+    byId("cloud-push").addEventListener("click", pushCloudEvents);
+    byId("cloud-preview").addEventListener("click", previewCloudPull);
+    byId("cloud-pull").addEventListener("click", pullCloudEvents);
   }
 }
 
@@ -611,6 +640,30 @@ function renderSyncStatus() {
       <button id="sync-copy-identity" class="toolbar-button" type="button">Copy Identity</button>
     </div>
     <div class="sync-summary">
+      <p><strong>Cloud:</strong> ${sync.cloud_connection_state} / ${sync.cloud_config?.sync_server_url || "not configured"}</p>
+      <p><strong>Account:</strong> ${sync.cloud_account_id || "not paired"}</p>
+      <p><strong>Cloud head:</strong> <small>${sync.cloud_status?.accessible_logbooks?.[0]?.head_hash || "unknown"}</small></p>
+      <p><strong>Last cloud push:</strong> ${sync.last_cloud_push_time || "never"}</p>
+      <p><strong>Last cloud pull:</strong> ${sync.last_cloud_pull_time || "never"}</p>
+      ${sync.cloud_divergence ? `<p class="event-error"><strong>Cloud divergence:</strong> ${sync.cloud_divergence}</p>` : ""}
+      ${
+        sync.latest_cloud_preview
+          ? `<p><strong>Cloud preview:</strong> ${sync.latest_cloud_preview.status} / ${sync.latest_cloud_preview.missing_event_count} events pending</p>`
+          : ""
+      }
+      ${
+        sync.latest_cloud_push
+          ? `<p><strong>Cloud push:</strong> ${sync.latest_cloud_push.status} / accepted ${sync.latest_cloud_push.accepted_count}, rejected ${sync.latest_cloud_push.rejected_count}</p>`
+          : ""
+      }
+      <div class="monitor-actions">
+        <button id="cloud-connect" class="toolbar-button" type="button">Connect Cloud</button>
+        <button id="cloud-push" class="toolbar-button" type="button">Push Now</button>
+        <button id="cloud-preview" class="toolbar-button" type="button">Preview Cloud Pull</button>
+        <button id="cloud-pull" class="toolbar-button" type="button">Pull Cloud</button>
+      </div>
+    </div>
+    <div class="sync-summary">
       <p><strong>Local head:</strong> <small>${sync.local_head?.head_hash || "genesis"}</small></p>
       <p><strong>Remote head:</strong> <small>${sync.remote_head?.head_hash || "unknown"}</small></p>
       <p><strong>Last sync:</strong> ${sync.last_sync_time || "never"}</p>
@@ -692,6 +745,65 @@ async function pullSelectedPeer() {
 
 function copyLocalSyncIdentity() {
   if (state.syncState) navigator.clipboard?.writeText(JSON.stringify(state.syncState.identity, null, 2));
+}
+
+async function connectCloudSyncFromSettings() {
+  const payload = {
+    server_url: byId("cloud-server-url")?.value,
+    device_name: byId("cloud-device-name")?.value,
+    pairing_code: window.prompt("Pairing code", "local-dev-pairing-code") || "",
+    account_id: "local-account",
+    user_id: "local-user",
+    enable_cloud_sync: Boolean(byId("cloud-enabled")?.checked),
+    prefer_lan_sync: Boolean(byId("cloud-prefer-lan")?.checked),
+    auto_push_enabled: Boolean(byId("cloud-auto-push")?.checked),
+    auto_pull_enabled: Boolean(byId("cloud-auto-pull")?.checked),
+    sync_interval_seconds: Number(byId("cloud-sync-interval")?.value || 300),
+  };
+  await syncPost("/api/sync/cloud/connect", payload);
+}
+
+function connectCloudSyncFromPrompt() {
+  const pairing_code = window.prompt("Cloud pairing code", "local-dev-pairing-code");
+  if (!pairing_code) return;
+  syncPost("/api/sync/cloud/connect", {
+    pairing_code,
+    account_id: "local-account",
+    user_id: "local-user",
+    enable_cloud_sync: true,
+  });
+}
+
+async function pushCloudEvents() {
+  const result = await syncPost("/api/sync/cloud/push");
+  state.importSummary = result.push || result;
+}
+
+async function previewCloudPull() {
+  const result = await syncPost("/api/sync/cloud/preview-pull");
+  state.importSummary = result.preview || result;
+}
+
+async function pullCloudEvents() {
+  const result = await syncPost("/api/sync/cloud/pull");
+  state.importSummary = result.local_pull || result.server_pull || result;
+  await refreshQsos();
+  render();
+}
+
+function copyCloudSyncDiagnosticSummary() {
+  if (!state.syncState) return;
+  const summary = {
+    config: state.syncState.cloud_config,
+    connection_state: state.syncState.cloud_connection_state,
+    account_id: state.syncState.cloud_account_id,
+    status: state.syncState.cloud_status,
+    latest_preview: state.syncState.latest_cloud_preview,
+    latest_pull: state.syncState.latest_cloud_pull,
+    latest_push: state.syncState.latest_cloud_push,
+    divergence: state.syncState.cloud_divergence,
+  };
+  navigator.clipboard?.writeText(JSON.stringify(summary, null, 2));
 }
 
 function copySyncDiagnosticSummary() {

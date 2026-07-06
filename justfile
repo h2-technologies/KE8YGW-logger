@@ -22,4 +22,7 @@ release:
 gui:
     cargo run -p ham-gui --bin ham-gui
 
+sync-server:
+    cargo run -p ham-sync-server --bin ham-sync-server
+
 ci: fmt-check clippy test build

@@ -1,16 +1,12 @@
 [package]
-name = "ham-sync"
+name = "ham-sync-server"
 edition.workspace = true
 license.workspace = true
 version.workspace = true
 
 [dependencies]
-chrono.workspace = true
-ham-core = { path = "../ham-core" }
+ham-sync = { path = "../ham-sync" }
 serde.workspace = true
 serde_json.workspace = true
-thiserror.workspace = true
 tokio.workspace = true
 uuid.workspace = true
-
-[dev-dependencies]

@@ -24,8 +24,11 @@ use ham_plugin_sdk::{
 };
 use ham_sync::{
     build_handshake_response, metadata_for_event, preview_pull_from_events, pull_missing_events,
-    DiscoveryPacket, GetEventMetadataResponse, GetEventRangeResponse, HandshakeRequest,
-    ListLogbooksResponse, LocalPeerIdentity, LogbookHeadSummary, PeerObservation, PeerRecord,
+    CloudAuth, CloudConnectionState, CloudPreviewPullRequest, CloudPullEventsRequest,
+    CloudPullEventsResponse, CloudPushEventsRequest, CloudPushEventsResponse, CloudServerConfig,
+    CloudSyncConfig, CloudSyncStatusResponse, DiscoveryPacket, GetEventMetadataResponse,
+    GetEventRangeResponse, HandshakeRequest, InMemoryCloudSyncServer, ListLogbooksResponse,
+    LocalPeerIdentity, LogbookHeadSummary, PairDeviceRequest, PeerObservation, PeerRecord,
     PeerRegistry, PreviewPullRequest, PreviewPullResponse, PullEventsRequest, PullEventsResponse,
     ReplicationStatus, SyncConfig, PROTOCOL_VERSION,
 };
@@ -135,6 +138,7 @@ fn main() {
         logbook_id,
         proposal_runtime,
         sync: Mutex::new(SyncUiState::new(bound_addr.clone())),
+        cloud_server: InMemoryCloudSyncServer::new(CloudServerConfig::default()),
     });
 
     println!("ham-gui listening on http://{bound_addr}");
@@ -153,6 +157,7 @@ struct AppState {
     logbook_id: uuid::Uuid,
     proposal_runtime: tokio::runtime::Runtime,
     sync: Mutex<SyncUiState>,
+    cloud_server: InMemoryCloudSyncServer,
 }
 
 #[derive(Debug)]
@@ -167,6 +172,16 @@ struct SyncUiState {
     last_sync_time: Option<String>,
     demo_remote_events: Vec<CoreEventEnvelope>,
     divergence: Option<String>,
+    cloud_config: CloudSyncConfig,
+    cloud_auth: Option<CloudAuth>,
+    cloud_account_id: Option<String>,
+    latest_cloud_status: Option<CloudSyncStatusResponse>,
+    latest_cloud_preview: Option<PreviewPullResponse>,
+    latest_cloud_pull: Option<CloudPullEventsResponse>,
+    latest_cloud_push: Option<CloudPushEventsResponse>,
+    last_cloud_push_time: Option<String>,
+    last_cloud_pull_time: Option<String>,
+    cloud_divergence: Option<String>,
     warning_count: u64,
 }
 
@@ -186,6 +201,20 @@ impl SyncUiState {
             last_sync_time: None,
             demo_remote_events: Vec::new(),
             divergence: None,
+            cloud_config: CloudSyncConfig {
+                sync_server_url: "http://127.0.0.1:9740".to_owned(),
+                device_name: "KE8YGW Logger Local".to_owned(),
+                ..CloudSyncConfig::default()
+            },
+            cloud_auth: None,
+            cloud_account_id: None,
+            latest_cloud_status: None,
+            latest_cloud_preview: None,
+            latest_cloud_pull: None,
+            latest_cloud_push: None,
+            last_cloud_push_time: None,
+            last_cloud_pull_time: None,
+            cloud_divergence: None,
             warning_count: 0,
         }
     }
@@ -260,6 +289,10 @@ fn handle_client(state: Arc<AppState>, mut stream: TcpStream) {
         ("POST", "/api/sync/handshake") => handle_sync_handshake(&state, &request.body),
         ("POST", "/api/sync/preview-pull") => handle_sync_preview_pull(&state, &request.body),
         ("POST", "/api/sync/pull-events") => handle_sync_pull_events(&state, &request.body),
+        ("POST", "/api/sync/cloud/connect") => handle_cloud_connect(&state, &request.body),
+        ("POST", "/api/sync/cloud/push") => handle_cloud_push(&state),
+        ("POST", "/api/sync/cloud/preview-pull") => handle_cloud_preview_pull(&state),
+        ("POST", "/api/sync/cloud/pull") => handle_cloud_pull(&state),
         ("GET", "/api/log/verify") => handle_verify_chain(&state),
         ("POST", "/api/projections/rebuild") => handle_rebuild_projections(&state),
         ("POST", "/api/adif/import") => handle_adif_import(&state, &request.body),
@@ -382,6 +415,20 @@ struct HandshakePeerRequest {
     peer_id: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+struct CloudConnectRequest {
+    server_url: Option<String>,
+    device_name: Option<String>,
+    pairing_code: Option<String>,
+    account_id: Option<String>,
+    user_id: Option<String>,
+    enable_cloud_sync: Option<bool>,
+    prefer_lan_sync: Option<bool>,
+    auto_push_enabled: Option<bool>,
+    auto_pull_enabled: Option<bool>,
+    sync_interval_seconds: Option<u64>,
+}
+
 #[derive(Debug, Serialize)]
 struct SyncStatePayload {
     config: SyncConfig,
@@ -395,6 +442,16 @@ struct SyncStatePayload {
     local_head: LogbookHeadSummary,
     remote_head: Option<LogbookHeadSummary>,
     divergence: Option<String>,
+    cloud_config: CloudSyncConfig,
+    cloud_connection_state: CloudConnectionState,
+    cloud_account_id: Option<String>,
+    cloud_status: Option<CloudSyncStatusResponse>,
+    latest_cloud_preview: Option<PreviewPullResponse>,
+    latest_cloud_pull: Option<CloudPullEventsResponse>,
+    latest_cloud_push: Option<CloudPushEventsResponse>,
+    last_cloud_push_time: Option<String>,
+    last_cloud_pull_time: Option<String>,
+    cloud_divergence: Option<String>,
     warning_count: u64,
 }
 
@@ -704,6 +761,20 @@ fn sync_state_payload(state: &AppState) -> SyncStatePayload {
         local_head,
         remote_head,
         divergence: sync.divergence.clone(),
+        cloud_config: sync.cloud_config.clone(),
+        cloud_connection_state: if sync.cloud_auth.is_some() {
+            CloudConnectionState::Connected
+        } else {
+            CloudConnectionState::Disconnected
+        },
+        cloud_account_id: sync.cloud_account_id.clone(),
+        cloud_status: sync.latest_cloud_status.clone(),
+        latest_cloud_preview: sync.latest_cloud_preview.clone(),
+        latest_cloud_pull: sync.latest_cloud_pull.clone(),
+        latest_cloud_push: sync.latest_cloud_push.clone(),
+        last_cloud_push_time: sync.last_cloud_push_time.clone(),
+        last_cloud_pull_time: sync.last_cloud_pull_time.clone(),
+        cloud_divergence: sync.cloud_divergence.clone(),
         warning_count: sync.warning_count,
     }
 }
@@ -1080,6 +1151,372 @@ fn handle_sync_pull_events(state: &AppState, body: &[u8]) -> Vec<u8> {
     json_response(&json!({"ok": pull.errors.is_empty(), "pull": pull}))
 }
 
+fn handle_cloud_connect(state: &AppState, body: &[u8]) -> Vec<u8> {
+    let request =
+        serde_json::from_slice::<CloudConnectRequest>(body).unwrap_or(CloudConnectRequest {
+            server_url: None,
+            device_name: None,
+            pairing_code: None,
+            account_id: None,
+            user_id: None,
+            enable_cloud_sync: None,
+            prefer_lan_sync: None,
+            auto_push_enabled: None,
+            auto_pull_enabled: None,
+            sync_interval_seconds: None,
+        });
+    let _ = publish_cloud_runtime(
+        state,
+        "sync.cloud.connect.started",
+        RuntimeEventSeverity::Info,
+        "Connecting cloud sync",
+        None,
+        None,
+    );
+    let (device_id, device_name, pairing_code, account_id, user_id) = {
+        let mut sync = state
+            .sync
+            .lock()
+            .expect("sync state mutex should not be poisoned");
+        if let Some(server_url) = request.server_url.filter(|value| !value.trim().is_empty()) {
+            sync.cloud_config.sync_server_url = server_url;
+        }
+        if let Some(device_name) = request.device_name.filter(|value| !value.trim().is_empty()) {
+            sync.cloud_config.device_name = device_name;
+        }
+        if let Some(enabled) = request.enable_cloud_sync {
+            sync.cloud_config.enable_cloud_sync = enabled;
+        }
+        if let Some(prefer_lan) = request.prefer_lan_sync {
+            sync.cloud_config.prefer_lan_sync = prefer_lan;
+        }
+        if let Some(auto_push) = request.auto_push_enabled {
+            sync.cloud_config.auto_push_enabled = auto_push;
+        }
+        if let Some(auto_pull) = request.auto_pull_enabled {
+            sync.cloud_config.auto_pull_enabled = auto_pull;
+        }
+        if let Some(interval) = request.sync_interval_seconds {
+            sync.cloud_config.sync_interval_seconds = interval.max(30);
+        }
+        (
+            sync.identity.device_id,
+            sync.cloud_config.device_name.clone(),
+            request
+                .pairing_code
+                .unwrap_or_else(|| "local-dev-pairing-code".to_owned()),
+            request
+                .account_id
+                .unwrap_or_else(|| "local-account".to_owned()),
+            request.user_id.unwrap_or_else(|| "local-user".to_owned()),
+        )
+    };
+    let pair = PairDeviceRequest {
+        pairing_code,
+        account_id,
+        user_id,
+        device_id,
+        device_name,
+        requested_logbooks: vec![state.logbook_id],
+        role_hints: vec!["admin".to_owned(), "log.sync".to_owned()],
+    };
+    let response = state
+        .proposal_runtime
+        .block_on(state.cloud_server.pair_device(pair));
+    if let Some(session) = response.session.clone() {
+        let auth = CloudAuth {
+            sync_token: session.sync_token.clone(),
+        };
+        let status = state
+            .proposal_runtime
+            .block_on(state.cloud_server.status(Some(&auth)))
+            .ok();
+        {
+            let mut sync = state
+                .sync
+                .lock()
+                .expect("sync state mutex should not be poisoned");
+            sync.cloud_config.enable_cloud_sync = true;
+            sync.cloud_auth = Some(auth);
+            sync.cloud_account_id = Some(session.account_id.clone());
+            sync.latest_cloud_status = status;
+        }
+        let _ = publish_cloud_runtime(
+            state,
+            "sync.cloud.connect.succeeded",
+            RuntimeEventSeverity::Info,
+            "Cloud sync connected",
+            Some(
+                json!({"device_id": session.device_id, "authorized_logbooks": session.authorized_logbooks}),
+            ),
+            None,
+        );
+        json_response(&json!({"ok": true, "session": session}))
+    } else {
+        {
+            let mut sync = state
+                .sync
+                .lock()
+                .expect("sync state mutex should not be poisoned");
+            sync.warning_count += 1;
+        }
+        let error = response
+            .reason
+            .unwrap_or_else(|| "pairing rejected".to_owned());
+        let _ = publish_cloud_runtime(
+            state,
+            "sync.cloud.connect.failed",
+            RuntimeEventSeverity::Warn,
+            "Cloud sync pairing failed",
+            None,
+            Some(error.clone()),
+        );
+        json_response_with_status(400, &json!({"ok": false, "error": error}))
+    }
+}
+
+fn handle_cloud_push(state: &AppState) -> Vec<u8> {
+    let Some(auth) = cloud_auth(state) else {
+        return cloud_auth_error(state, "sync.cloud.push.failed");
+    };
+    let _ = publish_cloud_runtime(
+        state,
+        "sync.cloud.push.started",
+        RuntimeEventSeverity::Info,
+        "Pushing local official events to cloud",
+        None,
+        None,
+    );
+    let events = state
+        .proposal_runtime
+        .block_on(state.store.list_events(state.logbook_id))
+        .unwrap_or_default();
+    let response = state
+        .proposal_runtime
+        .block_on(state.cloud_server.push_events(CloudPushEventsRequest {
+            auth,
+            logbook_id: state.logbook_id,
+            events,
+        }));
+    match response {
+        Ok(push) => {
+            let event_type = if matches!(
+                push.status,
+                ReplicationStatus::Pulled | ReplicationStatus::InSync
+            ) {
+                "sync.cloud.push.completed"
+            } else if push.status == ReplicationStatus::Diverged {
+                "sync.cloud.divergence.detected"
+            } else {
+                "sync.cloud.push.failed"
+            };
+            {
+                let mut sync = state
+                    .sync
+                    .lock()
+                    .expect("sync state mutex should not be poisoned");
+                sync.latest_cloud_push = Some(push.clone());
+                sync.last_cloud_push_time = Some(chrono::Utc::now().to_rfc3339());
+                if push.status == ReplicationStatus::Diverged {
+                    sync.cloud_divergence = push.errors.first().cloned();
+                    sync.warning_count += 1;
+                }
+            }
+            let _ = publish_cloud_runtime(
+                state,
+                "sync.cloud.push.progress",
+                RuntimeEventSeverity::Info,
+                &format!("Cloud accepted {} events", push.accepted_count),
+                Some(json!(&push)),
+                None,
+            );
+            let _ = publish_cloud_runtime(
+                state,
+                event_type,
+                if push.errors.is_empty() {
+                    RuntimeEventSeverity::Info
+                } else {
+                    RuntimeEventSeverity::Warn
+                },
+                &format!("Cloud push finished with {:?}", push.status),
+                Some(json!(&push)),
+                push.errors.first().cloned(),
+            );
+            json_response(&json!({"ok": push.errors.is_empty(), "push": push}))
+        }
+        Err(error) => {
+            let _ = publish_cloud_runtime(
+                state,
+                "sync.cloud.push.failed",
+                RuntimeEventSeverity::Warn,
+                "Cloud push failed",
+                None,
+                Some(error.to_string()),
+            );
+            json_response_with_status(400, &json!({"ok": false, "error": error.to_string()}))
+        }
+    }
+}
+
+fn handle_cloud_preview_pull(state: &AppState) -> Vec<u8> {
+    let Some(auth) = cloud_auth(state) else {
+        return cloud_auth_error(state, "sync.cloud.preview_pull.failed");
+    };
+    let local_head = state
+        .proposal_runtime
+        .block_on(state.store.get_head(state.logbook_id))
+        .unwrap_or(None);
+    let _ = publish_cloud_runtime(
+        state,
+        "sync.cloud.preview_pull.started",
+        RuntimeEventSeverity::Info,
+        "Previewing pull from cloud",
+        None,
+        None,
+    );
+    let response = state
+        .proposal_runtime
+        .block_on(state.cloud_server.preview_pull(CloudPreviewPullRequest {
+            auth,
+            logbook_id: state.logbook_id,
+            local_head_hash: local_head,
+        }));
+    match response {
+        Ok(preview) => {
+            {
+                let mut sync = state
+                    .sync
+                    .lock()
+                    .expect("sync state mutex should not be poisoned");
+                if preview.status == ReplicationStatus::Diverged {
+                    sync.cloud_divergence = Some(preview.message.clone());
+                    sync.warning_count += 1;
+                }
+                sync.latest_cloud_preview = Some(preview.clone());
+            }
+            let event_type = if preview.status == ReplicationStatus::Diverged {
+                "sync.cloud.divergence.detected"
+            } else {
+                "sync.cloud.preview_pull.completed"
+            };
+            let _ = publish_cloud_runtime(
+                state,
+                event_type,
+                if preview.status == ReplicationStatus::Diverged {
+                    RuntimeEventSeverity::Warn
+                } else {
+                    RuntimeEventSeverity::Info
+                },
+                &preview.message,
+                Some(json!(&preview)),
+                None,
+            );
+            json_response(&json!({"ok": true, "preview": preview}))
+        }
+        Err(error) => {
+            json_response_with_status(400, &json!({"ok": false, "error": error.to_string()}))
+        }
+    }
+}
+
+fn handle_cloud_pull(state: &AppState) -> Vec<u8> {
+    let Some(auth) = cloud_auth(state) else {
+        return cloud_auth_error(state, "sync.cloud.pull.failed");
+    };
+    let local_head = state
+        .proposal_runtime
+        .block_on(state.store.get_head(state.logbook_id))
+        .unwrap_or(None);
+    let _ = publish_cloud_runtime(
+        state,
+        "sync.cloud.pull.started",
+        RuntimeEventSeverity::Info,
+        "Pulling missing official events from cloud",
+        None,
+        None,
+    );
+    let response = state
+        .proposal_runtime
+        .block_on(state.cloud_server.pull_events(CloudPullEventsRequest {
+            auth,
+            logbook_id: state.logbook_id,
+            local_head_hash: local_head.clone(),
+        }));
+    match response {
+        Ok(cloud_pull) => {
+            let pull = state.proposal_runtime.block_on(pull_missing_events(
+                state.store.as_ref(),
+                PullEventsRequest {
+                    peer_id: "cloud".to_owned(),
+                    logbook_id: state.logbook_id,
+                    local_head_hash: local_head,
+                },
+                cloud_pull.events.clone(),
+            ));
+            if matches!(
+                pull.status,
+                ReplicationStatus::Pulled | ReplicationStatus::InSync
+            ) {
+                let _ = state
+                    .proposal_runtime
+                    .block_on(state.store.verify_chain(state.logbook_id));
+                let _ = state
+                    .proposal_runtime
+                    .block_on(state.store.rebuild_projections(state.logbook_id));
+            }
+            {
+                let mut sync = state
+                    .sync
+                    .lock()
+                    .expect("sync state mutex should not be poisoned");
+                sync.latest_cloud_preview = Some(cloud_pull.preview.clone());
+                sync.latest_cloud_pull = Some(cloud_pull.clone());
+                sync.last_cloud_pull_time = Some(chrono::Utc::now().to_rfc3339());
+                if pull.status == ReplicationStatus::Diverged {
+                    sync.cloud_divergence = pull.errors.first().cloned();
+                    sync.warning_count += 1;
+                }
+            }
+            let event_type = if matches!(
+                pull.status,
+                ReplicationStatus::Pulled | ReplicationStatus::InSync
+            ) {
+                "sync.cloud.pull.completed"
+            } else if pull.status == ReplicationStatus::Diverged {
+                "sync.cloud.divergence.detected"
+            } else {
+                "sync.cloud.pull.failed"
+            };
+            let _ = publish_cloud_runtime(
+                state,
+                event_type,
+                if pull.errors.is_empty() {
+                    RuntimeEventSeverity::Info
+                } else {
+                    RuntimeEventSeverity::Warn
+                },
+                &format!("Cloud pull finished with {:?}", pull.status),
+                Some(json!({"server": cloud_pull, "local": pull})),
+                pull.errors.first().cloned(),
+            );
+            json_response(
+                &json!({"ok": pull.errors.is_empty(), "server_pull": cloud_pull, "local_pull": pull}),
+            )
+        }
+        Err(error) => {
+            let _ = publish_cloud_runtime(
+                state,
+                "sync.cloud.pull.failed",
+                RuntimeEventSeverity::Warn,
+                "Cloud pull failed",
+                None,
+                Some(error.to_string()),
+            );
+            json_response_with_status(400, &json!({"ok": false, "error": error.to_string()}))
+        }
+    }
+}
+
 fn logbook_head_summary(state: &AppState) -> LogbookHeadSummary {
     let head_hash = state
         .proposal_runtime
@@ -1128,6 +1565,37 @@ fn sync_no_peer_error(state: &AppState, event_type: &str) -> Vec<u8> {
         Some("no discovered peers".to_owned()),
     );
     json_response_with_status(400, &json!({"ok": false, "error": "no discovered peers"}))
+}
+
+fn cloud_auth(state: &AppState) -> Option<CloudAuth> {
+    state
+        .sync
+        .lock()
+        .expect("sync state mutex should not be poisoned")
+        .cloud_auth
+        .clone()
+}
+
+fn cloud_auth_error(state: &AppState, event_type: &str) -> Vec<u8> {
+    {
+        let mut sync = state
+            .sync
+            .lock()
+            .expect("sync state mutex should not be poisoned");
+        sync.warning_count += 1;
+    }
+    let _ = publish_cloud_runtime(
+        state,
+        event_type,
+        RuntimeEventSeverity::Warn,
+        "Cloud sync is not connected",
+        None,
+        Some("cloud sync is not connected".to_owned()),
+    );
+    json_response_with_status(
+        401,
+        &json!({"ok": false, "error": "cloud sync is not connected"}),
+    )
 }
 
 fn build_demo_remote_events(state: &AppState) -> Vec<CoreEventEnvelope> {
@@ -1179,6 +1647,26 @@ fn publish_gui_runtime(
         event_type: event_type.to_owned(),
         severity,
         source: "ham-sync".to_owned(),
+        source_plugin_id: None,
+        workspace_id: Some("dashboard".to_owned()),
+        payload_summary: summary.to_owned(),
+        redacted_payload,
+        error,
+    })
+}
+
+fn publish_cloud_runtime(
+    state: &AppState,
+    event_type: &str,
+    severity: RuntimeEventSeverity,
+    summary: &str,
+    redacted_payload: Option<Value>,
+    error: Option<String>,
+) -> std::io::Result<ham_core::RuntimeEventEnvelope> {
+    state.bridge.publish(RuntimeEventInput {
+        event_type: event_type.to_owned(),
+        severity,
+        source: "ham-sync-cloud".to_owned(),
         source_plugin_id: None,
         workspace_id: Some("dashboard".to_owned()),
         payload_summary: summary.to_owned(),

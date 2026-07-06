@@ -9,6 +9,7 @@ sync, with room for emergency communications, net control, and contesting.
 - `ham-core`: append-only logbook events, event bus, proposal validation, event store, and projections.
 - `ham-plugin-sdk`: public plugin manifest, capability, proposal, and event constant types.
 - `ham-sync`: local-first discovery, handshake, head comparison, and safe pull replication models.
+- `ham-sync-server`: self-hostable cloud relay/sync service binary using the shared safe replication protocol.
 - `ham-cli`: placeholder command-line entry point.
 - `ham-gui`: initial GUI shell, workspace model, panel registry, command registry,
   and static web shell served by a small Rust binary.
@@ -271,6 +272,105 @@ store. Real peer-to-peer HTTP transport and trust pairing are the next sync
 tasks; the protocol messages added here are designed to be reused by that
 transport.
 
+## Cloud Relay And Self-Hosted Sync
+
+Cloud sync is a fallback when LAN peers cannot reach each other. LAN remains the
+preferred path when available. The cloud service reuses the same official event
+envelopes and safe replication rules as LAN sync; it does not sync runtime
+diagnostic logs, credentials, API keys, private plugin config, or mutable UI
+state.
+
+The shared `ham-sync` crate now defines cloud API messages, an MVP pairing
+session model, a cloud client abstraction, and an in-memory server backend used
+by tests and the self-hosted binary. Hosted and self-hosted deployments use the
+same server implementation.
+
+MVP auth uses pairing-code/token sessions. A paired device receives a sync token
+scoped to an account, user, device, and explicit logbook IDs. The server rejects
+unauthenticated requests, unauthorized logbooks, invalid event hashes,
+unsupported schema versions, divergent chains, and duplicate event IDs with
+different content. The server may track relay metadata separately, but it never
+rewrites official event metadata that participates in the event hash.
+
+Cloud API surface:
+
+- `GET /health`
+- `POST /api/v1/auth/pair`
+- `GET /api/v1/logbooks?token=...`
+- `GET /api/v1/logbooks/{logbook_id}/head?token=...`
+- `GET /api/v1/logbooks/{logbook_id}/events?token=...`
+- `POST /api/v1/logbooks/{logbook_id}/preview-pull`
+- `POST /api/v1/logbooks/{logbook_id}/pull`
+- `POST /api/v1/logbooks/{logbook_id}/push`
+- `GET /api/v1/sync/status?token=...`
+
+Push behavior:
+
+1. Client sends local official events to the server.
+2. Server verifies hashes, schema, event type, duplicates, and chain continuity.
+3. Valid events are stored append-only.
+4. Divergent or invalid events are rejected without mutation.
+
+Pull behavior:
+
+1. Client previews remote cloud events against its local head.
+2. Server returns missing event envelopes.
+3. Client verifies hashes and chain continuity again before appending locally.
+4. Client rebuilds projections after accepted events.
+
+The GUI Settings screen includes Cloud Sync options for server URL, device name,
+enablement, LAN preference, auto push, auto pull, and sync interval. The Sync
+Status panel shows cloud connection state, account/device status, server URL,
+local/cloud heads, last push/pull time, pending preview count, and divergence
+warnings. It also provides `Connect Cloud`, `Push Now`, `Preview Cloud Pull`,
+and `Pull Cloud` actions.
+
+Cloud runtime events include:
+
+- `sync.cloud.connect.started`
+- `sync.cloud.connect.succeeded`
+- `sync.cloud.connect.failed`
+- `sync.cloud.push.started`
+- `sync.cloud.push.progress`
+- `sync.cloud.push.completed`
+- `sync.cloud.push.failed`
+- `sync.cloud.preview_pull.started`
+- `sync.cloud.preview_pull.completed`
+- `sync.cloud.pull.started`
+- `sync.cloud.pull.completed`
+- `sync.cloud.pull.failed`
+- `sync.cloud.divergence.detected`
+
+Run the self-hosted sync server:
+
+```powershell
+just sync-server
+```
+
+Default server settings:
+
+```text
+HAM_SYNC_SERVER_BIND=127.0.0.1:9740
+HAM_SYNC_PUBLIC_URL=http://127.0.0.1:9740
+HAM_SYNC_SERVICE_MODE=self_hosted
+HAM_SYNC_PAIRING_CODE=local-dev-pairing-code
+```
+
+See `.env.example` for the same settings. The MVP server uses an in-memory
+storage backend for development and tests; durable server-side storage is the
+next self-hosting task.
+
+Docker build:
+
+```powershell
+docker build -f Dockerfile.sync-server -t ke8ygw-sync-server .
+docker run --rm -p 9740:9740 -e HAM_SYNC_PAIRING_CODE=change-me ke8ygw-sync-server
+```
+
+Current limitations: pairing is token-based MVP auth, events are not signed,
+end-to-end encryption is not implemented, automatic merge/conflict resolution is
+deferred, and the self-hosted server storage is not durable yet.
+
 ## GUI Architecture
 
 The GUI shell is implemented in `ham-gui`. It is intentionally a client of the
@@ -371,6 +471,7 @@ just test     # run all workspace tests
 just build    # debug build for all workspace crates
 just release  # release build for all workspace crates
 just gui      # run the local GUI shell at http://127.0.0.1:9467
+just sync-server # run the self-hosted sync server at http://127.0.0.1:9740
 just ci       # formatting check, clippy, tests, and debug build
 ```
 
@@ -384,6 +485,7 @@ cargo test --workspace
 cargo build --workspace
 cargo build --release --workspace
 cargo run -p ham-gui --bin ham-gui
+cargo run -p ham-sync-server --bin ham-sync-server
 ```
 
 ## CI

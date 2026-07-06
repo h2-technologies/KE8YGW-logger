@@ -223,6 +223,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "ham-sync-server"
+version = "0.1.0"
+dependencies = [
+ "ham-sync",
+ "serde",
+ "serde_json",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "iana-time-zone"
 version = "0.1.65"
 source = "registry+https://github.com/rust-lang/crates.io-index"

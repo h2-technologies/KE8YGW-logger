@@ -1,15 +1,20 @@
 //! Local-first LAN discovery and sync handshake primitives.
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, UdpSocket},
+    sync::Arc,
     time::Duration,
 };
 
 use chrono::{DateTime, Utc};
-use ham_core::{validate_supported_remote_event, CoreEventEnvelope, LogbookEventStore, StoreError};
+use ham_core::{
+    validate_supported_remote_event, CoreEventEnvelope, InMemoryLogbookEventStore,
+    LogbookEventStore, StoreError,
+};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+use tokio::sync::RwLock;
 use uuid::Uuid;
 
 pub const PROTOCOL_NAME: &str = "ke8ygw-logger-sync";
@@ -711,6 +716,563 @@ impl PullEventsResponse {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CloudSyncConfig {
+    pub enable_cloud_sync: bool,
+    pub sync_server_url: String,
+    pub account_login_mode: CloudLoginMode,
+    pub device_name: String,
+    pub prefer_lan_sync: bool,
+    pub auto_push_enabled: bool,
+    pub auto_pull_enabled: bool,
+    pub sync_interval_seconds: u64,
+}
+
+impl Default for CloudSyncConfig {
+    fn default() -> Self {
+        Self {
+            enable_cloud_sync: false,
+            sync_server_url: "http://127.0.0.1:9740".to_owned(),
+            account_login_mode: CloudLoginMode::PairingCode,
+            device_name: "KE8YGW Logger Device".to_owned(),
+            prefer_lan_sync: true,
+            auto_push_enabled: false,
+            auto_pull_enabled: false,
+            sync_interval_seconds: 300,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CloudLoginMode {
+    PairingCode,
+    SyncToken,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CloudConnectionState {
+    Disconnected,
+    Connected,
+    Unauthorized,
+    Error,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CloudHealthResponse {
+    pub ok: bool,
+    pub service: String,
+    pub version: String,
+    pub mode: CloudServiceMode,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CloudServiceMode {
+    Hosted,
+    SelfHosted,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PairDeviceRequest {
+    pub pairing_code: String,
+    pub account_id: String,
+    pub user_id: String,
+    pub device_id: Uuid,
+    pub device_name: String,
+    pub requested_logbooks: Vec<Uuid>,
+    pub role_hints: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PairDeviceResponse {
+    pub accepted: bool,
+    pub reason: Option<String>,
+    pub session: Option<CloudSession>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CloudSession {
+    pub account_id: String,
+    pub user_id: String,
+    pub device_id: Uuid,
+    pub device_name: String,
+    pub sync_token: String,
+    pub authorized_logbooks: Vec<Uuid>,
+    pub issued_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CloudAuth {
+    pub sync_token: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CloudPreviewPullRequest {
+    pub auth: CloudAuth,
+    pub logbook_id: Uuid,
+    pub local_head_hash: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CloudPullEventsRequest {
+    pub auth: CloudAuth,
+    pub logbook_id: Uuid,
+    pub local_head_hash: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CloudPullEventsResponse {
+    pub preview: PreviewPullResponse,
+    pub events: Vec<CoreEventEnvelope>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CloudPushEventsRequest {
+    pub auth: CloudAuth,
+    pub logbook_id: Uuid,
+    pub events: Vec<CoreEventEnvelope>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CloudPushEventsResponse {
+    pub status: ReplicationStatus,
+    pub accepted_count: usize,
+    pub ignored_duplicate_count: usize,
+    pub rejected_count: usize,
+    pub server_head_hash: Option<String>,
+    pub errors: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CloudSyncStatusResponse {
+    pub connection_state: CloudConnectionState,
+    pub account_id: Option<String>,
+    pub device_id: Option<Uuid>,
+    pub server_url: String,
+    pub accessible_logbooks: Vec<LogbookHeadSummary>,
+}
+
+#[derive(Debug, Error, Clone, PartialEq, Eq)]
+pub enum CloudSyncError {
+    #[error("unauthenticated request")]
+    Unauthenticated,
+    #[error("unauthorized logbook access: {0}")]
+    UnauthorizedLogbook(Uuid),
+    #[error("pairing rejected: {0}")]
+    PairingRejected(String),
+    #[error("cloud event validation failed: {0}")]
+    Validation(String),
+    #[error("cloud store error: {0}")]
+    Store(String),
+}
+
+#[derive(Debug, Clone)]
+pub struct CloudServerConfig {
+    pub mode: CloudServiceMode,
+    pub public_url: String,
+    pub pairing_code: String,
+}
+
+impl Default for CloudServerConfig {
+    fn default() -> Self {
+        Self {
+            mode: CloudServiceMode::SelfHosted,
+            public_url: "http://127.0.0.1:9740".to_owned(),
+            pairing_code: "local-dev-pairing-code".to_owned(),
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+struct CloudAuthState {
+    sessions_by_token: HashMap<String, CloudSession>,
+    account_logbooks: HashMap<String, HashSet<Uuid>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct InMemoryCloudSyncServer {
+    config: CloudServerConfig,
+    store: Arc<InMemoryLogbookEventStore>,
+    auth: Arc<RwLock<CloudAuthState>>,
+}
+
+impl InMemoryCloudSyncServer {
+    pub fn new(config: CloudServerConfig) -> Self {
+        Self {
+            config,
+            store: Arc::new(InMemoryLogbookEventStore::new()),
+            auth: Arc::new(RwLock::new(CloudAuthState::default())),
+        }
+    }
+
+    pub fn health(&self) -> CloudHealthResponse {
+        CloudHealthResponse {
+            ok: true,
+            service: "ke8ygw-sync-server".to_owned(),
+            version: env!("CARGO_PKG_VERSION").to_owned(),
+            mode: self.config.mode,
+        }
+    }
+
+    pub async fn pair_device(&self, request: PairDeviceRequest) -> PairDeviceResponse {
+        if request.pairing_code != self.config.pairing_code {
+            return PairDeviceResponse {
+                accepted: false,
+                reason: Some("invalid pairing code".to_owned()),
+                session: None,
+            };
+        }
+
+        let token = format!("sync-{}-{}", request.account_id, Uuid::new_v4());
+        let session = CloudSession {
+            account_id: request.account_id,
+            user_id: request.user_id,
+            device_id: request.device_id,
+            device_name: request.device_name,
+            sync_token: token.clone(),
+            authorized_logbooks: request.requested_logbooks,
+            issued_at: Utc::now(),
+        };
+        let mut auth = self.auth.write().await;
+        auth.account_logbooks
+            .entry(session.account_id.clone())
+            .or_default()
+            .extend(session.authorized_logbooks.iter().copied());
+        auth.sessions_by_token.insert(token, session.clone());
+
+        PairDeviceResponse {
+            accepted: true,
+            reason: None,
+            session: Some(session),
+        }
+    }
+
+    pub async fn list_logbooks(
+        &self,
+        auth: &CloudAuth,
+    ) -> Result<ListLogbooksResponse, CloudSyncError> {
+        let session = self.authorize(auth).await?;
+        let mut logbooks = Vec::new();
+        for logbook_id in session.authorized_logbooks {
+            logbooks.push(LogbookHeadSummary {
+                logbook_id,
+                head_hash: self
+                    .store
+                    .get_head(logbook_id)
+                    .await
+                    .map_err(cloud_store_error)?,
+                event_count: Some(
+                    self.store
+                        .list_events(logbook_id)
+                        .await
+                        .map_err(cloud_store_error)?
+                        .len() as u64,
+                ),
+            });
+        }
+        Ok(ListLogbooksResponse { logbooks })
+    }
+
+    pub async fn get_head(
+        &self,
+        auth: &CloudAuth,
+        logbook_id: Uuid,
+    ) -> Result<LogbookHeadSummary, CloudSyncError> {
+        self.authorize_logbook(auth, logbook_id).await?;
+        Ok(LogbookHeadSummary {
+            logbook_id,
+            head_hash: self
+                .store
+                .get_head(logbook_id)
+                .await
+                .map_err(cloud_store_error)?,
+            event_count: Some(
+                self.store
+                    .list_events(logbook_id)
+                    .await
+                    .map_err(cloud_store_error)?
+                    .len() as u64,
+            ),
+        })
+    }
+
+    pub async fn event_metadata(
+        &self,
+        auth: &CloudAuth,
+        logbook_id: Uuid,
+        after_hash: Option<String>,
+    ) -> Result<GetEventMetadataResponse, CloudSyncError> {
+        self.authorize_logbook(auth, logbook_id).await?;
+        let events = self
+            .store
+            .list_events_after(logbook_id, after_hash)
+            .await
+            .map_err(cloud_store_error)?;
+        Ok(GetEventMetadataResponse {
+            logbook_id,
+            events: events.iter().map(metadata_for_event).collect(),
+        })
+    }
+
+    pub async fn preview_pull(
+        &self,
+        request: CloudPreviewPullRequest,
+    ) -> Result<PreviewPullResponse, CloudSyncError> {
+        self.authorize_logbook(&request.auth, request.logbook_id)
+            .await?;
+        let events = self
+            .store
+            .list_events(request.logbook_id)
+            .await
+            .map_err(cloud_store_error)?;
+        Ok(preview_pull_from_events(
+            PreviewPullRequest {
+                peer_id: "cloud".to_owned(),
+                logbook_id: request.logbook_id,
+                local_head_hash: request.local_head_hash,
+            },
+            &events,
+        ))
+    }
+
+    pub async fn pull_events(
+        &self,
+        request: CloudPullEventsRequest,
+    ) -> Result<CloudPullEventsResponse, CloudSyncError> {
+        self.authorize_logbook(&request.auth, request.logbook_id)
+            .await?;
+        let events = self
+            .store
+            .list_events(request.logbook_id)
+            .await
+            .map_err(cloud_store_error)?;
+        let preview = preview_pull_from_events(
+            PreviewPullRequest {
+                peer_id: "cloud".to_owned(),
+                logbook_id: request.logbook_id,
+                local_head_hash: request.local_head_hash,
+            },
+            &events,
+        );
+        let event_hashes = preview
+            .events
+            .iter()
+            .map(|event| event.event_hash.as_str())
+            .collect::<HashSet<_>>();
+        let events = events
+            .into_iter()
+            .filter(|event| event_hashes.contains(event.event_hash.as_str()))
+            .collect();
+        Ok(CloudPullEventsResponse { preview, events })
+    }
+
+    pub async fn push_events(
+        &self,
+        request: CloudPushEventsRequest,
+    ) -> Result<CloudPushEventsResponse, CloudSyncError> {
+        self.authorize_logbook(&request.auth, request.logbook_id)
+            .await?;
+        if request
+            .events
+            .iter()
+            .any(|event| event.logbook_id != request.logbook_id)
+        {
+            return Err(CloudSyncError::UnauthorizedLogbook(request.logbook_id));
+        }
+
+        let mut accepted_count = 0usize;
+        let mut ignored_duplicate_count = 0usize;
+        let mut errors = Vec::new();
+        for event in request.events {
+            if let Err(error) = validate_supported_remote_event(&event) {
+                errors.push(error.to_string());
+                break;
+            }
+            match self.store.get_event(event.event_id).await {
+                Ok(Some(existing)) if existing == event => {
+                    ignored_duplicate_count += 1;
+                    continue;
+                }
+                Ok(Some(_)) => {
+                    errors.push(format!(
+                        "event id {} already exists with different content",
+                        event.event_id
+                    ));
+                    break;
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    errors.push(error.to_string());
+                    break;
+                }
+            }
+            match self.store.append_verified_remote_event(event).await {
+                Ok(_) => accepted_count += 1,
+                Err(error) => {
+                    errors.push(error.to_string());
+                    break;
+                }
+            }
+        }
+
+        let server_head_hash = self
+            .store
+            .get_head(request.logbook_id)
+            .await
+            .map_err(cloud_store_error)?;
+        let status = if errors.is_empty() {
+            ReplicationStatus::Pulled
+        } else if errors
+            .iter()
+            .any(|error| error.contains("does not connect") || error.contains("previous hash"))
+        {
+            ReplicationStatus::Diverged
+        } else {
+            ReplicationStatus::Rejected
+        };
+        Ok(CloudPushEventsResponse {
+            status,
+            accepted_count,
+            ignored_duplicate_count,
+            rejected_count: errors.len(),
+            server_head_hash,
+            errors,
+        })
+    }
+
+    pub async fn status(
+        &self,
+        auth: Option<&CloudAuth>,
+    ) -> Result<CloudSyncStatusResponse, CloudSyncError> {
+        let Some(auth) = auth else {
+            return Ok(CloudSyncStatusResponse {
+                connection_state: CloudConnectionState::Disconnected,
+                account_id: None,
+                device_id: None,
+                server_url: self.config.public_url.clone(),
+                accessible_logbooks: Vec::new(),
+            });
+        };
+        let session = self.authorize(auth).await?;
+        let logbooks = self.list_logbooks(auth).await?.logbooks;
+        Ok(CloudSyncStatusResponse {
+            connection_state: CloudConnectionState::Connected,
+            account_id: Some(session.account_id),
+            device_id: Some(session.device_id),
+            server_url: self.config.public_url.clone(),
+            accessible_logbooks: logbooks,
+        })
+    }
+
+    async fn authorize(&self, auth: &CloudAuth) -> Result<CloudSession, CloudSyncError> {
+        self.auth
+            .read()
+            .await
+            .sessions_by_token
+            .get(&auth.sync_token)
+            .cloned()
+            .ok_or(CloudSyncError::Unauthenticated)
+    }
+
+    async fn authorize_logbook(
+        &self,
+        auth: &CloudAuth,
+        logbook_id: Uuid,
+    ) -> Result<CloudSession, CloudSyncError> {
+        let session = self.authorize(auth).await?;
+        if !session.authorized_logbooks.contains(&logbook_id) {
+            return Err(CloudSyncError::UnauthorizedLogbook(logbook_id));
+        }
+        Ok(session)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct CloudSyncClient {
+    server: InMemoryCloudSyncServer,
+    auth: Option<CloudAuth>,
+}
+
+impl CloudSyncClient {
+    pub fn in_memory(server: InMemoryCloudSyncServer) -> Self {
+        Self { server, auth: None }
+    }
+
+    pub fn auth(&self) -> Option<&CloudAuth> {
+        self.auth.as_ref()
+    }
+
+    pub async fn pair(
+        &mut self,
+        request: PairDeviceRequest,
+    ) -> Result<CloudSession, CloudSyncError> {
+        let response = self.server.pair_device(request).await;
+        let Some(session) = response.session else {
+            return Err(CloudSyncError::PairingRejected(
+                response
+                    .reason
+                    .unwrap_or_else(|| "pairing rejected".to_owned()),
+            ));
+        };
+        self.auth = Some(CloudAuth {
+            sync_token: session.sync_token.clone(),
+        });
+        Ok(session)
+    }
+
+    pub async fn preview_pull(
+        &self,
+        logbook_id: Uuid,
+        local_head_hash: Option<String>,
+    ) -> Result<PreviewPullResponse, CloudSyncError> {
+        self.server
+            .preview_pull(CloudPreviewPullRequest {
+                auth: self.required_auth()?,
+                logbook_id,
+                local_head_hash,
+            })
+            .await
+    }
+
+    pub async fn pull_events(
+        &self,
+        logbook_id: Uuid,
+        local_head_hash: Option<String>,
+    ) -> Result<CloudPullEventsResponse, CloudSyncError> {
+        self.server
+            .pull_events(CloudPullEventsRequest {
+                auth: self.required_auth()?,
+                logbook_id,
+                local_head_hash,
+            })
+            .await
+    }
+
+    pub async fn push_events(
+        &self,
+        logbook_id: Uuid,
+        events: Vec<CoreEventEnvelope>,
+    ) -> Result<CloudPushEventsResponse, CloudSyncError> {
+        self.server
+            .push_events(CloudPushEventsRequest {
+                auth: self.required_auth()?,
+                logbook_id,
+                events,
+            })
+            .await
+    }
+
+    fn required_auth(&self) -> Result<CloudAuth, CloudSyncError> {
+        self.auth.clone().ok_or(CloudSyncError::Unauthenticated)
+    }
+}
+
+fn cloud_store_error(error: StoreError) -> CloudSyncError {
+    CloudSyncError::Store(error.to_string())
+}
+
 #[derive(Debug, Error)]
 pub enum DiscoveryServiceError {
     #[error("discovery I/O error: {0}")]
@@ -797,6 +1359,27 @@ mod tests {
             events.push(event);
         }
         events
+    }
+
+    fn cloud_server() -> InMemoryCloudSyncServer {
+        InMemoryCloudSyncServer::new(CloudServerConfig::default())
+    }
+
+    async fn paired_client(server: InMemoryCloudSyncServer, logbook_id: Uuid) -> CloudSyncClient {
+        let mut client = CloudSyncClient::in_memory(server);
+        client
+            .pair(PairDeviceRequest {
+                pairing_code: "local-dev-pairing-code".to_owned(),
+                account_id: "acct-1".to_owned(),
+                user_id: "user-1".to_owned(),
+                device_id: Uuid::new_v4(),
+                device_name: "Test Device".to_owned(),
+                requested_logbooks: vec![logbook_id],
+                role_hints: vec!["admin".to_owned()],
+            })
+            .await
+            .unwrap();
+        client
     }
 
     #[test]
@@ -939,6 +1522,23 @@ mod tests {
                 .len(),
             1
         );
+    }
+
+    #[test]
+    fn cloud_api_models_serialize() {
+        let logbook_id = Uuid::new_v4();
+        let request = PairDeviceRequest {
+            pairing_code: "pair".to_owned(),
+            account_id: "account".to_owned(),
+            user_id: "user".to_owned(),
+            device_id: Uuid::new_v4(),
+            device_name: "Radio Desk".to_owned(),
+            requested_logbooks: vec![logbook_id],
+            role_hints: vec!["logger".to_owned()],
+        };
+        let encoded = serde_json::to_string(&request).unwrap();
+        let decoded: PairDeviceRequest = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(decoded.requested_logbooks, vec![logbook_id]);
     }
 
     #[test]
@@ -1137,5 +1737,145 @@ mod tests {
         );
 
         assert_eq!(response.status, ReplicationStatus::Diverged);
+    }
+
+    #[tokio::test]
+    async fn cloud_server_rejects_unauthenticated_requests() {
+        let server = cloud_server();
+        let error = server
+            .list_logbooks(&CloudAuth {
+                sync_token: "missing".to_owned(),
+            })
+            .await
+            .unwrap_err();
+
+        assert_eq!(error, CloudSyncError::Unauthenticated);
+    }
+
+    #[tokio::test]
+    async fn cloud_pairing_token_validation() {
+        let server = cloud_server();
+        let rejected = server
+            .pair_device(PairDeviceRequest {
+                pairing_code: "wrong".to_owned(),
+                account_id: "acct".to_owned(),
+                user_id: "user".to_owned(),
+                device_id: Uuid::new_v4(),
+                device_name: "Bad Device".to_owned(),
+                requested_logbooks: vec![Uuid::new_v4()],
+                role_hints: Vec::new(),
+            })
+            .await;
+
+        assert!(!rejected.accepted);
+    }
+
+    #[tokio::test]
+    async fn cloud_push_valid_events_and_preview_pull() {
+        let logbook_id = Uuid::new_v4();
+        let server = cloud_server();
+        let client = paired_client(server, logbook_id).await;
+        let events = remote_chain(logbook_id, 2);
+
+        let push = client
+            .push_events(logbook_id, events.clone())
+            .await
+            .unwrap();
+        assert_eq!(push.accepted_count, 2);
+
+        let preview = client.preview_pull(logbook_id, None).await.unwrap();
+        assert_eq!(preview.status, ReplicationStatus::RemoteAhead);
+        assert_eq!(preview.missing_event_count, 2);
+    }
+
+    #[tokio::test]
+    async fn cloud_push_invalid_hash_is_rejected() {
+        let logbook_id = Uuid::new_v4();
+        let server = cloud_server();
+        let client = paired_client(server, logbook_id).await;
+        let mut events = remote_chain(logbook_id, 1);
+        events[0].payload["mode"] = json!("CW");
+
+        let push = client.push_events(logbook_id, events).await.unwrap();
+        assert_eq!(push.status, ReplicationStatus::Rejected);
+        assert_eq!(push.accepted_count, 0);
+    }
+
+    #[tokio::test]
+    async fn cloud_push_duplicate_identical_is_ignored() {
+        let logbook_id = Uuid::new_v4();
+        let server = cloud_server();
+        let client = paired_client(server, logbook_id).await;
+        let events = remote_chain(logbook_id, 1);
+
+        client
+            .push_events(logbook_id, events.clone())
+            .await
+            .unwrap();
+        let push = client.push_events(logbook_id, events).await.unwrap();
+
+        assert_eq!(push.ignored_duplicate_count, 1);
+    }
+
+    #[tokio::test]
+    async fn cloud_push_duplicate_id_with_different_hash_is_rejected() {
+        let logbook_id = Uuid::new_v4();
+        let server = cloud_server();
+        let client = paired_client(server, logbook_id).await;
+        let local = remote_chain(logbook_id, 1);
+        client.push_events(logbook_id, local.clone()).await.unwrap();
+        let mut duplicate = new_event(logbook_id, Some(local[0].event_hash.clone()));
+        duplicate.event_id = local[0].event_id;
+        duplicate.event_hash = duplicate.calculate_hash();
+
+        let push = client
+            .push_events(logbook_id, vec![duplicate])
+            .await
+            .unwrap();
+
+        assert_eq!(push.status, ReplicationStatus::Rejected);
+    }
+
+    #[tokio::test]
+    async fn cloud_pull_missing_events() {
+        let logbook_id = Uuid::new_v4();
+        let server = cloud_server();
+        let client = paired_client(server, logbook_id).await;
+        let events = remote_chain(logbook_id, 2);
+        client
+            .push_events(logbook_id, events.clone())
+            .await
+            .unwrap();
+
+        let pull = client.pull_events(logbook_id, None).await.unwrap();
+
+        assert_eq!(pull.events.len(), 2);
+        assert_eq!(pull.preview.missing_event_count, 2);
+    }
+
+    #[tokio::test]
+    async fn cloud_unauthorized_logbook_access_is_rejected() {
+        let logbook_id = Uuid::new_v4();
+        let other_logbook = Uuid::new_v4();
+        let server = cloud_server();
+        let client = paired_client(server, logbook_id).await;
+
+        let error = client.preview_pull(other_logbook, None).await.unwrap_err();
+
+        assert_eq!(error, CloudSyncError::UnauthorizedLogbook(other_logbook));
+    }
+
+    #[tokio::test]
+    async fn cloud_push_divergence_response() {
+        let logbook_id = Uuid::new_v4();
+        let server = cloud_server();
+        let client = paired_client(server, logbook_id).await;
+        let server_chain = remote_chain(logbook_id, 1);
+        client.push_events(logbook_id, server_chain).await.unwrap();
+        let divergent = remote_chain(logbook_id, 1);
+
+        let push = client.push_events(logbook_id, divergent).await.unwrap();
+
+        assert_eq!(push.status, ReplicationStatus::Diverged);
     }
 }
