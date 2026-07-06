@@ -127,7 +127,7 @@ pub fn default_panel_registry() -> Vec<PanelDefinition> {
             "rig-control",
             "Rig Control",
             "plugin.rig-control",
-            ["rig.read", "rig.control"],
+            ["rig.view", "rig.read.state", "rig.configure"],
             WorkspaceId::ALL,
         ),
         panel(
@@ -254,6 +254,7 @@ fn default_layout(id: WorkspaceId) -> WorkspaceLayout {
             place("activation-setup", PanelRegion::Center, 10),
             place("portable-logger-entry", PanelRegion::Center, 20),
             place("activation-progress", PanelRegion::RightInspector, 10),
+            place("rig-control", PanelRegion::RightInspector, 20),
             place("activation-recent-qsos", PanelRegion::Bottom, 10),
             place("spots-alerts", PanelRegion::Bottom, 20),
         ],

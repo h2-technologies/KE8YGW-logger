@@ -22,8 +22,17 @@ pub fn mock_plugins() -> Vec<MockPlugin> {
         plugin(
             "plugin.rig-control",
             "Rig Control",
-            false,
-            ["rig.read", "rig.control"],
+            true,
+            [
+                "rig.view",
+                "rig.control.frequency",
+                "rig.control.mode",
+                "rig.control.ptt",
+                "rig.control.split",
+                "rig.read.state",
+                "rig.configure",
+                "log.qso.suggest_fields",
+            ],
         ),
         plugin(
             "plugin.pota-sota",
@@ -82,6 +91,13 @@ pub fn capability_labels() -> Vec<String> {
         PluginCapability::LookupCacheRead,
         PluginCapability::LookupCacheWrite,
         PluginCapability::QsoSuggestFields,
+        PluginCapability::RigView,
+        PluginCapability::RigControlFrequency,
+        PluginCapability::RigControlMode,
+        PluginCapability::RigControlPtt,
+        PluginCapability::RigControlSplit,
+        PluginCapability::RigReadState,
+        PluginCapability::RigConfigure,
     ]
     .into_iter()
     .map(|capability| capability.as_str().to_owned())

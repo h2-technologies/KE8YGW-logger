@@ -11,10 +11,12 @@ use std::{
 
 use ham_core::{
     default_official_event_log_path, export_adif, export_adif_with_activations, import_adif,
-    lookup_callsign_with_cache, submit_proposal, AdifImportOptions, CoreEventEnvelope,
-    JsonlLogbookEventStore, LocalPrefixProvider, LogbookEventStore, LookupCache, LookupCacheConfig,
-    LookupProviderStatus, NewLogbookEvent, OperatorRole, Projection, ProposalContext,
-    RuntimeEventFilter, RuntimeEventSeverity, RuntimeLogConfig,
+    lookup_callsign_with_cache, publish_rig_runtime_event, submit_proposal,
+    suggestion_from_rig_state, AdifImportOptions, CoreEventEnvelope, JsonlLogbookEventStore,
+    LocalPrefixProvider, LogbookEventStore, LookupCache, LookupCacheConfig, LookupProviderStatus,
+    MockRigProvider, NewLogbookEvent, OperatorRole, Projection, ProposalContext,
+    RigConnectionStatus, RigDevice, RigProvider, RigProviderStatus, RigState, RuntimeEventFilter,
+    RuntimeEventSeverity, RuntimeLogConfig,
 };
 use ham_gui::{
     mock::{capability_labels, mock_plugins},
@@ -144,6 +146,8 @@ fn main() {
         cloud_server: InMemoryCloudSyncServer::new(CloudServerConfig::default()),
         lookup_cache: LookupCache::new(),
         lookup_config: Mutex::new(LookupUiConfig::default()),
+        rig_provider: MockRigProvider::default(),
+        rig_config: Mutex::new(RigUiConfig::default()),
     });
 
     println!("ham-gui listening on http://{bound_addr}");
@@ -165,6 +169,8 @@ struct AppState {
     cloud_server: InMemoryCloudSyncServer,
     lookup_cache: LookupCache,
     lookup_config: Mutex<LookupUiConfig>,
+    rig_provider: MockRigProvider,
+    rig_config: Mutex<RigUiConfig>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -184,6 +190,31 @@ impl Default for LookupUiConfig {
             preferred_provider: "local-prefix".to_owned(),
             cache_ttl_days: 30,
             offline_prefix_fallback_enabled: true,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct RigUiConfig {
+    enable_rig_control: bool,
+    default_provider: String,
+    default_rig_id: Option<uuid::Uuid>,
+    polling_interval_ms: u64,
+    auto_fill_from_rig: bool,
+    hamlib_endpoint: String,
+    serial_settings_placeholder: String,
+}
+
+impl Default for RigUiConfig {
+    fn default() -> Self {
+        Self {
+            enable_rig_control: true,
+            default_provider: "mock".to_owned(),
+            default_rig_id: None,
+            polling_interval_ms: 1_000,
+            auto_fill_from_rig: true,
+            hamlib_endpoint: "127.0.0.1:4532".to_owned(),
+            serial_settings_placeholder: "Serial CAT settings are planned".to_owned(),
         }
     }
 }
@@ -308,6 +339,11 @@ fn handle_client(state: Arc<AppState>, mut stream: TcpStream) {
         ("GET", "/api/lookup/callsign") => handle_lookup_callsign(&state, query),
         ("POST", "/api/lookup/cache/clear") => handle_lookup_cache_clear(&state),
         ("GET", "/api/lookup/status") => handle_lookup_status(&state),
+        ("GET", "/api/rig/status") => handle_rig_status(&state),
+        ("POST", "/api/rig/connect") => handle_rig_connect(&state),
+        ("POST", "/api/rig/disconnect") => handle_rig_disconnect(&state),
+        ("POST", "/api/rig/refresh") => handle_rig_refresh(&state),
+        ("POST", "/api/rig/mock/set") => handle_rig_mock_set(&state, &request.body),
         ("GET", "/api/sync/state") => json_response(&sync_state_payload(&state)),
         ("GET", "/api/sync/list-logbooks") => json_response(&ListLogbooksResponse {
             logbooks: vec![logbook_head_summary(&state)],
@@ -457,6 +493,27 @@ struct CreateQsoRequest {
     lookup_source: Option<String>,
     lookup_confidence: Option<f32>,
     enriched_fields: Option<Vec<String>>,
+    submode: Option<String>,
+    rig_source: Option<String>,
+    rig_id: Option<uuid::Uuid>,
+    rig_enriched_fields: Option<Vec<String>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RigSetRequest {
+    frequency_hz: Option<u64>,
+    mode: Option<String>,
+    ptt: Option<bool>,
+}
+
+#[derive(Debug, Serialize)]
+struct RigStatusPayload {
+    config: RigUiConfig,
+    devices: Vec<RigDevice>,
+    active_state: Option<RigState>,
+    provider_status: RigProviderStatus,
+    connected_count: usize,
+    autofill_suggestion: Option<ham_core::RigAutofillSuggestion>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -709,6 +766,281 @@ fn handle_lookup_cache_clear(state: &AppState) -> Vec<u8> {
     }
 }
 
+fn handle_rig_status(state: &AppState) -> Vec<u8> {
+    json_response(&rig_status_payload(state))
+}
+
+fn handle_rig_connect(state: &AppState) -> Vec<u8> {
+    let devices = state
+        .proposal_runtime
+        .block_on(state.rig_provider.list_supported_rigs());
+    let Some(rig_id) = devices.first().map(|device| device.rig_id) else {
+        return json_error(400, "no rig providers available");
+    };
+    let _ = state.proposal_runtime.block_on(publish_rig_runtime_event(
+        &state.bridge,
+        state.bridge.status().device_id,
+        "rig.connect.started",
+        RuntimeEventSeverity::Info,
+        "Connecting mock rig",
+        Some(json!({"rig_id": rig_id, "provider": "mock"})),
+        None,
+    ));
+    match state
+        .proposal_runtime
+        .block_on(state.rig_provider.connect(rig_id))
+    {
+        Ok(device) => {
+            let _ = state.proposal_runtime.block_on(publish_rig_runtime_event(
+                &state.bridge,
+                state.bridge.status().device_id,
+                "rig.provider.loaded",
+                RuntimeEventSeverity::Info,
+                "Mock rig provider loaded",
+                Some(json!({"provider": "mock"})),
+                None,
+            ));
+            let _ = state.proposal_runtime.block_on(publish_rig_runtime_event(
+                &state.bridge,
+                state.bridge.status().device_id,
+                "rig.connect.succeeded",
+                RuntimeEventSeverity::Info,
+                "Mock rig connected",
+                Some(json!(&device)),
+                None,
+            ));
+            json_response(&json!({"ok": true, "rig": device, "status": rig_status_payload(state)}))
+        }
+        Err(error) => {
+            let _ = state.proposal_runtime.block_on(publish_rig_runtime_event(
+                &state.bridge,
+                state.bridge.status().device_id,
+                "rig.connect.failed",
+                RuntimeEventSeverity::Error,
+                "Mock rig connection failed",
+                Some(json!({"rig_id": rig_id})),
+                Some(error.to_string()),
+            ));
+            json_response_with_status(400, &json!({"ok": false, "error": error.to_string()}))
+        }
+    }
+}
+
+fn handle_rig_disconnect(state: &AppState) -> Vec<u8> {
+    let devices = state
+        .proposal_runtime
+        .block_on(state.rig_provider.list_supported_rigs());
+    let Some(rig_id) = devices.first().map(|device| device.rig_id) else {
+        return json_error(400, "no rig providers available");
+    };
+    match state
+        .proposal_runtime
+        .block_on(state.rig_provider.disconnect(rig_id))
+    {
+        Ok(device) => {
+            let _ = state.proposal_runtime.block_on(publish_rig_runtime_event(
+                &state.bridge,
+                state.bridge.status().device_id,
+                "rig.disconnected",
+                RuntimeEventSeverity::Info,
+                "Mock rig disconnected",
+                Some(json!(&device)),
+                None,
+            ));
+            json_response(&json!({"ok": true, "rig": device, "status": rig_status_payload(state)}))
+        }
+        Err(error) => {
+            json_response_with_status(400, &json!({"ok": false, "error": error.to_string()}))
+        }
+    }
+}
+
+fn handle_rig_refresh(state: &AppState) -> Vec<u8> {
+    let devices = state
+        .proposal_runtime
+        .block_on(state.rig_provider.list_supported_rigs());
+    let Some(rig_id) = devices.first().map(|device| device.rig_id) else {
+        return json_error(400, "no rig providers available");
+    };
+    match state
+        .proposal_runtime
+        .block_on(state.rig_provider.get_state(rig_id))
+    {
+        Ok(rig_state) => {
+            let _ = state.proposal_runtime.block_on(publish_rig_runtime_event(
+                &state.bridge,
+                state.bridge.status().device_id,
+                "rig.state.changed",
+                RuntimeEventSeverity::Info,
+                "Rig state refreshed",
+                Some(json!(&rig_state)),
+                None,
+            ));
+            let _ = state.proposal_runtime.block_on(publish_rig_runtime_event(
+                &state.bridge,
+                state.bridge.status().device_id,
+                "rig.autofill.suggestion.created",
+                RuntimeEventSeverity::Debug,
+                "Rig autofill suggestion created",
+                Some(json!(suggestion_from_rig_state(&rig_state))),
+                None,
+            ));
+            json_response(
+                &json!({"ok": true, "state": rig_state, "status": rig_status_payload(state)}),
+            )
+        }
+        Err(error) => {
+            json_response_with_status(400, &json!({"ok": false, "error": error.to_string()}))
+        }
+    }
+}
+
+fn handle_rig_mock_set(state: &AppState, body: &[u8]) -> Vec<u8> {
+    let Ok(request) = serde_json::from_slice::<RigSetRequest>(body) else {
+        return json_error(400, "invalid rig mock JSON");
+    };
+    let devices = state
+        .proposal_runtime
+        .block_on(state.rig_provider.list_supported_rigs());
+    let Some(rig_id) = devices.first().map(|device| device.rig_id) else {
+        return json_error(400, "no rig providers available");
+    };
+    let mut latest_state = None;
+    if let Some(frequency_hz) = request.frequency_hz {
+        match state
+            .proposal_runtime
+            .block_on(state.rig_provider.set_frequency(rig_id, frequency_hz))
+        {
+            Ok(rig_state) => {
+                latest_state = Some(rig_state.clone());
+                let _ = state.proposal_runtime.block_on(publish_rig_runtime_event(
+                    &state.bridge,
+                    state.bridge.status().device_id,
+                    "rig.frequency.changed",
+                    RuntimeEventSeverity::Info,
+                    format!("Mock rig frequency set to {frequency_hz} Hz"),
+                    Some(json!(&rig_state)),
+                    None,
+                ));
+            }
+            Err(error) => {
+                return json_response_with_status(
+                    400,
+                    &json!({"ok": false, "error": error.to_string()}),
+                )
+            }
+        }
+    }
+    if let Some(mode) = request
+        .mode
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        match state
+            .proposal_runtime
+            .block_on(state.rig_provider.set_mode(rig_id, mode))
+        {
+            Ok(rig_state) => {
+                latest_state = Some(rig_state.clone());
+                let _ = state.proposal_runtime.block_on(publish_rig_runtime_event(
+                    &state.bridge,
+                    state.bridge.status().device_id,
+                    "rig.mode.changed",
+                    RuntimeEventSeverity::Info,
+                    format!("Mock rig mode set to {}", mode.trim().to_ascii_uppercase()),
+                    Some(json!(&rig_state)),
+                    None,
+                ));
+            }
+            Err(error) => {
+                return json_response_with_status(
+                    400,
+                    &json!({"ok": false, "error": error.to_string()}),
+                )
+            }
+        }
+    }
+    if let Some(ptt) = request.ptt {
+        match state
+            .proposal_runtime
+            .block_on(state.rig_provider.set_ptt(rig_id, ptt))
+        {
+            Ok(rig_state) => {
+                latest_state = Some(rig_state.clone());
+                let _ = state.proposal_runtime.block_on(publish_rig_runtime_event(
+                    &state.bridge,
+                    state.bridge.status().device_id,
+                    "rig.ptt.changed",
+                    RuntimeEventSeverity::Info,
+                    if ptt {
+                        "Mock rig PTT on"
+                    } else {
+                        "Mock rig PTT off"
+                    },
+                    Some(json!(&rig_state)),
+                    None,
+                ));
+            }
+            Err(error) => {
+                return json_response_with_status(
+                    400,
+                    &json!({"ok": false, "error": error.to_string()}),
+                )
+            }
+        }
+    }
+    let _ = state.proposal_runtime.block_on(publish_rig_runtime_event(
+        &state.bridge,
+        state.bridge.status().device_id,
+        "rig.command.sent",
+        RuntimeEventSeverity::Debug,
+        "Mock rig command applied",
+        Some(json!({"rig_id": rig_id})),
+        None,
+    ));
+    json_response(&json!({
+        "ok": true,
+        "state": latest_state,
+        "status": rig_status_payload(state)
+    }))
+}
+
+fn rig_status_payload(state: &AppState) -> RigStatusPayload {
+    let config = state
+        .rig_config
+        .lock()
+        .expect("rig config mutex should not be poisoned")
+        .clone();
+    let devices = state
+        .proposal_runtime
+        .block_on(state.rig_provider.list_supported_rigs());
+    let active_state = devices
+        .iter()
+        .find(|device| device.connection_status == RigConnectionStatus::Connected)
+        .and_then(|device| {
+            state
+                .proposal_runtime
+                .block_on(state.rig_provider.get_state(device.rig_id))
+                .ok()
+        });
+    let provider_status = state
+        .proposal_runtime
+        .block_on(state.rig_provider.provider_status());
+    let connected_count = devices
+        .iter()
+        .filter(|device| device.connection_status == RigConnectionStatus::Connected)
+        .count();
+    let autofill_suggestion = active_state.as_ref().map(suggestion_from_rig_state);
+    RigStatusPayload {
+        config,
+        devices,
+        active_state,
+        provider_status,
+        connected_count,
+        autofill_suggestion,
+    }
+}
+
 fn qso_projection_payload(state: &AppState, query: &str) -> ApiQsoPayload {
     let include_deleted = parse_query(query)
         .get("include_deleted")
@@ -797,6 +1129,7 @@ fn handle_qso_create(state: &AppState, body: &[u8]) -> Vec<u8> {
         payload["notes"] = json!(notes);
     }
     apply_accepted_lookup_fields(&mut payload, &request);
+    apply_accepted_rig_fields(&mut payload, &request);
 
     submit_gui_proposal(state, PROPOSAL_QSO_CREATE, None, payload)
 }
@@ -836,6 +1169,7 @@ fn handle_qso_create_with_activation(state: &AppState, body: &[u8]) -> Vec<u8> {
         payload["notes"] = json!(notes);
     }
     apply_accepted_lookup_fields(&mut payload, &request);
+    apply_accepted_rig_fields(&mut payload, &request);
     if let Some(active) = active {
         payload["activation_id"] = json!(active.activation_id);
         if let Some(kind) = active
@@ -957,6 +1291,29 @@ fn apply_accepted_lookup_fields(payload: &mut Value, request: &CreateQsoRequest)
     }
     if let Some(fields) = &request.enriched_fields {
         payload["enriched_fields"] = json!(fields);
+    }
+}
+
+fn apply_accepted_rig_fields(payload: &mut Value, request: &CreateQsoRequest) {
+    if let Some(submode) = request
+        .submode
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        payload["submode"] = json!(submode.trim().to_ascii_uppercase());
+    }
+    if let Some(source) = request
+        .rig_source
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        payload["rig_source"] = json!(source);
+    }
+    if let Some(rig_id) = request.rig_id {
+        payload["rig_id"] = json!(rig_id);
+    }
+    if let Some(fields) = &request.rig_enriched_fields {
+        payload["rig_enriched_fields"] = json!(fields);
     }
 }
 

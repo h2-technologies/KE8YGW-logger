@@ -6,6 +6,7 @@ pub mod event;
 pub mod lookup;
 pub mod projection;
 pub mod proposal;
+pub mod rig;
 pub mod runtime_log;
 pub mod store;
 
@@ -29,6 +30,11 @@ pub use projection::{
 };
 pub use proposal::{
     submit_proposal, OperatorRole, ProposalContext, ProposalOutcome, ProposalValidationError,
+};
+pub use rig::{
+    apply_rig_suggestion_to_form, infer_band, publish_rig_runtime_event, suggestion_from_rig_state,
+    HamlibProviderStub, MockRigProvider, RigAutofillSuggestion, RigConnectionStatus,
+    RigConnectionType, RigDevice, RigError, RigProvider, RigProviderStatus, RigState,
 };
 pub use runtime_log::{
     default_log_directory, RuntimeJsonlLogWriter, RuntimeLogConfig, DEFAULT_RUNTIME_LOG_MAX_BYTES,

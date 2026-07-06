@@ -9,6 +9,8 @@ const state = {
   activeActivation: null,
   lookupSuggestion: null,
   acceptedLookupFields: null,
+  rigStatus: null,
+  acceptedRigFields: null,
   qsoError: "",
   importSummary: null,
   syncState: null,
@@ -41,6 +43,7 @@ async function boot() {
   renderWorkspaceSelector();
   await refreshQsos();
   await refreshActivations();
+  await refreshRigStatus();
   await refreshSyncState();
   render();
   startRuntimeEventPolling();
@@ -86,7 +89,9 @@ function render() {
   byId("status-workspace").textContent = `Workspace: ${workspace.title}`;
   byId("status-plugins").textContent = `Plugins: ${state.plugins.filter((plugin) => plugin.enabled).length} enabled`;
   byId("status-bus").textContent = `Event bus: ${state.busConnected ? "connected" : "disconnected"}`;
-  byId("status-sync").textContent = `Sync: ${state.runtimeStatus?.sync_state || "Local only"}`;
+  const rigState = state.rigStatus?.active_state;
+  const rigLabel = rigState ? `${rigState.frequency_hz || "freq?"} Hz ${rigState.mode || ""}` : "none";
+  byId("status-sync").textContent = `Sync: ${state.runtimeStatus?.sync_state || "Local only"} / Rig: ${rigLabel}`;
   byId("status-events").textContent = `Runtime events: ${state.runtimeStatus?.runtime_event_count || state.runtimeEvents.length}`;
   byId("status-errors").textContent = `Errors: ${state.runtimeStatus?.latest_error_count || 0}`;
   byId("status-sync-peers").textContent = `Discovery: ${state.syncState?.discovery_running ? "running" : "stopped"} / ${state.syncState?.peers?.length || 0} peers / ${state.syncState?.warning_count || 0} warnings`;
@@ -148,7 +153,7 @@ function panelContent(panel) {
     case "sync-status":
       return renderSyncStatus();
     case "rig-control":
-      return `<p>Rig control plugin surface placeholder.</p><button class="toolbar-button" disabled>Connect Rig</button>`;
+      return renderRigControl();
     case "map-placeholder":
       return `<p>Map and activation geography placeholder. Future plugin should provide map tiles and overlays.</p>`;
     case "dx-cluster":
@@ -232,6 +237,11 @@ function runCommand(commandId) {
   if (command.id === "lookup.callsign") lookupCallsignFromPrompt();
   if (command.id === "lookup.cache.clear") clearLookupCache();
   if (command.id === "lookup.provider-status") showLookupProviderStatus();
+  if (command.id === "rig.connect") connectRig();
+  if (command.id === "rig.disconnect") disconnectRig();
+  if (command.id === "rig.refresh-state") refreshRigState();
+  if (command.id === "rig.use-frequency-mode") acceptRigSuggestion(true);
+  if (command.id === "rig.open-panel") switchWorkspace("casual-logger");
   if (command.id === "activation.start-pota") startActivationFromPrompt("pota");
   if (command.id === "activation.start-sota") startActivationFromPrompt("sota");
   if (command.id === "activation.end-current") endCurrentActivation();
@@ -331,7 +341,7 @@ function renderPluginManager() {
 }
 
 function renderSettings() {
-  const sections = ["General", "Appearance", "Callsign/Profile", "Sync", "Lookup/Enrichment", "Plugins", "Diagnostics", "Keyboard Shortcuts"];
+  const sections = ["General", "Appearance", "Callsign/Profile", "Sync", "Lookup/Enrichment", "Rig Control", "Plugins", "Diagnostics", "Keyboard Shortcuts"];
   return `<div class="settings-grid">
     ${sections
       .map((section) =>
@@ -339,9 +349,23 @@ function renderSettings() {
           ? `<article class="settings-card"><h3>${section}</h3>${renderCloudSettings()}</article>`
           : section === "Lookup/Enrichment"
             ? `<article class="settings-card"><h3>${section}</h3>${renderLookupSettings()}</article>`
+          : section === "Rig Control"
+            ? `<article class="settings-card"><h3>${section}</h3>${renderRigSettings()}</article>`
           : `<article class="settings-card"><h3>${section}</h3><p class="muted">Placeholder settings surface.</p></article>`,
       )
       .join("")}
+  </div>`;
+}
+
+function renderRigSettings() {
+  const config = state.rigStatus?.config || {};
+  return `<div class="qso-form">
+    <label>Rig Control Enabled <input type="checkbox" ${config.enable_rig_control !== false ? "checked" : ""} disabled /></label>
+    <label>Default Provider <input class="placeholder-control" value="${config.default_provider || "mock"}" disabled /></label>
+    <label>Polling Interval ms <input class="placeholder-control" value="${config.polling_interval_ms || 1000}" disabled /></label>
+    <label>Auto Fill From Rig <input type="checkbox" ${config.auto_fill_from_rig !== false ? "checked" : ""} disabled /></label>
+    <label>Hamlib Host/Port <input class="placeholder-control" value="${config.hamlib_endpoint || "127.0.0.1:4532"}" disabled /></label>
+    <label>Serial Settings <input class="placeholder-control" value="${config.serial_settings_placeholder || "planned"}" disabled /></label>
   </div>`;
 }
 
@@ -435,6 +459,8 @@ function bindPanelControls() {
     qsoForm.addEventListener("submit", submitQsoCreate);
     byId("lookup-callsign-button")?.addEventListener("click", () => lookupCallsign(byId("callsign-entry-input")?.value || ""));
     byId("accept-lookup-button")?.addEventListener("click", acceptLookupSuggestion);
+    byId("use-rig-button")?.addEventListener("click", () => acceptRigSuggestion(true));
+    byId("refresh-rig-button")?.addEventListener("click", refreshRigState);
   }
   const activationForm = byId("activation-start-form");
   if (activationForm) activationForm.addEventListener("submit", submitActivationStart);
@@ -442,7 +468,14 @@ function bindPanelControls() {
   if (portableForm) portableForm.addEventListener("submit", submitPortableQsoCreate);
   byId("portable-lookup-button")?.addEventListener("click", () => lookupCallsign(byId("portable-callsign-input")?.value || ""));
   byId("portable-accept-lookup-button")?.addEventListener("click", acceptLookupSuggestion);
+  byId("portable-use-rig-button")?.addEventListener("click", () => acceptRigSuggestion(true));
+  byId("portable-refresh-rig-button")?.addEventListener("click", refreshRigState);
   byId("activation-end-button")?.addEventListener("click", endCurrentActivation);
+  byId("rig-connect-button")?.addEventListener("click", connectRig);
+  byId("rig-disconnect-button")?.addEventListener("click", disconnectRig);
+  byId("rig-refresh-button")?.addEventListener("click", refreshRigState);
+  byId("rig-use-button")?.addEventListener("click", () => acceptRigSuggestion(true));
+  byId("rig-mock-apply-button")?.addEventListener("click", applyMockRigSettings);
 
   document.querySelectorAll("[data-qso-action]").forEach((button) => {
     button.addEventListener("click", () => {
@@ -526,6 +559,43 @@ async function exportVisibleRuntimeEvents() {
   URL.revokeObjectURL(url);
 }
 
+function renderRigControl() {
+  const status = state.rigStatus;
+  if (!status) return `<p class="muted">Rig state loading.</p>`;
+  const device = status.devices?.[0] || {};
+  const rig = status.active_state || {};
+  return `<div class="qso-form">
+    <label>Provider
+      <select class="placeholder-control" aria-label="Rig provider" disabled>
+        <option selected>MockRigProvider</option>
+        <option>HamlibProviderStub</option>
+      </select>
+    </label>
+    <p><strong>${device.display_name || "Mock HF Rig"}</strong><br /><small>${device.provider || "mock"} / ${device.connection_type || "mock"}</small></p>
+    <p>Status: ${device.connection_status || "disconnected"}</p>
+    <p>Frequency: ${rig.frequency_hz || "unknown"} Hz</p>
+    <p>Band / Mode: ${rig.band || "unknown"} / ${rig.mode || "unknown"} ${rig.submode || ""}</p>
+    <p>Split: ${rig.split_enabled ? "on" : "off"} / PTT: ${rig.ptt ? "on" : "off"}</p>
+    <p>Last update: ${rig.timestamp ? new Date(rig.timestamp).toLocaleTimeString() : "never"}</p>
+    ${device.error ? `<p class="event-error">${device.error}</p>` : ""}
+    <div class="monitor-actions">
+      <button id="rig-connect-button" class="toolbar-button" type="button">Connect</button>
+      <button id="rig-disconnect-button" class="toolbar-button" type="button">Disconnect</button>
+      <button id="rig-refresh-button" class="toolbar-button" type="button">Refresh</button>
+      <button id="rig-use-button" class="toolbar-button" type="button" ${status.autofill_suggestion ? "" : "disabled"}>Use In Logger</button>
+    </div>
+    <label>Mock Frequency Hz
+      <input id="rig-mock-frequency" class="placeholder-control" inputmode="numeric" value="${rig.frequency_hz || 14250000}" />
+    </label>
+    <label>Mock Mode
+      <input id="rig-mock-mode" class="placeholder-control" value="${rig.mode || "SSB"}" />
+    </label>
+    <label>Mock PTT <input id="rig-mock-ptt" type="checkbox" ${rig.ptt ? "checked" : ""} /></label>
+    <button id="rig-mock-apply-button" class="toolbar-button" type="button">Apply Mock State</button>
+    <p class="muted">Hamlib is represented by a build-safe stub for now; no radio hardware is required.</p>
+  </div>`;
+}
+
 function renderCallsignEntry() {
   return `<form id="qso-create-form" class="qso-form">
       <label>Contacted callsign
@@ -537,14 +607,19 @@ function renderCallsignEntry() {
       </div>
       ${renderLookupSuggestion()}
       <label>Mode
-        <input name="mode" class="placeholder-control" aria-label="Mode" placeholder="SSB" required />
+        <input name="mode" class="placeholder-control" aria-label="Mode" placeholder="SSB" value="${state.acceptedRigFields?.mode || ""}" required />
       </label>
       <label>Frequency Hz
-        <input name="frequency_hz" class="placeholder-control" aria-label="Frequency Hz" placeholder="14250000" inputmode="numeric" />
+        <input name="frequency_hz" class="placeholder-control" aria-label="Frequency Hz" placeholder="14250000" inputmode="numeric" value="${state.acceptedRigFields?.frequency_hz || ""}" />
       </label>
       <label>Band
-        <input name="band" class="placeholder-control" aria-label="Band" placeholder="20m" />
+        <input name="band" class="placeholder-control" aria-label="Band" placeholder="20m" value="${state.acceptedRigFields?.band || ""}" />
       </label>
+      <div class="monitor-actions">
+        <button id="refresh-rig-button" class="toolbar-button" type="button">Refresh Rig</button>
+        <button id="use-rig-button" class="toolbar-button" type="button" ${state.rigStatus?.autofill_suggestion ? "" : "disabled"}>Use Rig Frequency/Mode</button>
+      </div>
+      ${renderRigSuggestion()}
       <label>Notes
         <input name="notes" class="placeholder-control" aria-label="Notes" placeholder="Optional note" />
       </label>
@@ -622,9 +697,14 @@ function renderPortableLoggerEntry() {
         <button id="portable-accept-lookup-button" class="toolbar-button" type="button" ${state.lookupSuggestion ? "" : "disabled"}>Accept Suggestions</button>
       </div>
       ${renderLookupSuggestion()}
-      <label>Mode <input name="mode" class="placeholder-control" value="SSB" required /></label>
-      <label>Band <input name="band" class="placeholder-control" placeholder="20m" /></label>
-      <label>Frequency Hz <input name="frequency_hz" class="placeholder-control" inputmode="numeric" /></label>
+      <label>Mode <input name="mode" class="placeholder-control" value="${state.acceptedRigFields?.mode || "SSB"}" required /></label>
+      <label>Band <input name="band" class="placeholder-control" placeholder="20m" value="${state.acceptedRigFields?.band || ""}" /></label>
+      <label>Frequency Hz <input name="frequency_hz" class="placeholder-control" inputmode="numeric" value="${state.acceptedRigFields?.frequency_hz || ""}" /></label>
+      <div class="monitor-actions">
+        <button id="portable-refresh-rig-button" class="toolbar-button" type="button">Refresh Rig</button>
+        <button id="portable-use-rig-button" class="toolbar-button" type="button" ${state.rigStatus?.autofill_suggestion ? "" : "disabled"}>Use Rig Frequency/Mode</button>
+      </div>
+      ${renderRigSuggestion()}
       <label>Notes <input name="notes" class="placeholder-control" /></label>
       <button class="toolbar-button" type="submit">Submit Portable QSO</button>
     </form>`;
@@ -638,6 +718,16 @@ function renderLookupSuggestion() {
     <p><strong>${suggestion.normalized_callsign}</strong> from ${suggestion.provider} (${Math.round((suggestion.confidence || 0) * 100)}%)</p>
     <p>${fields.name || ""} ${fields.qth || ""}</p>
     <p>${fields.grid || ""} ${fields.country || ""} ${fields.dxcc ? `DXCC ${fields.dxcc}` : ""}</p>
+  </div>`;
+}
+
+function renderRigSuggestion() {
+  const suggestion = state.rigStatus?.autofill_suggestion;
+  if (!suggestion) return `<p class="muted">Connect or refresh a rig to suggest frequency, band, and mode.</p>`;
+  return `<div class="sync-summary">
+    <p><strong>Rig suggestion</strong> from ${suggestion.source}</p>
+    <p>${suggestion.frequency_hz || "unknown"} Hz / ${suggestion.band || "unknown"} / ${suggestion.mode || "unknown"} ${suggestion.submode || ""}</p>
+    <p class="muted">${state.acceptedRigFields ? "Accepted into this form. Submit to create an official QSO proposal." : "Advisory only until accepted."}</p>
   </div>`;
 }
 
@@ -681,6 +771,10 @@ async function refreshActivations() {
   state.activeActivation = payload.active_activation;
 }
 
+async function refreshRigStatus() {
+  state.rigStatus = await fetch("/api/rig/status").then((response) => response.json());
+}
+
 async function submitQsoCreate(event) {
   event.preventDefault();
   const form = new FormData(event.currentTarget);
@@ -692,6 +786,7 @@ async function submitQsoCreate(event) {
     notes: form.get("notes")?.toString() || "",
     frequency_hz: frequency ? Number(frequency) : null,
     ...(state.acceptedLookupFields || {}),
+    ...(state.acceptedRigFields || {}),
   };
   const response = await fetch("/api/qso/create", {
     method: "POST",
@@ -707,8 +802,10 @@ async function submitQsoCreate(event) {
   }
   await refreshQsos();
   await refreshActivations();
+  await refreshRigStatus();
   await refreshRuntimeEvents();
   state.acceptedLookupFields = null;
+  state.acceptedRigFields = null;
   state.lookupSuggestion = null;
   render();
 }
@@ -727,13 +824,16 @@ async function submitPortableQsoCreate(event) {
       notes: form.get("notes")?.toString() || "",
       frequency_hz: frequency ? Number(frequency) : null,
       ...(state.acceptedLookupFields || {}),
+      ...(state.acceptedRigFields || {}),
     }),
   });
   event.currentTarget.reset();
   await refreshQsos();
   await refreshActivations();
+  await refreshRigStatus();
   await refreshRuntimeEvents();
   state.acceptedLookupFields = null;
+  state.acceptedRigFields = null;
   state.lookupSuggestion = null;
   render();
 }
@@ -778,6 +878,60 @@ async function clearLookupCache() {
 async function showLookupProviderStatus() {
   state.importSummary = await fetch("/api/lookup/status").then((response) => response.json());
   openScreen("import-summary");
+}
+
+async function connectRig() {
+  await fetch("/api/rig/connect", { method: "POST" });
+  await refreshRigStatus();
+  await refreshRuntimeEvents();
+  render();
+}
+
+async function disconnectRig() {
+  await fetch("/api/rig/disconnect", { method: "POST" });
+  state.acceptedRigFields = null;
+  await refreshRigStatus();
+  await refreshRuntimeEvents();
+  render();
+}
+
+async function refreshRigState() {
+  await fetch("/api/rig/refresh", { method: "POST" });
+  await refreshRigStatus();
+  await refreshRuntimeEvents();
+  render();
+}
+
+async function applyMockRigSettings() {
+  const frequency = byId("rig-mock-frequency")?.value?.trim();
+  const mode = byId("rig-mock-mode")?.value?.trim();
+  await fetch("/api/rig/mock/set", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      frequency_hz: frequency ? Number(frequency) : null,
+      mode: mode || null,
+      ptt: Boolean(byId("rig-mock-ptt")?.checked),
+    }),
+  });
+  await refreshRigStatus();
+  await refreshRuntimeEvents();
+  render();
+}
+
+function acceptRigSuggestion(explicit = false) {
+  const suggestion = state.rigStatus?.autofill_suggestion;
+  if (!suggestion) return;
+  state.acceptedRigFields = {
+    frequency_hz: suggestion.frequency_hz || null,
+    band: suggestion.band || null,
+    mode: suggestion.mode || null,
+    submode: suggestion.submode || null,
+    rig_source: explicit ? "rig/manual-refresh" : suggestion.source,
+    rig_id: suggestion.rig_id || null,
+    rig_enriched_fields: suggestion.suggested_fields || [],
+  };
+  render();
 }
 
 async function submitActivationStart(event) {

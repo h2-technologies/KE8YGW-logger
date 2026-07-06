@@ -57,6 +57,13 @@ pub enum PluginCapability {
     LookupCacheWrite,
     NetworkExternalLookup,
     QsoSuggestFields,
+    RigView,
+    RigControlFrequency,
+    RigControlMode,
+    RigControlPtt,
+    RigControlSplit,
+    RigReadState,
+    RigConfigure,
     Other(String),
 }
 
@@ -81,6 +88,13 @@ impl PluginCapability {
             Self::LookupCacheWrite => "cache.lookup.write",
             Self::NetworkExternalLookup => "network.external.lookup",
             Self::QsoSuggestFields => "log.qso.suggest_fields",
+            Self::RigView => "rig.view",
+            Self::RigControlFrequency => "rig.control.frequency",
+            Self::RigControlMode => "rig.control.mode",
+            Self::RigControlPtt => "rig.control.ptt",
+            Self::RigControlSplit => "rig.control.split",
+            Self::RigReadState => "rig.read.state",
+            Self::RigConfigure => "rig.configure",
             Self::Other(value) => value,
         }
     }
@@ -120,6 +134,13 @@ impl<'de> Deserialize<'de> for PluginCapability {
             "cache.lookup.write" => Self::LookupCacheWrite,
             "network.external.lookup" => Self::NetworkExternalLookup,
             "log.qso.suggest_fields" => Self::QsoSuggestFields,
+            "rig.view" => Self::RigView,
+            "rig.control.frequency" => Self::RigControlFrequency,
+            "rig.control.mode" => Self::RigControlMode,
+            "rig.control.ptt" => Self::RigControlPtt,
+            "rig.control.split" => Self::RigControlSplit,
+            "rig.read.state" => Self::RigReadState,
+            "rig.configure" => Self::RigConfigure,
             _ => Self::Other(value),
         })
     }

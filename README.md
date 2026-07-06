@@ -203,6 +203,70 @@ Current limitations: QRZ, HamQTH, FCC/ULS lookup, DXCC database updates,
 distance/bearing display, award-needed hints, and auto-accept trusted lookups are
 future work.
 
+## Rig Control And Frequency Autofill Plugin
+
+`plugin.rig-control` provides the first radio/device integration layer. Rig
+state is advisory runtime data: it can populate logger forms, but it never writes
+official QSO events directly. Submitted QSOs still go through the normal
+`proposal.qso.create` validation path.
+
+Provider architecture:
+
+- `RigProvider` defines list/connect/disconnect/state subscription and control
+  commands for frequency, mode, and PTT.
+- `MockRigProvider` is enabled for GUI/dev/tests and requires no hardware.
+- `HamlibProviderStub` documents the Hamlib integration point without requiring
+  Hamlib to be installed for builds or CI.
+
+Current plugin permissions:
+
+- `rig.view`
+- `rig.control.frequency`
+- `rig.control.mode`
+- `rig.control.ptt`
+- `rig.control.split`
+- `rig.read.state`
+- `rig.configure`
+- `log.qso.suggest_fields`
+
+Runtime rig events include:
+
+- `rig.provider.loaded`
+- `rig.connect.started`
+- `rig.connect.succeeded`
+- `rig.connect.failed`
+- `rig.disconnected`
+- `rig.state.changed`
+- `rig.frequency.changed`
+- `rig.mode.changed`
+- `rig.ptt.changed`
+- `rig.command.sent`
+- `rig.command.failed`
+- `rig.autofill.suggestion.created`
+
+The core includes a band inference helper for common HF/VHF/UHF amateur bands:
+160m, 80m, 60m, 40m, 30m, 20m, 17m, 15m, 12m, 10m, 6m, 2m, 1.25m, and 70cm.
+Regional band-plan validation is future work.
+
+Logger workflow:
+
+1. Open Casual Logger or POTA/SOTA.
+2. Use the Rig Control panel to connect the mock rig.
+3. Optionally adjust the mock frequency/mode and apply the mock state.
+4. Click `Refresh Rig` or `Use Rig Frequency/Mode` in the logger.
+5. Submit the QSO. Accepted rig frequency, band, mode, submode, and safe source
+   metadata flow through the normal QSO proposal payload.
+
+The Rig Control settings section exposes MVP placeholders for enablement,
+default provider, polling interval, auto-fill behavior, Hamlib host/port, and
+serial CAT settings. The status bar shows the active rig frequency/mode when a
+rig is connected.
+
+Current limitations: Hamlib is a build-safe stub, serial CAT and TCP CAT are not
+implemented, and multiple rigs are modeled but the GUI uses one active rig for
+autofill. Future work includes full Hamlib support, serial/TCP CAT, rotors,
+amplifiers, tuners, SO2R, and band-plan validation.
+
 ## Durable Local Persistence
 
 The MVP durable official event store is JSON Lines. Each official event is

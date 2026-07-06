@@ -100,6 +100,35 @@ impl CommandRegistry {
                 None,
                 None,
             ),
+            command("rig.connect", "Connect Rig", "Rig Control", None, None),
+            command(
+                "rig.disconnect",
+                "Disconnect Rig",
+                "Rig Control",
+                None,
+                None,
+            ),
+            command(
+                "rig.refresh-state",
+                "Refresh Rig State",
+                "Rig Control",
+                None,
+                None,
+            ),
+            command(
+                "rig.use-frequency-mode",
+                "Use Rig Frequency/Mode",
+                "Rig Control",
+                None,
+                None,
+            ),
+            command(
+                "rig.open-panel",
+                "Open Rig Control Panel",
+                "Rig Control",
+                None,
+                Some(WorkspaceId::CasualLogger),
+            ),
             command(
                 "activation.start-pota",
                 "Start POTA Activation",
@@ -350,6 +379,11 @@ mod tests {
         assert!(ids.contains(&"adif.export"));
         assert!(ids.contains(&"lookup.callsign"));
         assert!(ids.contains(&"lookup.cache.clear"));
+        assert!(ids.contains(&"rig.connect"));
+        assert!(ids.contains(&"rig.disconnect"));
+        assert!(ids.contains(&"rig.refresh-state"));
+        assert!(ids.contains(&"rig.use-frequency-mode"));
+        assert!(ids.contains(&"rig.open-panel"));
         assert!(ids.contains(&"activation.start-pota"));
         assert!(ids.contains(&"activation.export-adif"));
         assert!(ids.contains(&"official-log.verify-chain"));
