@@ -12,13 +12,15 @@ use std::{
 use ham_core::{
     build_diagnostic_bundle, default_official_event_log_path, default_service_registry,
     export_adif, export_adif_with_activations, export_diagnostic_zip, export_net_report_markdown,
-    import_adif, lookup_callsign_with_service_framework, publish_rig_runtime_event,
-    submit_proposal, suggestion_from_rig_state, AdifImportOptions, CoreEventEnvelope,
-    CredentialMetadata, CredentialStore, DiagnosticBundleInput, DiagnosticReportType,
-    EquipmentItem, EquipmentType, InsecureDevCredentialStore, JsonPermissionGrantStore,
-    JsonStationBookStore, JsonlLogbookEventStore, LocalPrefixProvider, LogbookEventStore,
-    LookupCache, LookupCacheConfig, LookupProviderStatus, MockRigProvider, NetControlProjection,
-    NewLogbookEvent, OperatorRole, PermissionGrantSet, PermissionGrantStatus, PermissionRegistry,
+    grayline_snapshot, import_adif, lookup_callsign_with_service_framework,
+    maidenhead_to_coordinate, mock_propagation_forecast, mock_weather, publish_rig_runtime_event,
+    qso_map_objects, station_markers_from_profiles, submit_proposal, suggestion_from_rig_state,
+    AdifImportOptions, Coordinate, CoreEventEnvelope, CredentialMetadata, CredentialStore,
+    DiagnosticBundleInput, DiagnosticReportType, EquipmentItem, EquipmentType,
+    InsecureDevCredentialStore, JsonPermissionGrantStore, JsonStationBookStore,
+    JsonlLogbookEventStore, LocalPrefixProvider, LogbookEventStore, LookupCache, LookupCacheConfig,
+    LookupProviderStatus, MapLayerStack, MockRigProvider, NetControlProjection, NewLogbookEvent,
+    OperatorRole, PermissionGrantSet, PermissionGrantStatus, PermissionRegistry,
     PermissionSettings, Projection, ProposalContext, RigConnectionStatus, RigDevice, RigProvider,
     RigProviderStatus, RigState, RuntimeEventFilter, RuntimeEventSeverity, RuntimeLogConfig,
     ServiceCache, ServiceRegistry, ServiceRegistrySnapshot, StationBook, StationConfiguration,
@@ -235,6 +237,7 @@ fn main() {
         lookup_config: Mutex::new(LookupUiConfig::default()),
         service_registry: Mutex::new(default_service_registry()),
         service_cache: ServiceCache::new(),
+        map_layers: Mutex::new(MapLayerStack::default_layers()),
         rig_provider: MockRigProvider::default(),
         rig_config: Mutex::new(RigUiConfig::default()),
         station_store,
@@ -269,6 +272,7 @@ struct AppState {
     lookup_config: Mutex<LookupUiConfig>,
     service_registry: Mutex<ServiceRegistry>,
     service_cache: ServiceCache,
+    map_layers: Mutex<MapLayerStack>,
     rig_provider: MockRigProvider,
     rig_config: Mutex<RigUiConfig>,
     station_store: JsonStationBookStore,
@@ -501,6 +505,8 @@ fn handle_client(state: Arc<AppState>, mut stream: TcpStream) {
         ("GET", "/api/search") => handle_search(&state, query),
         ("GET", "/api/uploads") => handle_uploads(&state),
         ("POST", "/api/uploads/queue") => handle_upload_queue_create(&state, &request.body),
+        ("GET", "/api/maps/state") => handle_map_state(&state),
+        ("POST", "/api/maps/layer/toggle") => handle_map_layer_toggle(&state, &request.body),
         ("GET", "/api/net-control") => handle_net_control_state(&state),
         ("POST", "/api/net/session/start") => handle_net_session_start(&state, &request.body),
         ("POST", "/api/net/session/end") => handle_net_session_end(&state, &request.body),
@@ -867,6 +873,12 @@ struct ServiceCacheClearRequest {
 }
 
 #[derive(Debug, Deserialize)]
+struct MapLayerToggleRequest {
+    layer_id: String,
+    enabled: bool,
+}
+
+#[derive(Debug, Deserialize)]
 struct HandshakePeerRequest {
     peer_id: Option<String>,
 }
@@ -1205,8 +1217,15 @@ fn maps_manifest() -> PluginManifest {
         env!("CARGO_PKG_VERSION"),
         vec![PluginCapability::MapView, PluginCapability::MapConfigure],
     );
-    manifest.description = "Map tiles and geocoding provider placeholders.".to_owned();
-    manifest.contributed_panels = vec!["map-placeholder".to_owned()];
+    manifest.description =
+        "GIS map workspace, layers, markers, overlays, tiles, and geocoding providers.".to_owned();
+    manifest.contributed_panels = vec![
+        "interactive-map".to_owned(),
+        "map-layers".to_owned(),
+        "map-selected-object".to_owned(),
+        "map-search".to_owned(),
+        "map-filters".to_owned(),
+    ];
     manifest.contributed_services = vec![ServiceType::MapTiles, ServiceType::Geocoding];
     manifest
 }
@@ -1219,6 +1238,7 @@ fn weather_manifest() -> PluginManifest {
         vec![PluginCapability::WeatherView],
     );
     manifest.description = "NOAA/Open-Meteo/manual weather provider placeholders.".to_owned();
+    manifest.contributed_panels = vec!["weather".to_owned()];
     manifest.contributed_services = vec![ServiceType::Weather];
     manifest
 }
@@ -1231,6 +1251,7 @@ fn propagation_manifest() -> PluginManifest {
         vec![PluginCapability::PropagationView],
     );
     manifest.description = "Solar, MUF, grayline, and VOACAP provider placeholders.".to_owned();
+    manifest.contributed_panels = vec!["propagation".to_owned()];
     manifest.contributed_services = vec![ServiceType::Propagation];
     manifest
 }
@@ -2529,6 +2550,155 @@ fn handle_upload_queue_create(state: &AppState, body: &[u8]) -> Vec<u8> {
         None,
     );
     json_response(&json!({"ok": true, "job": job, "adif_preview": adif}))
+}
+
+fn handle_map_state(state: &AppState) -> Vec<u8> {
+    if let Err(response) = ensure_gui_permission(
+        state,
+        &maps_manifest(),
+        PluginCapability::MapView,
+        "Map view permission check",
+    ) {
+        return response;
+    }
+
+    let projection = current_qso_projection(state);
+    let station_book = state
+        .station_book
+        .lock()
+        .expect("station book mutex should not be poisoned")
+        .clone();
+    let active_station_coordinate = station_book
+        .active_profile()
+        .and_then(|profile| profile.default_grid.as_deref())
+        .and_then(|grid| maidenhead_to_coordinate(grid).ok());
+    let qso_objects = qso_map_objects(&projection, active_station_coordinate, None);
+    let station_profiles = station_book
+        .profiles
+        .iter()
+        .filter_map(|profile| serde_json::to_value(profile).ok())
+        .collect::<Vec<_>>();
+    let station_markers = station_markers_from_profiles(&station_profiles);
+    let layers = state
+        .map_layers
+        .lock()
+        .expect("map layers mutex should not be poisoned")
+        .clone();
+    let enabled_layer = layers
+        .layers
+        .iter()
+        .filter(|layer| layer.enabled)
+        .min_by_key(|layer| layer.order)
+        .map(|layer| layer.title.clone())
+        .unwrap_or_else(|| "none".to_owned());
+    let status_coordinate = active_station_coordinate
+        .or_else(|| {
+            qso_objects
+                .iter()
+                .map(|object| object.marker.coordinate)
+                .next()
+        })
+        .unwrap_or(Coordinate {
+            latitude: 0.0,
+            longitude: 0.0,
+        });
+    let status_grid = ham_core::encode_maidenhead(status_coordinate, 6).unwrap_or_else(|_| {
+        active_station_coordinate
+            .and_then(|coordinate| ham_core::encode_maidenhead(coordinate, 4).ok())
+            .unwrap_or_else(|| "unknown".to_owned())
+    });
+    let selected_distance = qso_objects
+        .iter()
+        .find_map(|object| object.distance.as_ref())
+        .map(|distance| format!("{:.0} km", distance.kilometers))
+        .unwrap_or_else(|| "n/a".to_owned());
+    let selected_bearing = qso_objects
+        .iter()
+        .find_map(|object| object.bearing.as_ref())
+        .map(|bearing| format!("{:.0} deg", bearing.initial_degrees))
+        .unwrap_or_else(|| "n/a".to_owned());
+    let providers = service_registry_snapshot(state)
+        .providers
+        .into_iter()
+        .filter(|provider| {
+            matches!(
+                provider.metadata.service_type,
+                ServiceType::MapTiles
+                    | ServiceType::Geocoding
+                    | ServiceType::Weather
+                    | ServiceType::Propagation
+            )
+        })
+        .collect::<Vec<_>>();
+    let _ = publish_gui_runtime(
+        state,
+        "map.loaded",
+        RuntimeEventSeverity::Info,
+        "Map state loaded",
+        Some(json!({
+            "qso_markers": qso_objects.len(),
+            "station_markers": station_markers.len(),
+            "enabled_layers": layers.layers.iter().filter(|layer| layer.enabled).count()
+        })),
+        None,
+    );
+
+    json_response(&json!({
+        "providers": providers,
+        "layers": layers,
+        "qso_objects": qso_objects,
+        "station_markers": station_markers,
+        "grayline": grayline_snapshot(chrono::Utc::now()).ok(),
+        "propagation": mock_propagation_forecast(),
+        "weather": mock_weather(status_coordinate),
+        "status": {
+            "grid": status_grid,
+            "coordinates": {
+                "latitude": status_coordinate.latitude,
+                "longitude": status_coordinate.longitude
+            },
+            "distance": selected_distance,
+            "bearing": selected_bearing,
+            "zoom": "4",
+            "selected_layer": enabled_layer
+        }
+    }))
+}
+
+fn handle_map_layer_toggle(state: &AppState, body: &[u8]) -> Vec<u8> {
+    if let Err(response) = ensure_gui_permission(
+        state,
+        &maps_manifest(),
+        PluginCapability::MapConfigure,
+        "Map layer configure permission check",
+    ) {
+        return response;
+    }
+    let Ok(request) = serde_json::from_slice::<MapLayerToggleRequest>(body) else {
+        return json_error(400, "invalid map layer toggle JSON");
+    };
+    {
+        let mut layers = state
+            .map_layers
+            .lock()
+            .expect("map layers mutex should not be poisoned");
+        if let Err(error) = layers.set_enabled(&request.layer_id, request.enabled) {
+            return json_error(400, error.to_string());
+        }
+    }
+    let _ = publish_gui_runtime(
+        state,
+        if request.enabled {
+            "map.layer.enabled"
+        } else {
+            "map.layer.disabled"
+        },
+        RuntimeEventSeverity::Info,
+        "Map layer visibility changed",
+        Some(json!({"layer_id": request.layer_id, "enabled": request.enabled})),
+        None,
+    );
+    handle_map_state(state)
 }
 
 fn handle_net_control_state(state: &AppState) -> Vec<u8> {

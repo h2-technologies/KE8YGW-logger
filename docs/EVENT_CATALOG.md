@@ -270,6 +270,23 @@ Runtime event categories are dotted strings. Current and planned category roots:
 - `net.traffic.created`
 - `net.report.exported`
 
+### Maps, Weather, and Propagation
+
+- `map.loaded`
+- `map.layer.enabled`
+- `map.layer.disabled`
+- `map.marker.selected`
+- `map.center.changed`
+- `grid.converted`
+- `distance.calculated`
+- `bearing.calculated`
+- `grayline.updated`
+- `grayline.recalculated`
+- `propagation.updated`
+- `solar.updated`
+- `band.conditions.updated`
+- `weather.updated`
+
 ## Catalog Rules
 
 - Every official state change must add an official event and projection update path.

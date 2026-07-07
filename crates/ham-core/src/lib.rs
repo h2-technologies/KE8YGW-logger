@@ -7,6 +7,7 @@ pub mod credential;
 pub mod diagnostics;
 pub mod event;
 pub mod lookup;
+pub mod map;
 pub mod net;
 pub mod permissions;
 pub mod projection;
@@ -49,6 +50,17 @@ pub use lookup::{
     validate_grid, CallsignLookupProvider, EntityInfo, GridInfo, LocalPrefixProvider, LookupCache,
     LookupCacheConfig, LookupError, LookupProviderStatus, LookupResult, LookupSuggestion,
     MockLookupProvider, QrzLookupProviderStub,
+};
+pub use map::{
+    bearing_between, encode_maidenhead, final_bearing, grayline_snapshot, great_circle_distance,
+    great_circle_midpoint, great_circle_path, grid_precision, maidenhead_bounds,
+    maidenhead_to_coordinate, map_provider_metadata, mock_propagation_forecast, mock_weather,
+    neighbor_grids, normalize_maidenhead, publish_map_runtime_event, qso_map_objects,
+    station_markers_from_profiles, validate_maidenhead, BandConditions, BearingResult, Coordinate,
+    CurrentWeather, DistanceResult, DistanceUnit, ElevationResult, Forecast, GeoBounds, GeoPath,
+    GeoPoint, GeoPolygon, GraylineSnapshot, GridSquare, MapError, MapLayer, MapLayerKind,
+    MapLayerStack, MapMarker, MapMarkerType, MapOverlay, MapProvider, PlaceholderMapProvider,
+    PropagationForecast, QsoMapFilter, QsoMapObject, SolarConditions, Wind,
 };
 pub use net::{
     export_net_report_markdown, NetCheckInRecord, NetCheckInStatus, NetControlProjection,

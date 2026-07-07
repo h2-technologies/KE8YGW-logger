@@ -484,6 +484,62 @@ impl CommandRegistry {
                 Some(WorkspaceId::NetControl),
             ),
             command(
+                "map.open",
+                "Open Map",
+                "Maps",
+                None,
+                Some(WorkspaceId::Maps),
+            ),
+            command(
+                "map.layers.toggle",
+                "Toggle Layers",
+                "Maps",
+                None,
+                Some(WorkspaceId::Maps),
+            ),
+            command(
+                "map.center.home",
+                "Center Home Station",
+                "Maps",
+                None,
+                Some(WorkspaceId::Maps),
+            ),
+            command(
+                "map.center.activation",
+                "Center Active Activation",
+                "Maps",
+                None,
+                Some(WorkspaceId::Maps),
+            ),
+            command(
+                "map.center.selected-qso",
+                "Center Selected QSO",
+                "Maps",
+                None,
+                Some(WorkspaceId::Maps),
+            ),
+            command(
+                "map.grayline.toggle",
+                "Toggle Grayline",
+                "Maps",
+                None,
+                Some(WorkspaceId::Maps),
+            ),
+            command(
+                "map.distance.recalculate",
+                "Recalculate Distance",
+                "Maps",
+                None,
+                Some(WorkspaceId::Maps),
+            ),
+            command(
+                "propagation.open",
+                "Open Propagation",
+                "Propagation",
+                None,
+                Some(WorkspaceId::Maps),
+            ),
+            command(
                 "sync.discovery.start",
                 "Start LAN Discovery",
                 "Sync",
@@ -709,5 +765,8 @@ mod tests {
         assert!(ids.contains(&"net.open"));
         assert!(ids.contains(&"net.session.start"));
         assert!(ids.contains(&"net.report.export"));
+        assert!(ids.contains(&"map.open"));
+        assert!(ids.contains(&"map.grayline.toggle"));
+        assert!(ids.contains(&"propagation.open"));
     }
 }

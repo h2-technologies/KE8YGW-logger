@@ -17,20 +17,23 @@ This root roadmap summarizes the current implementation plan. Detailed architect
 - Daily Driver Logging foundation: station/equipment profiles, award engine, advanced search, upload queue, and keyboard-first logging commands.
 - Secure Credential Storage abstraction with OS-keychain placeholder, explicit dev fallback, provider credential references, and Credential Manager UI.
 - Net Control MVP: sessions, check-ins, traffic queue, tombstone deletes, report export events, projection, workspace panels, and commands.
+- Mapping and Propagation Framework: GIS models, Maidenhead grid engine, great-circle math, map provider model, map layers, markers, QSO/station visualization, grayline, mock propagation/weather, and Maps workspace panels.
 
 ## Current Milestone
 
-Secure Credential Storage and Net Control MVP are now implemented at foundation level. The app can manage safe credential metadata/backend status and can run a directed net workflow through proposal-backed official events.
+Mapping and Propagation Framework is now implemented at foundation level. The app can derive map state from station profiles and QSO projections, expose provider-backed map/weather/propagation metadata, toggle map layers, and show map status in the GUI.
 
 ## Recommended Next Milestone
 
-Maps + propagation, then real online service integrations:
+Online Services Integration:
 
-- Map workspace and provider-backed offline/online tile surfaces.
-- Propagation panels using solar/grayline/MUF provider skeletons.
-- Weather overlays for portable and EmComm workflows.
 - LoTW/eQSL/Club Log/QRZ real upload providers.
 - QRZ/HamQTH real lookup providers.
+- DX Cluster live feed.
+- POTA spots.
+- SOTAWatch.
+- Real propagation and weather providers.
+- Automatic upload queue processing.
 - Native OS keychain/secret-store backend implementation.
 
 ## Future Milestones

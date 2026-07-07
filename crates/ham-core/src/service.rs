@@ -33,6 +33,14 @@ pub const CAP_SPOTTING_SOTA: &str = "spotting.sota";
 pub const CAP_SPOTTING_RBN: &str = "spotting.rbn";
 pub const CAP_MAP_TILES_ONLINE: &str = "map.tiles.online";
 pub const CAP_MAP_TILES_OFFLINE: &str = "map.tiles.offline";
+pub const CAP_MAP_VECTOR: &str = "map.vector";
+pub const CAP_MAP_RASTER: &str = "map.raster";
+pub const CAP_MAP_GEOCODING: &str = "map.geocoding";
+pub const CAP_MAP_REVERSE_GEOCODING: &str = "map.reverse_geocoding";
+pub const CAP_MAP_ROUTING_PLACEHOLDER: &str = "map.routing.placeholder";
+pub const CAP_MAP_TERRAIN: &str = "map.terrain";
+pub const CAP_MAP_ELEVATION: &str = "map.elevation";
+pub const CAP_MAP_OVERLAYS: &str = "map.overlays";
 pub const CAP_WEATHER_CURRENT: &str = "weather.current";
 pub const CAP_WEATHER_FORECAST: &str = "weather.forecast";
 pub const CAP_PROPAGATION_SOLAR_INDICES: &str = "propagation.solar_indices";
@@ -910,8 +918,11 @@ pub fn default_service_registry() -> ServiceRegistry {
         MockSpottingProvider::default().metadata(),
         map_provider_metadata("local-map-stub", "Local Map Stub", true, false),
         map_provider_metadata("osm-stub", "OpenStreetMap Stub", false, true),
+        map_provider_metadata("mock-map", "Mock Map Provider", true, false),
         weather_provider_metadata("manual-weather-stub", "Manual Weather Stub", true, false),
+        weather_provider_metadata("mock-weather", "Mock Weather Provider", true, false),
         propagation_provider_metadata("mock-propagation", "Mock Propagation Provider"),
+        propagation_provider_metadata("voacap-stub", "VOACAP Placeholder"),
     ] {
         let _ = registry.register_provider(metadata);
     }
@@ -991,11 +1002,24 @@ fn map_provider_metadata(
         display_name,
         "0.1.0",
         "plugin.maps",
-        vec![if offline {
-            CAP_MAP_TILES_OFFLINE.to_owned()
-        } else {
-            CAP_MAP_TILES_ONLINE.to_owned()
-        }],
+        vec![
+            if offline {
+                CAP_MAP_TILES_OFFLINE.to_owned()
+            } else {
+                CAP_MAP_TILES_ONLINE.to_owned()
+            },
+            if offline {
+                CAP_MAP_VECTOR.to_owned()
+            } else {
+                CAP_MAP_RASTER.to_owned()
+            },
+            CAP_MAP_GEOCODING.to_owned(),
+            CAP_MAP_REVERSE_GEOCODING.to_owned(),
+            CAP_MAP_ROUTING_PLACEHOLDER.to_owned(),
+            CAP_MAP_TERRAIN.to_owned(),
+            CAP_MAP_ELEVATION.to_owned(),
+            CAP_MAP_OVERLAYS.to_owned(),
+        ],
         vec![PluginCapability::MapView],
         if offline { 50 } else { 40 },
         offline,

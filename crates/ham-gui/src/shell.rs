@@ -6,6 +6,7 @@ pub enum WorkspaceId {
     Dashboard,
     CasualLogger,
     PotaSota,
+    Maps,
     Awards,
     NetControl,
     EmComm,
@@ -13,10 +14,11 @@ pub enum WorkspaceId {
 }
 
 impl WorkspaceId {
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 8] = [
         Self::Dashboard,
         Self::CasualLogger,
         Self::PotaSota,
+        Self::Maps,
         Self::Awards,
         Self::NetControl,
         Self::EmComm,
@@ -28,6 +30,7 @@ impl WorkspaceId {
             Self::Dashboard => "Dashboard",
             Self::CasualLogger => "Casual Logger",
             Self::PotaSota => "POTA/SOTA",
+            Self::Maps => "Maps",
             Self::Awards => "Awards",
             Self::NetControl => "Net Control",
             Self::EmComm => "EmComm",
@@ -155,8 +158,58 @@ pub fn default_panel_registry() -> Vec<PanelDefinition> {
             [
                 WorkspaceId::Dashboard,
                 WorkspaceId::PotaSota,
+                WorkspaceId::Maps,
                 WorkspaceId::EmComm,
             ],
+        ),
+        panel(
+            "interactive-map",
+            "Interactive Map",
+            "plugin.maps",
+            ["map.view"],
+            [WorkspaceId::Maps],
+        ),
+        panel(
+            "map-layers",
+            "Layers",
+            "plugin.maps",
+            ["map.view"],
+            [WorkspaceId::Maps],
+        ),
+        panel(
+            "map-selected-object",
+            "Selected Object",
+            "plugin.maps",
+            ["map.view"],
+            [WorkspaceId::Maps],
+        ),
+        panel(
+            "map-search",
+            "Map Search",
+            "plugin.maps",
+            ["map.view"],
+            [WorkspaceId::Maps],
+        ),
+        panel(
+            "map-filters",
+            "Map Filters",
+            "plugin.maps",
+            ["map.view"],
+            [WorkspaceId::Maps],
+        ),
+        panel(
+            "propagation",
+            "Propagation",
+            "plugin.propagation",
+            ["propagation.view"],
+            [WorkspaceId::Maps, WorkspaceId::Dashboard],
+        ),
+        panel(
+            "weather",
+            "Weather",
+            "plugin.weather",
+            ["weather.view"],
+            [WorkspaceId::Maps, WorkspaceId::EmComm],
         ),
         panel(
             "activation-setup",
@@ -328,6 +381,7 @@ fn workspace_description(id: WorkspaceId) -> &'static str {
         WorkspaceId::Dashboard => "Operational overview and platform health.",
         WorkspaceId::CasualLogger => "General QSO entry and recent contact context.",
         WorkspaceId::PotaSota => "Activation planning, map context, and portable logging.",
+        WorkspaceId::Maps => "Map, propagation, weather, grid, and station geography.",
         WorkspaceId::Awards => "Award progress, advanced search, and upload queue context.",
         WorkspaceId::NetControl => "Directed net workflow placeholders.",
         WorkspaceId::EmComm => "Emergency communications coordination placeholders.",
@@ -362,6 +416,16 @@ fn default_layout(id: WorkspaceId) -> WorkspaceLayout {
             place("rig-control", PanelRegion::RightInspector, 20),
             place("activation-recent-qsos", PanelRegion::Bottom, 10),
             place("spots-alerts", PanelRegion::Bottom, 20),
+        ],
+        WorkspaceId::Maps => vec![
+            place("interactive-map", PanelRegion::Center, 10),
+            place("map-search", PanelRegion::Center, 20),
+            place("map-layers", PanelRegion::RightInspector, 10),
+            place("map-selected-object", PanelRegion::RightInspector, 20),
+            place("station-summary", PanelRegion::RightInspector, 30),
+            place("map-filters", PanelRegion::Bottom, 10),
+            place("propagation", PanelRegion::Bottom, 20),
+            place("weather", PanelRegion::Bottom, 30),
         ],
         WorkspaceId::Awards => vec![
             place("awards-summary", PanelRegion::Center, 10),
@@ -432,7 +496,11 @@ mod tests {
         let decoded: GuiShellState = serde_json::from_str(&encoded).unwrap();
 
         assert_eq!(decoded.active_workspace, WorkspaceId::Dashboard);
-        assert_eq!(decoded.workspaces.len(), 7);
+        assert_eq!(decoded.workspaces.len(), 8);
+        assert!(decoded
+            .workspaces
+            .iter()
+            .any(|workspace| workspace.id == WorkspaceId::Maps));
     }
 
     #[test]
@@ -449,5 +517,7 @@ mod tests {
         assert!(ids.contains(&"event-bus-monitor"));
         assert!(ids.contains(&"callsign-entry"));
         assert!(ids.contains(&"activation-setup"));
+        assert!(ids.contains(&"interactive-map"));
+        assert!(ids.contains(&"map-layers"));
     }
 }

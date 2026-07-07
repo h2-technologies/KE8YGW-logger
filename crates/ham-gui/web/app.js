@@ -5,6 +5,7 @@ const state = {
   serviceProviders: { providers: [], preferred_providers: {} },
   credentials: null,
   netControl: null,
+  mapState: null,
   permissionState: null,
   runtimeEvents: [],
   runtimeStatus: null,
@@ -59,6 +60,7 @@ async function boot() {
   await refreshUploads();
   await refreshCredentials();
   await refreshNetControl();
+  await refreshMapState();
   await refreshActivations();
   await refreshRigStatus();
   await refreshSyncState();
@@ -124,6 +126,13 @@ function render() {
   byId("status-events").textContent = `Runtime events: ${state.runtimeStatus?.runtime_event_count || state.runtimeEvents.length}`;
   byId("status-errors").textContent = `Errors: ${state.runtimeStatus?.latest_error_count || 0}`;
   byId("status-sync-peers").textContent = `Discovery: ${state.syncState?.discovery_running ? "running" : "stopped"} / ${state.syncState?.peers?.length || 0} peers / ${state.syncState?.warning_count || 0} warnings`;
+  const mapStatus = state.mapState?.status || {};
+  byId("status-map-grid").textContent = `Grid: ${mapStatus.grid || "unknown"}`;
+  byId("status-map-coordinates").textContent = `Coords: ${formatCoordinate(mapStatus.coordinates)}`;
+  byId("status-map-distance").textContent = `Distance: ${mapStatus.distance || "n/a"}`;
+  byId("status-map-bearing").textContent = `Bearing: ${mapStatus.bearing || "n/a"}`;
+  byId("status-map-zoom").textContent = `Zoom: ${mapStatus.zoom || "n/a"}`;
+  byId("status-map-layer").textContent = `Layer: ${mapStatus.selected_layer || "none"}`;
 
   document.querySelectorAll(".activity-item").forEach((button) => {
     button.classList.toggle("is-active", button.dataset.workspace === state.activeWorkspace);
@@ -175,6 +184,20 @@ function panelContent(panel) {
       return renderGlobalSearch();
     case "uploads":
       return renderUploads();
+    case "interactive-map":
+      return renderInteractiveMap();
+    case "map-layers":
+      return renderMapLayers();
+    case "map-selected-object":
+      return renderMapSelectedObject();
+    case "map-search":
+      return renderMapSearch();
+    case "map-filters":
+      return renderMapFilters();
+    case "propagation":
+      return renderPropagation();
+    case "weather":
+      return renderWeather();
     case "event-bus-monitor":
       return renderEventBusMonitor();
     case "activation-setup":
@@ -210,7 +233,7 @@ function panelContent(panel) {
     case "rig-control":
       return renderRigControl();
     case "map-placeholder":
-      return `<p>Map and activation geography placeholder. Future plugin should provide map tiles and overlays.</p>`;
+      return renderInteractiveMap();
     case "dx-cluster":
       return `<p>DX cluster feed placeholder. Network integrations stay plugin-owned.</p>`;
     case "ai-assistant":
@@ -317,6 +340,14 @@ function runCommand(commandId) {
   if (command.id === "uploads.open") openScreen("uploads");
   if (command.id === "uploads.queue-not-uploaded") queueNotUploadedQsos();
   if (command.id === "uploads.export-adif") exportAdifFromPrompt();
+  if (command.id === "map.open") switchWorkspace("maps");
+  if (command.id === "map.layers.toggle") switchWorkspace("maps");
+  if (command.id === "map.center.home") refreshMapState().then(() => switchWorkspace("maps"));
+  if (command.id === "map.center.activation") refreshMapState().then(() => switchWorkspace("maps"));
+  if (command.id === "map.center.selected-qso") refreshMapState().then(() => switchWorkspace("maps"));
+  if (command.id === "map.grayline.toggle") toggleMapLayer("grayline");
+  if (command.id === "map.distance.recalculate") refreshMapState().then(render);
+  if (command.id === "propagation.open") switchWorkspace("maps");
   if (command.id === "logger.submit-qso") byId("qso-create-form")?.requestSubmit();
   if (command.id === "logger.clear-form") clearQsoForm();
   if (command.id === "logger.use-rig-frequency") acceptRigSuggestion(true);
@@ -867,6 +898,10 @@ function bindPanelControls() {
       runQsoAction(button.dataset.qsoAction, button.dataset.qsoId);
     });
   });
+  document.querySelectorAll("[data-map-layer]").forEach((control) => {
+    control.addEventListener("change", () => toggleMapLayer(control.dataset.mapLayer, control.checked));
+  });
+  byId("map-refresh-button")?.addEventListener("click", () => refreshMapState().then(render));
 
   document.querySelectorAll("[data-peer-id]").forEach((button) => {
     button.addEventListener("click", () => {
@@ -1344,6 +1379,133 @@ function renderRecentQsos() {
       })
       .join("")}
   </div>`;
+}
+
+function renderInteractiveMap() {
+  const map = state.mapState;
+  if (!map) return `<p class="muted">Map state is loading.</p>`;
+  const qsoMarkers = (map.qso_objects || []).filter((object) => object.marker);
+  const paths = (map.qso_objects || []).filter((object) => object.path);
+  const activeLayers = (map.layers?.layers || []).filter((layer) => layer.enabled);
+  return `<div class="map-canvas" role="img" aria-label="Operator map preview">
+      <div class="map-grid-lines"></div>
+      <div class="map-hud">
+        <strong>${map.status?.grid || "Grid unknown"}</strong>
+        <span>${formatCoordinate(map.status?.coordinates)}</span>
+        <span>${qsoMarkers.length} QSO markers / ${paths.length} paths</span>
+      </div>
+      <div class="map-marker-cloud">
+        ${qsoMarkers
+          .slice(0, 12)
+          .map((object, index) => `<span class="map-dot" style="left:${12 + ((index * 17) % 76)}%;top:${18 + ((index * 29) % 64)}%" title="${object.marker.title}"></span>`)
+          .join("")}
+        ${(map.station_markers || [])
+          .slice(0, 6)
+          .map((marker, index) => `<span class="map-dot station-dot" style="left:${45 + index * 5}%;top:${42 + index * 4}%" title="${marker.title}"></span>`)
+          .join("")}
+      </div>
+    </div>
+    <div class="metric-grid">
+      <span>Distance ${map.status?.distance || "n/a"}</span>
+      <span>Bearing ${map.status?.bearing || "n/a"}</span>
+      <span>Zoom ${map.status?.zoom || "n/a"}</span>
+      <span>Layer ${map.status?.selected_layer || "none"}</span>
+    </div>
+    <p class="muted">Enabled layers: ${activeLayers.map((layer) => layer.title).join(", ") || "none"}</p>
+    <button id="map-refresh-button" class="toolbar-button" type="button">Refresh Map State</button>`;
+}
+
+function renderMapLayers() {
+  const layers = state.mapState?.layers?.layers || [];
+  if (!layers.length) return `<p class="muted">No map layers are registered.</p>`;
+  return `<div class="stack">${layers
+    .sort((left, right) => left.order - right.order)
+    .map((layer) => `<label class="check-row">
+      <input type="checkbox" data-map-layer="${layer.layer_id}" ${layer.enabled ? "checked" : ""} />
+      <span><strong>${layer.title}</strong><br /><small>${layer.kind} / ${layer.source_plugin_id}</small></span>
+    </label>`)
+    .join("")}</div>`;
+}
+
+function renderMapSelectedObject() {
+  const selected = (state.mapState?.qso_objects || []).find((object) => object.marker) || null;
+  if (!selected) return `<p class="muted">Select a mapped QSO or station to inspect it.</p>`;
+  const marker = selected.marker;
+  return `<div class="sync-summary">
+    <p><strong>${marker.title}</strong></p>
+    <p>${marker.description}</p>
+    <p>Grid: ${selected.grid || "unknown"} / Entity: ${selected.entity || "unknown"}</p>
+    <p>Distance: ${selected.distance ? `${selected.distance.kilometers.toFixed(1)} km` : "n/a"}</p>
+    <p>Bearing: ${selected.bearing ? `${selected.bearing.initial_degrees.toFixed(0)} deg` : "n/a"}</p>
+    <p>Layer: ${marker.layer_id}</p>
+  </div>`;
+}
+
+function renderMapSearch() {
+  const providers = (state.mapState?.providers || []).filter((provider) => provider.metadata?.service_type === "geocoding");
+  return `<label>Map Search
+      <input class="placeholder-control" type="search" placeholder="Grid, callsign, park, summit, or place" aria-label="Map search" />
+    </label>
+    <p class="muted">Geocoding providers: ${providers.map((provider) => provider.metadata.display_name).join(", ") || "none"}</p>`;
+}
+
+function renderMapFilters() {
+  return `<div class="filter-grid">
+    <label>Band<input class="placeholder-control" placeholder="20m" /></label>
+    <label>Mode<input class="placeholder-control" placeholder="FT8" /></label>
+    <label>Date<input class="placeholder-control" placeholder="2026-07-01..2026-07-06" /></label>
+    <label>Entity<input class="placeholder-control" placeholder="Japan" /></label>
+  </div>
+  <p class="muted">Filters are modeled for QSO, station, activation, and future APRS/satellite overlays.</p>`;
+}
+
+function renderPropagation() {
+  const forecast = state.mapState?.propagation;
+  if (!forecast) return `<p class="muted">Propagation data is unavailable.</p>`;
+  return `<div class="metric-grid">
+      <span>SFI ${forecast.solar?.sfi ?? "n/a"}</span>
+      <span>A ${forecast.solar?.a_index ?? "n/a"}</span>
+      <span>K ${forecast.solar?.k_index ?? "n/a"}</span>
+      <span>X-ray ${forecast.solar?.xray_class || "n/a"}</span>
+    </div>
+    <div class="qso-list">${(forecast.bands || [])
+      .map((band) => `<article class="qso-row"><strong>${band.band}</strong><span>${band.day_rating} day / ${band.night_rating} night</span><small>${band.notes || ""}</small></article>`)
+      .join("")}</div>`;
+}
+
+function renderWeather() {
+  const weather = state.mapState?.weather;
+  if (!weather) return `<p class="muted">Weather data is unavailable.</p>`;
+  return `<div class="metric-grid">
+      <span>${weather.temperature_c ?? "n/a"} C</span>
+      <span>${weather.wind?.speed_kph ?? "n/a"} kph ${weather.wind?.direction_degrees ?? ""} deg</span>
+      <span>${weather.conditions || "unknown"}</span>
+      <span>${weather.provider_id}</span>
+    </div>
+    <p class="muted">Lightning and radar overlays are placeholders for future providers.</p>`;
+}
+
+function formatCoordinate(coordinate) {
+  if (!coordinate) return "unknown";
+  const lat = Number(coordinate.latitude).toFixed(3);
+  const lon = Number(coordinate.longitude).toFixed(3);
+  return `${lat}, ${lon}`;
+}
+
+async function refreshMapState() {
+  state.mapState = await fetch("/api/maps/state").then((response) => response.json());
+}
+
+async function toggleMapLayer(layerId, enabled = null) {
+  const layer = (state.mapState?.layers?.layers || []).find((candidate) => candidate.layer_id === layerId);
+  const nextEnabled = enabled ?? !layer?.enabled;
+  state.mapState = await fetch("/api/maps/layer/toggle", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ layer_id: layerId, enabled: nextEnabled }),
+  }).then((response) => response.json());
+  await refreshRuntimeEvents();
+  render();
 }
 
 async function refreshQsos(includeDeleted = false) {

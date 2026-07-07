@@ -52,9 +52,9 @@ Each pass should ship a vertical slice across core, GUI or client models, tests,
     - Station/equipment profiles, award engine foundation, advanced search/filtering, upload queue foundation, keyboard-first logging improvements.
     - Status: implemented at foundation level. Real online providers, durable upload queue settings, and full award databases remain planned.
 
-13. **Net Control + EmComm MVP**
-    - Net roster/check-ins/traffic queue, ICS-213/214/205/309 models, tactical callsigns, exports, EmComm workspace.
-    - Status: planned.
+13. **Secure Credentials + Net Control MVP**
+    - Credential store abstraction, OS keychain placeholder, explicit dev fallback, credential manager UI, net roster/check-ins/traffic queue, tactical callsigns, and reports.
+    - Status: implemented at foundation level. ICS exports and EmComm workspace remain planned.
 
 14. **Contesting MVP**
     - Contest framework, exchange templates, dupes, scoring, multiplier projections, Cabrillo export, keyboard-first contest workspace, Field Day template.
@@ -62,7 +62,7 @@ Each pass should ship a vertical slice across core, GUI or client models, tests,
 
 15. **Maps/Propagation + Polish**
     - Map plugin framework, Maidenhead overlays, great-circle/bearing, grayline placeholder, layout editor, theme polish, performance pass, migrations, v1.0 hardening.
-    - Status: planned; map/weather/propagation provider skeletons now exist.
+    - Status: implemented at foundation level. Full tile/vector renderer and live providers remain planned.
 
 ## Dependency Order
 
@@ -72,4 +72,4 @@ The next high-impact work should minimize future rewrites:
 2. Add durable self-hosted sync/report storage before public tester use.
 3. Add real peer-to-peer LAN transport and trust pairing before unattended sync.
 4. Add role/account/session models before broad multi-operator workflows.
-5. Build real online service integrations on top of the service framework: LoTW, eQSL, Club Log, QRZ Logbook, QRZ/HamQTH lookup, and OS keychain/secret-store credentials.
+5. Build real online service integrations on top of the service framework: QRZ XML API, HamQTH, LoTW, eQSL, Club Log, QRZ Logbook, DX Cluster, POTA spots, SOTAWatch, real propagation/weather providers, automatic upload processing, and OS keychain/secret-store credentials.

@@ -31,6 +31,16 @@ passes should start with these documents:
   and saved-search model.
 - [Upload Queue](docs/architecture/upload-queue.md): provider-backed ADIF upload
   queue foundation.
+- [Maps](docs/maps/README.md): GIS service framework, map layers, markers, and
+  QSO/station visualization.
+- [Grid System](docs/grid-system/README.md): Maidenhead validation, conversion,
+  distance, bearing, and bounds helpers.
+- [Propagation](docs/propagation/README.md): provider-backed solar, band
+  condition, grayline, and MUF placeholders.
+- [Weather](docs/weather/README.md): provider-backed current weather and
+  forecast model.
+- [Map Providers](docs/plugin-map-providers/README.md): plugin guide for map,
+  weather, propagation, geocoding, and overlay providers.
 - [Provider Development](docs/plugins/provider-development.md): how plugins add
   lookup, upload, spotting, map, weather, and propagation providers.
 - [Credentials and Redaction](docs/security/credentials-and-redaction.md):
@@ -164,6 +174,36 @@ The workspace includes:
 
 Deleted check-ins are tombstone events and are hidden from normal roster
 projection views by default. See [Net Control Plugin](docs/plugins/net-control.md).
+
+## Mapping and Propagation Framework
+
+The Maps workspace is now backed by `ham-core::map`, a reusable GIS foundation
+for logging, POTA/SOTA, awards, APRS, satellites, weather, propagation, Net
+Control, EmComm, and remote-station workflows.
+
+The map consumes core projections and service providers. It does not own
+business logic and does not write official log events. QSO markers and paths are
+derived from QSO projections, station markers come from station profiles, and
+weather/propagation data flows through provider-backed service models.
+
+Implemented foundations:
+
+- Maidenhead grid validation, normalization, encode/decode, bounds, precision,
+  and neighbors.
+- Great-circle distance, initial/final bearing, midpoint, and path generation.
+- Map providers for offline placeholder, OpenStreetMap placeholder, and mock
+  data through the Unified Service Framework.
+- Map layers for stations, QSOs, routes, POTA, SOTA, grid overlay, grayline,
+  propagation, weather, and satellite placeholders.
+- Marker models for station, operator, QSO, park, summit, repeater, incident,
+  weather, and satellite objects.
+- Grayline snapshot model and mock propagation/weather providers.
+- Maps workspace panels for Interactive Map, Layers, Selected Object,
+  Propagation, Weather, Search, Filters, and Station Summary.
+
+Run `cargo run -p ham-gui`, open the printed local URL, and choose the Maps
+workspace. The status bar shows current grid, coordinates, distance, bearing,
+zoom, and selected layer.
 
 ## Official QSO Workflow
 

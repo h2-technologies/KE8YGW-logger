@@ -207,6 +207,73 @@ input {
   font-size: 14px;
 }
 
+.map-canvas {
+  position: relative;
+  min-height: 300px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+  background:
+    linear-gradient(90deg, rgba(89, 195, 166, 0.08) 1px, transparent 1px),
+    linear-gradient(0deg, rgba(89, 195, 166, 0.08) 1px, transparent 1px),
+    #111316;
+  background-size: 42px 42px;
+}
+
+.map-hud {
+  position: absolute;
+  left: 12px;
+  top: 12px;
+  display: grid;
+  gap: 4px;
+  max-width: calc(100% - 24px);
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(17, 19, 22, 0.86);
+  color: var(--text);
+}
+
+.map-dot {
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  border: 2px solid #111316;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 4px rgba(89, 195, 166, 0.18);
+}
+
+.station-dot {
+  width: 16px;
+  height: 16px;
+  background: var(--warn);
+  box-shadow: 0 0 0 4px rgba(245, 197, 111, 0.16);
+}
+
+.metric-grid,
+.filter-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.metric-grid span,
+.check-row {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #111316;
+  padding: 8px;
+}
+
+.check-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--text);
+}
+
 .placeholder-control {
   width: 100%;
   min-height: 38px;

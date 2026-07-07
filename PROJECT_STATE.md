@@ -1,10 +1,10 @@
 # Project Status
 
-Current milestone: Secure Credential Storage and Net Control MVP
+Current milestone: Mapping and Propagation Framework
 
 Current version: 0.1.0
 
-Last update timestamp: 2026-07-06T20:31:17.9365623-04:00
+Last update timestamp: 2026-07-06T20:48:31.6682950-04:00
 
 Repository health status: Healthy. Formatting, Rust check, Clippy with warnings denied, full workspace tests, GUI JavaScript syntax check, and release build passed during this session.
 
@@ -39,6 +39,12 @@ Repository health status: Healthy. Formatting, Rust check, Clippy with warnings 
 - [x] Upload queue foundation and official upload status event constants
 - [x] Secure credential storage abstraction and explicit dev fallback
 - [x] Net Control official events, proposals, validation, projection, and report export
+- [x] GIS coordinate, bounds, path, polygon, layer, marker, and overlay models
+- [x] Maidenhead grid validation, normalization, encode/decode, bounds, precision, and neighbors
+- [x] Great-circle distance, bearing, midpoint, and path generation
+- [x] QSO/station map projection helpers
+- [x] Grayline snapshot model
+- [x] Mock weather and propagation models
 - [ ] Conflict resolution UI/model
 - [ ] Cryptographic signatures
 - [ ] Durable projection cache
@@ -76,6 +82,8 @@ Repository health status: Healthy. Formatting, Rust check, Clippy with warnings 
 - [x] Uploads panel
 - [x] Credential Manager screen/panel
 - [x] Net Control workspace panels
+- [x] Maps workspace panels
+- [x] Map status bar fields
 - [x] Keyboard-first logging command foundation
 - [ ] Interactive dockable panel movement
 - [ ] Native file dialogs
@@ -113,9 +121,9 @@ Repository health status: Healthy. Formatting, Rust check, Clippy with warnings 
 - [x] Net Control MVP
 - [ ] Real LoTW/eQSL/Club Log/QRZ providers
 - [x] Net Control MVP
+- [x] Maps/propagation framework
 - [ ] EmComm
 - [ ] Contesting
-- [ ] Maps/propagation
 - [ ] AI assistant enforcement model
 
 ## Tooling and Release
@@ -146,11 +154,15 @@ The award engine computes rebuildable progress from QSO projections. Search also
 
 Net Control is a plugin-style workflow using the normal proposal pipeline. Net sessions, check-ins, traffic, tombstones, and report exports are official append-only events. `NetControlProjection` derives current roster/session/report state.
 
+The mapping framework is implemented as a core GIS/service layer. `ham-core::map` owns coordinate, grid, distance, bearing, layer, marker, grayline, weather, and propagation models. Maps consume QSO projections, station profiles, and service providers; they do not own official event writes or business workflows.
+
 Sync is split between `ham-sync` for protocol, peer, LAN/cloud models, safe replication, and in-memory server logic, plus `ham-sync-server` for the self-hosted HTTP-like server binary. LAN is preferred. Cloud/self-hosted sync is a fallback and uses the same verification rules.
 
 Storage uses append-only JSONL official events for the MVP. Runtime logs are separate rotating JSONL files. Support/config state uses lightweight JSON or in-memory state depending on subsystem maturity.
 
 The GUI is `ham-gui`, a web-first shell served by Rust. It is Tauri-ready but not yet a packaged Tauri app. It consumes core bridge APIs, projections, runtime events, service framework state, and proposal endpoints.
+
+The Maps workspace consumes `/api/maps/state` and `/api/maps/layer/toggle`. It displays derived QSO/station map objects, layer state, selected-object context, grayline, propagation, weather, and map status fields.
 
 Permissions are centralized in `ham-core::permissions`. Protected actions require plugin permission and operator role permission. Scope support is modeled but not fully enforced everywhere yet.
 
@@ -162,6 +174,7 @@ Diagnostics include runtime event logs, redaction helpers, report ZIP generation
 
 - `crates/ham-core`: event bus, official events, stores, proposals, projections, ADIF, lookup, rig, diagnostics, permissions, service framework, credential storage, Net Control, station profiles, awards, search, upload queue.
 - `crates/ham-core::credential`: credential metadata, store abstraction, OS placeholder backend, explicit insecure development fallback.
+- `crates/ham-core::map`: GIS models, Maidenhead grid engine, great-circle engine, map layers, markers, provider metadata, grayline, propagation, and weather models.
 - `crates/ham-core::net`: Net Control projection, session/check-in/traffic models, and report export.
 - `crates/ham-plugin-sdk`: plugin manifest, capabilities, service types, proposal envelope, public event constants.
 - `crates/ham-sync`: LAN discovery/handshake models, peer registry, safe replication, cloud API/client/server models, report upload models.
@@ -170,6 +183,7 @@ Diagnostics include runtime event logs, redaction helpers, report ZIP generation
 - `crates/ham-cli`: CLI commands for ADIF and chain/projection operations.
 - `docs/architecture`: service framework, station profiles, award engine, search, and upload queue architecture notes.
 - `docs/plugins`: provider development guide.
+- `docs/maps`, `docs/grid-system`, `docs/propagation`, `docs/weather`, `docs/plugin-map-providers`: mapping and provider framework documentation.
 - `docs/security`: credential and redaction guidance.
 - `justfile`: local development commands aligned with CI.
 - `ROADMAP.md`: root milestone roadmap.
@@ -193,6 +207,8 @@ Diagnostics include runtime event logs, redaction helpers, report ZIP generation
 - [ ] Add role/account/session models and UI beyond the MVP local-admin assumption.
 - [ ] Implement real LAN peer-to-peer transport for replication endpoints.
 - [ ] Add conflict/divergence review UX.
+- [ ] Add real tile/geocoding/weather/propagation providers through the map service framework.
+- [ ] Replace the map preview shell with a full interactive tile/vector renderer.
 
 ## Medium
 
@@ -203,12 +219,14 @@ Diagnostics include runtime event logs, redaction helpers, report ZIP generation
 - [ ] Add native file dialogs for import/export/report bundles.
 - [ ] Add Tauri packaging.
 - [ ] Add projection cache persistence and startup optimization.
+- [ ] Persist map layer ordering and user map preferences.
 
 ## Low
 
 - [ ] Add richer visual polish and saved layouts.
 - [ ] Add coverage reporting.
 - [ ] Add screenshot attachment support for diagnostic reports.
+- [ ] Add terrain/elevation, APRS, satellite, and radar overlays.
 
 ---
 
@@ -227,6 +245,9 @@ Diagnostics include runtime event logs, redaction helpers, report ZIP generation
 - OS keychain support is represented by an unavailable placeholder; real native backends are still required.
 - The insecure dev credential fallback is plaintext and only suitable for local testing when explicitly enabled.
 - Net Control template create/edit UI is not complete; sessions/check-ins/traffic/report are implemented first.
+- The Maps workspace currently renders a structured preview rather than full tile/vector map rendering.
+- Map provider enablement/layer ordering is in-memory in the GUI process.
+- GIS bounds do not yet include antimeridian-aware clipping.
 - JavaScript UI behavior has limited automated test coverage.
 
 ---
@@ -269,7 +290,7 @@ Diagnostics include runtime event logs, redaction helpers, report ZIP generation
 
 # Documentation Status
 
-- README: updated with daily-driver foundation and links.
+- README: updated with mapping/propagation foundation and links.
 - Root ROADMAP: present and updated.
 - Master Blueprint: complete local repository copy.
 - Event Catalog: updated for upload status event constants and daily-driver runtime event names.
@@ -285,6 +306,11 @@ Diagnostics include runtime event logs, redaction helpers, report ZIP generation
 - Credentials and Redaction: current.
 - Credential Storage: complete MVP architecture note.
 - Net Control Plugin: complete MVP plugin/workflow note.
+- Maps: complete initial architecture note.
+- Grid System: complete initial Maidenhead/great-circle note.
+- Propagation: complete initial provider/model note.
+- Weather: complete initial provider/model note.
+- Plugin Map Providers: complete initial provider author guide.
 - Developer Guide: current local workflow; daily-driver examples could be expanded.
 - API docs: Rust public item docs are partial and should be improved as APIs stabilize.
 
@@ -292,49 +318,93 @@ Diagnostics include runtime event logs, redaction helpers, report ZIP generation
 
 # Test Coverage
 
-- Core event hashing, chain verification, QSO proposals, projections, ADIF, lookup, rig, diagnostics, permissions, service framework, credential store, Net Control, station profiles, awards, search, upload queue, and sync models have unit coverage.
+- Core event hashing, chain verification, QSO proposals, projections, ADIF, lookup, rig, diagnostics, permissions, service framework, credential store, Net Control, station profiles, awards, search, upload queue, sync models, GIS models, grid conversion, great-circle math, map layers, marker serialization, provider metadata, and grayline calculations have unit coverage.
 - GUI model serialization and command/panel foundations have partial coverage.
 - JavaScript UI behavior is mostly manually verified and should gain browser-level tests.
-- Current test run: `cargo test --workspace` passed with 138 total Rust tests across crates.
+- Current test run: `cargo test --workspace` passed with 146 total Rust tests across crates.
 
 ---
 
 # Current Milestone
 
-Current objective: add safe provider credential handling and the first Net Control operating-mode workflow.
+Current objective: implement the complete Mapping and Propagation Framework foundation.
 
 Completed work:
 
-- CredentialStore abstraction, credential metadata, OS placeholder backend, explicit insecure dev fallback, provider credential references, GUI credential manager, and credential runtime events.
-- Net Control proposal/event types, validation, projection, session/check-in/traffic/report handlers, workspace panels, command palette actions, and tests.
+- GIS data models for coordinates, grid squares, points, bounds, paths, polygons, markers, layers, overlays, weather, and propagation.
+- Maidenhead grid validation, normalization, encode/decode, bounds, precision, and neighbor helpers.
+- Great-circle distance, bearing, midpoint, and path generation.
+- Map provider metadata, placeholder providers, map layer stack, QSO map objects, station markers, grayline snapshot, and mock weather/propagation.
+- Maps workspace panels, map layer toggle endpoint, map status bar fields, and command palette actions.
 
 Remaining work:
 
-- Implement real OS keychain backends.
-- Add Net Control templates UI, report file exports, and ICS-309 export.
+- Add a real tile/vector renderer and persisted map preferences.
+- Implement live OSM/offline tile, geocoding, weather, propagation, satellite, APRS, and terrain/elevation providers.
+- Add browser-level GUI tests for map interactions.
 
 Expected completion criteria:
 
 - All required quality gates pass.
 - Documentation and project state are updated.
-- Credential and Net Control workflows are accessible in the GUI without bypassing proposal validation or secret redaction rules.
+- Map state is derived from core projections/service providers and remains separate from official event writes.
 
 ---
 
 # Recommended Next Milestone
 
-Maps + propagation, then real online service integrations:
+Online Services Integration:
 
-- Map workspace and provider-backed map/geocoding surfaces.
-- Propagation/weather provider panels for portable and EmComm workflows.
+- QRZ XML API and HamQTH real lookup providers.
+- LoTW upload/download, eQSL upload, Club Log upload, and QRZ Logbook upload.
+- DX Cluster live feed, POTA spots, and SOTAWatch.
+- Real propagation and weather providers.
+- Automatic upload queue processing.
 - Native OS keychain/secret-store credential backends.
-- LoTW/eQSL/Club Log/QRZ real uploads and QRZ/HamQTH real lookup.
 
-This milestone should come before deeper award/confirmation work because map/propagation context and real provider credentials shape later daily-driver and EmComm workflows.
+This milestone should come next because the provider, credential, upload, map, and service frameworks are now ready for real authenticated external integrations.
 
 ---
 
 # Changelog
+
+## 2026-07-06
+
+Summary: Added Mapping and Propagation Framework foundation with GIS models, Maidenhead and great-circle engines, provider-backed map state, layers, markers, grayline, mock propagation/weather, Maps workspace panels, and documentation.
+
+Major files changed:
+
+- `crates/ham-core/src/map.rs`
+- `crates/ham-core/src/lib.rs`
+- `crates/ham-core/src/service.rs`
+- `crates/ham-gui/src/main.rs`
+- `crates/ham-gui/src/shell.rs`
+- `crates/ham-gui/src/commands.rs`
+- `crates/ham-gui/web/app.js`
+- `crates/ham-gui/web/index.html`
+- `crates/ham-gui/web/styles.css`
+- `README.md`
+- `ROADMAP.md`
+- `docs/maps/README.md`
+- `docs/grid-system/README.md`
+- `docs/propagation/README.md`
+- `docs/weather/README.md`
+- `docs/plugin-map-providers/README.md`
+
+Architectural decisions:
+
+- The map is a core service consumer, not a business-logic owner.
+- QSO and station visualization derive from projections/support state.
+- Map, weather, and propagation providers register through the Unified Service Framework.
+- Full tile/vector rendering is deferred; the MVP exposes structured map state and a GUI shell.
+
+New plugins:
+
+- No runtime-loaded plugin was added. `plugin.maps`, `plugin.weather`, and `plugin.propagation` are static plugin-style manifests contributing panels and services.
+
+Breaking changes:
+
+- No breaking public API changes are expected beyond newly exported map/GIS types and service capabilities.
 
 ## 2026-07-06
 
