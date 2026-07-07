@@ -64,6 +64,10 @@ Each pass should ship a vertical slice across core, GUI or client models, tests,
     - Map plugin framework, Maidenhead overlays, great-circle/bearing, grayline placeholder, layout editor, theme polish, performance pass, migrations, v1.0 hardening.
     - Status: implemented at foundation level. Full tile/vector renderer and live providers remain planned.
 
+16. **Online Services Ecosystem**
+    - LoTW/eQSL/Club Log/QRZ/HRDLog provider metadata, QRZ/HamQTH/FCC lookup metadata, DX Cluster/RBN/POTA/SOTA spot models, NOAA/Open-Meteo/OSM provider metadata, upload/download engine models, confirmation import events, automation, notifications, and Online Services workspace.
+    - Status: implemented at foundation level. Live network adapters, durable scheduler execution, and production keychain backends remain planned.
+
 ## Dependency Order
 
 The next high-impact work should minimize future rewrites:
@@ -72,4 +76,4 @@ The next high-impact work should minimize future rewrites:
 2. Add durable self-hosted sync/report storage before public tester use.
 3. Add real peer-to-peer LAN transport and trust pairing before unattended sync.
 4. Add role/account/session models before broad multi-operator workflows.
-5. Build real online service integrations on top of the service framework: QRZ XML API, HamQTH, LoTW, eQSL, Club Log, QRZ Logbook, DX Cluster, POTA spots, SOTAWatch, real propagation/weather providers, automatic upload processing, and OS keychain/secret-store credentials.
+5. Build live network adapters on top of the Online Services foundation: QRZ XML API, HamQTH, LoTW, eQSL, Club Log, QRZ Logbook, DX Cluster, POTA spots, SOTAWatch, real propagation/weather providers, automatic upload processing, and OS keychain/secret-store credentials.

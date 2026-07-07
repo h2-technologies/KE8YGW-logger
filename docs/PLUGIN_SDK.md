@@ -38,7 +38,8 @@ Current permission categories include:
 - Diagnostics: `diagnostics.view_logs`, `diagnostics.export`, `diagnostics.upload`
 - Services: `service.provider.register`, `service.provider.configure`, `service.provider.enable`, `service.provider.disable`, `service.cache.read`, `service.cache.write`, `service.cache.clear`
 - Uploads: `upload.log`, `upload.confirmation_pull`, `upload.queue.manage`, `upload.status.view`, `network.external.upload`
-- Spotting/maps/weather/propagation: `spotting.view`, `spotting.configure`, `network.external.spotting`, `map.view`, `map.configure`, `weather.view`, `propagation.view`
+- Spotting/maps/weather/propagation: `spotting.view`, `spotting.configure`, `network.external.spotting`, `map.view`, `map.configure`, `network.external.map`, `weather.view`, `network.external.weather`, `propagation.view`, `network.external.propagation`
+- Automation/notifications: `automation.manage`, `notification.view`
 - Station: `station.profile.view`, `station.profile.manage`, `station.equipment.view`, `station.equipment.manage`, `station.profile.use`
 - UI/settings: `ui.panel.register`, `ui.command.register`, `settings.read`, `settings.write`
 
@@ -82,6 +83,7 @@ Provider cache entries are support data, not official events. Provider results r
 - `plugin.callsign-lookup` - advisory callsign/entity/grid lookup and cache.
 - `plugin.rig-control` - mock rig state and frequency/mode autofill.
 - `plugin.log-upload` - LoTW/eQSL/Club Log/QRZ Logbook provider stubs and upload queue permissions.
+- `plugin.online-services` - connected provider metadata, upload/download engine, confirmations, DX/POTA/SOTA spots, weather, propagation, maps, automation, and notifications.
 - `core.station` - station/equipment support state and logger defaults.
 - `core.awards` - projection-backed award progress.
 - `core.search` - projection-backed advanced QSO search.

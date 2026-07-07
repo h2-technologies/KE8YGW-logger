@@ -9,6 +9,7 @@ pub mod event;
 pub mod lookup;
 pub mod map;
 pub mod net;
+pub mod online;
 pub mod permissions;
 pub mod projection;
 pub mod proposal;
@@ -66,6 +67,19 @@ pub use net::{
     export_net_report_markdown, NetCheckInRecord, NetCheckInStatus, NetControlProjection,
     NetProjectionError, NetSessionRecord, NetSessionStatus, NetTemplate, NetTrafficLevel,
     NetTrafficPrecedence, NetTrafficRecord, NetTrafficStatus,
+};
+pub use online::{
+    append_confirmation_events, cache_provider_value, confirmations_from_adif,
+    default_online_automation_tasks, dx_cluster_spot_to_spot, execute_upload_with_provider,
+    missing_credential_status, next_retry_delay, notification_for_upload_result,
+    online_provider_metadata, online_runtime_event_payload, online_services_dashboard,
+    parse_dx_cluster_line, parse_noaa_solar_summary, pota_spot_to_spot, provider_metadata_for_kind,
+    runtime_severity_for_provider_status, upload_engine_stats, upload_execution_from_response,
+    ConfirmationDownloadRequest, ConfirmationDownloadResponse, ConfirmationRecord, DxClusterSpot,
+    NotificationSeverity, OnlineAccount, OnlineAutomationTask, OnlineNotification,
+    OnlineProviderHealth, OnlineProviderStatus, OnlineServiceError, OnlineServiceProviderKind,
+    OnlineServicesDashboard, PotaSpotRecord, RetryPolicy, SolarIndexReport, UploadEngineConfig,
+    UploadEngineStats, UploadExecutionResult,
 };
 pub use permissions::{
     check_plugin_permission, grant_builtin_defaults, JsonPermissionGrantStore, PermissionError,

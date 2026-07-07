@@ -1,10 +1,10 @@
 # Project Status
 
-Current milestone: Mapping and Propagation Framework
+Current milestone: Online Services Ecosystem
 
 Current version: 0.1.0
 
-Last update timestamp: 2026-07-06T20:48:31.6682950-04:00
+Last update timestamp: 2026-07-06T21:33:00-04:00
 
 Repository health status: Healthy. Formatting, Rust check, Clippy with warnings denied, full workspace tests, GUI JavaScript syntax check, and release build passed during this session.
 
@@ -45,6 +45,11 @@ Repository health status: Healthy. Formatting, Rust check, Clippy with warnings 
 - [x] QSO/station map projection helpers
 - [x] Grayline snapshot model
 - [x] Mock weather and propagation models
+- [x] Online Services provider metadata for logbooks, lookups, spotting, propagation, weather, and maps
+- [x] Upload engine retry, statistics, and execution result models
+- [x] Confirmation download model and official append-only confirmation status event path
+- [x] DX Cluster parser and POTA/SOTA spot normalization
+- [x] Online automation task and notification models
 - [ ] Conflict resolution UI/model
 - [ ] Cryptographic signatures
 - [ ] Durable projection cache
@@ -58,6 +63,7 @@ Repository health status: Healthy. Formatting, Rust check, Clippy with warnings 
 - [x] Service type vocabulary for provider contributions
 - [x] Station/equipment and upload queue permissions
 - [x] Credential and Net Control permissions/event constants
+- [x] Online network, automation, and notification permissions
 - [ ] Real plugin loading
 - [ ] Plugin sandboxing
 - [ ] Signed plugin packages
@@ -84,6 +90,7 @@ Repository health status: Healthy. Formatting, Rust check, Clippy with warnings 
 - [x] Net Control workspace panels
 - [x] Maps workspace panels
 - [x] Map status bar fields
+- [x] Online Services workspace panels
 - [x] Keyboard-first logging command foundation
 - [ ] Interactive dockable panel movement
 - [ ] Native file dialogs
@@ -122,6 +129,7 @@ Repository health status: Healthy. Formatting, Rust check, Clippy with warnings 
 - [ ] Real LoTW/eQSL/Club Log/QRZ providers
 - [x] Net Control MVP
 - [x] Maps/propagation framework
+- [x] Online Services ecosystem foundation
 - [ ] EmComm
 - [ ] Contesting
 - [ ] AI assistant enforcement model
@@ -144,7 +152,7 @@ The repository implements a local-first Rust workspace centered on `ham-core`. T
 
 The plugin system is currently static. Plugins are represented by manifests, requested permissions, optional permissions, contributed services, contributed panels, commands, and validation paths. Real runtime loading and sandboxing remain planned.
 
-The unified service framework provides provider metadata, registry, selection, fallback, shared service cache, service authorization, and typed service request/response models for lookup, upload, spotting, map, weather, propagation, and future integrations.
+The unified service framework provides provider metadata, registry, selection, fallback, shared service cache, service authorization, and typed service request/response models for lookup, upload, spotting, map, weather, propagation, online services, and future integrations.
 
 Credential storage is isolated behind `CredentialStore`. Credential metadata is support/security state and secret values stay behind the selected backend. The MVP has an OS keychain placeholder and an explicit opt-in insecure development file fallback.
 
@@ -156,6 +164,8 @@ Net Control is a plugin-style workflow using the normal proposal pipeline. Net s
 
 The mapping framework is implemented as a core GIS/service layer. `ham-core::map` owns coordinate, grid, distance, bearing, layer, marker, grayline, weather, and propagation models. Maps consume QSO projections, station profiles, and service providers; they do not own official event writes or business workflows.
 
+The Online Services ecosystem is implemented as a provider-backed service layer. `ham-core::online` owns connected provider metadata, upload/download engine models, confirmation records, DX/POTA/SOTA spot normalization, provider health states, automation tasks, notifications, and safe cache helpers. Live network adapters remain behind provider boundaries and must use `CredentialStore`.
+
 Sync is split between `ham-sync` for protocol, peer, LAN/cloud models, safe replication, and in-memory server logic, plus `ham-sync-server` for the self-hosted HTTP-like server binary. LAN is preferred. Cloud/self-hosted sync is a fallback and uses the same verification rules.
 
 Storage uses append-only JSONL official events for the MVP. Runtime logs are separate rotating JSONL files. Support/config state uses lightweight JSON or in-memory state depending on subsystem maturity.
@@ -163,6 +173,8 @@ Storage uses append-only JSONL official events for the MVP. Runtime logs are sep
 The GUI is `ham-gui`, a web-first shell served by Rust. It is Tauri-ready but not yet a packaged Tauri app. It consumes core bridge APIs, projections, runtime events, service framework state, and proposal endpoints.
 
 The Maps workspace consumes `/api/maps/state` and `/api/maps/layer/toggle`. It displays derived QSO/station map objects, layer state, selected-object context, grayline, propagation, weather, and map status fields.
+
+The Online Services workspace consumes `/api/online-services`. It displays accounts, providers, upload queue stats, confirmation downloads, DX/POTA/SOTA spots, weather, propagation, provider health, credential manager, service cache, automation, and notifications.
 
 Permissions are centralized in `ham-core::permissions`. Protected actions require plugin permission and operator role permission. Scope support is modeled but not fully enforced everywhere yet.
 
@@ -172,17 +184,18 @@ Diagnostics include runtime event logs, redaction helpers, report ZIP generation
 
 # Current Workspace Structure
 
-- `crates/ham-core`: event bus, official events, stores, proposals, projections, ADIF, lookup, rig, diagnostics, permissions, service framework, credential storage, Net Control, station profiles, awards, search, upload queue.
+- `crates/ham-core`: event bus, official events, stores, proposals, projections, ADIF, lookup, rig, diagnostics, permissions, service framework, online services, credential storage, Net Control, station profiles, awards, search, upload queue.
 - `crates/ham-core::credential`: credential metadata, store abstraction, OS placeholder backend, explicit insecure development fallback.
 - `crates/ham-core::map`: GIS models, Maidenhead grid engine, great-circle engine, map layers, markers, provider metadata, grayline, propagation, and weather models.
 - `crates/ham-core::net`: Net Control projection, session/check-in/traffic models, and report export.
+- `crates/ham-core::online`: online provider metadata, upload/download engine models, confirmation records, spot parsing, automation, notification, and provider health helpers.
 - `crates/ham-plugin-sdk`: plugin manifest, capabilities, service types, proposal envelope, public event constants.
 - `crates/ham-sync`: LAN discovery/handshake models, peer registry, safe replication, cloud API/client/server models, report upload models.
 - `crates/ham-sync-server`: self-hosted sync/report HTTP-like server binary.
 - `crates/ham-gui`: Rust bridge/server, GUI shell models, command registry, static web UI.
 - `crates/ham-cli`: CLI commands for ADIF and chain/projection operations.
-- `docs/architecture`: service framework, station profiles, award engine, search, and upload queue architecture notes.
-- `docs/plugins`: provider development guide.
+- `docs/architecture`: service framework, online services, station profiles, award engine, search, and upload queue architecture notes.
+- `docs/plugins`: provider and online provider development guides.
 - `docs/maps`, `docs/grid-system`, `docs/propagation`, `docs/weather`, `docs/plugin-map-providers`: mapping and provider framework documentation.
 - `docs/security`: credential and redaction guidance.
 - `justfile`: local development commands aligned with CI.
@@ -208,6 +221,8 @@ Diagnostics include runtime event logs, redaction helpers, report ZIP generation
 - [ ] Implement real LAN peer-to-peer transport for replication endpoints.
 - [ ] Add conflict/divergence review UX.
 - [ ] Add real tile/geocoding/weather/propagation providers through the map service framework.
+- [ ] Implement live network adapters for LoTW/eQSL/Club Log/QRZ/HRDLog uploads and confirmations.
+- [ ] Implement live QRZ XML, HamQTH, FCC ULS, DX Cluster, RBN, POTA, SOTAWatch, NOAA, Open-Meteo, and OSM adapters.
 - [ ] Replace the map preview shell with a full interactive tile/vector renderer.
 
 ## Medium
@@ -220,6 +235,7 @@ Diagnostics include runtime event logs, redaction helpers, report ZIP generation
 - [ ] Add Tauri packaging.
 - [ ] Add projection cache persistence and startup optimization.
 - [ ] Persist map layer ordering and user map preferences.
+- [ ] Persist upload history, provider account state, automation tasks, and notification read state.
 
 ## Low
 
@@ -242,6 +258,9 @@ Diagnostics include runtime event logs, redaction helpers, report ZIP generation
 - Upload queue state is currently in-memory in the GUI.
 - Station profile editing exists in core models but not yet as full GUI forms.
 - External provider implementations are stubs until production credential storage and live integrations are added.
+- Online Services has production-shaped provider metadata and parsers, but live network clients are not enabled yet.
+- Automation tasks are modeled but not executed by a durable scheduler.
+- Confirmation downloads append official events, but provider-specific matching to historical QSOs needs deeper reconciliation.
 - OS keychain support is represented by an unavailable placeholder; real native backends are still required.
 - The insecure dev credential fallback is plaintext and only suitable for local testing when explicitly enabled.
 - Net Control template create/edit UI is not complete; sessions/check-ins/traffic/report are implemented first.
@@ -260,7 +279,7 @@ Diagnostics include runtime event logs, redaction helpers, report ZIP generation
 
 # Breaking Changes
 
-- Added new SDK permission variants and official upload status event constants. Existing source using exhaustive `PluginCapability` matches may need to handle the new variants.
+- Added new SDK permission variants for online network access, automation, and notifications. Existing source using exhaustive `PluginCapability` matches may need to handle the new variants.
 
 ---
 
@@ -270,6 +289,7 @@ Diagnostics include runtime event logs, redaction helpers, report ZIP generation
 - Official projections are rebuildable; projection cache persistence is a future startup optimization.
 - Service provider selection is in-memory and cheap.
 - Advanced search is projection-scan based for MVP; future large logbooks should add indexing or persisted projection tables.
+- Online provider health/cache/dashboard aggregation is in-memory and cheap; future live adapters should add rate-limit-aware scheduling.
 
 ---
 
@@ -284,17 +304,19 @@ Diagnostics include runtime event logs, redaction helpers, report ZIP generation
 - Service requests also check provider-required permissions and operator role permissions.
 - Upload/network permissions are separate from ADIF export and status viewing.
 - Provider config schemas reference credential IDs; raw credential values stay behind `CredentialStore`.
+- Online Services separates external network permissions by upload, lookup, spotting, map, weather, and propagation.
+- Downloaded confirmations append official status events instead of mutating QSO records.
 - Native credential storage needs Windows/macOS/Linux backend implementations before real external credentials are safe for production use.
 
 ---
 
 # Documentation Status
 
-- README: updated with mapping/propagation foundation and links.
+- README: updated with online services foundation and links.
 - Root ROADMAP: present and updated.
 - Master Blueprint: complete local repository copy.
-- Event Catalog: updated for upload status event constants and daily-driver runtime event names.
-- Plugin SDK: updated for new station/upload permissions and static plugin-like foundations.
+- Event Catalog: updated for online service runtime event names.
+- Plugin SDK: updated for online network, automation, and notification permissions.
 - Sync Protocol: current for LAN/cloud foundation.
 - Security Model: broadly current; future update should add a dedicated upload queue permission example.
 - Service Framework: current for provider architecture.
@@ -311,6 +333,8 @@ Diagnostics include runtime event logs, redaction helpers, report ZIP generation
 - Propagation: complete initial provider/model note.
 - Weather: complete initial provider/model note.
 - Plugin Map Providers: complete initial provider author guide.
+- Online Services: complete initial architecture note.
+- Online Provider Development: complete initial provider author guide.
 - Developer Guide: current local workflow; daily-driver examples could be expanded.
 - API docs: Rust public item docs are partial and should be improved as APIs stabilize.
 
@@ -318,55 +342,93 @@ Diagnostics include runtime event logs, redaction helpers, report ZIP generation
 
 # Test Coverage
 
-- Core event hashing, chain verification, QSO proposals, projections, ADIF, lookup, rig, diagnostics, permissions, service framework, credential store, Net Control, station profiles, awards, search, upload queue, sync models, GIS models, grid conversion, great-circle math, map layers, marker serialization, provider metadata, and grayline calculations have unit coverage.
+- Core event hashing, chain verification, QSO proposals, projections, ADIF, lookup, rig, diagnostics, permissions, service framework, credential store, Net Control, station profiles, awards, search, upload queue, sync models, GIS models, grid conversion, great-circle math, map layers, marker serialization, provider metadata, grayline calculations, online provider metadata, retry logic, confirmation parsing, spot parsing, cache stats, and notification models have unit coverage.
 - GUI model serialization and command/panel foundations have partial coverage.
 - JavaScript UI behavior is mostly manually verified and should gain browser-level tests.
-- Current test run: `cargo test --workspace` passed with 146 total Rust tests across crates.
+- Current test run: `cargo test --workspace` passed with 156 total Rust tests across crates.
 
 ---
 
 # Current Milestone
 
-Current objective: implement the complete Mapping and Propagation Framework foundation.
+Current objective: implement the Online Services ecosystem foundation.
 
 Completed work:
 
-- GIS data models for coordinates, grid squares, points, bounds, paths, polygons, markers, layers, overlays, weather, and propagation.
-- Maidenhead grid validation, normalization, encode/decode, bounds, precision, and neighbor helpers.
-- Great-circle distance, bearing, midpoint, and path generation.
-- Map provider metadata, placeholder providers, map layer stack, QSO map objects, station markers, grayline snapshot, and mock weather/propagation.
-- Maps workspace panels, map layer toggle endpoint, map status bar fields, and command palette actions.
+- Connected provider metadata for LoTW, eQSL, Club Log, QRZ Logbook, HRDLog, QRZ XML, HamQTH, FCC ULS, prefix fallback, DX Cluster, RBN, POTA, SOTAWatch, NOAA Space Weather, NOAA Weather, Open-Meteo, OpenStreetMap, offline tile cache, and reverse geocoder.
+- Upload engine retry policy, execution result, upload stats, provider health, and notification foundation.
+- Confirmation download model and official append-only confirmation status event path.
+- DX Cluster parser and POTA/SOTA spot normalization into the shared spot model.
+- Online automation task and notification models.
+- Online Services workspace and `/api/online-services` dashboard.
 
 Remaining work:
 
-- Add a real tile/vector renderer and persisted map preferences.
-- Implement live OSM/offline tile, geocoding, weather, propagation, satellite, APRS, and terrain/elevation providers.
-- Add browser-level GUI tests for map interactions.
+- Implement live network adapters and credential validation for the registered providers.
+- Add durable upload history, account settings, scheduler state, and notification read state.
+- Add browser-level GUI tests for online service interactions.
 
 Expected completion criteria:
 
 - All required quality gates pass.
 - Documentation and project state are updated.
-- Map state is derived from core projections/service providers and remains separate from official event writes.
+- Online services use the Unified Service Framework, CredentialStore, permissions, runtime events, and official append-only confirmation events.
 
 ---
 
 # Recommended Next Milestone
 
-Online Services Integration:
+Live Provider Adapters and Production Credential Backends:
 
-- QRZ XML API and HamQTH real lookup providers.
-- LoTW upload/download, eQSL upload, Club Log upload, and QRZ Logbook upload.
-- DX Cluster live feed, POTA spots, and SOTAWatch.
-- Real propagation and weather providers.
-- Automatic upload queue processing.
 - Native OS keychain/secret-store credential backends.
+- Live QRZ XML and HamQTH lookup clients.
+- Live LoTW/eQSL/Club Log/QRZ/HRDLog upload and confirmation clients.
+- DX Cluster Telnet background client, POTA spots, SOTAWatch, and RBN adapters.
+- NOAA/Open-Meteo/space-weather live providers.
+- Durable scheduler execution for automatic uploads/downloads/refreshes.
 
-This milestone should come next because the provider, credential, upload, map, and service frameworks are now ready for real authenticated external integrations.
+This milestone should come next because the provider metadata, credential references, upload/download models, and GUI surfaces are now ready for live authenticated adapters.
 
 ---
 
 # Changelog
+
+## 2026-07-06
+
+Summary: Added Online Services ecosystem foundation with connected provider metadata, upload/download engine models, confirmation import events, DX/POTA/SOTA spot normalization, provider health, automation, notifications, permissions, workspace panels, and documentation.
+
+Major files changed:
+
+- `crates/ham-core/src/online.rs`
+- `crates/ham-core/src/lib.rs`
+- `crates/ham-core/src/service.rs`
+- `crates/ham-core/src/permissions.rs`
+- `crates/ham-plugin-sdk/src/lib.rs`
+- `crates/ham-gui/src/main.rs`
+- `crates/ham-gui/src/shell.rs`
+- `crates/ham-gui/src/commands.rs`
+- `crates/ham-gui/web/app.js`
+- `crates/ham-gui/web/index.html`
+- `README.md`
+- `ROADMAP.md`
+- `docs/architecture/online-services.md`
+- `docs/plugins/online-provider-development.md`
+- `docs/security/credential-storage.md`
+
+Architectural decisions:
+
+- Online Services is a provider-backed service layer, not a set of direct GUI integrations.
+- Live network providers must use `CredentialStore` credential IDs and provider-specific permissions.
+- Downloaded confirmations append official status events; they do not mutate QSO records directly.
+- Automation and notifications are support/runtime state, not official log state.
+
+New plugins:
+
+- `plugin.online-services` built-in/static provider ecosystem plugin.
+
+Breaking changes:
+
+- New SDK permission variants were added for external map/weather/propagation network access, automation, and notifications.
 
 ## 2026-07-06
 

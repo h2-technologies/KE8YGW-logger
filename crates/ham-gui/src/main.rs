@@ -10,21 +10,24 @@ use std::{
 };
 
 use ham_core::{
-    build_diagnostic_bundle, default_official_event_log_path, default_service_registry,
-    export_adif, export_adif_with_activations, export_diagnostic_zip, export_net_report_markdown,
-    grayline_snapshot, import_adif, lookup_callsign_with_service_framework,
-    maidenhead_to_coordinate, mock_propagation_forecast, mock_weather, publish_rig_runtime_event,
-    qso_map_objects, station_markers_from_profiles, submit_proposal, suggestion_from_rig_state,
-    AdifImportOptions, Coordinate, CoreEventEnvelope, CredentialMetadata, CredentialStore,
-    DiagnosticBundleInput, DiagnosticReportType, EquipmentItem, EquipmentType,
-    InsecureDevCredentialStore, JsonPermissionGrantStore, JsonStationBookStore,
-    JsonlLogbookEventStore, LocalPrefixProvider, LogbookEventStore, LookupCache, LookupCacheConfig,
-    LookupProviderStatus, MapLayerStack, MockRigProvider, NetControlProjection, NewLogbookEvent,
-    OperatorRole, PermissionGrantSet, PermissionGrantStatus, PermissionRegistry,
-    PermissionSettings, Projection, ProposalContext, RigConnectionStatus, RigDevice, RigProvider,
-    RigProviderStatus, RigState, RuntimeEventFilter, RuntimeEventSeverity, RuntimeLogConfig,
-    ServiceCache, ServiceRegistry, ServiceRegistrySnapshot, StationBook, StationConfiguration,
-    StationProfile, UnsupportedOsCredentialStore, UploadQueue, UploadTarget,
+    build_diagnostic_bundle, confirmations_from_adif, default_official_event_log_path,
+    default_service_registry, dx_cluster_spot_to_spot, export_adif, export_adif_with_activations,
+    export_diagnostic_zip, export_net_report_markdown, grayline_snapshot, import_adif,
+    lookup_callsign_with_service_framework, maidenhead_to_coordinate, missing_credential_status,
+    mock_propagation_forecast, mock_weather, online_services_dashboard, parse_dx_cluster_line,
+    pota_spot_to_spot, publish_rig_runtime_event, qso_map_objects, station_markers_from_profiles,
+    submit_proposal, suggestion_from_rig_state, AdifImportOptions, Coordinate, CoreEventEnvelope,
+    CredentialMetadata, CredentialStore, DiagnosticBundleInput, DiagnosticReportType,
+    EquipmentItem, EquipmentType, InsecureDevCredentialStore, JsonPermissionGrantStore,
+    JsonStationBookStore, JsonlLogbookEventStore, LocalPrefixProvider, LogbookEventStore,
+    LookupCache, LookupCacheConfig, LookupProviderStatus, MapLayerStack, MockRigProvider,
+    NetControlProjection, NewLogbookEvent, NotificationSeverity, OnlineNotification,
+    OnlineProviderStatus, OperatorRole, PermissionGrantSet, PermissionGrantStatus,
+    PermissionRegistry, PermissionSettings, PotaSpotRecord, Projection, ProposalContext,
+    RigConnectionStatus, RigDevice, RigProvider, RigProviderStatus, RigState, RuntimeEventFilter,
+    RuntimeEventSeverity, RuntimeLogConfig, ServiceCache, ServiceRegistry, ServiceRegistrySnapshot,
+    StationBook, StationConfiguration, StationProfile, UnsupportedOsCredentialStore, UploadQueue,
+    UploadTarget,
 };
 use ham_gui::{
     mock::{capability_labels, mock_plugins},
@@ -505,6 +508,7 @@ fn handle_client(state: Arc<AppState>, mut stream: TcpStream) {
         ("GET", "/api/search") => handle_search(&state, query),
         ("GET", "/api/uploads") => handle_uploads(&state),
         ("POST", "/api/uploads/queue") => handle_upload_queue_create(&state, &request.body),
+        ("GET", "/api/online-services") => handle_online_services(&state),
         ("GET", "/api/maps/state") => handle_map_state(&state),
         ("POST", "/api/maps/layer/toggle") => handle_map_layer_toggle(&state, &request.body),
         ("GET", "/api/net-control") => handle_net_control_state(&state),
@@ -1129,6 +1133,7 @@ fn plugin_manifests() -> Vec<PluginManifest> {
         lookup_manifest(),
         rig_manifest(),
         log_upload_manifest(),
+        online_services_manifest(),
         spotting_manifest(),
         maps_manifest(),
         weather_manifest(),
@@ -1189,6 +1194,75 @@ fn log_upload_manifest() -> PluginManifest {
     );
     manifest.description = "LoTW, eQSL, Club Log, and QRZ Logbook provider stubs.".to_owned();
     manifest.contributed_services = vec![ServiceType::LogUpload];
+    manifest
+}
+
+fn online_services_manifest() -> PluginManifest {
+    let mut manifest = PluginManifest::new(
+        "plugin.online-services",
+        "Online Services",
+        env!("CARGO_PKG_VERSION"),
+        vec![
+            PluginCapability::ServiceCacheRead,
+            PluginCapability::ServiceCacheWrite,
+            PluginCapability::ServiceCacheClear,
+            PluginCapability::UploadLog,
+            PluginCapability::UploadConfirmationPull,
+            PluginCapability::UploadQueueManage,
+            PluginCapability::UploadStatusView,
+            PluginCapability::NetworkExternalUpload,
+            PluginCapability::LookupCallsign,
+            PluginCapability::LookupEntity,
+            PluginCapability::LookupGrid,
+            PluginCapability::NetworkExternalLookup,
+            PluginCapability::SpottingView,
+            PluginCapability::SpottingConfigure,
+            PluginCapability::NetworkExternalSpotting,
+            PluginCapability::MapView,
+            PluginCapability::NetworkExternalMap,
+            PluginCapability::WeatherView,
+            PluginCapability::NetworkExternalWeather,
+            PluginCapability::PropagationView,
+            PluginCapability::NetworkExternalPropagation,
+            PluginCapability::CredentialViewMetadata,
+            PluginCapability::CredentialUse,
+            PluginCapability::CredentialTest,
+            PluginCapability::AutomationManage,
+            PluginCapability::NotificationView,
+        ],
+    );
+    manifest.description =
+        "Connected logbooks, lookups, spots, weather, propagation, maps, automation, and notifications.".to_owned();
+    manifest.contributed_panels = vec![
+        "online-accounts".to_owned(),
+        "online-providers".to_owned(),
+        "online-upload-queue".to_owned(),
+        "online-downloads".to_owned(),
+        "confirmation-status".to_owned(),
+        "provider-health".to_owned(),
+        "service-cache".to_owned(),
+        "online-automation".to_owned(),
+        "online-notifications".to_owned(),
+    ];
+    manifest.contributed_commands = vec![
+        "online.open".to_owned(),
+        "online.upload.queue".to_owned(),
+        "online.download.confirmations".to_owned(),
+        "online.health.refresh".to_owned(),
+        "online.dxcluster.open".to_owned(),
+        "online.pota-spots.open".to_owned(),
+        "online.sota-spots.open".to_owned(),
+    ];
+    manifest.contributed_services = vec![
+        ServiceType::LogUpload,
+        ServiceType::CallsignLookup,
+        ServiceType::Spotting,
+        ServiceType::Weather,
+        ServiceType::Propagation,
+        ServiceType::MapTiles,
+        ServiceType::Geocoding,
+        ServiceType::Notification,
+    ];
     manifest
 }
 
@@ -2550,6 +2624,144 @@ fn handle_upload_queue_create(state: &AppState, body: &[u8]) -> Vec<u8> {
         None,
     );
     json_response(&json!({"ok": true, "job": job, "adif_preview": adif}))
+}
+
+fn handle_online_services(state: &AppState) -> Vec<u8> {
+    if let Err(response) = ensure_gui_permission(
+        state,
+        &online_services_manifest(),
+        PluginCapability::ServiceCacheRead,
+        "Online services dashboard permission check",
+    ) {
+        return response;
+    }
+
+    let registry_snapshot = service_registry_snapshot(state);
+    let credentials = state
+        .credential_store
+        .lock()
+        .expect("credential store mutex should not be poisoned")
+        .list_metadata();
+    let providers = registry_snapshot
+        .providers
+        .iter()
+        .filter(|provider| provider.metadata.source_plugin_id == "plugin.online-services")
+        .map(|provider| {
+            let health = missing_credential_status(&provider.metadata, &credentials)
+                .map(|status| ham_core::ProviderHealth {
+                    provider_id: status.provider_id,
+                    state: match status.status {
+                        OnlineProviderStatus::MissingCredentials => {
+                            ham_core::ProviderHealthState::MissingConfig
+                        }
+                        OnlineProviderStatus::Healthy => ham_core::ProviderHealthState::Healthy,
+                        OnlineProviderStatus::RateLimited => {
+                            ham_core::ProviderHealthState::Degraded
+                        }
+                        _ => ham_core::ProviderHealthState::Unavailable,
+                    },
+                    message: status.message,
+                    checked_at: status.checked_at,
+                    rate_limited: status.status == OnlineProviderStatus::RateLimited,
+                })
+                .unwrap_or_else(|| provider.health.clone());
+            (provider.metadata.clone(), health)
+        })
+        .collect::<Vec<_>>();
+    let queue = state
+        .upload_queue
+        .lock()
+        .expect("upload queue mutex should not be poisoned")
+        .clone();
+    let mut notifications = providers
+        .iter()
+        .filter(|(_, health)| health.state == ham_core::ProviderHealthState::MissingConfig)
+        .map(|(metadata, health)| {
+            let mut notification = OnlineNotification::new(
+                "notification.provider.missing_credentials",
+                NotificationSeverity::Warning,
+                format!("{} needs credentials", metadata.display_name),
+                health.message.clone(),
+            );
+            notification.related_provider_id = Some(metadata.provider_id.clone());
+            notification
+        })
+        .collect::<Vec<_>>();
+    if queue
+        .jobs
+        .iter()
+        .any(|job| job.status == ham_core::UploadStatus::Failed)
+    {
+        notifications.push(OnlineNotification::new(
+            "notification.upload.failed",
+            NotificationSeverity::Warning,
+            "Upload job failed",
+            "One or more upload jobs are waiting for retry or operator review.",
+        ));
+    }
+    let dashboard = state.proposal_runtime.block_on(online_services_dashboard(
+        providers,
+        credentials,
+        &queue,
+        &state.service_cache,
+        notifications,
+    ));
+    let dx_spot = parse_dx_cluster_line("DX de K1ABC: 14074.0 JA1XYZ FT8 loud 1234Z")
+        .map(|spot| dx_cluster_spot_to_spot(spot, "dx-cluster"));
+    let pota_spot = pota_spot_to_spot(PotaSpotRecord {
+        activator: "K8POTA".to_owned(),
+        reference: "US-0001".to_owned(),
+        frequency_hz: 14_244_000,
+        mode: Some("SSB".to_owned()),
+        spotted_at: chrono::Utc::now(),
+        comments: Some("Mock live POTA spot".to_owned()),
+    });
+    let mut sota_spot = pota_spot.clone();
+    sota_spot.spotted_callsign = "G4SOTA".to_owned();
+    sota_spot.reference = Some("W6/CT-001".to_owned());
+    sota_spot.source.provider_id = "sotawatch".to_owned();
+    sota_spot.source.label = "SOTAWatch".to_owned();
+    let confirmations = confirmations_from_adif(
+        "lotw",
+        "<CALL:5>K1ABC<BAND:3>20M<MODE:3>FT8<QSO_DATE:8>20260706<EOR>",
+        chrono::Utc::now(),
+    );
+    let _ = publish_gui_runtime(
+        state,
+        "service.request.completed",
+        RuntimeEventSeverity::Info,
+        "Online services dashboard refreshed",
+        Some(json!({
+            "provider_count": dashboard.providers.len(),
+            "cache_entries": dashboard.cache_entries,
+            "credential_values_redacted": true
+        })),
+        None,
+    );
+
+    json_response(&json!({
+        "dashboard": dashboard,
+        "spots": {
+            "dx_cluster": dx_spot.into_iter().collect::<Vec<_>>(),
+            "pota": [pota_spot],
+            "sota": [sota_spot]
+        },
+        "confirmation_status": confirmations,
+        "weather": mock_weather(Coordinate { latitude: 41.0, longitude: -81.0 }),
+        "propagation": mock_propagation_forecast(),
+        "api_status": {
+            "lotw": "credential_required",
+            "eqsl": "credential_required",
+            "club_log": "credential_required",
+            "qrz": "credential_required",
+            "hrdlog": "credential_required",
+            "dx_cluster": "offline_parser_ready",
+            "pota": "provider_ready_for_network_adapter",
+            "sota": "provider_ready_for_network_adapter",
+            "weather": "mock_provider_active",
+            "propagation": "mock_provider_active"
+        }
+    }))
 }
 
 fn handle_map_state(state: &AppState) -> Vec<u8> {

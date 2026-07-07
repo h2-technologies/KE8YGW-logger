@@ -18,23 +18,24 @@ This root roadmap summarizes the current implementation plan. Detailed architect
 - Secure Credential Storage abstraction with OS-keychain placeholder, explicit dev fallback, provider credential references, and Credential Manager UI.
 - Net Control MVP: sessions, check-ins, traffic queue, tombstone deletes, report export events, projection, workspace panels, and commands.
 - Mapping and Propagation Framework: GIS models, Maidenhead grid engine, great-circle math, map provider model, map layers, markers, QSO/station visualization, grayline, mock propagation/weather, and Maps workspace panels.
+- Online Services Ecosystem foundation: connected provider metadata, upload/download engine models, confirmation import events, DX/POTA/SOTA spot normalization, provider health, automation tasks, notifications, and Online Services workspace.
 
 ## Current Milestone
 
-Mapping and Propagation Framework is now implemented at foundation level. The app can derive map state from station profiles and QSO projections, expose provider-backed map/weather/propagation metadata, toggle map layers, and show map status in the GUI.
+Online Services Ecosystem is implemented at foundation level. The app can inspect connected provider metadata, credential requirements, upload queue stats, confirmation download models, spot feeds, provider health, automation tasks, notifications, weather, and propagation from a dedicated workspace.
 
 ## Recommended Next Milestone
 
-Online Services Integration:
+Live Provider Adapters and Production Credential Backends:
 
-- LoTW/eQSL/Club Log/QRZ real upload providers.
-- QRZ/HamQTH real lookup providers.
-- DX Cluster live feed.
-- POTA spots.
-- SOTAWatch.
-- Real propagation and weather providers.
-- Automatic upload queue processing.
 - Native OS keychain/secret-store backend implementation.
+- Real QRZ XML and HamQTH lookup clients.
+- Real LoTW/eQSL/Club Log/QRZ/HRDLog upload clients.
+- Real LoTW/eQSL/Club Log/QRZ confirmation download clients.
+- DX Cluster Telnet background runtime.
+- POTA and SOTAWatch live feed adapters.
+- NOAA/Open-Meteo/space-weather live providers.
+- Durable upload queue and scheduler execution.
 
 ## Future Milestones
 

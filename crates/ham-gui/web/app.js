@@ -6,6 +6,7 @@ const state = {
   credentials: null,
   netControl: null,
   mapState: null,
+  onlineServices: null,
   permissionState: null,
   runtimeEvents: [],
   runtimeStatus: null,
@@ -61,6 +62,7 @@ async function boot() {
   await refreshCredentials();
   await refreshNetControl();
   await refreshMapState();
+  await refreshOnlineServices();
   await refreshActivations();
   await refreshRigStatus();
   await refreshSyncState();
@@ -184,6 +186,24 @@ function panelContent(panel) {
       return renderGlobalSearch();
     case "uploads":
       return renderUploads();
+    case "online-accounts":
+      return renderOnlineAccounts();
+    case "online-providers":
+      return renderOnlineProviders();
+    case "online-upload-queue":
+      return renderOnlineUploadQueue();
+    case "online-downloads":
+      return renderOnlineDownloads();
+    case "confirmation-status":
+      return renderConfirmationStatus();
+    case "provider-health":
+      return renderProviderHealth();
+    case "service-cache":
+      return renderServiceCachePanel();
+    case "online-automation":
+      return renderOnlineAutomation();
+    case "online-notifications":
+      return renderOnlineNotifications();
     case "interactive-map":
       return renderInteractiveMap();
     case "map-layers":
@@ -209,7 +229,7 @@ function panelContent(panel) {
     case "portable-logger-entry":
       return renderPortableLoggerEntry();
     case "spots-alerts":
-      return `<p>Spots and alert feeds will connect to POTA/SOTA APIs in a future plugin update.</p>`;
+      return renderPortableSpots();
     case "plugin-permissions":
       return state.plugins
         .map((plugin) => `<p><strong>${plugin.name}</strong><br />${permissionSummary(plugin.plugin_id)}</p>`)
@@ -235,7 +255,7 @@ function panelContent(panel) {
     case "map-placeholder":
       return renderInteractiveMap();
     case "dx-cluster":
-      return `<p>DX cluster feed placeholder. Network integrations stay plugin-owned.</p>`;
+      return renderDxCluster();
     case "ai-assistant":
       return `<p>AI assistant placeholder. Future access should be permissioned and proposal-aware.</p>`;
     case "diagnostic-reports":
@@ -348,6 +368,13 @@ function runCommand(commandId) {
   if (command.id === "map.grayline.toggle") toggleMapLayer("grayline");
   if (command.id === "map.distance.recalculate") refreshMapState().then(render);
   if (command.id === "propagation.open") switchWorkspace("maps");
+  if (command.id === "online.open") switchWorkspace("online-services");
+  if (command.id === "online.upload.queue") switchWorkspace("online-services");
+  if (command.id === "online.download.confirmations") switchWorkspace("online-services");
+  if (command.id === "online.health.refresh") refreshOnlineServices().then(render);
+  if (command.id === "online.dxcluster.open") switchWorkspace("online-services");
+  if (command.id === "online.pota-spots.open") switchWorkspace("online-services");
+  if (command.id === "online.sota-spots.open") switchWorkspace("online-services");
   if (command.id === "logger.submit-qso") byId("qso-create-form")?.requestSubmit();
   if (command.id === "logger.clear-form") clearQsoForm();
   if (command.id === "logger.use-rig-frequency") acceptRigSuggestion(true);
@@ -1485,6 +1512,126 @@ function renderWeather() {
     <p class="muted">Lightning and radar overlays are placeholders for future providers.</p>`;
 }
 
+function renderOnlineAccounts() {
+  const credentials = state.onlineServices?.dashboard?.credentials || [];
+  if (!credentials.length) return `<p class="muted">No credential metadata is configured. Add credentials from Credential Manager before enabling real network providers.</p>`;
+  return `<div class="qso-list">${credentials
+    .map((credential) => `<article class="qso-row">
+      <strong>${credential.label}</strong>
+      <span>${credential.provider_id} / ${credential.service_type}</span>
+      <small>Status: ${credential.status}</small>
+    </article>`)
+    .join("")}</div>`;
+}
+
+function renderOnlineProviders() {
+  const providers = state.onlineServices?.dashboard?.providers || [];
+  return `<div class="qso-list">${providers
+    .map((provider) => `<article class="qso-row">
+      <strong>${provider.display_name}</strong>
+      <span>${provider.provider_id} / ${provider.service_type}</span>
+      <small>${provider.requires_network_access ? "Network" : "Offline"} / priority ${provider.priority}</small>
+      <small>Capabilities: ${(provider.capabilities || []).join(", ")}</small>
+    </article>`)
+    .join("") || `<p class="muted">No online providers registered.</p>`}</div>`;
+}
+
+function renderOnlineUploadQueue() {
+  const stats = state.onlineServices?.dashboard?.upload_stats || {};
+  const jobs = state.uploads?.jobs || [];
+  return `<div class="metric-grid">
+      <span>Queued ${stats.queued || 0}</span>
+      <span>Running ${stats.running || 0}</span>
+      <span>Done ${stats.completed || 0}</span>
+      <span>Failed ${stats.failed || 0}</span>
+    </div>
+    <div class="qso-list">${jobs
+      .map((job) => `<article class="qso-row"><strong>${job.target_id}</strong><span>${job.status}</span><small>${job.qso_ids?.length || 0} QSOs</small></article>`)
+      .join("") || `<p class="muted">No upload jobs queued.</p>`}</div>`;
+}
+
+function renderOnlineDownloads() {
+  const confirmations = state.onlineServices?.confirmation_status?.confirmations || [];
+  return `<p>${confirmations.length} confirmation records in the latest sample download.</p>
+    <p class="muted">LoTW, QRZ, eQSL, and Club Log confirmation downloads append official status events after provider verification.</p>`;
+}
+
+function renderConfirmationStatus() {
+  const confirmation = state.onlineServices?.confirmation_status;
+  return `<div class="sync-summary">
+    <p><strong>${confirmation?.provider_id || "No provider"}</strong></p>
+    <p>Fetched: ${confirmation?.fetched_at ? new Date(confirmation.fetched_at).toLocaleString() : "never"}</p>
+    <p>Accepted: ${confirmation?.confirmations?.length || 0} / Rejected: ${confirmation?.rejected_count || 0}</p>
+  </div>`;
+}
+
+function renderProviderHealth() {
+  const health = state.onlineServices?.dashboard?.health || [];
+  return `<div class="qso-list">${health
+    .map((item) => `<article class="qso-row">
+      <strong>${item.provider_id}</strong>
+      <span>${item.status}</span>
+      <small>${item.message}</small>
+      ${item.retry_after_seconds ? `<small>Retry in ${item.retry_after_seconds}s</small>` : ""}
+    </article>`)
+    .join("") || `<p class="muted">No provider health records.</p>`}</div>`;
+}
+
+function renderServiceCachePanel() {
+  const count = state.onlineServices?.dashboard?.cache_entries || 0;
+  return `<p>${count} service cache entries.</p>
+    <button class="toolbar-button" type="button" onclick="clearServiceCache()">Clear Service Cache</button>
+    <p class="muted">Provider cache is support data, expires independently, and is not official log data.</p>`;
+}
+
+function renderOnlineAutomation() {
+  const tasks = state.onlineServices?.dashboard?.automation_tasks || [];
+  return `<div class="qso-list">${tasks
+    .map((task) => `<article class="qso-row">
+      <strong>${task.name}</strong>
+      <span>${task.enabled ? "enabled" : "disabled"} / every ${task.interval_seconds}s</span>
+      <small>${task.service_type}</small>
+    </article>`)
+    .join("")}</div>`;
+}
+
+function renderOnlineNotifications() {
+  const notifications = state.onlineServices?.dashboard?.notifications || [];
+  return `<div class="qso-list">${notifications
+    .map((notification) => `<article class="qso-row">
+      <strong>${notification.title}</strong>
+      <span>${notification.message}</span>
+      <small>${notification.severity} / ${new Date(notification.created_at).toLocaleTimeString()}</small>
+    </article>`)
+    .join("") || `<p class="muted">No online service notifications.</p>`}</div>`;
+}
+
+function renderDxCluster() {
+  const spots = state.onlineServices?.spots?.dx_cluster || [];
+  return renderSpotList(spots, "DX Cluster parser is ready for the Telnet client/reconnect adapter.");
+}
+
+function renderPortableSpots() {
+  const pota = state.onlineServices?.spots?.pota || [];
+  const sota = state.onlineServices?.spots?.sota || [];
+  return renderSpotList([...pota, ...sota], "POTA/SOTA feed adapters will use the same spot model and map actions.");
+}
+
+function renderSpotList(spots, emptyText) {
+  if (!spots.length) return `<p class="muted">${emptyText}</p>`;
+  return `<div class="qso-list">${spots
+    .map((spot) => `<article class="qso-row">
+      <strong>${spot.spotted_callsign}</strong>
+      <span>${spot.frequency_hz} Hz ${spot.mode || ""} ${spot.reference ? `<span class="pill">${spot.reference}</span>` : ""}</span>
+      <small>${spot.source?.label || spot.source?.provider_id || ""} / ${new Date(spot.spotted_at).toLocaleTimeString()}</small>
+      <div class="monitor-actions">
+        <button class="toolbar-button" type="button" onclick="switchWorkspace('maps')">Map Center</button>
+        <button class="toolbar-button" type="button" onclick="lookupCallsign('${spot.spotted_callsign}')">Lookup</button>
+      </div>
+    </article>`)
+    .join("")}</div>`;
+}
+
 function formatCoordinate(coordinate) {
   if (!coordinate) return "unknown";
   const lat = Number(coordinate.latitude).toFixed(3);
@@ -1494,6 +1641,10 @@ function formatCoordinate(coordinate) {
 
 async function refreshMapState() {
   state.mapState = await fetch("/api/maps/state").then((response) => response.json());
+}
+
+async function refreshOnlineServices() {
+  state.onlineServices = await fetch("/api/online-services").then((response) => response.json());
 }
 
 async function toggleMapLayer(layerId, enabled = null) {

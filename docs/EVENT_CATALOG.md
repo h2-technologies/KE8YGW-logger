@@ -287,6 +287,31 @@ Runtime event categories are dotted strings. Current and planned category roots:
 - `band.conditions.updated`
 - `weather.updated`
 
+### Online Services
+
+- `online.auth.started`
+- `online.auth.succeeded`
+- `online.auth.failed`
+- `online.upload.started`
+- `online.upload.completed`
+- `online.upload.failed`
+- `online.download.started`
+- `online.download.completed`
+- `online.download.failed`
+- `online.confirmation.received`
+- `online.provider.health_changed`
+- `online.provider.rate_limited`
+- `online.cache.hit`
+- `online.cache.miss`
+- `spot.dx_cluster.received`
+- `spot.rbn.received`
+- `spot.pota.received`
+- `spot.sota.received`
+- `notification.generated`
+- `automation.task.started`
+- `automation.task.completed`
+- `automation.task.failed`
+
 ## Catalog Rules
 
 - Every official state change must add an official event and projection update path.

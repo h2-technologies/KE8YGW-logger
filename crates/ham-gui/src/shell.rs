@@ -8,18 +8,20 @@ pub enum WorkspaceId {
     PotaSota,
     Maps,
     Awards,
+    OnlineServices,
     NetControl,
     EmComm,
     Contesting,
 }
 
 impl WorkspaceId {
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 9] = [
         Self::Dashboard,
         Self::CasualLogger,
         Self::PotaSota,
         Self::Maps,
         Self::Awards,
+        Self::OnlineServices,
         Self::NetControl,
         Self::EmComm,
         Self::Contesting,
@@ -32,6 +34,7 @@ impl WorkspaceId {
             Self::PotaSota => "POTA/SOTA",
             Self::Maps => "Maps",
             Self::Awards => "Awards",
+            Self::OnlineServices => "Online Services",
             Self::NetControl => "Net Control",
             Self::EmComm => "EmComm",
             Self::Contesting => "Contesting",
@@ -149,6 +152,69 @@ pub fn default_panel_registry() -> Vec<PanelDefinition> {
             "core.diagnostics",
             ["diagnostics.view_logs"],
             WorkspaceId::ALL,
+        ),
+        panel(
+            "online-accounts",
+            "Accounts",
+            "plugin.online-services",
+            ["credential.view_metadata"],
+            [WorkspaceId::OnlineServices],
+        ),
+        panel(
+            "online-providers",
+            "Providers",
+            "plugin.online-services",
+            ["service.cache.read"],
+            [WorkspaceId::OnlineServices],
+        ),
+        panel(
+            "online-upload-queue",
+            "Upload Queue",
+            "plugin.online-services",
+            ["upload.status.view"],
+            [WorkspaceId::OnlineServices],
+        ),
+        panel(
+            "online-downloads",
+            "Downloads",
+            "plugin.online-services",
+            ["upload.confirmation_pull"],
+            [WorkspaceId::OnlineServices],
+        ),
+        panel(
+            "confirmation-status",
+            "Confirmation Status",
+            "plugin.online-services",
+            ["upload.status.view"],
+            [WorkspaceId::OnlineServices],
+        ),
+        panel(
+            "provider-health",
+            "Provider Health",
+            "plugin.online-services",
+            ["service.cache.read"],
+            [WorkspaceId::OnlineServices],
+        ),
+        panel(
+            "service-cache",
+            "Service Cache",
+            "plugin.online-services",
+            ["service.cache.read"],
+            [WorkspaceId::OnlineServices],
+        ),
+        panel(
+            "online-automation",
+            "Automation",
+            "plugin.online-services",
+            ["automation.manage"],
+            [WorkspaceId::OnlineServices],
+        ),
+        panel(
+            "online-notifications",
+            "Notifications",
+            "plugin.online-services",
+            ["notification.view"],
+            [WorkspaceId::OnlineServices],
         ),
         panel(
             "map-placeholder",
@@ -383,6 +449,9 @@ fn workspace_description(id: WorkspaceId) -> &'static str {
         WorkspaceId::PotaSota => "Activation planning, map context, and portable logging.",
         WorkspaceId::Maps => "Map, propagation, weather, grid, and station geography.",
         WorkspaceId::Awards => "Award progress, advanced search, and upload queue context.",
+        WorkspaceId::OnlineServices => {
+            "Accounts, providers, uploads, confirmations, spots, weather, propagation, automation, and notifications."
+        }
         WorkspaceId::NetControl => "Directed net workflow placeholders.",
         WorkspaceId::EmComm => "Emergency communications coordination placeholders.",
         WorkspaceId::Contesting => "Contest operating surface placeholders.",
@@ -432,6 +501,22 @@ fn default_layout(id: WorkspaceId) -> WorkspaceLayout {
             place("global-search", PanelRegion::Center, 20),
             place("uploads", PanelRegion::RightInspector, 10),
             place("recent-qsos", PanelRegion::Bottom, 10),
+        ],
+        WorkspaceId::OnlineServices => vec![
+            place("online-providers", PanelRegion::Center, 10),
+            place("online-upload-queue", PanelRegion::Center, 20),
+            place("dx-cluster", PanelRegion::Center, 30),
+            place("spots-alerts", PanelRegion::Center, 40),
+            place("online-accounts", PanelRegion::RightInspector, 10),
+            place("provider-health", PanelRegion::RightInspector, 20),
+            place("credential-manager", PanelRegion::RightInspector, 30),
+            place("service-cache", PanelRegion::RightInspector, 40),
+            place("online-downloads", PanelRegion::Bottom, 10),
+            place("confirmation-status", PanelRegion::Bottom, 20),
+            place("weather", PanelRegion::Bottom, 30),
+            place("propagation", PanelRegion::Bottom, 40),
+            place("online-automation", PanelRegion::Bottom, 50),
+            place("online-notifications", PanelRegion::Bottom, 60),
         ],
         WorkspaceId::NetControl => vec![
             place("net-session-control", PanelRegion::Center, 10),
@@ -496,11 +581,15 @@ mod tests {
         let decoded: GuiShellState = serde_json::from_str(&encoded).unwrap();
 
         assert_eq!(decoded.active_workspace, WorkspaceId::Dashboard);
-        assert_eq!(decoded.workspaces.len(), 8);
+        assert_eq!(decoded.workspaces.len(), 9);
         assert!(decoded
             .workspaces
             .iter()
             .any(|workspace| workspace.id == WorkspaceId::Maps));
+        assert!(decoded
+            .workspaces
+            .iter()
+            .any(|workspace| workspace.id == WorkspaceId::OnlineServices));
     }
 
     #[test]
@@ -519,5 +608,7 @@ mod tests {
         assert!(ids.contains(&"activation-setup"));
         assert!(ids.contains(&"interactive-map"));
         assert!(ids.contains(&"map-layers"));
+        assert!(ids.contains(&"online-providers"));
+        assert!(ids.contains(&"online-upload-queue"));
     }
 }

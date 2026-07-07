@@ -31,6 +31,9 @@ passes should start with these documents:
   and saved-search model.
 - [Upload Queue](docs/architecture/upload-queue.md): provider-backed ADIF upload
   queue foundation.
+- [Online Services](docs/architecture/online-services.md): connected logbooks,
+  lookups, spotting, propagation, weather, maps, upload/download, automation,
+  and notifications.
 - [Maps](docs/maps/README.md): GIS service framework, map layers, markers, and
   QSO/station visualization.
 - [Grid System](docs/grid-system/README.md): Maidenhead validation, conversion,
@@ -41,6 +44,8 @@ passes should start with these documents:
   forecast model.
 - [Map Providers](docs/plugin-map-providers/README.md): plugin guide for map,
   weather, propagation, geocoding, and overlay providers.
+- [Online Provider Development](docs/plugins/online-provider-development.md):
+  provider implementation rules for connected services.
 - [Provider Development](docs/plugins/provider-development.md): how plugins add
   lookup, upload, spotting, map, weather, and propagation providers.
 - [Credentials and Redaction](docs/security/credentials-and-redaction.md):
@@ -204,6 +209,31 @@ Implemented foundations:
 Run `cargo run -p ham-gui`, open the printed local URL, and choose the Maps
 workspace. The status bar shows current grid, coordinates, distance, bearing,
 zoom, and selected layer.
+
+## Online Services Ecosystem
+
+The Online Services workspace brings provider-backed connected operations into
+the same core architecture. Registered provider metadata now covers LoTW, eQSL,
+Club Log, QRZ Logbook, HRDLog, QRZ XML, HamQTH, FCC ULS, DX Cluster, RBN, POTA
+spots, SOTAWatch, NOAA Space Weather, NOAA Weather, Open-Meteo, OpenStreetMap
+tiles, offline tile cache, and reverse geocoding.
+
+The implementation is credential-aware and offline-testable:
+
+- Provider metadata declares capabilities, required permissions, network access,
+  config keys, and credential references.
+- Upload execution uses ADIF generated from projections, retry policy, provider
+  health, upload statistics, and notification models.
+- Confirmation downloads parse ADIF-style records and append official upload
+  status events through the core event store.
+- DX Cluster lines and POTA/SOTA records are normalized into the common `Spot`
+  model for map/logging actions.
+- Automation tasks model scheduled uploads, confirmation downloads, spot
+  refreshes, weather refreshes, and propagation refreshes.
+- Credentials are referenced by ID and remain behind `CredentialStore`.
+
+Live network adapters are intentionally isolated behind provider boundaries so
+tests and CI do not require external credentials or internet access.
 
 ## Official QSO Workflow
 

@@ -51,6 +51,12 @@ Raw tokens, passwords, API keys, and certificates should not be stored in
 provider config. Providers retrieve the secret through `CredentialStore` only
 after plugin permission and operator role checks pass.
 
+Online Services providers use this pattern for LoTW certificates, eQSL
+passwords, Club Log credentials, QRZ API keys, HamQTH credentials, HRDLog upload
+codes, and future weather/map tokens. Runtime events and diagnostics should
+only mention provider IDs and credential IDs; they must never include the secret
+material itself.
+
 ## Redaction
 
 Runtime events, diagnostic bundles, and safe metadata pass through the existing

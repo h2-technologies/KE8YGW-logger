@@ -676,6 +676,7 @@ pub fn operator_role_allows_service_permission(
                 | PluginCapability::MapView
                 | PluginCapability::WeatherView
                 | PluginCapability::PropagationView
+                | PluginCapability::NotificationView
         ),
         OperatorRole::Logger => matches!(
             permission,
@@ -691,6 +692,7 @@ pub fn operator_role_allows_service_permission(
                 | PluginCapability::MapView
                 | PluginCapability::WeatherView
                 | PluginCapability::PropagationView
+                | PluginCapability::NotificationView
         ),
         OperatorRole::Admin => true,
     }
@@ -924,6 +926,9 @@ pub fn default_service_registry() -> ServiceRegistry {
         propagation_provider_metadata("mock-propagation", "Mock Propagation Provider"),
         propagation_provider_metadata("voacap-stub", "VOACAP Placeholder"),
     ] {
+        let _ = registry.register_provider(metadata);
+    }
+    for metadata in crate::online::online_provider_metadata() {
         let _ = registry.register_provider(metadata);
     }
     registry
