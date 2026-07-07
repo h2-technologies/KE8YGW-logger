@@ -21,7 +21,6 @@
 		10000000000000000000010C /* Views/StationProfileView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 10000000000000000000000C /* Views/StationProfileView.swift */; };
 		10000000000000000000010D /* Views/ExportView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 10000000000000000000000D /* Views/ExportView.swift */; };
 		10000000000000000000010E /* Views/SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 10000000000000000000000E /* Views/SettingsView.swift */; };
-		10000000000000000000010F /* KE8YGWLogger in Resources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000010 /* KE8YGWLogger */; };
 		100000000000000000000201 /* HamRadioUtilitiesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000021 /* HamRadioUtilitiesTests.swift */; };
 		100000000000000000000202 /* ExportServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000022 /* ExportServiceTests.swift */; };
 		FAAEDEAD2FFCAE2E007249F1 /* appicon.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = FAAEDEAC2FFCAE2E007249F1 /* appicon.xcassets */; };
@@ -210,7 +209,6 @@
 			buildActionMask = 2147483647;
 			files = (
 				FAAEDEAD2FFCAE2E007249F1 /* appicon.xcassets in Resources */,
-				10000000000000000000010F /* KE8YGWLogger in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -394,7 +392,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = R4B2HA4TUA;
-				GENERATE_INFOPLIST_FILE = YES;
+				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = KE8YGWLogger/Resources/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -419,7 +417,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = R4B2HA4TUA;
-				GENERATE_INFOPLIST_FILE = YES;
+				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = KE8YGWLogger/Resources/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LD_RUNPATH_SEARCH_PATHS = (

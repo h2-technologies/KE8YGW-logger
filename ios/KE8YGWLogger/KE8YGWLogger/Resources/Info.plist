@@ -17,7 +17,7 @@
 	<key>CFBundleName</key>
 	<string>KE8YGW-Logger</string>
 	<key>CFBundlePackageType</key>
-	<string>BNDL</string>
+	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
 	<string>$(MARKETING_VERSION)</string>
 	<key>CFBundleVersion</key>
