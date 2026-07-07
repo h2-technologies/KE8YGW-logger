@@ -1080,9 +1080,7 @@ pub fn grant_builtin_defaults(
 ) {
     for manifest in manifests {
         for permission in manifest.requested_or_capabilities() {
-            if grants.status(&manifest.plugin_id, &permission).is_some() {
-                continue;
-            }
+            let existing_status = grants.status(&manifest.plugin_id, &permission);
             let Some(metadata) = registry.get(&permission) else {
                 continue;
             };
@@ -1095,12 +1093,16 @@ pub fn grant_builtin_defaults(
                     metadata.risk_level,
                     PermissionRiskLevel::Low | PermissionRiskLevel::Medium
                 )
+                && !matches!(
+                    existing_status,
+                    Some(PermissionGrantStatus::Denied | PermissionGrantStatus::Revoked)
+                )
             {
                 grants.upsert(PermissionGrant::granted(
                     manifest.plugin_id.clone(),
                     permission,
                 ));
-            } else {
+            } else if existing_status.is_none() {
                 grants.upsert(PermissionGrant::pending(
                     manifest.plugin_id.clone(),
                     permission,
@@ -1176,6 +1178,32 @@ mod tests {
         assert_eq!(
             grants.status("plugin.test", &PluginCapability::QsoCreate),
             Some(PermissionGrantStatus::Revoked)
+        );
+    }
+
+    #[test]
+    fn builtin_defaults_upgrade_pending_safe_builtin_permissions() {
+        let registry = PermissionRegistry::mvp_default();
+        let settings = PermissionSettings::default();
+        let manifest = PluginManifest::new(
+            "core.gui",
+            "Core GUI",
+            "0.1.0",
+            vec![PluginCapability::QsoCreate],
+        );
+        let mut grants = PermissionGrantSet::default();
+        grants.set_status(
+            "core.gui",
+            PluginCapability::QsoCreate,
+            PermissionGrantStatus::Pending,
+            Some("previous startup pending state".to_owned()),
+        );
+
+        grant_builtin_defaults(&[manifest], &registry, &settings, &mut grants);
+
+        assert_eq!(
+            grants.status("core.gui", &PluginCapability::QsoCreate),
+            Some(PermissionGrantStatus::Granted)
         );
     }
 

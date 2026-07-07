@@ -565,3 +565,29 @@ New plugins:
 Breaking changes:
 
 - None.
+
+## 2026-07-07
+
+Summary: Fixed Casual Logger QSO submission visibility, settings scrolling, kHz frequency entry, and added client-side workspace card close/reopen/move controls.
+
+Major files changed:
+
+- `crates/ham-core/src/permissions.rs`
+- `crates/ham-gui/web/app.js`
+- `crates/ham-gui/web/styles.css`
+- `README.md`
+- `PROJECT_STATE.md`
+
+Architectural decisions:
+
+- Built-in safe default permissions now self-heal from stale pending states on startup, while explicit denied/revoked permissions remain respected.
+- Logger and net frequency inputs are presented in kHz at the GUI boundary and converted to `frequency_hz` before proposals reach the core.
+- Workspace card layout customization is implemented as a browser-local MVP using stable panel IDs and existing workspace placements.
+
+New plugins:
+
+- None.
+
+Breaking changes:
+
+- None.

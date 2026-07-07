@@ -272,9 +272,11 @@ visible QSOs, include deleted QSOs when requested, show current corrected field
 values, show note history, and show deleted/restored state.
 
 The GUI Casual Logger submits QSO create proposals through `/api/qso/create`.
-Recent QSOs are loaded from `/api/qsos`, which rebuilds the QSO projection from
-the official event store. Delete, restore, and note actions also go through
-proposal endpoints.
+Frequency entry is operator-facing in kHz; the GUI converts to Hz before sending
+the proposal because official event payloads store `frequency_hz`. Recent QSOs
+are loaded from `/api/qsos`, which rebuilds the QSO projection from the official
+event store. Delete, restore, and note actions also go through proposal
+endpoints.
 
 ## POTA/SOTA Activation Plugin
 
@@ -931,9 +933,10 @@ The default shell includes:
 
 The default workspaces are Dashboard, Casual Logger, POTA/SOTA, Net Control,
 EmComm, and Contesting. Panels have stable IDs, titles, plugin/source labels,
-required permissions, and supported workspaces. The first layout is static; the
-layout model includes a TODO path for future dockable panel movement and saved
-custom layouts.
+required permissions, and supported workspaces. Workspace cards can be closed,
+reopened, and moved between the center, inspector, and bottom regions. These
+operator layout choices are currently saved in browser local storage; the core
+layout model still leaves room for a later support-storage backed dock manager.
 
 The GUI loads shell state from `/api/shell` and consumes runtime diagnostics
 through `/api/runtime-events`. Plugin data is still static placeholder data until

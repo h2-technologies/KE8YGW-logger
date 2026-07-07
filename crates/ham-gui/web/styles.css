@@ -184,6 +184,7 @@ input {
 .panel-card header {
   display: flex;
   justify-content: space-between;
+  align-items: flex-start;
   gap: 10px;
   padding: 12px;
   border-bottom: 1px solid var(--line);
@@ -199,6 +200,44 @@ input {
   color: var(--muted);
   font-size: 12px;
   white-space: nowrap;
+}
+
+.panel-card-actions,
+.panel-opener {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.panel-opener {
+  align-items: center;
+  padding: 8px;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.panel-open-select {
+  min-width: 180px;
+}
+
+.icon-button {
+  display: inline-grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #15181c;
+  color: var(--text);
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.icon-button:disabled {
+  cursor: default;
+  opacity: 0.35;
 }
 
 .panel-content {
@@ -344,6 +383,8 @@ input {
 }
 
 .screen {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
   width: min(960px, 100%);
   max-height: min(720px, calc(100vh - 40px));
   border: 1px solid var(--line);
@@ -364,6 +405,7 @@ input {
 
 .screen-body {
   display: grid;
+  min-height: 0;
   gap: 14px;
   padding: 16px;
   overflow: auto;

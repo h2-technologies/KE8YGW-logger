@@ -24,7 +24,7 @@ const state = {
   qsoDraft: {
     contacted_callsign: "",
     mode: "",
-    frequency_hz: "",
+    frequency_khz: "",
     band: "",
     notes: "",
   },
@@ -45,6 +45,7 @@ const state = {
     source: "",
     text: "",
   },
+  panelLayouts: loadPanelLayouts(),
 };
 
 const byId = (id) => document.getElementById(id);
@@ -60,6 +61,35 @@ function escapeHtml(value) {
     };
     return entities[character];
   });
+}
+
+function loadPanelLayouts() {
+  try {
+    return JSON.parse(localStorage.getItem("ham.panelLayouts") || "{}");
+  } catch (_) {
+    return {};
+  }
+}
+
+function savePanelLayouts() {
+  try {
+    localStorage.setItem("ham.panelLayouts", JSON.stringify(state.panelLayouts));
+  } catch (_) {
+    // Layout customization is convenient UI state; failure should not break logging.
+  }
+}
+
+function formatKhz(frequencyHz) {
+  if (!frequencyHz) return "";
+  const khz = Number(frequencyHz) / 1000;
+  return Number.isInteger(khz) ? khz.toString() : khz.toFixed(3).replace(/\.?0+$/, "");
+}
+
+function khzToHz(value) {
+  const text = value?.toString().trim();
+  if (!text) return null;
+  const khz = Number(text);
+  return Number.isFinite(khz) && khz > 0 ? Math.round(khz * 1000) : null;
 }
 
 async function boot() {
@@ -143,7 +173,7 @@ function render() {
   byId("status-plugins").textContent = `Plugins: ${state.plugins.filter((plugin) => plugin.enabled).length} enabled`;
   byId("status-bus").textContent = `Event bus: ${state.busConnected ? "connected" : "disconnected"}`;
   const rigState = state.rigStatus?.active_state;
-  const rigLabel = rigState ? `${rigState.frequency_hz || "freq?"} Hz ${rigState.mode || ""}` : "none";
+  const rigLabel = rigState ? `${formatKhz(rigState.frequency_hz) || "freq?"} kHz ${rigState.mode || ""}` : "none";
   byId("status-sync").textContent = `Sync: ${state.runtimeStatus?.sync_state || "Local only"} / Rig: ${rigLabel}`;
   byId("status-events").textContent = `Runtime events: ${state.runtimeStatus?.runtime_event_count || state.runtimeEvents.length}`;
   byId("status-errors").textContent = `Errors: ${state.runtimeStatus?.latest_error_count || 0}`;
@@ -168,20 +198,69 @@ function render() {
 
 function renderRegion(elementId, region) {
   const workspace = currentWorkspace();
-  const placements = workspace.layout.placements
+  const placements = effectivePlacements(workspace)
     .filter((placement) => placement.region === region)
     .sort((left, right) => left.order - right.order);
-  byId(elementId).innerHTML = placements.map((placement) => renderPanel(placement.panel_id)).join("");
+  byId(elementId).innerHTML = `${renderPanelOpener(region)}${placements.map((placement) => renderPanel(placement.panel_id, region)).join("")}`;
 }
 
-function renderPanel(panelId) {
+function layoutKey(workspace = currentWorkspace()) {
+  return workspace.id;
+}
+
+function workspaceLayoutState(workspace = currentWorkspace()) {
+  const key = layoutKey(workspace);
+  if (!state.panelLayouts[key]) {
+    state.panelLayouts[key] = {
+      placements: workspace.layout.placements.map((placement) => ({ ...placement })),
+      hidden: [],
+    };
+  }
+  return state.panelLayouts[key];
+}
+
+function effectivePlacements(workspace = currentWorkspace()) {
+  const layout = workspaceLayoutState(workspace);
+  const hidden = new Set(layout.hidden || []);
+  return (layout.placements || workspace.layout.placements)
+    .filter((placement) => !hidden.has(placement.panel_id))
+    .map((placement) => ({ ...placement }));
+}
+
+function panelsAvailableForWorkspace(workspace = currentWorkspace()) {
+  return state.shell.panels.filter((panel) => panel.supported_workspaces.includes(workspace.id));
+}
+
+function renderPanelOpener(region) {
+  const workspace = currentWorkspace();
+  const visible = new Set(effectivePlacements(workspace).map((placement) => placement.panel_id));
+  const available = panelsAvailableForWorkspace(workspace).filter((panel) => !visible.has(panel.id));
+  if (!available.length) return "";
+  return `<div class="panel-opener">
+    <select class="placeholder-control panel-open-select" data-panel-open-region="${region}" aria-label="Open card in ${region}">
+      <option value="">Open card...</option>
+      ${available.map((panel) => `<option value="${panel.id}">${panel.title}</option>`).join("")}
+    </select>
+    <button class="toolbar-button" type="button" data-panel-open-button="${region}">Open</button>
+  </div>`;
+}
+
+function renderPanel(panelId, region) {
   const panel = state.shell.panels.find((candidate) => candidate.id === panelId);
   if (!panel) return "";
   return `
     <article class="panel-card" data-panel-id="${panel.id}">
       <header>
-        <h3>${panel.title}</h3>
-        <span class="source">${panel.source}</span>
+        <div>
+          <h3>${panel.title}</h3>
+          <span class="source">${panel.source}</span>
+        </div>
+        <div class="panel-card-actions" aria-label="${panel.title} card actions">
+          <button class="icon-button" type="button" title="Move to center" aria-label="Move ${panel.title} to center" data-panel-move="center" data-panel-id="${panel.id}" ${region === "center" ? "disabled" : ""}>C</button>
+          <button class="icon-button" type="button" title="Move to inspector" aria-label="Move ${panel.title} to inspector" data-panel-move="right-inspector" data-panel-id="${panel.id}" ${region === "right-inspector" ? "disabled" : ""}>R</button>
+          <button class="icon-button" type="button" title="Move to bottom" aria-label="Move ${panel.title} to bottom" data-panel-move="bottom" data-panel-id="${panel.id}" ${region === "bottom" ? "disabled" : ""}>B</button>
+          <button class="icon-button" type="button" title="Close card" aria-label="Close ${panel.title}" data-panel-close="${panel.id}">X</button>
+        </div>
       </header>
       <div class="panel-content">${panelContent(panel)}</div>
     </article>
@@ -948,6 +1027,19 @@ function bindPanelControls() {
       runQsoAction(button.dataset.qsoAction, button.dataset.qsoId);
     });
   });
+  document.querySelectorAll("[data-panel-close]").forEach((button) => {
+    button.addEventListener("click", () => closePanelCard(button.dataset.panelClose));
+  });
+  document.querySelectorAll("[data-panel-move]").forEach((button) => {
+    button.addEventListener("click", () => movePanelCard(button.dataset.panelId, button.dataset.panelMove));
+  });
+  document.querySelectorAll("[data-panel-open-button]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const region = button.dataset.panelOpenButton;
+      const panelId = document.querySelector(`[data-panel-open-region="${region}"]`)?.value;
+      if (panelId) openPanelCard(panelId, region);
+    });
+  });
   document.querySelectorAll("[data-map-layer]").forEach((control) => {
     control.addEventListener("change", () => toggleMapLayer(control.dataset.mapLayer, control.checked));
   });
@@ -975,6 +1067,44 @@ function bindPanelControls() {
   }
   bindSearchControls();
   bindUploadControls();
+}
+
+function closePanelCard(panelId) {
+  const layout = workspaceLayoutState();
+  layout.hidden = Array.from(new Set([...(layout.hidden || []), panelId]));
+  savePanelLayouts();
+  render();
+}
+
+function openPanelCard(panelId, region) {
+  const layout = workspaceLayoutState();
+  layout.hidden = (layout.hidden || []).filter((hiddenPanelId) => hiddenPanelId !== panelId);
+  movePanelPlacement(layout, panelId, region);
+  savePanelLayouts();
+  render();
+}
+
+function movePanelCard(panelId, region) {
+  const layout = workspaceLayoutState();
+  layout.hidden = (layout.hidden || []).filter((hiddenPanelId) => hiddenPanelId !== panelId);
+  movePanelPlacement(layout, panelId, region);
+  savePanelLayouts();
+  render();
+}
+
+function movePanelPlacement(layout, panelId, region) {
+  const placements = layout.placements || [];
+  const maxOrder = placements
+    .filter((placement) => placement.region === region)
+    .reduce((max, placement) => Math.max(max, placement.order || 0), 0);
+  const existing = placements.find((placement) => placement.panel_id === panelId);
+  if (existing) {
+    existing.region = region;
+    existing.order = maxOrder + 10;
+  } else {
+    placements.push({ panel_id: panelId, region, order: maxOrder + 10 });
+  }
+  layout.placements = placements;
 }
 
 function updateMonitorFilter(key, value) {
@@ -1045,7 +1175,7 @@ function renderRigControl() {
     </label>
     <p><strong>${device.display_name || "Mock HF Rig"}</strong><br /><small>${device.provider || "mock"} / ${device.connection_type || "mock"}</small></p>
     <p>Status: ${device.connection_status || "disconnected"}</p>
-    <p>Frequency: ${rig.frequency_hz || "unknown"} Hz</p>
+    <p>Frequency: ${formatKhz(rig.frequency_hz) || "unknown"} kHz</p>
     <p>Band / Mode: ${rig.band || "unknown"} / ${rig.mode || "unknown"} ${rig.submode || ""}</p>
     <p>Split: ${rig.split_enabled ? "on" : "off"} / PTT: ${rig.ptt ? "on" : "off"}</p>
     <p>Last update: ${rig.timestamp ? new Date(rig.timestamp).toLocaleTimeString() : "never"}</p>
@@ -1056,8 +1186,8 @@ function renderRigControl() {
       <button id="rig-refresh-button" class="toolbar-button" type="button">Refresh</button>
       <button id="rig-use-button" class="toolbar-button" type="button" ${status.autofill_suggestion ? "" : "disabled"}>Use In Logger</button>
     </div>
-    <label>Mock Frequency Hz
-      <input id="rig-mock-frequency" class="placeholder-control" inputmode="numeric" value="${rig.frequency_hz || 14250000}" />
+    <label>Mock Frequency kHz
+      <input id="rig-mock-frequency" class="placeholder-control" inputmode="decimal" value="${formatKhz(rig.frequency_hz) || 14250}" />
     </label>
     <label>Mock Mode
       <input id="rig-mock-mode" class="placeholder-control" value="${rig.mode || "SSB"}" />
@@ -1071,7 +1201,7 @@ function renderRigControl() {
 function renderCallsignEntry() {
   const draft = state.qsoDraft || {};
   const mode = draft.mode || state.acceptedRigFields?.mode || "";
-  const frequency = draft.frequency_hz || state.acceptedRigFields?.frequency_hz || "";
+  const frequency = draft.frequency_khz || formatKhz(state.acceptedRigFields?.frequency_hz);
   const band = draft.band || state.acceptedRigFields?.band || "";
   return `<form id="qso-create-form" class="qso-form">
       ${renderStationSummary()}
@@ -1087,8 +1217,8 @@ function renderCallsignEntry() {
       <label>Mode
         <input name="mode" class="placeholder-control" aria-label="Mode" placeholder="SSB" value="${escapeHtml(mode)}" required />
       </label>
-      <label>Frequency Hz
-        <input name="frequency_hz" class="placeholder-control" aria-label="Frequency Hz" placeholder="14250000" inputmode="numeric" value="${escapeHtml(frequency)}" />
+      <label>Frequency kHz
+        <input name="frequency_khz" class="placeholder-control" aria-label="Frequency kHz" placeholder="14250" inputmode="decimal" value="${escapeHtml(frequency)}" />
       </label>
       <label>Band
         <input name="band" class="placeholder-control" aria-label="Band" placeholder="20m" value="${escapeHtml(band)}" />
@@ -1177,7 +1307,7 @@ function renderPortableLoggerEntry() {
       ${renderLookupSuggestion()}
       <label>Mode <input name="mode" class="placeholder-control" value="${state.acceptedRigFields?.mode || "SSB"}" required /></label>
       <label>Band <input name="band" class="placeholder-control" placeholder="20m" value="${state.acceptedRigFields?.band || ""}" /></label>
-      <label>Frequency Hz <input name="frequency_hz" class="placeholder-control" inputmode="numeric" value="${state.acceptedRigFields?.frequency_hz || ""}" /></label>
+      <label>Frequency kHz <input name="frequency_khz" class="placeholder-control" inputmode="decimal" value="${formatKhz(state.acceptedRigFields?.frequency_hz)}" /></label>
       <div class="monitor-actions">
         <button id="portable-refresh-rig-button" class="toolbar-button" type="button">Refresh Rig</button>
         <button id="portable-use-rig-button" class="toolbar-button" type="button" ${state.rigStatus?.autofill_suggestion ? "" : "disabled"}>Use Rig Frequency/Mode</button>
@@ -1204,7 +1334,7 @@ function renderRigSuggestion() {
   if (!suggestion) return `<p class="muted">Connect or refresh a rig to suggest frequency, band, and mode.</p>`;
   return `<div class="sync-summary">
     <p><strong>Rig suggestion</strong> from ${suggestion.source}</p>
-    <p>${suggestion.frequency_hz || "unknown"} Hz / ${suggestion.band || "unknown"} / ${suggestion.mode || "unknown"} ${suggestion.submode || ""}</p>
+    <p>${formatKhz(suggestion.frequency_hz) || "unknown"} kHz / ${suggestion.band || "unknown"} / ${suggestion.mode || "unknown"} ${suggestion.submode || ""}</p>
     <p class="muted">${state.acceptedRigFields ? "Accepted into this form. Submit to create an official QSO proposal." : "Advisory only until accepted."}</p>
   </div>`;
 }
@@ -1309,7 +1439,7 @@ function renderNetSessionControl() {
       <label>Net Name <input name="net_name" class="placeholder-control" value="ARES Weekly Net" required /></label>
       <label>Station Callsign <input name="station_callsign" class="placeholder-control" value="${activeStationProfile()?.station_callsign || "KE8YGW"}" required /></label>
       <label>Net Control Operator <input name="net_control_operator_id" class="placeholder-control" value="${activeStationProfile()?.operator_callsign || activeStationProfile()?.station_callsign || "KE8YGW"}" required /></label>
-      <label>Frequency Hz <input name="frequency_hz" class="placeholder-control" inputmode="numeric" value="${state.acceptedRigFields?.frequency_hz || ""}" /></label>
+      <label>Frequency kHz <input name="frequency_khz" class="placeholder-control" inputmode="decimal" value="${formatKhz(state.acceptedRigFields?.frequency_hz)}" /></label>
       <label>Band <input name="band" class="placeholder-control" value="${state.acceptedRigFields?.band || ""}" /></label>
       <label>Mode <input name="mode" class="placeholder-control" value="${state.acceptedRigFields?.mode || "FM"}" /></label>
       <label>Notes <input name="notes" class="placeholder-control" /></label>
@@ -1418,7 +1548,7 @@ function renderRecentQsos() {
         const activationLabel = activation ? activation.payload.park_id || activation.payload.summit_id || activation.payload.reference || "Activation" : "";
         return `<article class="qso-row">
           <strong>${payload.contacted_callsign || "Unknown"}</strong>
-          <span>${payload.mode || ""} ${payload.band || ""} ${payload.frequency_hz || ""} ${activationLabel ? `<span class="pill">${activationLabel}</span>` : ""}</span>
+          <span>${payload.mode || ""} ${payload.band || ""} ${payload.frequency_hz ? `${formatKhz(payload.frequency_hz)} kHz` : ""} ${activationLabel ? `<span class="pill">${activationLabel}</span>` : ""}</span>
           <small>${payload.started_at || ""}</small>
           <small>Notes: ${qso.note_history.length}</small>
           <div class="monitor-actions">
@@ -1649,7 +1779,7 @@ function renderSpotList(spots, emptyText) {
   return `<div class="qso-list">${spots
     .map((spot) => `<article class="qso-row">
       <strong>${spot.spotted_callsign}</strong>
-      <span>${spot.frequency_hz} Hz ${spot.mode || ""} ${spot.reference ? `<span class="pill">${spot.reference}</span>` : ""}</span>
+      <span>${formatKhz(spot.frequency_hz)} kHz ${spot.mode || ""} ${spot.reference ? `<span class="pill">${spot.reference}</span>` : ""}</span>
       <small>${spot.source?.label || spot.source?.provider_id || ""} / ${new Date(spot.spotted_at).toLocaleTimeString()}</small>
       <div class="monitor-actions">
         <button class="toolbar-button" type="button" onclick="switchWorkspace('maps')">Map Center</button>
@@ -1846,7 +1976,7 @@ async function submitNetSessionStart(event) {
     net_name: form.get("net_name")?.toString() || "Net",
     station_callsign: form.get("station_callsign")?.toString() || "KE8YGW",
     net_control_operator_id: form.get("net_control_operator_id")?.toString() || "KE8YGW",
-    frequency_hz: numberOrNull(form.get("frequency_hz")),
+    frequency_hz: khzToHz(form.get("frequency_khz")),
     band: emptyToNull(form.get("band")),
     mode: emptyToNull(form.get("mode")),
     notes: emptyToNull(form.get("notes")),
@@ -1992,7 +2122,7 @@ function updateQsoDraftFromForm() {
   state.qsoDraft = {
     contacted_callsign: data.get("contacted_callsign")?.toString() || "",
     mode: data.get("mode")?.toString() || "",
-    frequency_hz: data.get("frequency_hz")?.toString() || "",
+    frequency_khz: data.get("frequency_khz")?.toString() || "",
     band: data.get("band")?.toString() || "",
     notes: data.get("notes")?.toString() || "",
   };
@@ -2002,7 +2132,7 @@ function clearQsoDraft() {
   state.qsoDraft = {
     contacted_callsign: "",
     mode: "",
-    frequency_hz: "",
+    frequency_khz: "",
     band: "",
     notes: "",
   };
@@ -2075,7 +2205,7 @@ async function refreshRigStatus() {
 async function submitQsoCreate(event) {
   event.preventDefault();
   const form = new FormData(event.currentTarget);
-  const frequency = form.get("frequency_hz")?.toString().trim();
+  const frequencyHz = khzToHz(form.get("frequency_khz"));
   const payload = {
     ...(state.acceptedLookupFields || {}),
     ...(state.acceptedRigFields || {}),
@@ -2083,7 +2213,7 @@ async function submitQsoCreate(event) {
     mode: form.get("mode")?.toString() || "",
     band: form.get("band")?.toString() || "",
     notes: form.get("notes")?.toString() || "",
-    frequency_hz: frequency ? Number(frequency) : null,
+    frequency_hz: frequencyHz,
   };
   updateQsoDraftFromForm();
   updateDuplicateWarning();
@@ -2102,8 +2232,11 @@ async function submitQsoCreate(event) {
     state.qsoError = "";
     event.currentTarget.reset();
     clearQsoDraft();
+    if (result.projection?.qsos) {
+      state.qsos = result.projection.qsos;
+    }
   }
-  await refreshQsos();
+  if (!result.projection?.qsos) await refreshQsos();
   await refreshActivations();
   await refreshAwards();
   await refreshRigStatus();
@@ -2138,7 +2271,7 @@ function updateDuplicateWarning() {
 async function submitPortableQsoCreate(event) {
   event.preventDefault();
   const form = new FormData(event.currentTarget);
-  const frequency = form.get("frequency_hz")?.toString().trim();
+  const frequencyHz = khzToHz(form.get("frequency_khz"));
   await fetch("/api/qso/portable-create", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -2147,7 +2280,7 @@ async function submitPortableQsoCreate(event) {
       mode: form.get("mode")?.toString() || "",
       band: form.get("band")?.toString() || "",
       notes: form.get("notes")?.toString() || "",
-      frequency_hz: frequency ? Number(frequency) : null,
+      frequency_hz: frequencyHz,
       ...(state.acceptedLookupFields || {}),
       ...(state.acceptedRigFields || {}),
     }),
@@ -2307,7 +2440,7 @@ async function applyMockRigSettings() {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      frequency_hz: frequency ? Number(frequency) : null,
+      frequency_hz: khzToHz(frequency),
       mode: mode || null,
       ptt: Boolean(byId("rig-mock-ptt")?.checked),
     }),
@@ -2331,7 +2464,7 @@ function acceptRigSuggestion(explicit = false) {
   };
   state.qsoDraft = {
     ...state.qsoDraft,
-    frequency_hz: suggestion.frequency_hz?.toString() || state.qsoDraft.frequency_hz,
+    frequency_khz: formatKhz(suggestion.frequency_hz) || state.qsoDraft.frequency_khz,
     band: suggestion.band || state.qsoDraft.band,
     mode: suggestion.mode || state.qsoDraft.mode,
   };
