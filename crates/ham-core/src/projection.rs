@@ -69,6 +69,15 @@ impl QsoCurrentStateProjection {
             .collect()
     }
 
+    pub fn upsert_record(&mut self, record: QsoRecord) {
+        if record.deleted {
+            self.tombstones.insert(record.qso_id);
+        } else {
+            self.tombstones.remove(&record.qso_id);
+        }
+        self.records.insert(record.qso_id, record);
+    }
+
     pub fn is_tombstoned(&self, qso_id: Uuid) -> bool {
         self.tombstones.contains(&qso_id)
     }

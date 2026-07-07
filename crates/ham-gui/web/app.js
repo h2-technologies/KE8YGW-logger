@@ -2,10 +2,15 @@ const state = {
   shell: null,
   commands: [],
   plugins: [],
+  serviceProviders: { providers: [], preferred_providers: {} },
   permissionState: null,
   runtimeEvents: [],
   runtimeStatus: null,
   qsos: [],
+  station: null,
+  awards: null,
+  search: { query: "", results: [] },
+  uploads: null,
   activations: [],
   activeActivation: null,
   lookupSuggestion: null,
@@ -13,6 +18,7 @@ const state = {
   rigStatus: null,
   acceptedRigFields: null,
   qsoError: "",
+  duplicateWarning: "",
   importSummary: null,
   reportPreview: null,
   lastReport: null,
@@ -37,6 +43,7 @@ async function boot() {
   state.shell = payload.shell;
   state.commands = payload.commands.commands;
   state.plugins = payload.plugins;
+  state.serviceProviders = payload.service_providers || { providers: [], preferred_providers: {} };
   state.runtimeEvents = payload.runtime_events;
   state.runtimeStatus = payload.runtime_status;
   state.activeWorkspace = payload.shell.active_workspace;
@@ -45,6 +52,9 @@ async function boot() {
   bindShellControls();
   renderWorkspaceSelector();
   await refreshQsos();
+  await refreshStation();
+  await refreshAwards();
+  await refreshUploads();
   await refreshActivations();
   await refreshRigStatus();
   await refreshSyncState();
@@ -71,6 +81,17 @@ function bindShellControls() {
     if ((event.ctrlKey || event.metaKey) && key === "k") {
       event.preventDefault();
       openCommandPalette();
+    }
+    if ((event.ctrlKey || event.metaKey) && key === "l") {
+      event.preventDefault();
+      runCommand("focus.callsign-entry");
+    }
+    if (event.key === "Enter" && document.activeElement?.id === "callsign-entry-input") {
+      const form = byId("qso-create-form");
+      if (form?.checkValidity()) {
+        event.preventDefault();
+        form.requestSubmit();
+      }
     }
     if (event.key === "Escape") {
       closeScreen();
@@ -138,6 +159,18 @@ function panelContent(panel) {
       return renderRecentQsos();
     case "callsign-entry":
       return renderCallsignEntry();
+    case "station-summary":
+      return renderStationSummary();
+    case "station-profiles":
+      return renderStationProfiles();
+    case "equipment-manager":
+      return renderEquipmentManager();
+    case "awards-summary":
+      return renderAwardsSummary();
+    case "global-search":
+      return renderGlobalSearch();
+    case "uploads":
+      return renderUploads();
     case "event-bus-monitor":
       return renderEventBusMonitor();
     case "activation-setup":
@@ -154,6 +187,8 @@ function panelContent(panel) {
       return state.plugins
         .map((plugin) => `<p><strong>${plugin.name}</strong><br />${permissionSummary(plugin.plugin_id)}</p>`)
         .join("");
+    case "service-providers":
+      return renderServiceProviders();
     case "sync-status":
       return renderSyncStatus();
     case "rig-control":
@@ -234,6 +269,10 @@ function runCommand(commandId) {
   if (command.target_workspace) switchWorkspace(command.target_workspace);
   if (command.id === "open.settings") openScreen("settings");
   if (command.id === "open.plugins") openScreen("plugins");
+  if (command.id === "services.open") openScreen("services");
+  if (command.id === "services.cache.clear") clearServiceCache();
+  if (command.id === "services.lookup.test") lookupCallsignFromPrompt();
+  if (command.id === "services.spotting.test") openScreen("services");
   if (command.id === "open.diagnostics") openScreen("diagnostics");
   if (command.id === "diagnostics.open-folder") openScreen("diagnostics-folder");
   if (command.id === "diagnostics.report.problem") openReportProblemScreen();
@@ -250,6 +289,21 @@ function runCommand(commandId) {
   if (command.id === "rig.refresh-state") refreshRigState();
   if (command.id === "rig.use-frequency-mode") acceptRigSuggestion(true);
   if (command.id === "rig.open-panel") switchWorkspace("casual-logger");
+  if (command.id === "station.profiles.open") openScreen("station-profiles");
+  if (command.id === "station.equipment.open") openScreen("equipment");
+  if (command.id === "station.profile.switch") switchStationProfileFromPrompt();
+  if (command.id === "awards.open") switchWorkspace("awards");
+  if (command.id === "awards.rebuild") refreshAwards().then(render);
+  if (command.id === "search.open" || command.id === "logger.open-advanced-search") openScreen("search");
+  if (command.id === "search.deleted") runSearchPrompt("deleted:true ");
+  if (command.id === "uploads.open") openScreen("uploads");
+  if (command.id === "uploads.queue-not-uploaded") queueNotUploadedQsos();
+  if (command.id === "uploads.export-adif") exportAdifFromPrompt();
+  if (command.id === "logger.submit-qso") byId("qso-create-form")?.requestSubmit();
+  if (command.id === "logger.clear-form") clearQsoForm();
+  if (command.id === "logger.use-rig-frequency") acceptRigSuggestion(true);
+  if (command.id === "logger.accept-lookup-suggestions") acceptLookupSuggestion();
+  if (command.id === "logger.open-recent-qsos") switchWorkspace("casual-logger");
   if (command.id === "activation.start-pota") startActivationFromPrompt("pota");
   if (command.id === "activation.start-sota") startActivationFromPrompt("sota");
   if (command.id === "activation.end-current") endCurrentActivation();
@@ -297,6 +351,43 @@ function openScreen(kind) {
     title.textContent = "Plugin Manager";
     body.innerHTML = renderPluginManager();
     bindPluginPermissionControls();
+    return;
+  }
+
+  if (kind === "services") {
+    eyebrow.textContent = "Provider Runtime";
+    title.textContent = "Service Providers";
+    body.innerHTML = renderServiceProviderScreen();
+    return;
+  }
+
+  if (kind === "station-profiles") {
+    eyebrow.textContent = "Station";
+    title.textContent = "Station Profiles";
+    body.innerHTML = renderStationProfiles();
+    return;
+  }
+
+  if (kind === "equipment") {
+    eyebrow.textContent = "Station";
+    title.textContent = "Equipment Manager";
+    body.innerHTML = renderEquipmentManager();
+    return;
+  }
+
+  if (kind === "search") {
+    eyebrow.textContent = "Search";
+    title.textContent = "Advanced Search";
+    body.innerHTML = renderGlobalSearch();
+    bindSearchControls();
+    return;
+  }
+
+  if (kind === "uploads") {
+    eyebrow.textContent = "Uploads";
+    title.textContent = "Upload Queue";
+    body.innerHTML = renderUploads();
+    bindUploadControls();
     return;
   }
 
@@ -416,12 +507,14 @@ function bindPluginPermissionControls() {
 }
 
 function renderSettings() {
-  const sections = ["General", "Appearance", "Callsign/Profile", "Sync", "Lookup/Enrichment", "Rig Control", "Plugin Permissions", "Plugins", "Diagnostics", "Keyboard Shortcuts"];
+  const sections = ["General", "Appearance", "Callsign/Profile", "Sync", "Service Providers", "Lookup/Enrichment", "Rig Control", "Plugin Permissions", "Plugins", "Diagnostics", "Keyboard Shortcuts"];
   return `<div class="settings-grid">
     ${sections
       .map((section) =>
         section === "Sync"
           ? `<article class="settings-card"><h3>${section}</h3>${renderCloudSettings()}</article>`
+          : section === "Service Providers"
+            ? `<article class="settings-card"><h3>${section}</h3>${renderServiceProviderSummary()}</article>`
           : section === "Lookup/Enrichment"
             ? `<article class="settings-card"><h3>${section}</h3>${renderLookupSettings()}</article>`
           : section === "Rig Control"
@@ -432,6 +525,50 @@ function renderSettings() {
       )
       .join("")}
   </div>`;
+}
+
+function renderServiceProviders() {
+  const providers = [...(state.serviceProviders?.providers || [])].sort((left, right) =>
+    `${left.metadata.service_type}:${left.metadata.display_name}`.localeCompare(`${right.metadata.service_type}:${right.metadata.display_name}`),
+  );
+  if (!providers.length) return `<p class="muted">No service providers are registered.</p>`;
+  return `<div class="stack">${providers
+    .map((provider) => {
+      const meta = provider.metadata;
+      const health = provider.health || {};
+      const missingConfig = (meta.required_config_keys || []).length ? `<p class="event-warn">Missing config: ${meta.required_config_keys.join(", ")}</p>` : "";
+      return `<article class="sync-summary">
+        <p><strong>${meta.display_name}</strong> <span class="pill">${meta.service_type}</span></p>
+        <p class="muted">${meta.provider_id} / ${meta.source_plugin_id}</p>
+        <p>Status: ${provider.enabled ? "enabled" : "disabled"} / Health: ${health.state || "unknown"} / Priority: ${meta.priority}</p>
+        <p>${meta.supports_offline ? "Offline capable" : "Online only"} / ${meta.requires_network_access ? "Network required" : "No network required"}</p>
+        <p>Capabilities: ${(meta.capabilities || []).join(", ") || "none"}</p>
+        <p>Permissions: ${(meta.required_permissions || []).join(", ") || "none"}</p>
+        ${missingConfig}
+      </article>`;
+    })
+    .join("")}</div>`;
+}
+
+function renderServiceProviderSummary() {
+  const providers = state.serviceProviders?.providers || [];
+  const byType = providers.reduce((acc, provider) => {
+    const type = provider.metadata?.service_type || "unknown";
+    acc[type] = (acc[type] || 0) + 1;
+    return acc;
+  }, {});
+  return `<p>${providers.length} providers registered.</p>
+    <p>${Object.entries(byType)
+      .map(([type, count]) => `${type}: ${count}`)
+      .join(" / ")}</p>
+    <button class="toolbar-button" type="button" onclick="openScreen('services')">Review Providers</button>
+    <button class="toolbar-button" type="button" onclick="clearServiceCache()">Clear Service Cache</button>`;
+}
+
+function renderServiceProviderScreen() {
+  return `<p class="muted">Providers are registered through the shared core service framework. Credential fields are schema-only until secure storage is added.</p>
+    ${renderServiceProviderSummary()}
+    ${renderServiceProviders()}`;
 }
 
 function renderPermissionSettings() {
@@ -593,6 +730,7 @@ function bindPanelControls() {
   const qsoForm = byId("qso-create-form");
   if (qsoForm) {
     qsoForm.addEventListener("submit", submitQsoCreate);
+    byId("callsign-entry-input")?.addEventListener("input", updateDuplicateWarning);
     byId("lookup-callsign-button")?.addEventListener("click", () => lookupCallsign(byId("callsign-entry-input")?.value || ""));
     byId("accept-lookup-button")?.addEventListener("click", acceptLookupSuggestion);
     byId("use-rig-button")?.addEventListener("click", () => acceptRigSuggestion(true));
@@ -639,6 +777,8 @@ function bindPanelControls() {
     byId("cloud-preview").addEventListener("click", previewCloudPull);
     byId("cloud-pull").addEventListener("click", pullCloudEvents);
   }
+  bindSearchControls();
+  bindUploadControls();
 }
 
 function updateMonitorFilter(key, value) {
@@ -734,9 +874,11 @@ function renderRigControl() {
 
 function renderCallsignEntry() {
   return `<form id="qso-create-form" class="qso-form">
+      ${renderStationSummary()}
       <label>Contacted callsign
         <input id="callsign-entry-input" name="contacted_callsign" class="placeholder-control" aria-label="Contacted callsign" placeholder="K1ABC" required />
       </label>
+      <p id="duplicate-warning" class="event-error" ${state.duplicateWarning ? "" : "hidden"}>${state.duplicateWarning || ""}</p>
       <div class="monitor-actions">
         <button id="lookup-callsign-button" class="toolbar-button" type="button">Lookup</button>
         <button id="accept-lookup-button" class="toolbar-button" type="button" ${state.lookupSuggestion ? "" : "disabled"}>Accept Suggestions</button>
@@ -867,6 +1009,99 @@ function renderRigSuggestion() {
   </div>`;
 }
 
+function renderStationSummary() {
+  const profile = activeStationProfile();
+  const config = activeStationConfiguration();
+  if (!profile) return `<p class="muted">No station profile configured.</p>`;
+  return `<div class="sync-summary">
+    <p><strong>${profile.display_name}</strong></p>
+    <p>${profile.station_callsign} ${profile.operator_callsign ? `/ ${profile.operator_callsign}` : ""}</p>
+    <p>${profile.default_grid || ""} ${profile.default_qth || ""}</p>
+    <p>${config ? `Config: ${config.name}` : "No configuration selected"}</p>
+    <div class="monitor-actions">
+      <button class="toolbar-button" type="button" onclick="openScreen('station-profiles')">Profiles</button>
+      <button class="toolbar-button" type="button" onclick="openScreen('equipment')">Equipment</button>
+    </div>
+  </div>`;
+}
+
+function renderStationProfiles() {
+  const profiles = state.station?.profiles || [];
+  if (!profiles.length) return `<p class="muted">No station profiles yet.</p>`;
+  return `<div class="qso-list">${profiles
+    .map((profile) => `<article class="qso-row">
+      <strong>${profile.display_name}</strong>
+      <span>${profile.station_callsign} ${profile.operator_callsign ? `/ ${profile.operator_callsign}` : ""}</span>
+      <small>${profile.default_grid || ""} ${profile.active ? "Active" : ""}</small>
+      <button class="toolbar-button" type="button" onclick="selectStationProfile('${profile.station_profile_id}')">Use Profile</button>
+    </article>`)
+    .join("")}</div>`;
+}
+
+function renderEquipmentManager() {
+  const equipment = state.station?.equipment || [];
+  if (!equipment.length) return `<p class="muted">No equipment records yet.</p>`;
+  return `<div class="qso-list">${equipment
+    .map((item) => `<article class="qso-row">
+      <strong>${item.display_name}</strong>
+      <span>${item.equipment_type} ${item.manufacturer || ""} ${item.model || ""}</span>
+      <small>${item.status}</small>
+    </article>`)
+    .join("")}</div>`;
+}
+
+function renderAwardsSummary() {
+  const progress = state.awards?.progress || [];
+  if (!progress.length) return `<p class="muted">Award progress will appear after QSOs are logged.</p>`;
+  return `<div class="plugin-grid">${progress
+    .map((award) => `<article class="plugin-card">
+      <h3>${award.name}</h3>
+      <p><strong>${award.credit_count}</strong> credits</p>
+      <p class="muted">${award.confirmed_credit_count} confirmed</p>
+      <details><summary>Credits</summary>
+        <div class="stack">${(award.credits || []).slice(0, 20).map((credit) => `<span class="pill">${credit.display_name}</span>`).join("")}</div>
+      </details>
+    </article>`)
+    .join("")}</div>`;
+}
+
+function renderGlobalSearch() {
+  const rows = state.search?.results || [];
+  return `<div class="stack">
+    <form id="global-search-form" class="qso-form">
+      <label>Search
+        <input id="global-search-input" class="placeholder-control" name="query" value="${state.search?.query || ""}" placeholder="callsign:K1ABC band:20m portable" />
+      </label>
+      <button class="toolbar-button" type="submit">Search</button>
+    </form>
+    <div class="qso-list">${rows
+      .map((result) => `<article class="qso-row">
+        <strong>${result.payload.contacted_callsign || result.qso_id}</strong>
+        <span>${result.payload.mode || ""} ${result.payload.band || ""} ${result.deleted ? "(deleted)" : ""}</span>
+        <small>${(result.matched_fields || []).join(", ")}</small>
+      </article>`)
+      .join("") || `<p class="muted">No search results.</p>`}</div>
+  </div>`;
+}
+
+function renderUploads() {
+  const queue = state.uploads || { targets: [], jobs: [] };
+  return `<div class="stack">
+    <div class="monitor-actions">
+      <button class="toolbar-button" type="button" data-upload-all>Queue All Not Uploaded</button>
+      <button class="toolbar-button" type="button" onclick="exportAdifFromPrompt()">Export Upload ADIF</button>
+    </div>
+    <h4>Targets</h4>
+    <div class="qso-list">${(queue.targets || [])
+      .map((target) => `<article class="qso-row"><strong>${target.display_name}</strong><span>${target.provider_id}</span><small>${target.enabled ? "Enabled" : "Disabled"}</small></article>`)
+      .join("")}</div>
+    <h4>Jobs</h4>
+    <div class="qso-list">${(queue.jobs || [])
+      .map((job) => `<article class="qso-row"><strong>${job.target_id}</strong><span>${job.status}</span><small>${job.qso_ids.length} QSOs</small></article>`)
+      .join("") || `<p class="muted">No upload jobs queued.</p>`}</div>
+  </div>`;
+}
+
 function renderRecentQsos() {
   if (!state.qsos.length) {
     return `<p class="muted">No visible QSOs yet. Create one from Callsign Entry.</p>`;
@@ -909,6 +1144,95 @@ async function refreshActivations() {
 
 async function refreshPluginPermissions() {
   state.permissionState = await fetch("/api/plugins/permissions").then((response) => response.json());
+}
+
+async function refreshStation() {
+  state.station = await fetch("/api/station").then((response) => response.json());
+}
+
+async function refreshAwards() {
+  state.awards = await fetch("/api/awards").then((response) => response.json());
+}
+
+async function refreshUploads() {
+  state.uploads = await fetch("/api/uploads").then((response) => response.json());
+}
+
+function activeStationProfile() {
+  const id = state.station?.active_profile_id;
+  return (state.station?.profiles || []).find((profile) => profile.station_profile_id === id) || null;
+}
+
+function activeStationConfiguration() {
+  const id = state.station?.active_configuration_id;
+  return (state.station?.configurations || []).find((config) => config.configuration_id === id) || null;
+}
+
+async function selectStationProfile(stationProfileId) {
+  await fetch("/api/station/select-profile", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ station_profile_id: stationProfileId }),
+  });
+  await refreshStation();
+  await refreshRuntimeEvents();
+  render();
+}
+
+function switchStationProfileFromPrompt() {
+  const profiles = state.station?.profiles || [];
+  const callsign = window.prompt(`Station profile callsign (${profiles.map((profile) => profile.station_callsign).join(", ")})`);
+  const profile = profiles.find((candidate) => candidate.station_callsign.toLowerCase() === (callsign || "").toLowerCase());
+  if (profile) selectStationProfile(profile.station_profile_id);
+}
+
+function bindSearchControls() {
+  byId("global-search-form")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const query = new FormData(event.currentTarget).get("query")?.toString() || "";
+    await runSearch(query);
+    openScreen("search");
+  });
+}
+
+async function runSearch(query) {
+  state.search.query = query;
+  state.search = await fetch(`/api/search?q=${encodeURIComponent(query)}`).then((response) => response.json());
+  state.search.query = query;
+  await refreshRuntimeEvents();
+}
+
+function runSearchPrompt(prefix = "") {
+  const query = window.prompt("Search QSOs", prefix);
+  if (query == null) return;
+  runSearch(query).then(() => openScreen("search"));
+}
+
+function bindUploadControls() {
+  document.querySelectorAll("[data-upload-all]").forEach((button) => {
+    button.addEventListener("click", queueNotUploadedQsos);
+  });
+}
+
+async function queueNotUploadedQsos() {
+  const target = state.uploads?.targets?.[0]?.target_id;
+  if (!target) return;
+  state.importSummary = await fetch("/api/uploads/queue", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ target_id: target, qso_ids: [], all_not_uploaded: true }),
+  }).then((response) => response.json());
+  await refreshUploads();
+  await refreshRuntimeEvents();
+  openScreen("uploads");
+}
+
+function clearQsoForm() {
+  byId("qso-create-form")?.reset();
+  state.acceptedLookupFields = null;
+  state.acceptedRigFields = null;
+  state.qsoError = "";
+  render();
 }
 
 async function updatePluginPermission(action, pluginId, permissionId) {
@@ -968,6 +1292,7 @@ async function submitQsoCreate(event) {
     ...(state.acceptedLookupFields || {}),
     ...(state.acceptedRigFields || {}),
   };
+  updateDuplicateWarning();
   const response = await fetch("/api/qso/create", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -982,12 +1307,34 @@ async function submitQsoCreate(event) {
   }
   await refreshQsos();
   await refreshActivations();
+  await refreshAwards();
   await refreshRigStatus();
   await refreshRuntimeEvents();
   state.acceptedLookupFields = null;
   state.acceptedRigFields = null;
   state.lookupSuggestion = null;
+  state.duplicateWarning = "";
   render();
+}
+
+function updateDuplicateWarning() {
+  const callsign = byId("callsign-entry-input")?.value?.trim()?.toUpperCase();
+  if (!callsign) {
+    state.duplicateWarning = "";
+    return;
+  }
+  const duplicate = state.qsos.find((qso) => {
+    const payload = qso.payload || {};
+    return !qso.deleted && (payload.contacted_callsign || "").toUpperCase() === callsign;
+  });
+  state.duplicateWarning = duplicate
+    ? `Possible duplicate: ${callsign} was logged ${duplicate.payload.started_at || "recently"}.`
+    : "";
+  const warning = byId("duplicate-warning");
+  if (warning) {
+    warning.textContent = state.duplicateWarning;
+    warning.hidden = !state.duplicateWarning;
+  }
 }
 
 async function submitPortableQsoCreate(event) {
@@ -1010,6 +1357,7 @@ async function submitPortableQsoCreate(event) {
   event.currentTarget.reset();
   await refreshQsos();
   await refreshActivations();
+  await refreshAwards();
   await refreshRigStatus();
   await refreshRuntimeEvents();
   state.acceptedLookupFields = null;
@@ -1051,6 +1399,18 @@ function lookupCallsignFromPrompt() {
 
 async function clearLookupCache() {
   state.importSummary = await fetch("/api/lookup/cache/clear", { method: "POST" }).then((response) => response.json());
+  await refreshServiceProviders();
+  await refreshRuntimeEvents();
+  openScreen("import-summary");
+}
+
+async function clearServiceCache() {
+  state.importSummary = await fetch("/api/services/cache/clear", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({}),
+  }).then((response) => response.json());
+  await refreshServiceProviders();
   await refreshRuntimeEvents();
   openScreen("import-summary");
 }
@@ -1058,6 +1418,10 @@ async function clearLookupCache() {
 async function showLookupProviderStatus() {
   state.importSummary = await fetch("/api/lookup/status").then((response) => response.json());
   openScreen("import-summary");
+}
+
+async function refreshServiceProviders() {
+  state.serviceProviders = await fetch("/api/services/providers").then((response) => response.json());
 }
 
 async function openReportProblemScreen() {
@@ -1194,14 +1558,15 @@ async function submitActivationStart(event) {
 function startActivationFromPrompt(kind) {
   const reference = window.prompt(`${kind.toUpperCase()} reference`);
   if (!reference) return;
+  const profile = activeStationProfile();
   fetch("/api/activation/start", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       activation_type: kind,
       reference,
-      station_callsign: "KE8YGW",
-      operator_callsign: "KE8YGW",
+      station_callsign: profile?.station_callsign || "KE8YGW",
+      operator_callsign: profile?.operator_callsign || profile?.station_callsign || "KE8YGW",
     }),
   }).then(async () => {
     await refreshActivations();
@@ -1249,6 +1614,7 @@ async function runQsoAction(action, qsoId) {
   });
   await refreshQsos(action === "restore");
   await refreshActivations();
+  await refreshAwards();
   await refreshRuntimeEvents();
   render();
 }
@@ -1263,6 +1629,7 @@ async function importAdifFromPrompt() {
   });
   state.importSummary = await response.json();
   await refreshQsos();
+  await refreshAwards();
   await refreshRuntimeEvents();
   openScreen("import-summary");
   render();

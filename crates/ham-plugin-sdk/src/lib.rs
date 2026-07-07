@@ -35,6 +35,9 @@ pub const OFFICIAL_LOG_ACTIVATION_CANCELLED: &str = "official.log.activation.can
 pub const OFFICIAL_LOG_ACTIVATION_NOTE_ADDED: &str = "official.log.activation.note_added";
 pub const OFFICIAL_LOG_QSO_ACTIVATION_LINKED: &str = "official.log.qso.activation_linked";
 pub const OFFICIAL_LOG_QSO_ACTIVATION_UNLINKED: &str = "official.log.qso.activation_unlinked";
+pub const OFFICIAL_LOG_UPLOAD_QUEUED: &str = "official.log.upload.queued";
+pub const OFFICIAL_LOG_UPLOAD_COMPLETED: &str = "official.log.upload.completed";
+pub const OFFICIAL_LOG_UPLOAD_FAILED: &str = "official.log.upload.failed";
 
 /// A capability granted to a plugin by the host application.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -76,6 +79,30 @@ pub enum PluginCapability {
     DiagnosticsViewLogs,
     DiagnosticsExport,
     DiagnosticsUpload,
+    ServiceProviderRegister,
+    ServiceProviderConfigure,
+    ServiceProviderEnable,
+    ServiceProviderDisable,
+    ServiceCacheRead,
+    ServiceCacheWrite,
+    ServiceCacheClear,
+    UploadLog,
+    UploadConfirmationPull,
+    UploadQueueManage,
+    UploadStatusView,
+    NetworkExternalUpload,
+    SpottingView,
+    SpottingConfigure,
+    NetworkExternalSpotting,
+    MapView,
+    MapConfigure,
+    WeatherView,
+    PropagationView,
+    StationProfileView,
+    StationProfileManage,
+    StationEquipmentView,
+    StationEquipmentManage,
+    StationProfileUse,
     UiPanelRegister,
     UiCommandRegister,
     SettingsRead,
@@ -123,6 +150,30 @@ impl PluginCapability {
             Self::DiagnosticsViewLogs => "diagnostics.view_logs",
             Self::DiagnosticsExport => "diagnostics.export",
             Self::DiagnosticsUpload => "diagnostics.upload",
+            Self::ServiceProviderRegister => "service.provider.register",
+            Self::ServiceProviderConfigure => "service.provider.configure",
+            Self::ServiceProviderEnable => "service.provider.enable",
+            Self::ServiceProviderDisable => "service.provider.disable",
+            Self::ServiceCacheRead => "service.cache.read",
+            Self::ServiceCacheWrite => "service.cache.write",
+            Self::ServiceCacheClear => "service.cache.clear",
+            Self::UploadLog => "upload.log",
+            Self::UploadConfirmationPull => "upload.confirmation_pull",
+            Self::UploadQueueManage => "upload.queue.manage",
+            Self::UploadStatusView => "upload.status.view",
+            Self::NetworkExternalUpload => "network.external.upload",
+            Self::SpottingView => "spotting.view",
+            Self::SpottingConfigure => "spotting.configure",
+            Self::NetworkExternalSpotting => "network.external.spotting",
+            Self::MapView => "map.view",
+            Self::MapConfigure => "map.configure",
+            Self::WeatherView => "weather.view",
+            Self::PropagationView => "propagation.view",
+            Self::StationProfileView => "station.profile.view",
+            Self::StationProfileManage => "station.profile.manage",
+            Self::StationEquipmentView => "station.equipment.view",
+            Self::StationEquipmentManage => "station.equipment.manage",
+            Self::StationProfileUse => "station.profile.use",
             Self::UiPanelRegister => "ui.panel.register",
             Self::UiCommandRegister => "ui.command.register",
             Self::SettingsRead => "settings.read",
@@ -185,12 +236,77 @@ impl<'de> Deserialize<'de> for PluginCapability {
             "diagnostics.view_logs" => Self::DiagnosticsViewLogs,
             "diagnostics.export" => Self::DiagnosticsExport,
             "diagnostics.upload" => Self::DiagnosticsUpload,
+            "service.provider.register" => Self::ServiceProviderRegister,
+            "service.provider.configure" => Self::ServiceProviderConfigure,
+            "service.provider.enable" => Self::ServiceProviderEnable,
+            "service.provider.disable" => Self::ServiceProviderDisable,
+            "service.cache.read" => Self::ServiceCacheRead,
+            "service.cache.write" => Self::ServiceCacheWrite,
+            "service.cache.clear" => Self::ServiceCacheClear,
+            "upload.log" => Self::UploadLog,
+            "upload.confirmation_pull" => Self::UploadConfirmationPull,
+            "upload.queue.manage" => Self::UploadQueueManage,
+            "upload.status.view" => Self::UploadStatusView,
+            "network.external.upload" => Self::NetworkExternalUpload,
+            "spotting.view" => Self::SpottingView,
+            "spotting.configure" => Self::SpottingConfigure,
+            "network.external.spotting" => Self::NetworkExternalSpotting,
+            "map.view" => Self::MapView,
+            "map.configure" => Self::MapConfigure,
+            "weather.view" => Self::WeatherView,
+            "propagation.view" => Self::PropagationView,
+            "station.profile.view" => Self::StationProfileView,
+            "station.profile.manage" => Self::StationProfileManage,
+            "station.equipment.view" => Self::StationEquipmentView,
+            "station.equipment.manage" => Self::StationEquipmentManage,
+            "station.profile.use" => Self::StationProfileUse,
             "ui.panel.register" => Self::UiPanelRegister,
             "ui.command.register" => Self::UiCommandRegister,
             "settings.read" => Self::SettingsRead,
             "settings.write" => Self::SettingsWrite,
             _ => Self::Other(value),
         })
+    }
+}
+
+/// Stable service categories that plugins can provide.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ServiceType {
+    CallsignLookup,
+    EntityLookup,
+    GridLookup,
+    LogUpload,
+    Spotting,
+    MapTiles,
+    Geocoding,
+    Weather,
+    Propagation,
+    AwardData,
+    AiTool,
+    Authentication,
+    Storage,
+    Notification,
+}
+
+impl ServiceType {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::CallsignLookup => "callsign_lookup",
+            Self::EntityLookup => "entity_lookup",
+            Self::GridLookup => "grid_lookup",
+            Self::LogUpload => "log_upload",
+            Self::Spotting => "spotting",
+            Self::MapTiles => "map_tiles",
+            Self::Geocoding => "geocoding",
+            Self::Weather => "weather",
+            Self::Propagation => "propagation",
+            Self::AwardData => "award_data",
+            Self::AiTool => "ai_tool",
+            Self::Authentication => "authentication",
+            Self::Storage => "storage",
+            Self::Notification => "notification",
+        }
     }
 }
 
@@ -212,6 +328,8 @@ pub struct PluginManifest {
     pub contributed_panels: Vec<String>,
     #[serde(default)]
     pub contributed_commands: Vec<String>,
+    #[serde(default)]
+    pub contributed_services: Vec<ServiceType>,
     #[serde(default)]
     pub plugin_type: String,
     #[serde(default)]
@@ -237,6 +355,7 @@ impl PluginManifest {
             optional_permissions: Vec::new(),
             contributed_panels: Vec::new(),
             contributed_commands: Vec::new(),
+            contributed_services: Vec::new(),
             plugin_type: "builtin".to_owned(),
             minimum_core_version: "0.1.0".to_owned(),
             capabilities,

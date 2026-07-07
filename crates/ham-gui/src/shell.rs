@@ -6,16 +6,18 @@ pub enum WorkspaceId {
     Dashboard,
     CasualLogger,
     PotaSota,
+    Awards,
     NetControl,
     EmComm,
     Contesting,
 }
 
 impl WorkspaceId {
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 7] = [
         Self::Dashboard,
         Self::CasualLogger,
         Self::PotaSota,
+        Self::Awards,
         Self::NetControl,
         Self::EmComm,
         Self::Contesting,
@@ -26,6 +28,7 @@ impl WorkspaceId {
             Self::Dashboard => "Dashboard",
             Self::CasualLogger => "Casual Logger",
             Self::PotaSota => "POTA/SOTA",
+            Self::Awards => "Awards",
             Self::NetControl => "Net Control",
             Self::EmComm => "EmComm",
             Self::Contesting => "Contesting",
@@ -107,7 +110,7 @@ pub fn default_panel_registry() -> Vec<PanelDefinition> {
             "recent-qsos",
             "Recent QSOs",
             "core.gui",
-            ["logbook.read"],
+            ["log.qso.view"],
             WorkspaceId::ALL,
         ),
         panel(
@@ -134,14 +137,14 @@ pub fn default_panel_registry() -> Vec<PanelDefinition> {
             "sync-status",
             "Sync Status",
             "core.sync",
-            ["sync.read"],
+            ["sync.lan.discovery"],
             WorkspaceId::ALL,
         ),
         panel(
             "event-bus-monitor",
             "Event Bus Monitor",
             "core.diagnostics",
-            ["diagnostics.read"],
+            ["diagnostics.view_logs"],
             WorkspaceId::ALL,
         ),
         panel(
@@ -173,7 +176,7 @@ pub fn default_panel_registry() -> Vec<PanelDefinition> {
             "activation-recent-qsos",
             "Activation Recent QSOs",
             "plugin.pota-sota",
-            ["activation.view", "logbook.read"],
+            ["activation.view", "log.qso.view"],
             [WorkspaceId::PotaSota],
         ),
         panel(
@@ -186,15 +189,15 @@ pub fn default_panel_registry() -> Vec<PanelDefinition> {
         panel(
             "spots-alerts",
             "Spots/Alerts",
-            "plugin.pota-sota",
-            ["network.read"],
+            "plugin.spotting",
+            ["spotting.view"],
             [WorkspaceId::PotaSota],
         ),
         panel(
             "dx-cluster",
             "DX Cluster",
-            "plugin.dx-cluster",
-            ["network.read"],
+            "plugin.spotting",
+            ["spotting.view"],
             [
                 WorkspaceId::Dashboard,
                 WorkspaceId::CasualLogger,
@@ -212,14 +215,67 @@ pub fn default_panel_registry() -> Vec<PanelDefinition> {
             "plugin-permissions",
             "Plugin Permissions",
             "core.plugins",
-            ["plugins.read"],
+            ["service.provider.enable"],
             WorkspaceId::ALL,
+        ),
+        panel(
+            "service-providers",
+            "Service Providers",
+            "core.services",
+            ["service.provider.enable", "service.cache.read"],
+            WorkspaceId::ALL,
+        ),
+        panel(
+            "station-summary",
+            "Station Summary",
+            "core.station",
+            ["station.profile.view"],
+            WorkspaceId::ALL,
+        ),
+        panel(
+            "station-profiles",
+            "Station Profiles",
+            "core.station",
+            ["station.profile.view"],
+            WorkspaceId::ALL,
+        ),
+        panel(
+            "equipment-manager",
+            "Equipment Manager",
+            "core.station",
+            ["station.equipment.view"],
+            WorkspaceId::ALL,
+        ),
+        panel(
+            "awards-summary",
+            "Awards",
+            "core.awards",
+            ["log.qso.view"],
+            [WorkspaceId::Awards, WorkspaceId::Dashboard],
+        ),
+        panel(
+            "global-search",
+            "Advanced Search",
+            "core.search",
+            ["log.qso.view"],
+            [
+                WorkspaceId::Awards,
+                WorkspaceId::CasualLogger,
+                WorkspaceId::Dashboard,
+            ],
+        ),
+        panel(
+            "uploads",
+            "Uploads",
+            "plugin.log-upload",
+            ["upload.status.view"],
+            [WorkspaceId::Awards, WorkspaceId::Dashboard],
         ),
         panel(
             "diagnostic-reports",
             "Diagnostic Reports",
             "core.diagnostics",
-            ["diagnostics.read"],
+            ["diagnostics.view_logs"],
             WorkspaceId::ALL,
         ),
     ]
@@ -230,6 +286,7 @@ fn workspace_description(id: WorkspaceId) -> &'static str {
         WorkspaceId::Dashboard => "Operational overview and platform health.",
         WorkspaceId::CasualLogger => "General QSO entry and recent contact context.",
         WorkspaceId::PotaSota => "Activation planning, map context, and portable logging.",
+        WorkspaceId::Awards => "Award progress, advanced search, and upload queue context.",
         WorkspaceId::NetControl => "Directed net workflow placeholders.",
         WorkspaceId::EmComm => "Emergency communications coordination placeholders.",
         WorkspaceId::Contesting => "Contest operating surface placeholders.",
@@ -243,20 +300,31 @@ fn default_layout(id: WorkspaceId) -> WorkspaceLayout {
             place("sync-status", PanelRegion::Center, 20),
             place("event-bus-monitor", PanelRegion::Bottom, 10),
             place("diagnostic-reports", PanelRegion::RightInspector, 10),
+            place("service-providers", PanelRegion::RightInspector, 20),
+            place("awards-summary", PanelRegion::RightInspector, 30),
         ],
         WorkspaceId::CasualLogger => vec![
+            place("station-summary", PanelRegion::RightInspector, 5),
             place("callsign-entry", PanelRegion::Center, 10),
             place("recent-qsos", PanelRegion::Center, 20),
             place("rig-control", PanelRegion::RightInspector, 10),
+            place("global-search", PanelRegion::Bottom, 5),
             place("dx-cluster", PanelRegion::Bottom, 10),
         ],
         WorkspaceId::PotaSota => vec![
+            place("station-summary", PanelRegion::RightInspector, 5),
             place("activation-setup", PanelRegion::Center, 10),
             place("portable-logger-entry", PanelRegion::Center, 20),
             place("activation-progress", PanelRegion::RightInspector, 10),
             place("rig-control", PanelRegion::RightInspector, 20),
             place("activation-recent-qsos", PanelRegion::Bottom, 10),
             place("spots-alerts", PanelRegion::Bottom, 20),
+        ],
+        WorkspaceId::Awards => vec![
+            place("awards-summary", PanelRegion::Center, 10),
+            place("global-search", PanelRegion::Center, 20),
+            place("uploads", PanelRegion::RightInspector, 10),
+            place("recent-qsos", PanelRegion::Bottom, 10),
         ],
         WorkspaceId::NetControl => vec![
             place("callsign-entry", PanelRegion::Center, 10),
@@ -319,7 +387,7 @@ mod tests {
         let decoded: GuiShellState = serde_json::from_str(&encoded).unwrap();
 
         assert_eq!(decoded.active_workspace, WorkspaceId::Dashboard);
-        assert_eq!(decoded.workspaces.len(), 6);
+        assert_eq!(decoded.workspaces.len(), 7);
     }
 
     #[test]

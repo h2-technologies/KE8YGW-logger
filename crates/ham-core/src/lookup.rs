@@ -8,7 +8,12 @@ use thiserror::Error;
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
+use crate::{
+    cache_entry_for_value, local_prefix_provider_metadata, publish_service_runtime_event,
+    ProviderSelectionCriteria, ServiceCache, ServiceRegistry,
+};
 use crate::{BusEvent, EventBus, EventBusError, RuntimeEventEnvelope, RuntimeEventSeverity};
+use ham_plugin_sdk::ServiceType;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LookupResult {
@@ -260,6 +265,164 @@ where
     )
     .await?;
     Ok(Some(suggestion))
+}
+
+pub async fn lookup_callsign_with_service_framework<P, B>(
+    provider: &P,
+    registry: &ServiceRegistry,
+    service_cache: &ServiceCache,
+    cache_config: &LookupCacheConfig,
+    bus: &B,
+    callsign: &str,
+    device_id: Uuid,
+) -> Result<Option<LookupSuggestion>, LookupError>
+where
+    P: CallsignLookupProvider,
+    B: EventBus,
+{
+    let normalized = normalize_callsign(callsign)?;
+    publish_service_runtime_event(
+        bus,
+        "service.request.started",
+        RuntimeEventSeverity::Info,
+        Some("plugin.callsign-lookup".to_owned()),
+        device_id,
+        format!("Callsign lookup service request started for {normalized}"),
+        Some(json!({"service_type": "callsign_lookup", "callsign": normalized})),
+        None,
+    )
+    .await?;
+
+    let criteria = ProviderSelectionCriteria {
+        service_type: ServiceType::CallsignLookup,
+        required_capability: Some(crate::service::CAP_LOOKUP_CALLSIGN_BASIC.to_owned()),
+        allow_network: false,
+        require_offline: false,
+    };
+    let selected = registry
+        .select_provider(&criteria)
+        .map_err(|error| LookupError::Provider(error.to_string()))?;
+
+    if selected.metadata.provider_id != provider.provider_id() {
+        publish_service_runtime_event(
+            bus,
+            "service.provider.fallback_used",
+            RuntimeEventSeverity::Info,
+            Some("plugin.callsign-lookup".to_owned()),
+            device_id,
+            "Lookup provider fallback selected",
+            Some(json!({
+                "selected_provider": selected.metadata.provider_id,
+                "requested_provider": provider.provider_id()
+            })),
+            None,
+        )
+        .await?;
+    }
+
+    if let Some(entry) = service_cache
+        .get(
+            ServiceType::CallsignLookup,
+            &selected.metadata.provider_id,
+            &normalized,
+            Utc::now(),
+        )
+        .await
+    {
+        publish_service_runtime_event(
+            bus,
+            "service.request.cache_hit",
+            RuntimeEventSeverity::Debug,
+            Some("plugin.callsign-lookup".to_owned()),
+            device_id,
+            "Service cache hit for callsign lookup",
+            Some(json!({"provider_id": selected.metadata.provider_id, "callsign": normalized})),
+            None,
+        )
+        .await?;
+        let result: LookupResult = serde_json::from_value(entry.value)
+            .map_err(|error| LookupError::Provider(error.to_string()))?;
+        return Ok(Some(suggestion_from_result(&result)));
+    }
+
+    publish_service_runtime_event(
+        bus,
+        "service.request.cache_miss",
+        RuntimeEventSeverity::Debug,
+        Some("plugin.callsign-lookup".to_owned()),
+        device_id,
+        "Service cache miss for callsign lookup",
+        Some(json!({"provider_id": selected.metadata.provider_id, "callsign": normalized})),
+        None,
+    )
+    .await?;
+
+    let result = if selected.metadata.provider_id == provider.provider_id() {
+        provider.lookup_callsign(&normalized).await?
+    } else if selected.metadata.provider_id == local_prefix_provider_metadata().provider_id {
+        LocalPrefixProvider.lookup_callsign(&normalized).await?
+    } else {
+        return Err(LookupError::Provider(format!(
+            "selected lookup provider {} is not available in this runtime",
+            selected.metadata.provider_id
+        )));
+    };
+
+    let Some(mut result) = result else {
+        publish_service_runtime_event(
+            bus,
+            "service.request.failed",
+            RuntimeEventSeverity::Warn,
+            Some("plugin.callsign-lookup".to_owned()),
+            device_id,
+            "Callsign lookup service returned no result",
+            Some(json!({"provider_id": selected.metadata.provider_id, "callsign": normalized})),
+            None,
+        )
+        .await?;
+        return Ok(None);
+    };
+    if result.expires_at.is_none() {
+        result.expires_at = Some(Utc::now() + Duration::days(cache_config.ttl_days));
+    }
+
+    service_cache
+        .put(cache_entry_for_value(
+            ServiceType::CallsignLookup,
+            selected.metadata.provider_id.clone(),
+            normalized.clone(),
+            Duration::days(cache_config.ttl_days),
+            Some(result.confidence),
+            json!(&result),
+        ))
+        .await;
+
+    publish_service_runtime_event(
+        bus,
+        "service.request.completed",
+        RuntimeEventSeverity::Info,
+        Some("plugin.callsign-lookup".to_owned()),
+        device_id,
+        "Callsign lookup service completed",
+        Some(json!({
+            "provider_id": selected.metadata.provider_id,
+            "callsign": normalized,
+            "confidence": result.confidence
+        })),
+        None,
+    )
+    .await?;
+    publish_lookup_event(
+        bus,
+        "lookup.suggestion.created",
+        RuntimeEventSeverity::Info,
+        device_id,
+        "Lookup suggestion created through service framework",
+        Some(json!(suggestion_from_result(&result))),
+        None,
+    )
+    .await?;
+    Ok(Some(suggestion_from_result(&result)))
 }
 
 pub async fn clear_lookup_cache<B: EventBus>(
@@ -648,6 +811,58 @@ mod tests {
 
         assert_eq!(first.suggested_fields["name"], "Ada");
         assert_eq!(second.provider, "mock");
+    }
+
+    #[tokio::test]
+    async fn lookup_provider_works_through_service_framework() {
+        let bus = InMemoryEventBus::default();
+        let service_cache = ServiceCache::new();
+        let provider = LocalPrefixProvider;
+        let suggestion = lookup_callsign_with_service_framework(
+            &provider,
+            &crate::default_service_registry(),
+            &service_cache,
+            &LookupCacheConfig::default(),
+            &bus,
+            "K1ABC",
+            Uuid::new_v4(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(suggestion.provider, "local-prefix");
+        assert_eq!(suggestion.suggested_fields["country"], "United States");
+    }
+
+    #[tokio::test]
+    async fn lookup_service_fallback_event_is_emitted() {
+        let bus = InMemoryEventBus::default();
+        let service_cache = ServiceCache::new();
+        let mut registry = crate::default_service_registry();
+        registry
+            .set_preferred_provider(ham_plugin_sdk::ServiceType::CallsignLookup, "mock")
+            .unwrap();
+        registry.set_enabled("mock", false).unwrap();
+        let provider = MockLookupProvider::new(Some(sample_result()));
+        let suggestion = lookup_callsign_with_service_framework(
+            &provider,
+            &registry,
+            &service_cache,
+            &LookupCacheConfig::default(),
+            &bus,
+            "K1ABC",
+            Uuid::new_v4(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(suggestion.provider, "local-prefix");
+        let events = bus
+            .replay_runtime_events(crate::RuntimeEventFilter::default(), 20)
+            .await;
+        assert!(events
+            .iter()
+            .any(|event| event.event_type == "service.provider.fallback_used"));
     }
 
     #[tokio::test]

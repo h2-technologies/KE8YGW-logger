@@ -10,22 +10,25 @@ use std::{
 };
 
 use ham_core::{
-    build_diagnostic_bundle, default_official_event_log_path, export_adif,
-    export_adif_with_activations, export_diagnostic_zip, import_adif, lookup_callsign_with_cache,
-    publish_rig_runtime_event, submit_proposal, suggestion_from_rig_state, AdifImportOptions,
-    CoreEventEnvelope, DiagnosticBundleInput, DiagnosticReportType, JsonPermissionGrantStore,
-    JsonlLogbookEventStore, LocalPrefixProvider, LogbookEventStore, LookupCache, LookupCacheConfig,
-    LookupProviderStatus, MockRigProvider, NewLogbookEvent, OperatorRole, PermissionGrantSet,
-    PermissionGrantStatus, PermissionRegistry, PermissionSettings, Projection, ProposalContext,
-    RigConnectionStatus, RigDevice, RigProvider, RigProviderStatus, RigState, RuntimeEventFilter,
-    RuntimeEventSeverity, RuntimeLogConfig,
+    build_diagnostic_bundle, default_official_event_log_path, default_service_registry,
+    export_adif, export_adif_with_activations, export_diagnostic_zip, import_adif,
+    lookup_callsign_with_service_framework, publish_rig_runtime_event, submit_proposal,
+    suggestion_from_rig_state, AdifImportOptions, CoreEventEnvelope, DiagnosticBundleInput,
+    DiagnosticReportType, EquipmentItem, EquipmentType, JsonPermissionGrantStore,
+    JsonStationBookStore, JsonlLogbookEventStore, LocalPrefixProvider, LogbookEventStore,
+    LookupCache, LookupCacheConfig, LookupProviderStatus, MockRigProvider, NewLogbookEvent,
+    OperatorRole, PermissionGrantSet, PermissionGrantStatus, PermissionRegistry,
+    PermissionSettings, Projection, ProposalContext, RigConnectionStatus, RigDevice, RigProvider,
+    RigProviderStatus, RigState, RuntimeEventFilter, RuntimeEventSeverity, RuntimeLogConfig,
+    ServiceCache, ServiceRegistry, ServiceRegistrySnapshot, StationBook, StationConfiguration,
+    StationProfile, UploadQueue, UploadTarget,
 };
 use ham_gui::{
     mock::{capability_labels, mock_plugins},
     CommandRegistry, GuiRuntimeBridge, GuiShellState, RuntimeBridgeStatus, RuntimeEventInput,
 };
 use ham_plugin_sdk::{
-    PluginCapability, PluginManifest, ProposalEnvelope, PROPOSAL_ACTIVATION_END,
+    PluginCapability, PluginManifest, ProposalEnvelope, ServiceType, PROPOSAL_ACTIVATION_END,
     PROPOSAL_ACTIVATION_START, PROPOSAL_QSO_ACTIVATION_LINK, PROPOSAL_QSO_CREATE,
     PROPOSAL_QSO_DELETE, PROPOSAL_QSO_NOTE_ADD, PROPOSAL_QSO_RESTORE,
 };
@@ -78,12 +81,17 @@ fn main() {
     let proposal_runtime =
         tokio::runtime::Runtime::new().expect("creating GUI proposal runtime should succeed");
     let store_path = default_official_event_log_path();
-    let permission_store = JsonPermissionGrantStore::new(
-        RuntimeLogConfig::default_for_app()
-            .directory
-            .join("support")
-            .join("plugin-permissions.json"),
-    );
+    let support_dir = RuntimeLogConfig::default_for_app()
+        .directory
+        .join("support");
+    let permission_store =
+        JsonPermissionGrantStore::new(support_dir.join("plugin-permissions.json"));
+    let station_store = JsonStationBookStore::new(support_dir.join("station-book.json"));
+    let mut station_book = station_store.load().unwrap_or_default();
+    if station_book.profiles.is_empty() {
+        seed_default_station_book(&mut station_book);
+        let _ = station_store.save(&station_book);
+    }
     let permission_registry = PermissionRegistry::mvp_default();
     let permission_settings = PermissionSettings::default();
     let mut permission_grants = permission_store.load().unwrap_or_default();
@@ -209,8 +217,13 @@ fn main() {
         cloud_server: InMemoryCloudSyncServer::new(CloudServerConfig::default()),
         lookup_cache: LookupCache::new(),
         lookup_config: Mutex::new(LookupUiConfig::default()),
+        service_registry: Mutex::new(default_service_registry()),
+        service_cache: ServiceCache::new(),
         rig_provider: MockRigProvider::default(),
         rig_config: Mutex::new(RigUiConfig::default()),
+        station_store,
+        station_book: Mutex::new(station_book),
+        upload_queue: Mutex::new(default_upload_queue()),
         last_report: Mutex::new(None),
         permission_registry,
         permission_store,
@@ -237,8 +250,13 @@ struct AppState {
     cloud_server: InMemoryCloudSyncServer,
     lookup_cache: LookupCache,
     lookup_config: Mutex<LookupUiConfig>,
+    service_registry: Mutex<ServiceRegistry>,
+    service_cache: ServiceCache,
     rig_provider: MockRigProvider,
     rig_config: Mutex<RigUiConfig>,
+    station_store: JsonStationBookStore,
+    station_book: Mutex<StationBook>,
+    upload_queue: Mutex<UploadQueue>,
     last_report: Mutex<Option<DiagnosticReportUploadResponse>>,
     permission_registry: PermissionRegistry,
     permission_store: JsonPermissionGrantStore,
@@ -352,6 +370,37 @@ impl SyncUiState {
     }
 }
 
+fn seed_default_station_book(book: &mut StationBook) {
+    let mut profile = StationProfile::new("Home Station", "KE8YGW");
+    profile.operator_callsign = Some("KE8YGW".to_owned());
+    profile.default_grid = Some("EN91".to_owned());
+    profile.default_power_watts = Some(100);
+    profile.active = true;
+    let profile = book.create_profile(profile);
+    let mut radio = EquipmentItem::new(EquipmentType::Radio, "Mock HF Rig");
+    radio.manufacturer = Some("Demo".to_owned());
+    radio.model = Some("MockRig".to_owned());
+    let radio = book.create_equipment(radio);
+    let mut config = StationConfiguration::new(profile.station_profile_id, "Default HF");
+    config.radio_id = Some(radio.equipment_id);
+    config.default_power_watts = Some(100);
+    if let Ok(config) = book.create_configuration(config) {
+        let _ = book.select_configuration(config.configuration_id);
+    }
+}
+
+fn default_upload_queue() -> UploadQueue {
+    let registry = default_service_registry();
+    let targets = registry
+        .snapshot()
+        .providers
+        .into_iter()
+        .filter(|provider| provider.metadata.service_type == ServiceType::LogUpload)
+        .map(|provider| UploadTarget::from_provider(&provider.metadata))
+        .collect();
+    UploadQueue::new(targets)
+}
+
 fn handle_client(state: Arc<AppState>, mut stream: TcpStream) {
     let request = {
         let mut reader = BufReader::new(&mut stream);
@@ -378,6 +427,7 @@ fn handle_client(state: Arc<AppState>, mut stream: TcpStream) {
             runtime_events: state.bridge.replay(RuntimeEventFilter::default(), 100),
             runtime_status: state.bridge.status(),
             known_core_capabilities: capability_labels(),
+            service_providers: service_registry_snapshot(&state),
         }),
         ("GET", "/api/runtime-events") => {
             let params = parse_query(query);
@@ -397,6 +447,8 @@ fn handle_client(state: Arc<AppState>, mut stream: TcpStream) {
         ("POST", "/api/plugins/permissions/revoke") => {
             handle_plugin_permission_action(&state, &request.body, PermissionGrantStatus::Revoked)
         }
+        ("GET", "/api/services/providers") => json_response(&service_registry_snapshot(&state)),
+        ("POST", "/api/services/cache/clear") => handle_service_cache_clear(&state, &request.body),
         ("GET", "/api/runtime-events/export") => {
             let params = parse_query(query);
             let filter = runtime_filter_from_query(&params);
@@ -418,6 +470,14 @@ fn handle_client(state: Arc<AppState>, mut stream: TcpStream) {
             }
         }
         ("GET", "/api/qsos") => json_response(&qso_projection_payload(&state, query)),
+        ("GET", "/api/station") => handle_station_state(&state),
+        ("POST", "/api/station/select-profile") => {
+            handle_station_select_profile(&state, &request.body)
+        }
+        ("GET", "/api/awards") => handle_awards(&state),
+        ("GET", "/api/search") => handle_search(&state, query),
+        ("GET", "/api/uploads") => handle_uploads(&state),
+        ("POST", "/api/uploads/queue") => handle_upload_queue_create(&state, &request.body),
         ("GET", "/api/activations") => json_response(&activation_projection_payload(&state)),
         ("GET", "/api/lookup/callsign") => handle_lookup_callsign(&state, query),
         ("POST", "/api/lookup/cache/clear") => handle_lookup_cache_clear(&state),
@@ -529,6 +589,7 @@ struct ApiShellPayload {
     runtime_events: Vec<ham_core::RuntimeDiagnosticEvent>,
     runtime_status: RuntimeBridgeStatus,
     known_core_capabilities: Vec<String>,
+    service_providers: ServiceRegistrySnapshot,
 }
 
 #[derive(Debug, Serialize)]
@@ -643,6 +704,18 @@ struct PathRequest {
 }
 
 #[derive(Debug, Deserialize)]
+struct StationProfileSelectRequest {
+    station_profile_id: uuid::Uuid,
+}
+
+#[derive(Debug, Deserialize)]
+struct UploadQueueCreateRequest {
+    target_id: String,
+    qso_ids: Vec<uuid::Uuid>,
+    all_not_uploaded: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
 struct DiagnosticReportRequest {
     report_type: Option<String>,
     path: Option<String>,
@@ -664,6 +737,11 @@ struct PluginPermissionsPayload {
     registry: Vec<ham_core::PermissionMetadata>,
     grants: PermissionGrantSet,
     settings: PermissionSettings,
+}
+
+#[derive(Debug, Deserialize)]
+struct ServiceCacheClearRequest {
+    service_type: Option<ServiceType>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -807,6 +885,14 @@ fn core_gui_manifest() -> PluginManifest {
             PluginCapability::SyncCloudConnect,
             PluginCapability::SyncCloudPull,
             PluginCapability::SyncCloudPush,
+            PluginCapability::ServiceProviderEnable,
+            PluginCapability::ServiceProviderDisable,
+            PluginCapability::ServiceCacheClear,
+            PluginCapability::StationProfileView,
+            PluginCapability::StationProfileManage,
+            PluginCapability::StationEquipmentView,
+            PluginCapability::StationEquipmentManage,
+            PluginCapability::StationProfileUse,
             PluginCapability::SettingsRead,
             PluginCapability::SettingsWrite,
         ],
@@ -853,10 +939,18 @@ fn lookup_manifest() -> PluginManifest {
             PluginCapability::LookupGrid,
             PluginCapability::LookupCacheRead,
             PluginCapability::LookupCacheWrite,
+            PluginCapability::ServiceCacheRead,
+            PluginCapability::ServiceCacheWrite,
+            PluginCapability::ServiceCacheClear,
             PluginCapability::QsoSuggestFields,
         ],
     );
     manifest.optional_permissions = vec![PluginCapability::NetworkExternalLookup];
+    manifest.contributed_services = vec![
+        ServiceType::CallsignLookup,
+        ServiceType::EntityLookup,
+        ServiceType::GridLookup,
+    ];
     manifest.description =
         "Advisory callsign, prefix, grid, and cache-backed enrichment.".to_owned();
     manifest
@@ -889,7 +983,86 @@ fn plugin_manifests() -> Vec<PluginManifest> {
         pota_sota_manifest(),
         lookup_manifest(),
         rig_manifest(),
+        log_upload_manifest(),
+        spotting_manifest(),
+        maps_manifest(),
+        weather_manifest(),
+        propagation_manifest(),
     ]
+}
+
+fn log_upload_manifest() -> PluginManifest {
+    let mut manifest = PluginManifest::new(
+        "plugin.log-upload",
+        "Log Upload Providers",
+        env!("CARGO_PKG_VERSION"),
+        vec![
+            PluginCapability::AdifExport,
+            PluginCapability::UploadLog,
+            PluginCapability::UploadConfirmationPull,
+            PluginCapability::UploadQueueManage,
+            PluginCapability::UploadStatusView,
+            PluginCapability::NetworkExternalUpload,
+        ],
+    );
+    manifest.description = "LoTW, eQSL, Club Log, and QRZ Logbook provider stubs.".to_owned();
+    manifest.contributed_services = vec![ServiceType::LogUpload];
+    manifest
+}
+
+fn spotting_manifest() -> PluginManifest {
+    let mut manifest = PluginManifest::new(
+        "plugin.spotting",
+        "Spotting Providers",
+        env!("CARGO_PKG_VERSION"),
+        vec![
+            PluginCapability::SpottingView,
+            PluginCapability::SpottingConfigure,
+            PluginCapability::NetworkExternalSpotting,
+        ],
+    );
+    manifest.description =
+        "DX Cluster, POTA, SOTAWatch, and RBN spotting provider stubs.".to_owned();
+    manifest.contributed_panels = vec!["spots-alerts".to_owned(), "dx-cluster".to_owned()];
+    manifest.contributed_services = vec![ServiceType::Spotting];
+    manifest
+}
+
+fn maps_manifest() -> PluginManifest {
+    let mut manifest = PluginManifest::new(
+        "plugin.maps",
+        "Maps",
+        env!("CARGO_PKG_VERSION"),
+        vec![PluginCapability::MapView, PluginCapability::MapConfigure],
+    );
+    manifest.description = "Map tiles and geocoding provider placeholders.".to_owned();
+    manifest.contributed_panels = vec!["map-placeholder".to_owned()];
+    manifest.contributed_services = vec![ServiceType::MapTiles, ServiceType::Geocoding];
+    manifest
+}
+
+fn weather_manifest() -> PluginManifest {
+    let mut manifest = PluginManifest::new(
+        "plugin.weather",
+        "Weather",
+        env!("CARGO_PKG_VERSION"),
+        vec![PluginCapability::WeatherView],
+    );
+    manifest.description = "NOAA/Open-Meteo/manual weather provider placeholders.".to_owned();
+    manifest.contributed_services = vec![ServiceType::Weather];
+    manifest
+}
+
+fn propagation_manifest() -> PluginManifest {
+    let mut manifest = PluginManifest::new(
+        "plugin.propagation",
+        "Propagation",
+        env!("CARGO_PKG_VERSION"),
+        vec![PluginCapability::PropagationView],
+    );
+    manifest.description = "Solar, MUF, grayline, and VOACAP provider placeholders.".to_owned();
+    manifest.contributed_services = vec![ServiceType::Propagation];
+    manifest
 }
 
 fn lookup_provider_status(state: &AppState) -> LookupProviderStatus {
@@ -918,8 +1091,17 @@ fn handle_lookup_status(state: &AppState) -> Vec<u8> {
         .clone();
     json_response(&json!({
         "config": config,
-        "providers": [lookup_provider_status(state)]
+        "providers": [lookup_provider_status(state)],
+        "service_registry": service_registry_snapshot(state)
     }))
+}
+
+fn service_registry_snapshot(state: &AppState) -> ServiceRegistrySnapshot {
+    state
+        .service_registry
+        .lock()
+        .expect("service registry mutex should not be poisoned")
+        .snapshot()
 }
 
 fn handle_plugin_permissions(state: &AppState) -> Vec<u8> {
@@ -1087,16 +1269,24 @@ fn handle_lookup_callsign(state: &AppState, query: &str) -> Vec<u8> {
         return json_response_with_status(400, &json!({"ok": false, "error": "lookup disabled"}));
     }
     let provider = LocalPrefixProvider;
-    let result = state.proposal_runtime.block_on(lookup_callsign_with_cache(
-        &provider,
-        &state.lookup_cache,
-        &LookupCacheConfig {
-            ttl_days: config.cache_ttl_days,
-        },
-        &state.bridge,
-        callsign,
-        state.bridge.status().device_id,
-    ));
+    let registry = state
+        .service_registry
+        .lock()
+        .expect("service registry mutex should not be poisoned")
+        .clone();
+    let result = state
+        .proposal_runtime
+        .block_on(lookup_callsign_with_service_framework(
+            &provider,
+            &registry,
+            &state.service_cache,
+            &LookupCacheConfig {
+                ttl_days: config.cache_ttl_days,
+            },
+            &state.bridge,
+            callsign,
+            state.bridge.status().device_id,
+        ));
     match result {
         Ok(suggestion) => json_response(&json!({
             "ok": true,
@@ -1113,11 +1303,16 @@ fn handle_lookup_cache_clear(state: &AppState) -> Vec<u8> {
     if let Err(response) = ensure_gui_permission(
         state,
         &lookup_manifest(),
-        PluginCapability::LookupCacheWrite,
-        "Lookup cache write permission check",
+        PluginCapability::ServiceCacheClear,
+        "Service cache clear permission check",
     ) {
         return response;
     }
+    let service_cleared = state.proposal_runtime.block_on(
+        state
+            .service_cache
+            .clear_service(ServiceType::CallsignLookup),
+    );
     match state
         .proposal_runtime
         .block_on(ham_core::clear_lookup_cache(
@@ -1125,11 +1320,47 @@ fn handle_lookup_cache_clear(state: &AppState) -> Vec<u8> {
             &state.bridge,
             state.bridge.status().device_id,
         )) {
-        Ok(()) => json_response(&json!({"ok": true})),
+        Ok(()) => json_response(&json!({"ok": true, "service_cache_cleared": service_cleared})),
         Err(error) => {
             json_response_with_status(400, &json!({"ok": false, "error": error.to_string()}))
         }
     }
+}
+
+fn handle_service_cache_clear(state: &AppState, body: &[u8]) -> Vec<u8> {
+    if let Err(response) = ensure_gui_permission(
+        state,
+        &core_gui_manifest(),
+        PluginCapability::ServiceCacheClear,
+        "Service cache clear permission check",
+    ) {
+        return response;
+    }
+    let request = if body.is_empty() {
+        ServiceCacheClearRequest { service_type: None }
+    } else {
+        match serde_json::from_slice::<ServiceCacheClearRequest>(body) {
+            Ok(request) => request,
+            Err(_) => return json_error(400, "invalid service cache clear JSON"),
+        }
+    };
+    let cleared = match request.service_type {
+        Some(service_type) => state
+            .proposal_runtime
+            .block_on(state.service_cache.clear_service(service_type)),
+        None => state
+            .proposal_runtime
+            .block_on(state.service_cache.clear_all()),
+    };
+    let _ = publish_gui_runtime(
+        state,
+        "service.request.cache_miss",
+        RuntimeEventSeverity::Info,
+        "Service cache cleared",
+        Some(json!({"cleared": cleared, "service_type": request.service_type})),
+        None,
+    );
+    json_response(&json!({"ok": true, "cleared": cleared}))
 }
 
 fn handle_rig_status(state: &AppState) -> Vec<u8> {
@@ -1758,6 +1989,198 @@ fn qso_projection_payload(state: &AppState, query: &str) -> ApiQsoPayload {
     ApiQsoPayload { qsos }
 }
 
+fn current_qso_projection(state: &AppState) -> ham_core::QsoCurrentStateProjection {
+    state
+        .proposal_runtime
+        .block_on(state.store.rebuild_projections(state.logbook_id))
+        .unwrap_or_else(|_| ham_core::QsoCurrentStateProjection::new())
+}
+
+fn handle_station_state(state: &AppState) -> Vec<u8> {
+    if let Err(response) = ensure_gui_permission(
+        state,
+        &core_gui_manifest(),
+        PluginCapability::StationProfileView,
+        "Station profile view permission check",
+    ) {
+        return response;
+    }
+    let book = state
+        .station_book
+        .lock()
+        .expect("station book mutex should not be poisoned")
+        .clone();
+    json_response(&json!({
+        "profiles": book.profiles,
+        "equipment": book.equipment,
+        "configurations": book.configurations,
+        "active_profile_id": book.active_profile_id,
+        "active_configuration_id": book.active_configuration_id
+    }))
+}
+
+fn handle_station_select_profile(state: &AppState, body: &[u8]) -> Vec<u8> {
+    if let Err(response) = ensure_gui_permission(
+        state,
+        &core_gui_manifest(),
+        PluginCapability::StationProfileUse,
+        "Station profile use permission check",
+    ) {
+        return response;
+    }
+    let Ok(request) = serde_json::from_slice::<StationProfileSelectRequest>(body) else {
+        return json_error(400, "invalid station profile selection JSON");
+    };
+    let mut book = state
+        .station_book
+        .lock()
+        .expect("station book mutex should not be poisoned");
+    if let Err(error) = book.select_profile(request.station_profile_id) {
+        return json_error(400, error.to_string());
+    }
+    let _ = state.station_store.save(&book);
+    let _ = publish_gui_runtime(
+        state,
+        "station.profile.selected",
+        RuntimeEventSeverity::Info,
+        "Station profile selected",
+        Some(json!({"station_profile_id": request.station_profile_id})),
+        None,
+    );
+    json_response(&json!({"ok": true, "station": &*book}))
+}
+
+fn handle_awards(state: &AppState) -> Vec<u8> {
+    let projection = current_qso_projection(state);
+    let records = projection
+        .list(true)
+        .into_iter()
+        .cloned()
+        .collect::<Vec<_>>();
+    let _ = publish_gui_runtime(
+        state,
+        "awards.rebuild.started",
+        RuntimeEventSeverity::Info,
+        "Award progress rebuild started",
+        None,
+        None,
+    );
+    let engine = ham_core::AwardEngine::default_mvp();
+    let progress = engine.rebuild_from_qsos(&records);
+    let _ = publish_gui_runtime(
+        state,
+        "awards.rebuild.completed",
+        RuntimeEventSeverity::Info,
+        "Award progress rebuild completed",
+        Some(json!({"award_count": progress.len()})),
+        None,
+    );
+    json_response(&json!({
+        "definitions": engine.definitions(),
+        "progress": progress
+    }))
+}
+
+fn handle_search(state: &AppState, query: &str) -> Vec<u8> {
+    let params = parse_query(query);
+    let raw = params.get("q").cloned().unwrap_or_default();
+    let parsed = match ham_core::parse_search_query(&raw) {
+        Ok(query) => query,
+        Err(error) => return json_error(400, error.to_string()),
+    };
+    let projection = current_qso_projection(state);
+    let records = projection
+        .list(true)
+        .into_iter()
+        .cloned()
+        .collect::<Vec<_>>();
+    let _ = publish_gui_runtime(
+        state,
+        "search.query.started",
+        RuntimeEventSeverity::Debug,
+        "QSO search started",
+        Some(json!({"query": raw})),
+        None,
+    );
+    let results = ham_core::search_qsos(&records, &parsed);
+    let _ = publish_gui_runtime(
+        state,
+        "search.query.completed",
+        RuntimeEventSeverity::Info,
+        "QSO search completed",
+        Some(json!({"query": raw, "result_count": results.len()})),
+        None,
+    );
+    json_response(&json!({"query": parsed, "results": results}))
+}
+
+fn handle_uploads(state: &AppState) -> Vec<u8> {
+    if let Err(response) = ensure_gui_permission(
+        state,
+        &log_upload_manifest(),
+        PluginCapability::UploadStatusView,
+        "Upload status view permission check",
+    ) {
+        return response;
+    }
+    let queue = state
+        .upload_queue
+        .lock()
+        .expect("upload queue mutex should not be poisoned")
+        .clone();
+    json_response(&queue)
+}
+
+fn handle_upload_queue_create(state: &AppState, body: &[u8]) -> Vec<u8> {
+    if let Err(response) = ensure_gui_permission(
+        state,
+        &log_upload_manifest(),
+        PluginCapability::UploadQueueManage,
+        "Upload queue manage permission check",
+    ) {
+        return response;
+    }
+    let Ok(request) = serde_json::from_slice::<UploadQueueCreateRequest>(body) else {
+        return json_error(400, "invalid upload queue JSON");
+    };
+    let projection = current_qso_projection(state);
+    let qso_ids = if request.all_not_uploaded.unwrap_or(false) || request.qso_ids.is_empty() {
+        projection
+            .list(false)
+            .into_iter()
+            .map(|qso| qso.qso_id)
+            .collect::<Vec<_>>()
+    } else {
+        request.qso_ids
+    };
+    let mut queue = state
+        .upload_queue
+        .lock()
+        .expect("upload queue mutex should not be poisoned");
+    let job = match queue.create_job(request.target_id, state.logbook_id, qso_ids.clone()) {
+        Ok(job) => job,
+        Err(error) => return json_error(400, error.to_string()),
+    };
+    let adif = ham_core::adif_for_upload_job(&projection, &qso_ids);
+    let _ = publish_gui_runtime(
+        state,
+        "upload.queue.created",
+        RuntimeEventSeverity::Info,
+        "Upload job queued",
+        Some(json!({"upload_job_id": job.upload_job_id, "qso_count": qso_ids.len()})),
+        None,
+    );
+    let _ = publish_gui_runtime(
+        state,
+        "upload.adif.generated",
+        RuntimeEventSeverity::Info,
+        "Upload ADIF generated",
+        Some(json!({"upload_job_id": job.upload_job_id, "bytes": adif.len()})),
+        None,
+    );
+    json_response(&json!({"ok": true, "job": job, "adif_preview": adif}))
+}
+
 fn activation_projection_payload(state: &AppState) -> ApiActivationPayload {
     let projection = state
         .proposal_runtime
@@ -1822,6 +2245,7 @@ fn handle_qso_create(state: &AppState, body: &[u8]) -> Vec<u8> {
     }
     apply_accepted_lookup_fields(&mut payload, &request);
     apply_accepted_rig_fields(&mut payload, &request);
+    apply_active_station_defaults(state, &mut payload);
 
     submit_gui_proposal(state, PROPOSAL_QSO_CREATE, None, payload)
 }
@@ -1862,6 +2286,7 @@ fn handle_qso_create_with_activation(state: &AppState, body: &[u8]) -> Vec<u8> {
     }
     apply_accepted_lookup_fields(&mut payload, &request);
     apply_accepted_rig_fields(&mut payload, &request);
+    apply_active_station_defaults(state, &mut payload);
     if let Some(active) = active {
         payload["activation_id"] = json!(active.activation_id);
         if let Some(kind) = active
@@ -2007,6 +2432,15 @@ fn apply_accepted_rig_fields(payload: &mut Value, request: &CreateQsoRequest) {
     if let Some(fields) = &request.rig_enriched_fields {
         payload["rig_enriched_fields"] = json!(fields);
     }
+}
+
+fn apply_active_station_defaults(state: &AppState, payload: &mut Value) {
+    let book = state
+        .station_book
+        .lock()
+        .expect("station book mutex should not be poisoned")
+        .clone();
+    book.apply_defaults_to_qso_payload(payload);
 }
 
 fn handle_qso_simple_action(state: &AppState, body: &[u8], proposal_type: &str) -> Vec<u8> {

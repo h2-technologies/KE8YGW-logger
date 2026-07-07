@@ -128,6 +128,55 @@ impl CommandRegistry {
                 None,
                 None,
             ),
+            command(
+                "services.open",
+                "Open Service Providers",
+                "Services",
+                None,
+                None,
+            ),
+            command(
+                "services.health.refresh",
+                "Refresh Provider Health",
+                "Services",
+                None,
+                None,
+            ),
+            command(
+                "services.provider.enable",
+                "Enable Provider",
+                "Services",
+                None,
+                None,
+            ),
+            command(
+                "services.provider.disable",
+                "Disable Provider",
+                "Services",
+                None,
+                None,
+            ),
+            command(
+                "services.cache.clear",
+                "Clear Service Cache",
+                "Services",
+                None,
+                None,
+            ),
+            command(
+                "services.lookup.test",
+                "Test Callsign Lookup Providers",
+                "Services",
+                None,
+                None,
+            ),
+            command(
+                "services.spotting.test",
+                "Test Spotting Providers",
+                "Services",
+                None,
+                None,
+            ),
             command("rig.connect", "Connect Rig", "Rig Control", None, None),
             command(
                 "rig.disconnect",
@@ -217,6 +266,150 @@ impl CommandRegistry {
                 "projection.rebuild",
                 "Rebuild Projections",
                 "Diagnostics",
+                None,
+                None,
+            ),
+            command(
+                "station.profiles.open",
+                "Open Station Profiles",
+                "Station",
+                None,
+                None,
+            ),
+            command(
+                "station.equipment.open",
+                "Open Equipment Manager",
+                "Station",
+                None,
+                None,
+            ),
+            command(
+                "station.profile.switch",
+                "Switch Station Profile",
+                "Station",
+                None,
+                None,
+            ),
+            command(
+                "station.profile.create",
+                "Create Station Profile",
+                "Station",
+                None,
+                None,
+            ),
+            command(
+                "station.equipment.create",
+                "Create Equipment Item",
+                "Station",
+                None,
+                None,
+            ),
+            command(
+                "awards.open",
+                "Open Awards",
+                "Awards",
+                None,
+                Some(WorkspaceId::Awards),
+            ),
+            command(
+                "awards.rebuild",
+                "Rebuild Award Progress",
+                "Awards",
+                None,
+                Some(WorkspaceId::Awards),
+            ),
+            command(
+                "awards.needed.entities",
+                "Show Needed Entities",
+                "Awards",
+                None,
+                Some(WorkspaceId::Awards),
+            ),
+            command(
+                "awards.needed.states",
+                "Show Needed States",
+                "Awards",
+                None,
+                Some(WorkspaceId::Awards),
+            ),
+            command("search.open", "Open Search", "Search", None, None),
+            command(
+                "search.save-current",
+                "Save Current Search",
+                "Search",
+                None,
+                None,
+            ),
+            command("search.run-saved", "Run Saved Search", "Search", None, None),
+            command(
+                "search.deleted",
+                "Search Deleted QSOs",
+                "Search",
+                None,
+                None,
+            ),
+            command("uploads.open", "Open Uploads", "Uploads", None, None),
+            command(
+                "uploads.queue-not-uploaded",
+                "Queue Not Uploaded QSOs",
+                "Uploads",
+                None,
+                None,
+            ),
+            command(
+                "uploads.retry-failed",
+                "Retry Failed Uploads",
+                "Uploads",
+                None,
+                None,
+            ),
+            command(
+                "uploads.export-adif",
+                "Export Upload ADIF",
+                "Uploads",
+                None,
+                None,
+            ),
+            command(
+                "logger.submit-qso",
+                "Submit QSO",
+                "Logging",
+                Some("Enter"),
+                None,
+            ),
+            command("logger.clear-form", "Clear QSO Form", "Logging", None, None),
+            command(
+                "logger.use-rig-frequency",
+                "Use Rig Frequency",
+                "Logging",
+                None,
+                None,
+            ),
+            command(
+                "logger.accept-lookup-suggestions",
+                "Accept Lookup Suggestions",
+                "Logging",
+                None,
+                None,
+            ),
+            command(
+                "logger.toggle-activation-link",
+                "Toggle POTA/SOTA Activation Link",
+                "Logging",
+                None,
+                Some(WorkspaceId::PotaSota),
+            ),
+            command(
+                "logger.open-recent-qsos",
+                "Open Recent QSOs",
+                "Logging",
+                None,
+                Some(WorkspaceId::CasualLogger),
+            ),
+            command(
+                "logger.open-advanced-search",
+                "Open Advanced Search",
+                "Logging",
                 None,
                 None,
             ),
@@ -411,6 +604,10 @@ mod tests {
         assert!(ids.contains(&"adif.export"));
         assert!(ids.contains(&"lookup.callsign"));
         assert!(ids.contains(&"lookup.cache.clear"));
+        assert!(ids.contains(&"services.open"));
+        assert!(ids.contains(&"services.cache.clear"));
+        assert!(ids.contains(&"services.lookup.test"));
+        assert!(ids.contains(&"services.spotting.test"));
         assert!(ids.contains(&"rig.connect"));
         assert!(ids.contains(&"rig.disconnect"));
         assert!(ids.contains(&"rig.refresh-state"));
@@ -427,5 +624,15 @@ mod tests {
         assert!(ids.contains(&"sync.cloud.connect"));
         assert!(ids.contains(&"sync.cloud.pull"));
         assert!(ids.contains(&"sync.identity.copy"));
+        assert!(ids.contains(&"station.profiles.open"));
+        assert!(ids.contains(&"station.equipment.open"));
+        assert!(ids.contains(&"awards.open"));
+        assert!(ids.contains(&"awards.rebuild"));
+        assert!(ids.contains(&"search.open"));
+        assert!(ids.contains(&"uploads.open"));
+        assert!(ids.contains(&"uploads.queue-not-uploaded"));
+        assert!(ids.contains(&"logger.submit-qso"));
+        assert!(ids.contains(&"logger.clear-form"));
+        assert!(ids.contains(&"logger.accept-lookup-suggestions"));
     }
 }

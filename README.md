@@ -4,6 +4,45 @@ This workspace is the first foundation for a local-first, plugin-based amateur
 radio operations platform. The MVP direction is casual logging, POTA/SOTA, and
 sync, with room for emergency communications, net control, and contesting.
 
+## Start Here
+
+The project is now blueprint-driven. Contributors and future implementation
+passes should start with these documents:
+
+- [Master Blueprint](docs/MASTER_BLUEPRINT.md): locked architecture decisions,
+  system model, MVP scope, and crate migration notes.
+- [Roadmap](docs/ROADMAP.md): compressed vertical implementation passes and
+  current pass status.
+- [Event Catalog](docs/EVENT_CATALOG.md): official event, proposal, and runtime
+  event names.
+- [Plugin SDK](docs/PLUGIN_SDK.md): manifests, permissions, proposals, panels,
+  and commands.
+- [Sync Protocol](docs/SYNC_PROTOCOL.md): LAN discovery, handshake, replication,
+  cloud relay, and divergence behavior.
+- [Security Model](docs/SECURITY_MODEL.md): plugin permissions, operator roles,
+  scopes, diagnostics, and auth posture.
+- [Service Framework](docs/architecture/service-framework.md): shared provider
+  registry, provider selection, service cache, and integration skeletons.
+- [Station Profiles](docs/architecture/station-profiles.md): station/equipment
+  support storage and logger defaults.
+- [Award Engine](docs/architecture/award-engine.md): projection-backed award
+  progress foundation.
+- [Advanced Search](docs/architecture/search.md): QSO projection query syntax
+  and saved-search model.
+- [Upload Queue](docs/architecture/upload-queue.md): provider-backed ADIF upload
+  queue foundation.
+- [Provider Development](docs/plugins/provider-development.md): how plugins add
+  lookup, upload, spotting, map, weather, and propagation providers.
+- [Credentials and Redaction](docs/security/credentials-and-redaction.md):
+  credential handling, config schemas, runtime redaction, and report safety.
+- [Developer Guide](docs/DEVELOPER_GUIDE.md): local commands, completion
+  checklist, feature workflow, and testing expectations.
+- [Root Roadmap](ROADMAP.md): current milestone summary and next milestone.
+- [Project State](PROJECT_STATE.md): authoritative implementation status,
+  technical debt, test coverage, and next recommended milestone.
+- [Architecture Decisions](docs/adr/0001-append-only-official-log.md): accepted
+  ADRs for the foundational design choices.
+
 ## Workspace
 
 - `ham-core`: append-only logbook events, event bus, proposal validation, event store, and projections.
@@ -39,6 +78,57 @@ the official logbook stream.
 Projections are derived state. The QSO current-state projection rebuilds from the
 event stream and hides tombstoned QSOs while preserving the delete event in the
 append-only history.
+
+## Unified Service Framework
+
+`ham-core` now includes a shared service/provider framework so plugins do not
+invent separate provider abstractions. Providers register metadata in a central
+`ServiceRegistry`, declare service type, capabilities, permissions, config keys,
+network/offline behavior, health, and priority, then application code consumes
+provider-agnostic services.
+
+Implemented service categories include callsign/entity/grid lookup, log upload,
+spotting, map tiles, geocoding, weather, propagation, award data, AI tools,
+authentication, storage, and notifications. The MVP includes local/mock lookup
+providers, QRZ/HamQTH lookup stubs, LoTW/eQSL/Club Log/QRZ Logbook upload
+stubs, mock spotting, and placeholder map/weather/propagation providers.
+
+Service requests are allowed only when plugin permission, operator role
+permission, provider permission/config requirements, enablement, and health all
+pass. Shared `ServiceCache` entries are support data, not official log data, not
+append-only, expirable, clearable, and not synced by default.
+
+The GUI Service Providers screen lists providers by service type with plugin
+source, enabled state, health, priority, online/offline behavior, missing config
+warnings, capabilities, and required permissions. Credential fields are schema
+placeholders only until secure OS keychain/secret-store support is added.
+
+## Daily Driver Logging Foundation
+
+The current milestone adds the first daily-logger layer on top of the core and
+Unified Service Framework:
+
+- Station/equipment profiles live in support storage and provide logger defaults
+  for station callsign, operator callsign, grid, QTH, power, and selected
+  equipment references.
+- QSO official events may reference `station_profile_id`,
+  `station_configuration_id`, and equipment IDs. Historical QSOs are not
+  rewritten when support records change.
+- The Awards workspace computes DXCC, WAS, POTA, SOTA, and grid progress from
+  QSO projections. Deleted QSOs do not count; restored QSOs count after replay.
+- Advanced Search reads QSO projections and supports filters such as
+  `callsign:K1ABC`, `band:20m`, `mode:FT8`, `date:2026-07-01..2026-07-06`,
+  `tag:portable`, and plain text terms.
+- Upload queue scaffolding selects projected, visible QSOs, generates ADIF, and
+  targets service-framework upload providers such as LoTW/eQSL/Club Log/QRZ
+  stubs.
+- Keyboard-first logging commands include focus callsign entry, submit QSO,
+  clear form, use rig frequency, accept lookup suggestions, open recent QSOs,
+  and open advanced search.
+
+Run the GUI with `cargo run -p ham-gui`, open the local URL printed by the
+process, choose the Casual Logger workspace, and use the Station Summary,
+Callsign Entry, Recent QSOs, Advanced Search, Awards, and Uploads panels.
 
 ## Official QSO Workflow
 
