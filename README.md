@@ -102,6 +102,8 @@ passes should start with these documents:
 - `ham-cli`: placeholder command-line entry point.
 - `ham-gui`: initial GUI shell, workspace model, panel registry, command registry,
   and static web shell served by a small Rust binary.
+- `ios/KE8YGWLogger`: native iOS SwiftUI/SwiftData app skeleton for manual
+  Xcode builds.
 
 ## v0.2 Almost-v1 Beta Status
 

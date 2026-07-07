@@ -20,6 +20,7 @@ This root roadmap summarizes the current implementation plan. Detailed architect
 - Mapping and Propagation Framework: GIS models, Maidenhead grid engine, great-circle math, map provider model, map layers, markers, QSO/station visualization, grayline, mock propagation/weather, and Maps workspace panels.
 - Online Services Ecosystem foundation: connected provider metadata, upload/download engine models, confirmation import events, DX/POTA/SOTA spot normalization, provider health, automation tasks, notifications, and Online Services workspace.
 - Durable Support Storage MVP: versioned JSON sidecar storage for service provider settings, service cache metadata, upload queue state, map layer preferences, lookup/rig UI config, online automation/notification support state, and support-storage runtime events.
+- Native iOS SwiftUI skeleton: Xcode project, SwiftData local persistence, QSO logging screens, station profile, ADIF/CSV export, settings, shared scheme, and unit-test targets for manual Xcode builds.
 
 ## Current Milestone
 
@@ -84,6 +85,7 @@ Then continue Live Provider Adapters and Production Credential Backends:
 - OS keychain/secret-store release-runner validation.
 
 - Tauri installer/signing polish and release-runner package validation.
+- iOS parity with the Rust core event/proposal/sync architecture.
 - Award rule databases and needed-list intelligence.
 - Durable upload queue and provider settings.
 - LAN trust pairing UX and real peer-to-peer transport.

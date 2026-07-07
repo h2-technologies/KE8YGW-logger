@@ -1,0 +1,419 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		100000000000000000000101 /* KE8YGWLoggerApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000001 /* KE8YGWLoggerApp.swift */; };
+		100000000000000000000102 /* QSO.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000002 /* QSO.swift */; };
+		100000000000000000000103 /* StationProfile.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000003 /* StationProfile.swift */; };
+		100000000000000000000104 /* AppSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000004 /* AppSettings.swift */; };
+		100000000000000000000105 /* HamRadioUtilities.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000005 /* HamRadioUtilities.swift */; };
+		100000000000000000000106 /* LogExportService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000006 /* LogExportService.swift */; };
+		100000000000000000000107 /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000007 /* RootView.swift */; };
+		100000000000000000000108 /* HomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000008 /* HomeView.swift */; };
+		100000000000000000000109 /* NewQSOView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000009 /* NewQSOView.swift */; };
+		10000000000000000000010A /* LogbookView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 10000000000000000000000A /* LogbookView.swift */; };
+		10000000000000000000010B /* QSODetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 10000000000000000000000B /* QSODetailView.swift */; };
+		10000000000000000000010C /* StationProfileView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 10000000000000000000000C /* StationProfileView.swift */; };
+		10000000000000000000010D /* ExportView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 10000000000000000000000D /* ExportView.swift */; };
+		10000000000000000000010E /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 10000000000000000000000E /* SettingsView.swift */; };
+		100000000000000000000201 /* HamRadioUtilitiesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000021 /* HamRadioUtilitiesTests.swift */; };
+		100000000000000000000202 /* ExportServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000022 /* ExportServiceTests.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		100000000000000000000301 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 100000000000000000000500 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 100000000000000000000400;
+			remoteInfo = KE8YGWLogger;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXFileReference section */
+		100000000000000000000001 /* KE8YGWLoggerApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = App/KE8YGWLoggerApp.swift; sourceTree = "<group>"; };
+		100000000000000000000002 /* QSO.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models/QSO.swift; sourceTree = "<group>"; };
+		100000000000000000000003 /* StationProfile.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models/StationProfile.swift; sourceTree = "<group>"; };
+		100000000000000000000004 /* AppSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models/AppSettings.swift; sourceTree = "<group>"; };
+		100000000000000000000005 /* HamRadioUtilities.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Services/HamRadioUtilities.swift; sourceTree = "<group>"; };
+		100000000000000000000006 /* LogExportService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Services/LogExportService.swift; sourceTree = "<group>"; };
+		100000000000000000000007 /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/RootView.swift; sourceTree = "<group>"; };
+		100000000000000000000008 /* HomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/HomeView.swift; sourceTree = "<group>"; };
+		100000000000000000000009 /* NewQSOView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/NewQSOView.swift; sourceTree = "<group>"; };
+		10000000000000000000000A /* LogbookView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/LogbookView.swift; sourceTree = "<group>"; };
+		10000000000000000000000B /* QSODetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/QSODetailView.swift; sourceTree = "<group>"; };
+		10000000000000000000000C /* StationProfileView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/StationProfileView.swift; sourceTree = "<group>"; };
+		10000000000000000000000D /* ExportView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/ExportView.swift; sourceTree = "<group>"; };
+		10000000000000000000000E /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/SettingsView.swift; sourceTree = "<group>"; };
+		10000000000000000000000F /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Resources/Info.plist; sourceTree = "<group>"; };
+		100000000000000000000021 /* HamRadioUtilitiesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HamRadioUtilitiesTests.swift; sourceTree = "<group>"; };
+		100000000000000000000022 /* ExportServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExportServiceTests.swift; sourceTree = "<group>"; };
+		100000000000000000000030 /* KE8YGW Logger.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "KE8YGW Logger.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		100000000000000000000031 /* KE8YGWLoggerTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = KE8YGWLoggerTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		100000000000000000000401 /* Frameworks */ = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+		100000000000000000000411 /* Frameworks */ = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		100000000000000000000010 /* KE8YGWLogger */ = {
+			isa = PBXGroup;
+			children = (
+				100000000000000000000001 /* KE8YGWLoggerApp.swift */,
+				100000000000000000000002 /* QSO.swift */,
+				100000000000000000000003 /* StationProfile.swift */,
+				100000000000000000000004 /* AppSettings.swift */,
+				100000000000000000000005 /* HamRadioUtilities.swift */,
+				100000000000000000000006 /* LogExportService.swift */,
+				100000000000000000000007 /* RootView.swift */,
+				100000000000000000000008 /* HomeView.swift */,
+				100000000000000000000009 /* NewQSOView.swift */,
+				10000000000000000000000A /* LogbookView.swift */,
+				10000000000000000000000B /* QSODetailView.swift */,
+				10000000000000000000000C /* StationProfileView.swift */,
+				10000000000000000000000D /* ExportView.swift */,
+				10000000000000000000000E /* SettingsView.swift */,
+				10000000000000000000000F /* Info.plist */,
+			);
+			path = KE8YGWLogger;
+			sourceTree = "<group>";
+		};
+		100000000000000000000020 /* KE8YGWLoggerTests */ = {
+			isa = PBXGroup;
+			children = (
+				100000000000000000000021 /* HamRadioUtilitiesTests.swift */,
+				100000000000000000000022 /* ExportServiceTests.swift */,
+			);
+			path = KE8YGWLoggerTests;
+			sourceTree = "<group>";
+		};
+		100000000000000000000032 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				100000000000000000000030 /* KE8YGW Logger.app */,
+				100000000000000000000031 /* KE8YGWLoggerTests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		100000000000000000000033 /* Main Group */ = {
+			isa = PBXGroup;
+			children = (
+				100000000000000000000010 /* KE8YGWLogger */,
+				100000000000000000000020 /* KE8YGWLoggerTests */,
+				100000000000000000000032 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		100000000000000000000400 /* KE8YGWLogger */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 100000000000000000000700 /* Build configuration list for PBXNativeTarget "KE8YGWLogger" */;
+			buildPhases = (
+				100000000000000000000402 /* Sources */,
+				100000000000000000000401 /* Frameworks */,
+				100000000000000000000403 /* Resources */,
+			);
+			buildRules = ();
+			dependencies = ();
+			name = KE8YGWLogger;
+			productName = "KE8YGW Logger";
+			productReference = 100000000000000000000030 /* KE8YGW Logger.app */;
+			productType = "com.apple.product-type.application";
+		};
+		100000000000000000000410 /* KE8YGWLoggerTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 100000000000000000000710 /* Build configuration list for PBXNativeTarget "KE8YGWLoggerTests" */;
+			buildPhases = (
+				100000000000000000000412 /* Sources */,
+				100000000000000000000411 /* Frameworks */,
+				100000000000000000000413 /* Resources */,
+			);
+			buildRules = ();
+			dependencies = (
+				100000000000000000000302 /* PBXTargetDependency */,
+			);
+			name = KE8YGWLoggerTests;
+			productName = KE8YGWLoggerTests;
+			productReference = 100000000000000000000031 /* KE8YGWLoggerTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		100000000000000000000500 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 1500;
+				LastUpgradeCheck = 1500;
+				TargetAttributes = {
+					100000000000000000000400 = {CreatedOnToolsVersion = 15.0;};
+					100000000000000000000410 = {CreatedOnToolsVersion = 15.0; TestTargetID = 100000000000000000000400;};
+				};
+			};
+			buildConfigurationList = 100000000000000000000720 /* Build configuration list for PBXProject "KE8YGWLogger" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (en, Base);
+			mainGroup = 100000000000000000000033 /* Main Group */;
+			productRefGroup = 100000000000000000000032 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				100000000000000000000400 /* KE8YGWLogger */,
+				100000000000000000000410 /* KE8YGWLoggerTests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		100000000000000000000403 /* Resources */ = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+		100000000000000000000413 /* Resources */ = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		100000000000000000000402 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				100000000000000000000101 /* KE8YGWLoggerApp.swift in Sources */,
+				100000000000000000000102 /* QSO.swift in Sources */,
+				100000000000000000000103 /* StationProfile.swift in Sources */,
+				100000000000000000000104 /* AppSettings.swift in Sources */,
+				100000000000000000000105 /* HamRadioUtilities.swift in Sources */,
+				100000000000000000000106 /* LogExportService.swift in Sources */,
+				100000000000000000000107 /* RootView.swift in Sources */,
+				100000000000000000000108 /* HomeView.swift in Sources */,
+				100000000000000000000109 /* NewQSOView.swift in Sources */,
+				10000000000000000000010A /* LogbookView.swift in Sources */,
+				10000000000000000000010B /* QSODetailView.swift in Sources */,
+				10000000000000000000010C /* StationProfileView.swift in Sources */,
+				10000000000000000000010D /* ExportView.swift in Sources */,
+				10000000000000000000010E /* SettingsView.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		100000000000000000000412 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				100000000000000000000201 /* HamRadioUtilitiesTests.swift in Sources */,
+				100000000000000000000202 /* ExportServiceTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		100000000000000000000302 /* PBXTargetDependency */ = {isa = PBXTargetDependency; target = 100000000000000000000400 /* KE8YGWLogger */; targetProxy = 100000000000000000000301 /* PBXContainerItemProxy */; };
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		100000000000000000000600 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = ("DEBUG=1", "$(inherited)");
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		100000000000000000000601 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+		100000000000000000000610 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = KE8YGWLogger/Resources/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = ("$(inherited)", "@executable_path/Frameworks");
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.h2technologiesllc.ke8ygw-logger";
+				PRODUCT_MODULE_NAME = KE8YGWLogger;
+				PRODUCT_NAME = "KE8YGW Logger";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		100000000000000000000611 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = KE8YGWLogger/Resources/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = ("$(inherited)", "@executable_path/Frameworks");
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.h2technologiesllc.ke8ygw-logger";
+				PRODUCT_MODULE_NAME = KE8YGWLogger;
+				PRODUCT_NAME = "KE8YGW Logger";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		100000000000000000000620 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = "";
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = ("$(inherited)", "@executable_path/Frameworks", "@loader_path/Frameworks");
+				PRODUCT_BUNDLE_IDENTIFIER = "com.h2technologiesllc.ke8ygw-logger.tests";
+				PRODUCT_MODULE_NAME = KE8YGWLoggerTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/KE8YGW Logger.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/KE8YGW Logger";
+			};
+			name = Debug;
+		};
+		100000000000000000000621 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = "";
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = ("$(inherited)", "@executable_path/Frameworks", "@loader_path/Frameworks");
+				PRODUCT_BUNDLE_IDENTIFIER = "com.h2technologiesllc.ke8ygw-logger.tests";
+				PRODUCT_MODULE_NAME = KE8YGWLoggerTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/KE8YGW Logger.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/KE8YGW Logger";
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		100000000000000000000700 /* Build configuration list for PBXNativeTarget "KE8YGWLogger" */ = {isa = XCConfigurationList; buildConfigurations = (100000000000000000000610 /* Debug */, 100000000000000000000611 /* Release */); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+		100000000000000000000710 /* Build configuration list for PBXNativeTarget "KE8YGWLoggerTests" */ = {isa = XCConfigurationList; buildConfigurations = (100000000000000000000620 /* Debug */, 100000000000000000000621 /* Release */); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+		100000000000000000000720 /* Build configuration list for PBXProject "KE8YGWLogger" */ = {isa = XCConfigurationList; buildConfigurations = (100000000000000000000600 /* Debug */, 100000000000000000000601 /* Release */); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+/* End XCConfigurationList section */
+	};
+	rootObject = 100000000000000000000500 /* Project object */;
+}
