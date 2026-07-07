@@ -23,6 +23,9 @@ passes should start with these documents:
   scopes, diagnostics, and auth posture.
 - [Service Framework](docs/architecture/service-framework.md): shared provider
   registry, provider selection, service cache, and integration skeletons.
+- [Support Storage](docs/architecture/support-storage.md): durable sidecar
+  state for provider settings, upload jobs, cache metadata, and map
+  preferences.
 - [Station Profiles](docs/architecture/station-profiles.md): station/equipment
   support storage and logger defaults.
 - [Award Engine](docs/architecture/award-engine.md): projection-backed award
@@ -154,6 +157,11 @@ Unified Service Framework:
 - Upload queue scaffolding selects projected, visible QSOs, generates ADIF, and
   targets service-framework upload providers such as LoTW/eQSL/Club Log/QRZ
   stubs.
+- Service provider settings, service cache metadata, upload queue state, map
+  layer preferences, lookup/rig UI config, and online automation/notification
+  state are persisted as versioned support JSON files under the app data support
+  directory. Secrets are not stored there; provider config must reference
+  `credential_id` values.
 - Keyboard-first logging commands include focus callsign entry, submit QSO,
   clear form, use rig frequency, accept lookup suggestions, open recent QSOs,
   and open advanced search.

@@ -195,6 +195,12 @@ pub struct MapLayerStack {
     pub layers: Vec<MapLayer>,
 }
 
+impl Default for MapLayerStack {
+    fn default() -> Self {
+        Self::default_layers()
+    }
+}
+
 impl MapLayerStack {
     pub fn default_layers() -> Self {
         Self {

@@ -436,6 +436,19 @@ impl ServiceCache {
     pub async fn count(&self) -> usize {
         self.entries.read().await.len()
     }
+
+    pub async fn entries(&self) -> Vec<ServiceCacheEntry> {
+        self.entries.read().await.values().cloned().collect()
+    }
+
+    pub async fn replace_entries(&self, entries: Vec<ServiceCacheEntry>) {
+        let mut cache = self.entries.write().await;
+        cache.clear();
+        for entry in entries {
+            let key = service_cache_key(entry.service_type, &entry.provider_id, &entry.cache_key);
+            cache.insert(key, entry);
+        }
+    }
 }
 
 fn service_cache_key(service_type: ServiceType, provider_id: &str, cache_key: &str) -> String {

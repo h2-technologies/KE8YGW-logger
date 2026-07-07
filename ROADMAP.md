@@ -19,6 +19,7 @@ This root roadmap summarizes the current implementation plan. Detailed architect
 - Net Control MVP: sessions, check-ins, traffic queue, tombstone deletes, report export events, projection, workspace panels, and commands.
 - Mapping and Propagation Framework: GIS models, Maidenhead grid engine, great-circle math, map provider model, map layers, markers, QSO/station visualization, grayline, mock propagation/weather, and Maps workspace panels.
 - Online Services Ecosystem foundation: connected provider metadata, upload/download engine models, confirmation import events, DX/POTA/SOTA spot normalization, provider health, automation tasks, notifications, and Online Services workspace.
+- Durable Support Storage MVP: versioned JSON sidecar storage for service provider settings, service cache metadata, upload queue state, map layer preferences, lookup/rig UI config, online automation/notification support state, and support-storage runtime events.
 
 ## Current Milestone
 
@@ -35,7 +36,7 @@ Live Provider Adapters and Production Credential Backends:
 - DX Cluster Telnet background runtime.
 - POTA and SOTAWatch live feed adapters.
 - NOAA/Open-Meteo/space-weather live providers.
-- Durable upload queue and scheduler execution.
+- Upload queue execution against real providers and scheduler execution.
 
 ## Future Milestones
 

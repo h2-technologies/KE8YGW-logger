@@ -19,6 +19,7 @@ pub mod search;
 pub mod service;
 pub mod station;
 pub mod store;
+pub mod support;
 pub mod upload;
 
 pub use adif::{
@@ -125,6 +126,7 @@ pub use store::{
     default_official_event_log_path, validate_supported_remote_event, ChainVerificationError,
     InMemoryLogbookEventStore, JsonlLogbookEventStore, LogbookEventStore, StoreError,
 };
+pub use support::{JsonSupportStore, SupportEnvelope, SupportStoreError, SUPPORT_FILE_VERSION};
 pub use upload::{
     adif_for_upload_job, append_upload_status_event, build_log_upload_request,
     select_qsos_for_upload, UploadJob as UploadQueueJob, UploadJobItem, UploadQueue,

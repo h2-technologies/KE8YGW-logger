@@ -1,10 +1,10 @@
 # Project Status
 
-Current milestone: Online Services Ecosystem
+Current milestone: MVP Productionization
 
 Current version: 0.1.0
 
-Last update timestamp: 2026-07-06T21:33:00-04:00
+Last update timestamp: 2026-07-07T00:00:00-04:00
 
 Repository health status: Healthy. Formatting, Rust check, Clippy with warnings denied, full workspace tests, GUI JavaScript syntax check, and release build passed during this session.
 
@@ -50,6 +50,8 @@ Repository health status: Healthy. Formatting, Rust check, Clippy with warnings 
 - [x] Confirmation download model and official append-only confirmation status event path
 - [x] DX Cluster parser and POTA/SOTA spot normalization
 - [x] Online automation task and notification models
+- [x] Versioned durable support storage abstraction for non-official sidecar state
+- [x] Durable provider settings, service cache metadata, upload queue, map layer preferences, lookup/rig UI config, and online automation/notification state loading
 - [ ] Conflict resolution UI/model
 - [ ] Cryptographic signatures
 - [ ] Durable projection cache
@@ -91,6 +93,7 @@ Repository health status: Healthy. Formatting, Rust check, Clippy with warnings 
 - [x] Maps workspace panels
 - [x] Map status bar fields
 - [x] Online Services workspace panels
+- [x] Service provider enable/disable and priority controls persisted through support storage
 - [x] Keyboard-first logging command foundation
 - [ ] Interactive dockable panel movement
 - [ ] Native file dialogs
@@ -168,7 +171,7 @@ The Online Services ecosystem is implemented as a provider-backed service layer.
 
 Sync is split between `ham-sync` for protocol, peer, LAN/cloud models, safe replication, and in-memory server logic, plus `ham-sync-server` for the self-hosted HTTP-like server binary. LAN is preferred. Cloud/self-hosted sync is a fallback and uses the same verification rules.
 
-Storage uses append-only JSONL official events for the MVP. Runtime logs are separate rotating JSONL files. Support/config state uses lightweight JSON or in-memory state depending on subsystem maturity.
+Storage uses append-only JSONL official events for the MVP. Runtime logs are separate rotating JSONL files. Support/config state uses lightweight versioned JSON files for provider settings, service cache metadata, upload queue state, map layer preferences, lookup/rig UI config, online automation/notification support state, station profiles, saved searches, permission grants, and credential metadata. Secret values remain outside support storage behind `CredentialStore`.
 
 The GUI is `ham-gui`, a web-first shell served by Rust. It is Tauri-ready but not yet a packaged Tauri app. It consumes core bridge APIs, projections, runtime events, service framework state, and proposal endpoints.
 
@@ -213,7 +216,6 @@ Diagnostics include runtime event logs, redaction helpers, report ZIP generation
 
 ## High
 
-- [ ] Persist upload queue state and provider settings.
 - [ ] Add real LoTW/eQSL/Club Log/QRZ upload providers through the service framework.
 - [ ] Add QRZ/HamQTH real lookup providers using secure credential storage.
 - [ ] Enforce permission scopes consistently across account, logbook, and station boundaries.
@@ -230,12 +232,10 @@ Diagnostics include runtime event logs, redaction helpers, report ZIP generation
 - [ ] Add station profile and equipment create/edit GUI forms.
 - [ ] Add full award rule databases and needed-list computation.
 - [ ] Add saved-search GUI persistence flow.
-- [ ] Extract support/cache storage behind a durable abstraction.
 - [ ] Add native file dialogs for import/export/report bundles.
 - [ ] Add Tauri packaging.
 - [ ] Add projection cache persistence and startup optimization.
-- [ ] Persist map layer ordering and user map preferences.
-- [ ] Persist upload history, provider account state, automation tasks, and notification read state.
+- [ ] Extend support storage to provider account state and notification read/unread state.
 
 ## Low
 
@@ -254,8 +254,6 @@ Diagnostics include runtime event logs, redaction helpers, report ZIP generation
 - The sync server uses in-memory storage for cloud sync events and uploaded reports.
 - LAN discovery/replication has strong models but needs real multi-instance transport wiring.
 - Permission scopes are mostly recorded rather than fully enforced.
-- Service provider enablement and priority are currently in-memory GUI/server state.
-- Upload queue state is currently in-memory in the GUI.
 - Station profile editing exists in core models but not yet as full GUI forms.
 - External provider implementations are stubs until production credential storage and live integrations are added.
 - Online Services has production-shaped provider metadata and parsers, but live network clients are not enabled yet.
@@ -265,7 +263,7 @@ Diagnostics include runtime event logs, redaction helpers, report ZIP generation
 - The insecure dev credential fallback is plaintext and only suitable for local testing when explicitly enabled.
 - Net Control template create/edit UI is not complete; sessions/check-ins/traffic/report are implemented first.
 - The Maps workspace currently renders a structured preview rather than full tile/vector map rendering.
-- Map provider enablement/layer ordering is in-memory in the GUI process.
+- Browser-local card layouts are stored in local storage rather than the support-store layer.
 - GIS bounds do not yet include antimeridian-aware clipping.
 - JavaScript UI behavior has limited automated test coverage.
 
@@ -345,13 +343,13 @@ Diagnostics include runtime event logs, redaction helpers, report ZIP generation
 - Core event hashing, chain verification, QSO proposals, projections, ADIF, lookup, rig, diagnostics, permissions, service framework, credential store, Net Control, station profiles, awards, search, upload queue, sync models, GIS models, grid conversion, great-circle math, map layers, marker serialization, provider metadata, grayline calculations, online provider metadata, retry logic, confirmation parsing, spot parsing, cache stats, and notification models have unit coverage.
 - GUI model serialization and command/panel foundations have partial coverage.
 - JavaScript UI behavior is mostly manually verified and should gain browser-level tests.
-- Current test run: `cargo test --workspace` passed with 156 total Rust tests across crates.
+- Current test run: `cargo test --workspace` passed with 164 total Rust tests across crates.
 
 ---
 
 # Current Milestone
 
-Current objective: implement the Online Services ecosystem foundation.
+Current objective: finish MVP productionization, starting with durable support storage.
 
 Completed work:
 
@@ -361,10 +359,13 @@ Completed work:
 - DX Cluster parser and POTA/SOTA spot normalization into the shared spot model.
 - Online automation task and notification models.
 - Online Services workspace and `/api/online-services` dashboard.
+- Versioned support storage for provider settings, service cache metadata, upload queue state, map layer preferences, lookup/rig UI config, and online support state.
 
 Remaining work:
 
 - Implement live network adapters and credential validation for the registered providers.
+- Implement production OS credential backends.
+- Execute queued uploads against real providers and append provider-specific upload/confirmation events.
 - Add durable upload history, account settings, scheduler state, and notification read state.
 - Add browser-level GUI tests for online service interactions.
 
@@ -557,6 +558,38 @@ Architectural decisions:
 - The Casual Logger form now keeps an explicit in-progress QSO draft in GUI state so diagnostic event-bus refreshes do not destroy operator-entered fields.
 - Runtime event polling skips full shell re-rendering while logger forms are focused; the event stream catches up after the operator leaves or submits the form.
 - Rig autofill suggestions update the QSO draft, but manually typed QSO fields remain authoritative during proposal submission.
+
+New plugins:
+
+- None.
+
+Breaking changes:
+
+- None.
+
+## 2026-07-07
+
+Summary: Added durable support storage for MVP sidecar state and persisted service provider settings, service cache metadata, upload queue state, map layer preferences, lookup/rig UI config, and online support state.
+
+Major files changed:
+
+- `crates/ham-core/src/support.rs`
+- `crates/ham-core/src/service.rs`
+- `crates/ham-core/src/map.rs`
+- `crates/ham-core/src/lib.rs`
+- `crates/ham-gui/src/main.rs`
+- `crates/ham-gui/web/app.js`
+- `README.md`
+- `ROADMAP.md`
+- `docs/architecture/support-storage.md`
+- `PROJECT_STATE.md`
+
+Architectural decisions:
+
+- Support storage is versioned JSON sidecar state, not official log state.
+- Support storage stores provider settings, cache metadata, upload jobs, map preferences, and UI config, but never credential secret values.
+- The GUI publishes `support.storage.*` runtime events for support storage open/load/save/error activity.
+- Service provider enablement and priority changes now flow through a persisted core-backed endpoint.
 
 New plugins:
 

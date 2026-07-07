@@ -19,15 +19,15 @@ use ham_core::{
     submit_proposal, suggestion_from_rig_state, AdifImportOptions, Coordinate, CoreEventEnvelope,
     CredentialMetadata, CredentialStore, DiagnosticBundleInput, DiagnosticReportType,
     EquipmentItem, EquipmentType, InsecureDevCredentialStore, JsonPermissionGrantStore,
-    JsonStationBookStore, JsonlLogbookEventStore, LocalPrefixProvider, LogbookEventStore,
-    LookupCache, LookupCacheConfig, LookupProviderStatus, MapLayerStack, MockRigProvider,
-    NetControlProjection, NewLogbookEvent, NotificationSeverity, OnlineNotification,
-    OnlineProviderStatus, OperatorRole, PermissionGrantSet, PermissionGrantStatus,
-    PermissionRegistry, PermissionSettings, PotaSpotRecord, Projection, ProposalContext,
-    RigConnectionStatus, RigDevice, RigProvider, RigProviderStatus, RigState, RuntimeEventFilter,
-    RuntimeEventSeverity, RuntimeLogConfig, ServiceCache, ServiceRegistry, ServiceRegistrySnapshot,
-    StationBook, StationConfiguration, StationProfile, UnsupportedOsCredentialStore, UploadQueue,
-    UploadTarget,
+    JsonStationBookStore, JsonSupportStore, JsonlLogbookEventStore, LocalPrefixProvider,
+    LogbookEventStore, LookupCache, LookupCacheConfig, LookupProviderStatus, MapLayerStack,
+    MockRigProvider, NetControlProjection, NewLogbookEvent, NotificationSeverity,
+    OnlineAutomationTask, OnlineNotification, OnlineProviderStatus, OperatorRole,
+    PermissionGrantSet, PermissionGrantStatus, PermissionRegistry, PermissionSettings,
+    PotaSpotRecord, Projection, ProposalContext, RigConnectionStatus, RigDevice, RigProvider,
+    RigProviderStatus, RigState, RuntimeEventFilter, RuntimeEventSeverity, RuntimeLogConfig,
+    ServiceCache, ServiceCacheEntry, ServiceRegistry, ServiceRegistrySnapshot, StationBook,
+    StationConfiguration, StationProfile, UnsupportedOsCredentialStore, UploadQueue, UploadTarget,
 };
 use ham_gui::{
     mock::{capability_labels, mock_plugins},
@@ -95,6 +95,20 @@ fn main() {
     let permission_store =
         JsonPermissionGrantStore::new(support_dir.join("plugin-permissions.json"));
     let station_store = JsonStationBookStore::new(support_dir.join("station-book.json"));
+    let service_registry_store =
+        JsonSupportStore::<ServiceRegistry>::new(support_dir.join("service-registry.json"));
+    let service_cache_store =
+        JsonSupportStore::<Vec<ServiceCacheEntry>>::new(support_dir.join("service-cache.json"));
+    let map_layer_store =
+        JsonSupportStore::<MapLayerStack>::new(support_dir.join("map-layers.json"));
+    let upload_queue_store =
+        JsonSupportStore::<UploadQueue>::new(support_dir.join("upload-queue.json"));
+    let lookup_config_store =
+        JsonSupportStore::<LookupUiConfig>::new(support_dir.join("lookup-config.json"));
+    let rig_config_store =
+        JsonSupportStore::<RigUiConfig>::new(support_dir.join("rig-config.json"));
+    let online_support_store =
+        JsonSupportStore::<OnlineSupportState>::new(support_dir.join("online-support.json"));
     let mut station_book = station_store.load().unwrap_or_default();
     if station_book.profiles.is_empty() {
         seed_default_station_book(&mut station_book);
@@ -229,6 +243,66 @@ fn main() {
 
     start_demo_runtime_publisher(bridge.clone());
 
+    publish_support_storage_event(
+        &bridge,
+        "support.storage.opened",
+        RuntimeEventSeverity::Info,
+        format!("Support storage opened at {}", support_dir.display()),
+        None,
+    );
+
+    let service_registry = load_support_or(
+        &bridge,
+        &service_registry_store,
+        default_service_registry(),
+        "service registry",
+    );
+    let service_cache = ServiceCache::new();
+    let service_cache_entries = load_support_or(
+        &bridge,
+        &service_cache_store,
+        Vec::<ServiceCacheEntry>::new(),
+        "service cache",
+    );
+    proposal_runtime.block_on(service_cache.replace_entries(service_cache_entries));
+    let map_layers = load_support_or(
+        &bridge,
+        &map_layer_store,
+        MapLayerStack::default_layers(),
+        "map layers",
+    );
+    let upload_queue = {
+        let loaded = load_support_or(
+            &bridge,
+            &upload_queue_store,
+            default_upload_queue(),
+            "upload queue",
+        );
+        if loaded.targets.is_empty() {
+            default_upload_queue()
+        } else {
+            loaded
+        }
+    };
+    let lookup_config = load_support_or(
+        &bridge,
+        &lookup_config_store,
+        LookupUiConfig::default(),
+        "lookup config",
+    );
+    let rig_config = load_support_or(
+        &bridge,
+        &rig_config_store,
+        RigUiConfig::default(),
+        "rig config",
+    );
+    let online_support = load_support_or(
+        &bridge,
+        &online_support_store,
+        OnlineSupportState::default(),
+        "online support",
+    );
+
     let state = Arc::new(AppState {
         bridge,
         store,
@@ -237,19 +311,24 @@ fn main() {
         sync: Mutex::new(SyncUiState::new(bound_addr.clone())),
         cloud_server: InMemoryCloudSyncServer::new(CloudServerConfig::default()),
         lookup_cache: LookupCache::new(),
-        lookup_config: Mutex::new(LookupUiConfig::default()),
-        service_registry: Mutex::new(default_service_registry()),
-        service_cache: ServiceCache::new(),
-        map_layers: Mutex::new(MapLayerStack::default_layers()),
+        lookup_config: Mutex::new(lookup_config),
+        service_registry: Mutex::new(service_registry),
+        service_cache,
+        map_layers: Mutex::new(map_layers),
         rig_provider: MockRigProvider::default(),
-        rig_config: Mutex::new(RigUiConfig::default()),
+        rig_config: Mutex::new(rig_config),
         station_store,
         station_book: Mutex::new(station_book),
         credential_store: Mutex::new(credential_store),
-        upload_queue: Mutex::new(default_upload_queue()),
+        upload_queue: Mutex::new(upload_queue),
+        online_support: Mutex::new(online_support),
         last_report: Mutex::new(None),
         permission_registry,
         permission_store,
+        service_registry_store,
+        service_cache_store,
+        map_layer_store,
+        upload_queue_store,
         permission_grants: Mutex::new(permission_grants),
         permission_settings: Mutex::new(permission_settings),
     });
@@ -282,14 +361,19 @@ struct AppState {
     station_book: Mutex<StationBook>,
     credential_store: Mutex<Box<dyn CredentialStore>>,
     upload_queue: Mutex<UploadQueue>,
+    online_support: Mutex<OnlineSupportState>,
     last_report: Mutex<Option<DiagnosticReportUploadResponse>>,
     permission_registry: PermissionRegistry,
     permission_store: JsonPermissionGrantStore,
+    service_registry_store: JsonSupportStore<ServiceRegistry>,
+    service_cache_store: JsonSupportStore<Vec<ServiceCacheEntry>>,
+    map_layer_store: JsonSupportStore<MapLayerStack>,
+    upload_queue_store: JsonSupportStore<UploadQueue>,
     permission_grants: Mutex<PermissionGrantSet>,
     permission_settings: Mutex<PermissionSettings>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct LookupUiConfig {
     enable_lookup: bool,
     enable_online_lookup: bool,
@@ -310,7 +394,7 @@ impl Default for LookupUiConfig {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct RigUiConfig {
     enable_rig_control: bool,
     default_provider: String,
@@ -319,6 +403,21 @@ struct RigUiConfig {
     auto_fill_from_rig: bool,
     hamlib_endpoint: String,
     serial_settings_placeholder: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct OnlineSupportState {
+    automation_tasks: Vec<OnlineAutomationTask>,
+    notifications: Vec<OnlineNotification>,
+}
+
+impl Default for OnlineSupportState {
+    fn default() -> Self {
+        Self {
+            automation_tasks: ham_core::default_online_automation_tasks(),
+            notifications: Vec::new(),
+        }
+    }
 }
 
 impl Default for RigUiConfig {
@@ -473,6 +572,9 @@ fn handle_client(state: Arc<AppState>, mut stream: TcpStream) {
             handle_plugin_permission_action(&state, &request.body, PermissionGrantStatus::Revoked)
         }
         ("GET", "/api/services/providers") => json_response(&service_registry_snapshot(&state)),
+        ("POST", "/api/services/provider/update") => {
+            handle_service_provider_update(&state, &request.body)
+        }
         ("POST", "/api/services/cache/clear") => handle_service_cache_clear(&state, &request.body),
         ("GET", "/api/credentials") => handle_credentials(&state),
         ("POST", "/api/credentials/create") => handle_credential_create(&state, &request.body),
@@ -877,6 +979,13 @@ struct ServiceCacheClearRequest {
 }
 
 #[derive(Debug, Deserialize)]
+struct ServiceProviderUpdateRequest {
+    provider_id: String,
+    enabled: Option<bool>,
+    priority: Option<i32>,
+}
+
+#[derive(Debug, Deserialize)]
 struct MapLayerToggleRequest {
     layer_id: String,
     enabled: bool,
@@ -975,6 +1084,104 @@ fn response_with_headers(
     response
 }
 
+fn load_support_or<T>(
+    bridge: &GuiRuntimeBridge,
+    store: &JsonSupportStore<T>,
+    fallback: T,
+    label: &str,
+) -> T
+where
+    T: Serialize + for<'de> Deserialize<'de> + Default,
+{
+    match store.load() {
+        Ok(value) => {
+            publish_support_storage_event(
+                bridge,
+                "support.storage.loaded",
+                RuntimeEventSeverity::Info,
+                format!("Loaded {label} support state"),
+                Some(json!({"label": label, "path": store.path().display().to_string()})),
+            );
+            value
+        }
+        Err(error) => {
+            publish_support_storage_event(
+                bridge,
+                "support.storage.error",
+                RuntimeEventSeverity::Warn,
+                format!("Using default {label} support state"),
+                Some(json!({"label": label, "path": store.path().display().to_string()})),
+            );
+            eprintln!("failed to load {label} support state: {error}");
+            fallback
+        }
+    }
+}
+
+fn save_support_state<T>(
+    state: &AppState,
+    store: &JsonSupportStore<T>,
+    data: &T,
+    label: &str,
+) -> Result<(), String>
+where
+    T: Serialize + for<'de> Deserialize<'de> + Default,
+{
+    match store.save(data) {
+        Ok(()) => {
+            let summary = format!("Saved {label} support state");
+            let _ = publish_gui_runtime(
+                state,
+                "support.storage.saved",
+                RuntimeEventSeverity::Debug,
+                &summary,
+                Some(json!({"label": label, "path": store.path().display().to_string()})),
+                None,
+            );
+            Ok(())
+        }
+        Err(error) => {
+            let message = error.to_string();
+            let summary = format!("Failed to save {label} support state");
+            let _ = publish_gui_runtime(
+                state,
+                "support.storage.error",
+                RuntimeEventSeverity::Warn,
+                &summary,
+                Some(json!({"label": label, "path": store.path().display().to_string()})),
+                Some(message.clone()),
+            );
+            Err(message)
+        }
+    }
+}
+
+fn persist_service_cache(state: &AppState) {
+    let entries = state
+        .proposal_runtime
+        .block_on(state.service_cache.entries());
+    let _ = save_support_state(state, &state.service_cache_store, &entries, "service cache");
+}
+
+fn publish_support_storage_event(
+    bridge: &GuiRuntimeBridge,
+    event_type: &str,
+    severity: RuntimeEventSeverity,
+    payload_summary: String,
+    redacted_payload: Option<Value>,
+) {
+    let _ = bridge.publish(RuntimeEventInput {
+        event_type: event_type.to_owned(),
+        severity,
+        source: "ham-gui".to_owned(),
+        source_plugin_id: Some("core.support-storage".to_owned()),
+        workspace_id: Some("dashboard".to_owned()),
+        payload_summary,
+        redacted_payload,
+        error: None,
+    });
+}
+
 fn proposal_context(state: &AppState) -> ProposalContext {
     context_for_manifest(state, core_gui_manifest(), OperatorRole::Admin)
 }
@@ -1029,6 +1236,7 @@ fn core_gui_manifest() -> PluginManifest {
             PluginCapability::SyncCloudPush,
             PluginCapability::ServiceProviderEnable,
             PluginCapability::ServiceProviderDisable,
+            PluginCapability::ServiceProviderConfigure,
             PluginCapability::ServiceCacheClear,
             PluginCapability::StationProfileView,
             PluginCapability::StationProfileManage,
@@ -1369,6 +1577,55 @@ fn service_registry_snapshot(state: &AppState) -> ServiceRegistrySnapshot {
         .snapshot()
 }
 
+fn handle_service_provider_update(state: &AppState, body: &[u8]) -> Vec<u8> {
+    if let Err(response) = ensure_gui_permission(
+        state,
+        &core_gui_manifest(),
+        PluginCapability::ServiceProviderConfigure,
+        "Service provider configure permission check",
+    ) {
+        return response;
+    }
+    let Ok(request) = serde_json::from_slice::<ServiceProviderUpdateRequest>(body) else {
+        return json_error(400, "invalid service provider update JSON");
+    };
+    let mut registry = state
+        .service_registry
+        .lock()
+        .expect("service registry mutex should not be poisoned");
+    if let Some(enabled) = request.enabled {
+        if let Err(error) = registry.set_enabled(&request.provider_id, enabled) {
+            return json_error(400, error.to_string());
+        }
+    }
+    if let Some(priority) = request.priority {
+        if let Err(error) = registry.set_priority(&request.provider_id, priority) {
+            return json_error(400, error.to_string());
+        }
+    }
+    let registry_snapshot = registry.clone();
+    drop(registry);
+    let _ = save_support_state(
+        state,
+        &state.service_registry_store,
+        &registry_snapshot,
+        "service registry",
+    );
+    let _ = publish_gui_runtime(
+        state,
+        "service.provider.health_changed",
+        RuntimeEventSeverity::Info,
+        "Service provider settings updated",
+        Some(json!({
+            "provider_id": request.provider_id,
+            "enabled": request.enabled,
+            "priority": request.priority
+        })),
+        None,
+    );
+    json_response(&service_registry_snapshot(state))
+}
+
 fn handle_plugin_permissions(state: &AppState) -> Vec<u8> {
     json_response(&PluginPermissionsPayload {
         plugins: mock_plugins(),
@@ -1553,11 +1810,14 @@ fn handle_lookup_callsign(state: &AppState, query: &str) -> Vec<u8> {
             state.bridge.status().device_id,
         ));
     match result {
-        Ok(suggestion) => json_response(&json!({
-            "ok": true,
-            "suggestion": suggestion,
-            "provider_status": lookup_provider_status(state)
-        })),
+        Ok(suggestion) => {
+            persist_service_cache(state);
+            json_response(&json!({
+                "ok": true,
+                "suggestion": suggestion,
+                "provider_status": lookup_provider_status(state)
+            }))
+        }
         Err(error) => {
             json_response_with_status(400, &json!({"ok": false, "error": error.to_string()}))
         }
@@ -1585,7 +1845,10 @@ fn handle_lookup_cache_clear(state: &AppState) -> Vec<u8> {
             &state.bridge,
             state.bridge.status().device_id,
         )) {
-        Ok(()) => json_response(&json!({"ok": true, "service_cache_cleared": service_cleared})),
+        Ok(()) => {
+            persist_service_cache(state);
+            json_response(&json!({"ok": true, "service_cache_cleared": service_cleared}))
+        }
         Err(error) => {
             json_response_with_status(400, &json!({"ok": false, "error": error.to_string()}))
         }
@@ -1625,6 +1888,7 @@ fn handle_service_cache_clear(state: &AppState, body: &[u8]) -> Vec<u8> {
         Some(json!({"cleared": cleared, "service_type": request.service_type})),
         None,
     );
+    persist_service_cache(state);
     json_response(&json!({"ok": true, "cleared": cleared}))
 }
 
@@ -2606,6 +2870,14 @@ fn handle_upload_queue_create(state: &AppState, body: &[u8]) -> Vec<u8> {
         Ok(job) => job,
         Err(error) => return json_error(400, error.to_string()),
     };
+    let queue_snapshot = queue.clone();
+    drop(queue);
+    let _ = save_support_state(
+        state,
+        &state.upload_queue_store,
+        &queue_snapshot,
+        "upload queue",
+    );
     let adif = ham_core::adif_for_upload_job(&projection, &qso_ids);
     let _ = publish_gui_runtime(
         state,
@@ -2699,13 +2971,20 @@ fn handle_online_services(state: &AppState) -> Vec<u8> {
             "One or more upload jobs are waiting for retry or operator review.",
         ));
     }
-    let dashboard = state.proposal_runtime.block_on(online_services_dashboard(
+    let online_support = state
+        .online_support
+        .lock()
+        .expect("online support mutex should not be poisoned")
+        .clone();
+    notifications.extend(online_support.notifications.clone());
+    let mut dashboard = state.proposal_runtime.block_on(online_services_dashboard(
         providers,
         credentials,
         &queue,
         &state.service_cache,
         notifications,
     ));
+    dashboard.automation_tasks = online_support.automation_tasks;
     let dx_spot = parse_dx_cluster_line("DX de K1ABC: 14074.0 JA1XYZ FT8 loud 1234Z")
         .map(|spot| dx_cluster_spot_to_spot(spot, "dx-cluster"));
     let pota_spot = pota_spot_to_spot(PotaSpotRecord {
@@ -2897,6 +3176,14 @@ fn handle_map_layer_toggle(state: &AppState, body: &[u8]) -> Vec<u8> {
         if let Err(error) = layers.set_enabled(&request.layer_id, request.enabled) {
             return json_error(400, error.to_string());
         }
+        let layers_snapshot = layers.clone();
+        drop(layers);
+        let _ = save_support_state(
+            state,
+            &state.map_layer_store,
+            &layers_snapshot,
+            "map layers",
+        );
     }
     let _ = publish_gui_runtime(
         state,

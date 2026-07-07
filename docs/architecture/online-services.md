@@ -72,6 +72,13 @@ Automation tasks are modeled for:
 Notifications are advisory runtime/support state. They are not official log
 events and are safe for AI/tooling consumption.
 
+## Durable Support State
+
+Provider enablement, provider priority, service cache metadata, upload queue
+state, online automation tasks, and notification support state are persisted in
+versioned JSON support files. These files are sidecar state only: they are not
+synced as official log events and must not contain credential secrets.
+
 ## Security
 
 - Raw credentials never appear in provider config, runtime events, cache

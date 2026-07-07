@@ -750,6 +750,13 @@ function renderServiceProviders() {
         <p>Capabilities: ${(meta.capabilities || []).join(", ") || "none"}</p>
         <p>Permissions: ${(meta.required_permissions || []).join(", ") || "none"}</p>
         ${missingConfig}
+        <div class="monitor-actions">
+          <button class="toolbar-button" type="button" data-provider-toggle="${meta.provider_id}" data-provider-enabled="${provider.enabled ? "false" : "true"}">${provider.enabled ? "Disable" : "Enable"}</button>
+          <label>Priority
+            <input class="placeholder-control provider-priority" data-provider-priority="${meta.provider_id}" inputmode="numeric" value="${meta.priority}" />
+          </label>
+          <button class="toolbar-button" type="button" data-provider-priority-save="${meta.provider_id}">Save Priority</button>
+        </div>
       </article>`;
     })
     .join("")}</div>`;
@@ -1040,6 +1047,18 @@ function bindPanelControls() {
       if (panelId) openPanelCard(panelId, region);
     });
   });
+  document.querySelectorAll("[data-provider-toggle]").forEach((button) => {
+    button.addEventListener("click", () =>
+      updateServiceProvider(button.dataset.providerToggle, { enabled: button.dataset.providerEnabled === "true" }),
+    );
+  });
+  document.querySelectorAll("[data-provider-priority-save]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const providerId = button.dataset.providerPrioritySave;
+      const value = Number.parseInt(document.querySelector(`[data-provider-priority="${providerId}"]`)?.value || "", 10);
+      if (Number.isFinite(value)) updateServiceProvider(providerId, { priority: value });
+    });
+  });
   document.querySelectorAll("[data-map-layer]").forEach((control) => {
     control.addEventListener("change", () => toggleMapLayer(control.dataset.mapLayer, control.checked));
   });
@@ -1105,6 +1124,22 @@ function movePanelPlacement(layout, panelId, region) {
     placements.push({ panel_id: panelId, region, order: maxOrder + 10 });
   }
   layout.placements = placements;
+}
+
+async function updateServiceProvider(providerId, patch) {
+  const response = await fetch("/api/services/provider/update", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ provider_id: providerId, ...patch }),
+  });
+  const result = await response.json();
+  if (response.ok) {
+    state.serviceProviders = result;
+  } else {
+    state.importSummary = result;
+  }
+  await refreshRuntimeEvents();
+  render();
 }
 
 function updateMonitorFilter(key, value) {

@@ -27,8 +27,13 @@ These events record upload status without modifying QSO payloads.
 4. Store queue state as support state.
 5. Append official upload status events where tied to specific QSOs.
 
+## Durable State
+
+Upload targets, queued jobs, job items, and status history in the MVP queue are
+persisted as versioned support JSON. This keeps operator upload work across app
+restarts while keeping upload status separate from QSO payload mutation.
+
 ## Current Limitations
 
 - Providers are stubs until real credential storage and network integrations are added.
-- Queue state is currently in-memory in the GUI.
 - Confirmation pull and per-provider retry policy are future work.
