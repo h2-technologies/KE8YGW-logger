@@ -1448,6 +1448,30 @@ Breaking changes:
 
 ## 2026-07-07
 
+Summary: Added the iOS app icon asset catalog for the Apple-native KE8YGW Logger project and wired the app bundle to use `AppIcon`.
+
+Major files changed:
+
+- `ios/KE8YGWLogger/KE8YGWLogger/Assets.xcassets`
+- `ios/KE8YGWLogger/KE8YGWLogger/Resources/Info.plist`
+- `ios/KE8YGWLogger/KE8YGWLogger.xcodeproj/project.pbxproj`
+- `PROJECT_STATE.md`
+
+Architectural decisions:
+
+- App icons are managed through a standard Xcode asset catalog rather than loose image files.
+- The bundle explicitly declares `CFBundleIconName` as `AppIcon`.
+
+New plugins:
+
+- None.
+
+Breaking changes:
+
+- None.
+
+## 2026-07-07
+
 Summary: Added durable support storage for MVP sidecar state and persisted service provider settings, service cache metadata, upload queue state, map layer preferences, lookup/rig UI config, and online support state.
 
 Major files changed:
