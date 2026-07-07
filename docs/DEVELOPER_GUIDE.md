@@ -30,6 +30,8 @@ If current code differs from the blueprint, prefer documenting the migration pat
 - Sync prefers LAN before cloud.
 - Cloud/self-hosted sync must share the same safe replication rules.
 - Every protected action checks both plugin permission and operator role permission.
+- Credentials are stored only through `CredentialStore`; provider config must
+  reference credential IDs, never raw secrets.
 
 ## Local Commands
 
@@ -113,6 +115,7 @@ Provider work should add:
 - provider metadata
 - provider permissions
 - config key schema without credential values
+- credential reference schema for providers that require secrets
 - typed request/response models when needed
 - service cache behavior when useful
 - runtime events
@@ -137,6 +140,27 @@ At minimum, tests should cover:
 - GUI model logic where UI structure changes
 
 Network and GUI browser tests may be mocked or model-level when CI reliability would otherwise suffer.
+
+## Adding Credentialed Providers
+
+Credentialed providers must:
+
+- declare required credential keys in provider metadata
+- store only `credential_id` references in provider config
+- retrieve secrets through `CredentialStore`
+- publish runtime events with safe metadata only
+- redact provider metadata before diagnostics
+- include tests proving metadata lists do not expose secrets
+
+The insecure development fallback is only for local testing and must not be used
+as a production credential backend.
+
+## Adding Net Control Features
+
+Net Control changes must use proposals and official events. Do not mutate roster
+or traffic projections directly from the GUI. Check-in deletes are tombstones,
+not physical removal. Future template, ICS-309, and traffic features should add
+projection replay tests and permission denial tests.
 
 ## Daily Driver Logging Work
 

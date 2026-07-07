@@ -1,9 +1,14 @@
 use chrono::Utc;
 use ham_plugin_sdk::{
     PluginCapability, PluginManifest, ProposalEnvelope, OFFICIAL_LOG_ACTIVATION_STARTED,
+    OFFICIAL_LOG_NET_CHECKIN_CREATED, OFFICIAL_LOG_NET_CHECKIN_DELETED,
+    OFFICIAL_LOG_NET_REPORT_EXPORTED, OFFICIAL_LOG_NET_SESSION_ENDED,
+    OFFICIAL_LOG_NET_SESSION_STARTED, OFFICIAL_LOG_NET_TRAFFIC_CREATED,
     OFFICIAL_LOG_QSO_ACTIVATION_LINKED, OFFICIAL_LOG_QSO_CORRECTED, OFFICIAL_LOG_QSO_CREATED,
     OFFICIAL_LOG_QSO_DELETED, OFFICIAL_LOG_QSO_NOTE_ADDED, OFFICIAL_LOG_QSO_RESTORED,
-    PROPOSAL_ACTIVATION_END, PROPOSAL_ACTIVATION_START, PROPOSAL_QSO_ACTIVATION_LINK,
+    PROPOSAL_ACTIVATION_END, PROPOSAL_ACTIVATION_START, PROPOSAL_NET_CHECKIN_CREATE,
+    PROPOSAL_NET_CHECKIN_DELETE, PROPOSAL_NET_REPORT_EXPORT, PROPOSAL_NET_SESSION_END,
+    PROPOSAL_NET_SESSION_START, PROPOSAL_NET_TRAFFIC_CREATE, PROPOSAL_QSO_ACTIVATION_LINK,
     PROPOSAL_QSO_CREATE, PROPOSAL_QSO_DELETE, PROPOSAL_QSO_RESTORE,
 };
 use serde_json::json;
@@ -11,9 +16,10 @@ use std::{fs, path::PathBuf};
 use uuid::Uuid;
 
 use crate::{
-    submit_proposal, BusEvent, EventBus, InMemoryEventBus, InMemoryLogbookEventStore,
-    LogbookEventStore, NewLogbookEvent, OperatorRole, PermissionGrantSet, PermissionGrantStatus,
-    Projection, ProposalContext, ProposalValidationError, QsoCurrentStateProjection,
+    export_net_report_markdown, submit_proposal, BusEvent, EventBus, InMemoryEventBus,
+    InMemoryLogbookEventStore, LogbookEventStore, NetControlProjection, NewLogbookEvent,
+    OperatorRole, PermissionGrantSet, PermissionGrantStatus, Projection, ProposalContext,
+    ProposalValidationError, QsoCurrentStateProjection,
 };
 
 fn activation_payload(kind: &str) -> serde_json::Value {
@@ -52,6 +58,36 @@ fn activation_context() -> ProposalContext {
         ]),
         OperatorRole::Admin,
     )
+}
+
+fn net_context() -> ProposalContext {
+    ProposalContext::local_admin(
+        plugin_manifest(vec![
+            PluginCapability::NetView,
+            PluginCapability::NetTemplateCreate,
+            PluginCapability::NetTemplateUpdate,
+            PluginCapability::NetSessionStart,
+            PluginCapability::NetSessionEnd,
+            PluginCapability::NetCheckinCreate,
+            PluginCapability::NetCheckinUpdate,
+            PluginCapability::NetCheckinDelete,
+            PluginCapability::NetTrafficManage,
+            PluginCapability::NetReportExport,
+        ]),
+        OperatorRole::Admin,
+    )
+}
+
+fn net_session_payload() -> serde_json::Value {
+    json!({
+        "station_callsign": "KE8YGW",
+        "net_control_operator_id": Uuid::new_v4().to_string(),
+        "net_name": "ARES Weekly Net",
+        "started_at": "2026-07-06T00:00:00Z",
+        "frequency_hz": 146_940_000_u64,
+        "band": "2m",
+        "mode": "FM"
+    })
 }
 
 fn qso_payload() -> serde_json::Value {
@@ -816,4 +852,271 @@ async fn activation_adif_export_includes_pota_and_sota_fields() {
     assert!(adif.contains("<MY_SIG_INFO:7>US-1234"));
     assert!(adif.contains("<MY_SIG:4>SOTA"));
     assert!(adif.contains("<MY_SIG_INFO:10>W8O/NE-001"));
+}
+
+#[tokio::test]
+async fn net_session_start_end_lifecycle() {
+    let store = InMemoryLogbookEventStore::new();
+    let bus = InMemoryEventBus::default();
+    let logbook_id = Uuid::new_v4();
+    let started = submit_proposal(
+        &store,
+        &bus,
+        &net_context(),
+        proposal_for_logbook(
+            PROPOSAL_NET_SESSION_START,
+            logbook_id,
+            None,
+            net_session_payload(),
+        ),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        started.official_event.event_type,
+        OFFICIAL_LOG_NET_SESSION_STARTED
+    );
+    let session_id = started.official_event.entity_id.unwrap();
+
+    let ended = submit_proposal(
+        &store,
+        &bus,
+        &net_context(),
+        proposal_for_logbook(
+            PROPOSAL_NET_SESSION_END,
+            logbook_id,
+            Some(session_id),
+            json!({
+                "started_at": "2026-07-06T00:00:00Z",
+                "ended_at": "2026-07-06T01:00:00Z"
+            }),
+        ),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        ended.official_event.event_type,
+        OFFICIAL_LOG_NET_SESSION_ENDED
+    );
+}
+
+#[tokio::test]
+async fn net_checkin_requires_active_net() {
+    let store = InMemoryLogbookEventStore::new();
+    let bus = InMemoryEventBus::default();
+    let err = submit_proposal(
+        &store,
+        &bus,
+        &net_context(),
+        proposal_for_logbook(
+            PROPOSAL_NET_CHECKIN_CREATE,
+            Uuid::new_v4(),
+            None,
+            json!({
+                "net_session_id": Uuid::new_v4(),
+                "callsign": "K1ABC",
+                "checkin_time": "2026-07-06T00:01:00Z"
+            }),
+        ),
+    )
+    .await
+    .unwrap_err();
+    assert!(err.to_string().contains("does not exist"));
+}
+
+#[tokio::test]
+async fn net_projection_duplicate_late_emergency_and_tombstone_behavior() {
+    let store = InMemoryLogbookEventStore::new();
+    let bus = InMemoryEventBus::default();
+    let logbook_id = Uuid::new_v4();
+    let session = submit_proposal(
+        &store,
+        &bus,
+        &net_context(),
+        proposal_for_logbook(
+            PROPOSAL_NET_SESSION_START,
+            logbook_id,
+            None,
+            net_session_payload(),
+        ),
+    )
+    .await
+    .unwrap();
+    let session_id = session.official_event.entity_id.unwrap();
+    let mut checkin_ids = Vec::new();
+    for status in ["checked_in", "late"] {
+        let checkin = submit_proposal(
+            &store,
+            &bus,
+            &net_context(),
+            proposal_for_logbook(
+                PROPOSAL_NET_CHECKIN_CREATE,
+                logbook_id,
+                None,
+                json!({
+                    "net_session_id": session_id,
+                    "callsign": "K1ABC",
+                    "checkin_time": "2026-07-06T00:01:00Z",
+                    "status": status,
+                    "traffic": "listed"
+                }),
+            ),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            checkin.official_event.event_type,
+            OFFICIAL_LOG_NET_CHECKIN_CREATED
+        );
+        checkin_ids.push(checkin.official_event.entity_id.unwrap());
+    }
+    let traffic = submit_proposal(
+        &store,
+        &bus,
+        &net_context(),
+        proposal_for_logbook(
+            PROPOSAL_NET_TRAFFIC_CREATE,
+            logbook_id,
+            None,
+            json!({
+                "net_session_id": session_id,
+                "from_callsign": "K1ABC",
+                "precedence": "emergency",
+                "summary": "Emergency traffic test",
+                "status": "listed"
+            }),
+        ),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        traffic.official_event.event_type,
+        OFFICIAL_LOG_NET_TRAFFIC_CREATED
+    );
+
+    let events = store.list_events(logbook_id).await.unwrap();
+    let mut projection = NetControlProjection::new();
+    projection.rebuild(&events).unwrap();
+    let projected = projection.get_session(session_id).unwrap();
+    assert_eq!(projected.checkin_count, 2);
+    assert_eq!(projected.late_checkin_count, 1);
+    assert_eq!(projected.emergency_traffic_count, 1);
+    assert_eq!(projected.duplicate_warnings.len(), 1);
+
+    let deleted = submit_proposal(
+        &store,
+        &bus,
+        &net_context(),
+        proposal_for_logbook(
+            PROPOSAL_NET_CHECKIN_DELETE,
+            logbook_id,
+            Some(checkin_ids[0]),
+            json!({"net_session_id": session_id, "reason": "duplicate"}),
+        ),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        deleted.official_event.event_type,
+        OFFICIAL_LOG_NET_CHECKIN_DELETED
+    );
+
+    let events = store.list_events(logbook_id).await.unwrap();
+    let mut projection = NetControlProjection::new();
+    projection.rebuild(&events).unwrap();
+    assert_eq!(projection.checkins_for_session(session_id, false).len(), 1);
+    assert_eq!(projection.checkins_for_session(session_id, true).len(), 2);
+}
+
+#[tokio::test]
+async fn net_report_export_appends_event_and_report_contains_summary() {
+    let store = InMemoryLogbookEventStore::new();
+    let bus = InMemoryEventBus::default();
+    let logbook_id = Uuid::new_v4();
+    let session = submit_proposal(
+        &store,
+        &bus,
+        &net_context(),
+        proposal_for_logbook(
+            PROPOSAL_NET_SESSION_START,
+            logbook_id,
+            None,
+            net_session_payload(),
+        ),
+    )
+    .await
+    .unwrap();
+    let session_id = session.official_event.entity_id.unwrap();
+    submit_proposal(
+        &store,
+        &bus,
+        &net_context(),
+        proposal_for_logbook(
+            PROPOSAL_NET_CHECKIN_CREATE,
+            logbook_id,
+            None,
+            json!({
+                "net_session_id": session_id,
+                "callsign": "K1ABC",
+                "checkin_time": "2026-07-06T00:01:00Z"
+            }),
+        ),
+    )
+    .await
+    .unwrap();
+    let events = store.list_events(logbook_id).await.unwrap();
+    let mut projection = NetControlProjection::new();
+    projection.rebuild(&events).unwrap();
+    let report = export_net_report_markdown(&projection, session_id).unwrap();
+    assert!(report.contains("ARES Weekly Net"));
+    assert!(report.contains("K1ABC"));
+
+    let exported = submit_proposal(
+        &store,
+        &bus,
+        &net_context(),
+        proposal_for_logbook(
+            PROPOSAL_NET_REPORT_EXPORT,
+            logbook_id,
+            Some(session_id),
+            json!({"format": "markdown", "summary": report}),
+        ),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        exported.official_event.event_type,
+        OFFICIAL_LOG_NET_REPORT_EXPORTED
+    );
+}
+
+#[tokio::test]
+async fn net_permission_denial_blocks_checkin() {
+    let store = InMemoryLogbookEventStore::new();
+    let bus = InMemoryEventBus::default();
+    let context = ProposalContext::local_admin(
+        plugin_manifest(vec![PluginCapability::NetSessionStart]),
+        OperatorRole::Admin,
+    );
+    let err = submit_proposal(
+        &store,
+        &bus,
+        &context,
+        proposal_for_logbook(
+            PROPOSAL_NET_CHECKIN_CREATE,
+            Uuid::new_v4(),
+            None,
+            json!({
+                "net_session_id": Uuid::new_v4(),
+                "callsign": "K1ABC",
+                "checkin_time": "2026-07-06T00:01:00Z"
+            }),
+        ),
+    )
+    .await
+    .unwrap_err();
+    assert!(matches!(
+        err,
+        ProposalValidationError::MissingPluginCapability(PluginCapability::NetCheckinCreate)
+    ));
 }

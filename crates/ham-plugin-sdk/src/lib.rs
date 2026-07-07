@@ -21,6 +21,17 @@ pub const PROPOSAL_ACTIVATION_CANCEL: &str = "proposal.activation.cancel";
 pub const PROPOSAL_ACTIVATION_NOTE_ADD: &str = "proposal.activation.note.add";
 pub const PROPOSAL_QSO_ACTIVATION_LINK: &str = "proposal.qso.activation.link";
 pub const PROPOSAL_QSO_ACTIVATION_UNLINK: &str = "proposal.qso.activation.unlink";
+pub const PROPOSAL_NET_TEMPLATE_CREATE: &str = "proposal.net.template.create";
+pub const PROPOSAL_NET_TEMPLATE_UPDATE: &str = "proposal.net.template.update";
+pub const PROPOSAL_NET_SESSION_START: &str = "proposal.net.session.start";
+pub const PROPOSAL_NET_SESSION_END: &str = "proposal.net.session.end";
+pub const PROPOSAL_NET_SESSION_CANCEL: &str = "proposal.net.session.cancel";
+pub const PROPOSAL_NET_CHECKIN_CREATE: &str = "proposal.net.checkin.create";
+pub const PROPOSAL_NET_CHECKIN_UPDATE: &str = "proposal.net.checkin.update";
+pub const PROPOSAL_NET_CHECKIN_DELETE: &str = "proposal.net.checkin.delete";
+pub const PROPOSAL_NET_TRAFFIC_CREATE: &str = "proposal.net.traffic.create";
+pub const PROPOSAL_NET_TRAFFIC_UPDATE: &str = "proposal.net.traffic.update";
+pub const PROPOSAL_NET_REPORT_EXPORT: &str = "proposal.net.report.export";
 
 pub const OFFICIAL_LOG_QSO_CREATED: &str = "official.log.qso.created";
 pub const OFFICIAL_LOG_QSO_CORRECTED: &str = "official.log.qso.corrected";
@@ -38,6 +49,17 @@ pub const OFFICIAL_LOG_QSO_ACTIVATION_UNLINKED: &str = "official.log.qso.activat
 pub const OFFICIAL_LOG_UPLOAD_QUEUED: &str = "official.log.upload.queued";
 pub const OFFICIAL_LOG_UPLOAD_COMPLETED: &str = "official.log.upload.completed";
 pub const OFFICIAL_LOG_UPLOAD_FAILED: &str = "official.log.upload.failed";
+pub const OFFICIAL_LOG_NET_TEMPLATE_CREATED: &str = "official.log.net.template.created";
+pub const OFFICIAL_LOG_NET_TEMPLATE_UPDATED: &str = "official.log.net.template.updated";
+pub const OFFICIAL_LOG_NET_SESSION_STARTED: &str = "official.log.net.session.started";
+pub const OFFICIAL_LOG_NET_SESSION_ENDED: &str = "official.log.net.session.ended";
+pub const OFFICIAL_LOG_NET_SESSION_CANCELLED: &str = "official.log.net.session.cancelled";
+pub const OFFICIAL_LOG_NET_CHECKIN_CREATED: &str = "official.log.net.checkin.created";
+pub const OFFICIAL_LOG_NET_CHECKIN_UPDATED: &str = "official.log.net.checkin.updated";
+pub const OFFICIAL_LOG_NET_CHECKIN_DELETED: &str = "official.log.net.checkin.deleted";
+pub const OFFICIAL_LOG_NET_TRAFFIC_CREATED: &str = "official.log.net.traffic.created";
+pub const OFFICIAL_LOG_NET_TRAFFIC_UPDATED: &str = "official.log.net.traffic.updated";
+pub const OFFICIAL_LOG_NET_REPORT_EXPORTED: &str = "official.log.net.report.exported";
 
 /// A capability granted to a plugin by the host application.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -103,6 +125,22 @@ pub enum PluginCapability {
     StationEquipmentView,
     StationEquipmentManage,
     StationProfileUse,
+    CredentialViewMetadata,
+    CredentialCreate,
+    CredentialUpdate,
+    CredentialDelete,
+    CredentialUse,
+    CredentialTest,
+    NetView,
+    NetTemplateCreate,
+    NetTemplateUpdate,
+    NetSessionStart,
+    NetSessionEnd,
+    NetCheckinCreate,
+    NetCheckinUpdate,
+    NetCheckinDelete,
+    NetTrafficManage,
+    NetReportExport,
     UiPanelRegister,
     UiCommandRegister,
     SettingsRead,
@@ -174,6 +212,22 @@ impl PluginCapability {
             Self::StationEquipmentView => "station.equipment.view",
             Self::StationEquipmentManage => "station.equipment.manage",
             Self::StationProfileUse => "station.profile.use",
+            Self::CredentialViewMetadata => "credential.view_metadata",
+            Self::CredentialCreate => "credential.create",
+            Self::CredentialUpdate => "credential.update",
+            Self::CredentialDelete => "credential.delete",
+            Self::CredentialUse => "credential.use",
+            Self::CredentialTest => "credential.test",
+            Self::NetView => "net.view",
+            Self::NetTemplateCreate => "net.template.create",
+            Self::NetTemplateUpdate => "net.template.update",
+            Self::NetSessionStart => "net.session.start",
+            Self::NetSessionEnd => "net.session.end",
+            Self::NetCheckinCreate => "net.checkin.create",
+            Self::NetCheckinUpdate => "net.checkin.update",
+            Self::NetCheckinDelete => "net.checkin.delete",
+            Self::NetTrafficManage => "net.traffic.manage",
+            Self::NetReportExport => "net.report.export",
             Self::UiPanelRegister => "ui.panel.register",
             Self::UiCommandRegister => "ui.command.register",
             Self::SettingsRead => "settings.read",
@@ -260,6 +314,22 @@ impl<'de> Deserialize<'de> for PluginCapability {
             "station.equipment.view" => Self::StationEquipmentView,
             "station.equipment.manage" => Self::StationEquipmentManage,
             "station.profile.use" => Self::StationProfileUse,
+            "credential.view_metadata" => Self::CredentialViewMetadata,
+            "credential.create" => Self::CredentialCreate,
+            "credential.update" => Self::CredentialUpdate,
+            "credential.delete" => Self::CredentialDelete,
+            "credential.use" => Self::CredentialUse,
+            "credential.test" => Self::CredentialTest,
+            "net.view" => Self::NetView,
+            "net.template.create" => Self::NetTemplateCreate,
+            "net.template.update" => Self::NetTemplateUpdate,
+            "net.session.start" => Self::NetSessionStart,
+            "net.session.end" => Self::NetSessionEnd,
+            "net.checkin.create" => Self::NetCheckinCreate,
+            "net.checkin.update" => Self::NetCheckinUpdate,
+            "net.checkin.delete" => Self::NetCheckinDelete,
+            "net.traffic.manage" => Self::NetTrafficManage,
+            "net.report.export" => Self::NetReportExport,
             "ui.panel.register" => Self::UiPanelRegister,
             "ui.command.register" => Self::UiCommandRegister,
             "settings.read" => Self::SettingsRead,

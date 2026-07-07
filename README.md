@@ -100,8 +100,25 @@ append-only, expirable, clearable, and not synced by default.
 
 The GUI Service Providers screen lists providers by service type with plugin
 source, enabled state, health, priority, online/offline behavior, missing config
-warnings, capabilities, and required permissions. Credential fields are schema
-placeholders only until secure OS keychain/secret-store support is added.
+warnings, capabilities, and required permissions. Provider config should point
+to credential IDs rather than raw secrets.
+
+## Secure Credential Storage
+
+`ham-core` now defines a `CredentialStore` abstraction for provider secrets.
+Credential metadata is support/security state; secret values are isolated behind
+the credential backend and are never written to official events, runtime logs,
+diagnostic reports, or provider config.
+
+The MVP includes an OS keychain placeholder for Windows Credential Manager,
+macOS Keychain, and Linux Secret Service, plus an explicit opt-in insecure
+development fallback. The fallback is only enabled when:
+
+```powershell
+$env:HAM_PLATFORM_ALLOW_INSECURE_DEV_CREDENTIALS = "1"
+```
+
+See [Credential Storage](docs/security/credential-storage.md).
 
 ## Daily Driver Logging Foundation
 
@@ -129,6 +146,24 @@ Unified Service Framework:
 Run the GUI with `cargo run -p ham-gui`, open the local URL printed by the
 process, choose the Casual Logger workspace, and use the Station Summary,
 Callsign Entry, Recent QSOs, Advanced Search, Awards, and Uploads panels.
+
+## Net Control MVP
+
+The Net Control workspace is implemented as a built-in plugin-style workflow.
+It submits proposals for net sessions, check-ins, traffic, tombstones, and report
+exports. The core validates plugin permissions, operator role permissions, active
+session rules, and schemas before appending hash-chained official events.
+
+The workspace includes:
+
+- Net Session Control
+- Check-In Entry
+- Check-In Roster
+- Traffic Queue
+- Net Report
+
+Deleted check-ins are tombstone events and are hidden from normal roster
+projection views by default. See [Net Control Plugin](docs/plugins/net-control.md).
 
 ## Official QSO Workflow
 

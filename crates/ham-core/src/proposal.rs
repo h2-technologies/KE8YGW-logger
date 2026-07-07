@@ -3,13 +3,23 @@ use ham_plugin_sdk::{
     PluginCapability, PluginManifest, ProposalEnvelope, OFFICIAL_LOG_ACTIVATION_CANCELLED,
     OFFICIAL_LOG_ACTIVATION_CREATED, OFFICIAL_LOG_ACTIVATION_ENDED,
     OFFICIAL_LOG_ACTIVATION_NOTE_ADDED, OFFICIAL_LOG_ACTIVATION_STARTED,
-    OFFICIAL_LOG_ACTIVATION_UPDATED, OFFICIAL_LOG_QSO_ACTIVATION_LINKED,
-    OFFICIAL_LOG_QSO_ACTIVATION_UNLINKED, OFFICIAL_LOG_QSO_CORRECTED, OFFICIAL_LOG_QSO_CREATED,
-    OFFICIAL_LOG_QSO_DELETED, OFFICIAL_LOG_QSO_NOTE_ADDED, OFFICIAL_LOG_QSO_RESTORED,
-    PROPOSAL_ACTIVATION_CANCEL, PROPOSAL_ACTIVATION_CREATE, PROPOSAL_ACTIVATION_END,
-    PROPOSAL_ACTIVATION_NOTE_ADD, PROPOSAL_ACTIVATION_START, PROPOSAL_ACTIVATION_UPDATE,
-    PROPOSAL_QSO_ACTIVATION_LINK, PROPOSAL_QSO_ACTIVATION_UNLINK, PROPOSAL_QSO_CORRECT,
-    PROPOSAL_QSO_CREATE, PROPOSAL_QSO_DELETE, PROPOSAL_QSO_NOTE_ADD, PROPOSAL_QSO_RESTORE,
+    OFFICIAL_LOG_ACTIVATION_UPDATED, OFFICIAL_LOG_NET_CHECKIN_CREATED,
+    OFFICIAL_LOG_NET_CHECKIN_DELETED, OFFICIAL_LOG_NET_CHECKIN_UPDATED,
+    OFFICIAL_LOG_NET_REPORT_EXPORTED, OFFICIAL_LOG_NET_SESSION_CANCELLED,
+    OFFICIAL_LOG_NET_SESSION_ENDED, OFFICIAL_LOG_NET_SESSION_STARTED,
+    OFFICIAL_LOG_NET_TEMPLATE_CREATED, OFFICIAL_LOG_NET_TEMPLATE_UPDATED,
+    OFFICIAL_LOG_NET_TRAFFIC_CREATED, OFFICIAL_LOG_NET_TRAFFIC_UPDATED,
+    OFFICIAL_LOG_QSO_ACTIVATION_LINKED, OFFICIAL_LOG_QSO_ACTIVATION_UNLINKED,
+    OFFICIAL_LOG_QSO_CORRECTED, OFFICIAL_LOG_QSO_CREATED, OFFICIAL_LOG_QSO_DELETED,
+    OFFICIAL_LOG_QSO_NOTE_ADDED, OFFICIAL_LOG_QSO_RESTORED, PROPOSAL_ACTIVATION_CANCEL,
+    PROPOSAL_ACTIVATION_CREATE, PROPOSAL_ACTIVATION_END, PROPOSAL_ACTIVATION_NOTE_ADD,
+    PROPOSAL_ACTIVATION_START, PROPOSAL_ACTIVATION_UPDATE, PROPOSAL_NET_CHECKIN_CREATE,
+    PROPOSAL_NET_CHECKIN_DELETE, PROPOSAL_NET_CHECKIN_UPDATE, PROPOSAL_NET_REPORT_EXPORT,
+    PROPOSAL_NET_SESSION_CANCEL, PROPOSAL_NET_SESSION_END, PROPOSAL_NET_SESSION_START,
+    PROPOSAL_NET_TEMPLATE_CREATE, PROPOSAL_NET_TEMPLATE_UPDATE, PROPOSAL_NET_TRAFFIC_CREATE,
+    PROPOSAL_NET_TRAFFIC_UPDATE, PROPOSAL_QSO_ACTIVATION_LINK, PROPOSAL_QSO_ACTIVATION_UNLINK,
+    PROPOSAL_QSO_CORRECT, PROPOSAL_QSO_CREATE, PROPOSAL_QSO_DELETE, PROPOSAL_QSO_NOTE_ADD,
+    PROPOSAL_QSO_RESTORE,
 };
 use serde_json::Value;
 use thiserror::Error;
@@ -18,7 +28,9 @@ use uuid::Uuid;
 use crate::{
     bus::{BusEvent, EventBus, EventBusError, RuntimeEventEnvelope, RuntimeEventSeverity},
     event::{CoreEventEnvelope, NewLogbookEvent},
+    net::NetControlProjection,
     permissions::{check_plugin_permission, PermissionGrantSet},
+    projection::Projection,
     store::{LogbookEventStore, StoreError},
 };
 
@@ -49,6 +61,17 @@ impl OperatorRole {
                     | PROPOSAL_ACTIVATION_NOTE_ADD
                     | PROPOSAL_QSO_ACTIVATION_LINK
                     | PROPOSAL_QSO_ACTIVATION_UNLINK
+                    | PROPOSAL_NET_TEMPLATE_CREATE
+                    | PROPOSAL_NET_TEMPLATE_UPDATE
+                    | PROPOSAL_NET_SESSION_START
+                    | PROPOSAL_NET_SESSION_END
+                    | PROPOSAL_NET_SESSION_CANCEL
+                    | PROPOSAL_NET_CHECKIN_CREATE
+                    | PROPOSAL_NET_CHECKIN_UPDATE
+                    | PROPOSAL_NET_CHECKIN_DELETE
+                    | PROPOSAL_NET_TRAFFIC_CREATE
+                    | PROPOSAL_NET_TRAFFIC_UPDATE
+                    | PROPOSAL_NET_REPORT_EXPORT
             ),
         }
     }
@@ -277,6 +300,19 @@ fn required_capability(proposal_type: &str) -> Result<PluginCapability, Proposal
         PROPOSAL_QSO_ACTIVATION_LINK | PROPOSAL_QSO_ACTIVATION_UNLINK => {
             Ok(PluginCapability::QsoCorrect)
         }
+        PROPOSAL_NET_TEMPLATE_CREATE => Ok(PluginCapability::NetTemplateCreate),
+        PROPOSAL_NET_TEMPLATE_UPDATE => Ok(PluginCapability::NetTemplateUpdate),
+        PROPOSAL_NET_SESSION_START => Ok(PluginCapability::NetSessionStart),
+        PROPOSAL_NET_SESSION_END | PROPOSAL_NET_SESSION_CANCEL => {
+            Ok(PluginCapability::NetSessionEnd)
+        }
+        PROPOSAL_NET_CHECKIN_CREATE => Ok(PluginCapability::NetCheckinCreate),
+        PROPOSAL_NET_CHECKIN_UPDATE => Ok(PluginCapability::NetCheckinUpdate),
+        PROPOSAL_NET_CHECKIN_DELETE => Ok(PluginCapability::NetCheckinDelete),
+        PROPOSAL_NET_TRAFFIC_CREATE | PROPOSAL_NET_TRAFFIC_UPDATE => {
+            Ok(PluginCapability::NetTrafficManage)
+        }
+        PROPOSAL_NET_REPORT_EXPORT => Ok(PluginCapability::NetReportExport),
         other => Err(ProposalValidationError::UnsupportedProposalType(
             other.to_owned(),
         )),
@@ -445,6 +481,90 @@ where
             require_existing_qso(store, proposal).await?;
             Ok(())
         }
+        PROPOSAL_NET_TEMPLATE_CREATE => {
+            require_string(payload, "name", "net template create")?;
+            Ok(())
+        }
+        PROPOSAL_NET_TEMPLATE_UPDATE => {
+            require_existing_net_template(store, proposal).await?;
+            Ok(())
+        }
+        PROPOSAL_NET_SESSION_START => {
+            for field in [
+                "station_callsign",
+                "net_control_operator_id",
+                "net_name",
+                "started_at",
+            ] {
+                require_string(payload, field, "net session start")?;
+            }
+            validate_started_at(payload)?;
+            Ok(())
+        }
+        PROPOSAL_NET_SESSION_END => {
+            require_existing_active_net_session(store, proposal).await?;
+            require_string(payload, "ended_at", "net session end")?;
+            validate_ended_after_started(payload)?;
+            Ok(())
+        }
+        PROPOSAL_NET_SESSION_CANCEL => {
+            require_existing_net_session(store, proposal).await?;
+            Ok(())
+        }
+        PROPOSAL_NET_CHECKIN_CREATE => {
+            let session_id = net_session_id_from_payload(payload)?;
+            let projection = rebuild_net_projection(store, proposal.logbook_id).await?;
+            let session = projection.get_session(session_id).ok_or_else(|| {
+                ProposalValidationError::InvalidSchema(format!(
+                    "net_session_id {session_id} does not exist"
+                ))
+            })?;
+            if session.status != crate::NetSessionStatus::Active {
+                return Err(ProposalValidationError::InvalidSchema(
+                    "active net session required for check-ins".to_owned(),
+                ));
+            }
+            let tactical_only = payload
+                .get("tactical_only")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            if !tactical_only && !payload.get("callsign").is_some_and(Value::is_string) {
+                return Err(ProposalValidationError::InvalidSchema(
+                    "check-in requires callsign unless tactical_only is true".to_owned(),
+                ));
+            }
+            require_string(payload, "checkin_time", "net checkin create")?;
+            validate_checkin_time(payload)?;
+            Ok(())
+        }
+        PROPOSAL_NET_CHECKIN_UPDATE | PROPOSAL_NET_CHECKIN_DELETE => {
+            require_existing_net_checkin(store, proposal).await?;
+            Ok(())
+        }
+        PROPOSAL_NET_TRAFFIC_CREATE => {
+            let session_id = net_session_id_from_payload(payload)?;
+            let projection = rebuild_net_projection(store, proposal.logbook_id).await?;
+            let session = projection.get_session(session_id).ok_or_else(|| {
+                ProposalValidationError::InvalidSchema(format!(
+                    "net_session_id {session_id} does not exist"
+                ))
+            })?;
+            if session.status != crate::NetSessionStatus::Active {
+                return Err(ProposalValidationError::InvalidSchema(
+                    "active net session required for traffic".to_owned(),
+                ));
+            }
+            require_string(payload, "summary", "net traffic create")?;
+            Ok(())
+        }
+        PROPOSAL_NET_TRAFFIC_UPDATE => {
+            require_entity_id(proposal)?;
+            Ok(())
+        }
+        PROPOSAL_NET_REPORT_EXPORT => {
+            require_existing_net_session(store, proposal).await?;
+            Ok(())
+        }
         other => Err(ProposalValidationError::UnsupportedProposalType(
             other.to_owned(),
         )),
@@ -487,6 +607,19 @@ fn validate_activation_payload(
         _ => {}
     }
     validate_ended_after_started(payload)?;
+    Ok(())
+}
+
+fn require_string(
+    payload: &serde_json::Map<String, Value>,
+    field: &str,
+    label: &str,
+) -> Result<(), ProposalValidationError> {
+    if !payload.get(field).is_some_and(Value::is_string) {
+        return Err(ProposalValidationError::InvalidSchema(format!(
+            "{label} requires string field `{field}`"
+        )));
+    }
     Ok(())
 }
 
@@ -534,6 +667,25 @@ fn validate_started_at(
             "started_at must be UTC".to_owned(),
         ));
     }
+    Ok(())
+}
+
+fn validate_checkin_time(
+    payload: &serde_json::Map<String, Value>,
+) -> Result<(), ProposalValidationError> {
+    let checkin_time = payload
+        .get("checkin_time")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            ProposalValidationError::InvalidSchema("checkin_time is required".to_owned())
+        })?;
+    let _parsed = DateTime::parse_from_rfc3339(checkin_time)
+        .map_err(|_| {
+            ProposalValidationError::InvalidSchema(
+                "checkin_time must be a valid UTC/RFC3339 timestamp".to_owned(),
+            )
+        })?
+        .with_timezone(&Utc);
     Ok(())
 }
 
@@ -589,6 +741,116 @@ where
         )));
     }
     Ok(activation_id)
+}
+
+async fn rebuild_net_projection<S>(
+    store: &S,
+    logbook_id: Uuid,
+) -> Result<NetControlProjection, ProposalValidationError>
+where
+    S: LogbookEventStore,
+{
+    let events = store.list_events(logbook_id).await?;
+    let mut projection = NetControlProjection::new();
+    projection
+        .rebuild(&events)
+        .map_err(|error| ProposalValidationError::InvalidSchema(error.to_string()))?;
+    Ok(projection)
+}
+
+async fn require_existing_net_template<S>(
+    store: &S,
+    proposal: &ProposalEnvelope,
+) -> Result<Uuid, ProposalValidationError>
+where
+    S: LogbookEventStore,
+{
+    let template_id = require_entity_id(proposal)?;
+    let projection = rebuild_net_projection(store, proposal.logbook_id).await?;
+    let template_id_string = template_id.to_string();
+    if !projection.templates().iter().any(|template| {
+        template.get("net_template_id").and_then(Value::as_str) == Some(template_id_string.as_str())
+    }) {
+        return Err(ProposalValidationError::InvalidSchema(format!(
+            "net_template_id {template_id} does not exist"
+        )));
+    }
+    Ok(template_id)
+}
+
+async fn require_existing_net_session<S>(
+    store: &S,
+    proposal: &ProposalEnvelope,
+) -> Result<Uuid, ProposalValidationError>
+where
+    S: LogbookEventStore,
+{
+    let session_id = require_entity_id(proposal)?;
+    let projection = rebuild_net_projection(store, proposal.logbook_id).await?;
+    if projection.get_session(session_id).is_none() {
+        return Err(ProposalValidationError::InvalidSchema(format!(
+            "net_session_id {session_id} does not exist"
+        )));
+    }
+    Ok(session_id)
+}
+
+async fn require_existing_active_net_session<S>(
+    store: &S,
+    proposal: &ProposalEnvelope,
+) -> Result<Uuid, ProposalValidationError>
+where
+    S: LogbookEventStore,
+{
+    let session_id = require_existing_net_session(store, proposal).await?;
+    let projection = rebuild_net_projection(store, proposal.logbook_id).await?;
+    let session = projection.get_session(session_id).ok_or_else(|| {
+        ProposalValidationError::InvalidSchema(format!(
+            "net_session_id {session_id} does not exist"
+        ))
+    })?;
+    if session.status != crate::NetSessionStatus::Active {
+        return Err(ProposalValidationError::InvalidSchema(
+            "active net session required".to_owned(),
+        ));
+    }
+    Ok(session_id)
+}
+
+async fn require_existing_net_checkin<S>(
+    store: &S,
+    proposal: &ProposalEnvelope,
+) -> Result<Uuid, ProposalValidationError>
+where
+    S: LogbookEventStore,
+{
+    let checkin_id = require_entity_id(proposal)?;
+    let projection = rebuild_net_projection(store, proposal.logbook_id).await?;
+    if !projection.sessions(true).iter().any(|session| {
+        projection
+            .checkins_for_session(session.net_session_id, true)
+            .iter()
+            .any(|checkin| checkin.checkin_id == checkin_id)
+    }) {
+        return Err(ProposalValidationError::InvalidSchema(format!(
+            "checkin_id {checkin_id} does not exist"
+        )));
+    }
+    Ok(checkin_id)
+}
+
+fn net_session_id_from_payload(
+    payload: &serde_json::Map<String, Value>,
+) -> Result<Uuid, ProposalValidationError> {
+    payload
+        .get("net_session_id")
+        .and_then(Value::as_str)
+        .and_then(|value| Uuid::parse_str(value).ok())
+        .ok_or_else(|| {
+            ProposalValidationError::InvalidSchema(
+                "net proposal requires net_session_id".to_owned(),
+            )
+        })
 }
 
 fn require_entity_id(proposal: &ProposalEnvelope) -> Result<Uuid, ProposalValidationError> {
@@ -655,6 +917,50 @@ fn to_official_event(
             OFFICIAL_LOG_QSO_ACTIVATION_UNLINKED.to_owned(),
             Some(require_entity_id(&proposal)?),
         ),
+        PROPOSAL_NET_TEMPLATE_CREATE => (
+            OFFICIAL_LOG_NET_TEMPLATE_CREATED.to_owned(),
+            proposal.entity_id.or_else(|| Some(Uuid::new_v4())),
+        ),
+        PROPOSAL_NET_TEMPLATE_UPDATE => (
+            OFFICIAL_LOG_NET_TEMPLATE_UPDATED.to_owned(),
+            Some(require_entity_id(&proposal)?),
+        ),
+        PROPOSAL_NET_SESSION_START => (
+            OFFICIAL_LOG_NET_SESSION_STARTED.to_owned(),
+            proposal.entity_id.or_else(|| Some(Uuid::new_v4())),
+        ),
+        PROPOSAL_NET_SESSION_END => (
+            OFFICIAL_LOG_NET_SESSION_ENDED.to_owned(),
+            Some(require_entity_id(&proposal)?),
+        ),
+        PROPOSAL_NET_SESSION_CANCEL => (
+            OFFICIAL_LOG_NET_SESSION_CANCELLED.to_owned(),
+            Some(require_entity_id(&proposal)?),
+        ),
+        PROPOSAL_NET_CHECKIN_CREATE => (
+            OFFICIAL_LOG_NET_CHECKIN_CREATED.to_owned(),
+            proposal.entity_id.or_else(|| Some(Uuid::new_v4())),
+        ),
+        PROPOSAL_NET_CHECKIN_UPDATE => (
+            OFFICIAL_LOG_NET_CHECKIN_UPDATED.to_owned(),
+            Some(require_entity_id(&proposal)?),
+        ),
+        PROPOSAL_NET_CHECKIN_DELETE => (
+            OFFICIAL_LOG_NET_CHECKIN_DELETED.to_owned(),
+            Some(require_entity_id(&proposal)?),
+        ),
+        PROPOSAL_NET_TRAFFIC_CREATE => (
+            OFFICIAL_LOG_NET_TRAFFIC_CREATED.to_owned(),
+            proposal.entity_id.or_else(|| Some(Uuid::new_v4())),
+        ),
+        PROPOSAL_NET_TRAFFIC_UPDATE => (
+            OFFICIAL_LOG_NET_TRAFFIC_UPDATED.to_owned(),
+            Some(require_entity_id(&proposal)?),
+        ),
+        PROPOSAL_NET_REPORT_EXPORT => (
+            OFFICIAL_LOG_NET_REPORT_EXPORTED.to_owned(),
+            Some(require_entity_id(&proposal)?),
+        ),
         other => {
             return Err(ProposalValidationError::UnsupportedProposalType(
                 other.to_owned(),
@@ -662,9 +968,26 @@ fn to_official_event(
         }
     };
 
-    let entity_id = entity_id.expect("all QSO official events have a QSO entity id");
+    let entity_id = entity_id.expect("official proposal events have an entity id");
     let mut payload = proposal.payload;
-    payload["qso_id"] = serde_json::json!(entity_id);
+    let entity_key = match proposal.proposal_type.as_str() {
+        PROPOSAL_NET_TEMPLATE_CREATE | PROPOSAL_NET_TEMPLATE_UPDATE => "net_template_id",
+        PROPOSAL_ACTIVATION_CREATE
+        | PROPOSAL_ACTIVATION_START
+        | PROPOSAL_ACTIVATION_UPDATE
+        | PROPOSAL_ACTIVATION_END
+        | PROPOSAL_ACTIVATION_CANCEL
+        | PROPOSAL_ACTIVATION_NOTE_ADD => "activation_id",
+        PROPOSAL_NET_SESSION_START | PROPOSAL_NET_SESSION_END | PROPOSAL_NET_SESSION_CANCEL => {
+            "net_session_id"
+        }
+        PROPOSAL_NET_CHECKIN_CREATE | PROPOSAL_NET_CHECKIN_UPDATE | PROPOSAL_NET_CHECKIN_DELETE => {
+            "checkin_id"
+        }
+        PROPOSAL_NET_TRAFFIC_CREATE | PROPOSAL_NET_TRAFFIC_UPDATE => "traffic_id",
+        _ => "qso_id",
+    };
+    payload[entity_key] = serde_json::json!(entity_id);
     let station_callsign = payload
         .get("station_callsign")
         .and_then(Value::as_str)

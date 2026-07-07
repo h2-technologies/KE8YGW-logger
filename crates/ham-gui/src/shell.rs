@@ -226,6 +226,13 @@ pub fn default_panel_registry() -> Vec<PanelDefinition> {
             WorkspaceId::ALL,
         ),
         panel(
+            "credential-manager",
+            "Credential Manager",
+            "core.credentials",
+            ["credential.view_metadata"],
+            WorkspaceId::ALL,
+        ),
+        panel(
             "station-summary",
             "Station Summary",
             "core.station",
@@ -278,6 +285,41 @@ pub fn default_panel_registry() -> Vec<PanelDefinition> {
             ["diagnostics.view_logs"],
             WorkspaceId::ALL,
         ),
+        panel(
+            "net-session-control",
+            "Net Session Control",
+            "plugin.net-control",
+            ["net.session.start", "net.session.end"],
+            [WorkspaceId::NetControl],
+        ),
+        panel(
+            "net-checkin-entry",
+            "Check-In Entry",
+            "plugin.net-control",
+            ["net.checkin.create"],
+            [WorkspaceId::NetControl],
+        ),
+        panel(
+            "net-checkin-roster",
+            "Check-In Roster",
+            "plugin.net-control",
+            ["net.view"],
+            [WorkspaceId::NetControl],
+        ),
+        panel(
+            "net-traffic-queue",
+            "Traffic Queue",
+            "plugin.net-control",
+            ["net.traffic.manage"],
+            [WorkspaceId::NetControl],
+        ),
+        panel(
+            "net-report",
+            "Net Report",
+            "plugin.net-control",
+            ["net.report.export"],
+            [WorkspaceId::NetControl],
+        ),
     ]
 }
 
@@ -301,6 +343,7 @@ fn default_layout(id: WorkspaceId) -> WorkspaceLayout {
             place("event-bus-monitor", PanelRegion::Bottom, 10),
             place("diagnostic-reports", PanelRegion::RightInspector, 10),
             place("service-providers", PanelRegion::RightInspector, 20),
+            place("credential-manager", PanelRegion::RightInspector, 25),
             place("awards-summary", PanelRegion::RightInspector, 30),
         ],
         WorkspaceId::CasualLogger => vec![
@@ -327,9 +370,11 @@ fn default_layout(id: WorkspaceId) -> WorkspaceLayout {
             place("recent-qsos", PanelRegion::Bottom, 10),
         ],
         WorkspaceId::NetControl => vec![
-            place("callsign-entry", PanelRegion::Center, 10),
-            place("recent-qsos", PanelRegion::Center, 20),
-            place("event-bus-monitor", PanelRegion::RightInspector, 10),
+            place("net-session-control", PanelRegion::Center, 10),
+            place("net-checkin-entry", PanelRegion::Center, 20),
+            place("net-checkin-roster", PanelRegion::Center, 30),
+            place("net-traffic-queue", PanelRegion::RightInspector, 10),
+            place("net-report", PanelRegion::Bottom, 10),
         ],
         WorkspaceId::EmComm => vec![
             place("map-placeholder", PanelRegion::Center, 10),

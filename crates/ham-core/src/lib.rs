@@ -3,9 +3,11 @@
 pub mod adif;
 pub mod awards;
 pub mod bus;
+pub mod credential;
 pub mod diagnostics;
 pub mod event;
 pub mod lookup;
+pub mod net;
 pub mod permissions;
 pub mod projection;
 pub mod proposal;
@@ -29,6 +31,11 @@ pub use bus::{
     redact_payload, BusEvent, EventBus, EventBusError, InMemoryEventBus, RuntimeDiagnosticEvent,
     RuntimeEventEnvelope, RuntimeEventFilter, RuntimeEventSeverity,
 };
+pub use credential::{
+    authorize_credential_action, credential_runtime_payload, os_backend_name,
+    required_credentials_satisfied, CredentialBackendStatus, CredentialError, CredentialMetadata,
+    CredentialStatus, CredentialStore, InsecureDevCredentialStore, UnsupportedOsCredentialStore,
+};
 pub use diagnostics::{
     action_timeline, build_diagnostic_bundle, bundle_content_hash, export_diagnostic_zip,
     redact_for_report, ActionTimelineEntry, DiagnosticBundle, DiagnosticBundleFile,
@@ -42,6 +49,11 @@ pub use lookup::{
     validate_grid, CallsignLookupProvider, EntityInfo, GridInfo, LocalPrefixProvider, LookupCache,
     LookupCacheConfig, LookupError, LookupProviderStatus, LookupResult, LookupSuggestion,
     MockLookupProvider, QrzLookupProviderStub,
+};
+pub use net::{
+    export_net_report_markdown, NetCheckInRecord, NetCheckInStatus, NetControlProjection,
+    NetProjectionError, NetSessionRecord, NetSessionStatus, NetTemplate, NetTrafficLevel,
+    NetTrafficPrecedence, NetTrafficRecord, NetTrafficStatus,
 };
 pub use permissions::{
     check_plugin_permission, grant_builtin_defaults, JsonPermissionGrantStore, PermissionError,

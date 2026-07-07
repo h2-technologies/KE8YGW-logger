@@ -3,6 +3,8 @@ const state = {
   commands: [],
   plugins: [],
   serviceProviders: { providers: [], preferred_providers: {} },
+  credentials: null,
+  netControl: null,
   permissionState: null,
   runtimeEvents: [],
   runtimeStatus: null,
@@ -55,6 +57,8 @@ async function boot() {
   await refreshStation();
   await refreshAwards();
   await refreshUploads();
+  await refreshCredentials();
+  await refreshNetControl();
   await refreshActivations();
   await refreshRigStatus();
   await refreshSyncState();
@@ -189,6 +193,18 @@ function panelContent(panel) {
         .join("");
     case "service-providers":
       return renderServiceProviders();
+    case "credential-manager":
+      return renderCredentialManager();
+    case "net-session-control":
+      return renderNetSessionControl();
+    case "net-checkin-entry":
+      return renderNetCheckinEntry();
+    case "net-checkin-roster":
+      return renderNetRoster();
+    case "net-traffic-queue":
+      return renderNetTrafficQueue();
+    case "net-report":
+      return renderNetReport();
     case "sync-status":
       return renderSyncStatus();
     case "rig-control":
@@ -273,6 +289,8 @@ function runCommand(commandId) {
   if (command.id === "services.cache.clear") clearServiceCache();
   if (command.id === "services.lookup.test") lookupCallsignFromPrompt();
   if (command.id === "services.spotting.test") openScreen("services");
+  if (command.id === "credentials.open" || command.id === "credentials.create") openScreen("credentials");
+  if (command.id === "credentials.test") testFirstCredential();
   if (command.id === "open.diagnostics") openScreen("diagnostics");
   if (command.id === "diagnostics.open-folder") openScreen("diagnostics-folder");
   if (command.id === "diagnostics.report.problem") openReportProblemScreen();
@@ -304,6 +322,16 @@ function runCommand(commandId) {
   if (command.id === "logger.use-rig-frequency") acceptRigSuggestion(true);
   if (command.id === "logger.accept-lookup-suggestions") acceptLookupSuggestion();
   if (command.id === "logger.open-recent-qsos") switchWorkspace("casual-logger");
+  if (command.id === "net.open") switchWorkspace("net-control");
+  if (command.id === "net.session.start") startNetFromPrompt();
+  if (command.id === "net.session.end") endActiveNet();
+  if (command.id === "net.checkin.focus") {
+    switchWorkspace("net-control");
+    requestAnimationFrame(() => byId("net-checkin-callsign")?.focus());
+  }
+  if (command.id === "net.checkin.late") addLateCheckinFromPrompt();
+  if (command.id === "net.report.export") exportNetReport();
+  if (command.id === "net.traffic.open") switchWorkspace("net-control");
   if (command.id === "activation.start-pota") startActivationFromPrompt("pota");
   if (command.id === "activation.start-sota") startActivationFromPrompt("sota");
   if (command.id === "activation.end-current") endCurrentActivation();
@@ -358,6 +386,14 @@ function openScreen(kind) {
     eyebrow.textContent = "Provider Runtime";
     title.textContent = "Service Providers";
     body.innerHTML = renderServiceProviderScreen();
+    return;
+  }
+
+  if (kind === "credentials") {
+    eyebrow.textContent = "Security";
+    title.textContent = "Credential Manager";
+    body.innerHTML = renderCredentialManager();
+    bindCredentialControls();
     return;
   }
 
@@ -506,8 +542,18 @@ function bindPluginPermissionControls() {
   });
 }
 
+function bindCredentialControls() {
+  byId("credential-create-form")?.addEventListener("submit", submitCredentialCreate);
+  document.querySelectorAll("[data-credential-test]").forEach((button) => {
+    button.addEventListener("click", () => testCredential(button.dataset.credentialTest));
+  });
+  document.querySelectorAll("[data-credential-revoke]").forEach((button) => {
+    button.addEventListener("click", () => revokeCredential(button.dataset.credentialRevoke));
+  });
+}
+
 function renderSettings() {
-  const sections = ["General", "Appearance", "Callsign/Profile", "Sync", "Service Providers", "Lookup/Enrichment", "Rig Control", "Plugin Permissions", "Plugins", "Diagnostics", "Keyboard Shortcuts"];
+  const sections = ["General", "Appearance", "Callsign/Profile", "Sync", "Service Providers", "Credentials", "Lookup/Enrichment", "Rig Control", "Plugin Permissions", "Plugins", "Diagnostics", "Keyboard Shortcuts"];
   return `<div class="settings-grid">
     ${sections
       .map((section) =>
@@ -515,6 +561,8 @@ function renderSettings() {
           ? `<article class="settings-card"><h3>${section}</h3>${renderCloudSettings()}</article>`
           : section === "Service Providers"
             ? `<article class="settings-card"><h3>${section}</h3>${renderServiceProviderSummary()}</article>`
+          : section === "Credentials"
+            ? `<article class="settings-card"><h3>${section}</h3>${renderCredentialSummary()}</article>`
           : section === "Lookup/Enrichment"
             ? `<article class="settings-card"><h3>${section}</h3>${renderLookupSettings()}</article>`
           : section === "Rig Control"
@@ -566,9 +614,57 @@ function renderServiceProviderSummary() {
 }
 
 function renderServiceProviderScreen() {
-  return `<p class="muted">Providers are registered through the shared core service framework. Credential fields are schema-only until secure storage is added.</p>
+  return `<p class="muted">Providers are registered through the shared core service framework. Provider configs reference credential IDs; raw secrets are handled only by the credential store.</p>
     ${renderServiceProviderSummary()}
     ${renderServiceProviders()}`;
+}
+
+function renderCredentialSummary() {
+  const backend = state.credentials?.backend || {};
+  const count = state.credentials?.credentials?.length || 0;
+  const warning = backend.dev_only ? `<p class="event-error">Development fallback is active. Do not use for production credentials.</p>` : "";
+  return `<p>${count} credential metadata records.</p>
+    <p>Backend: ${backend.backend_name || "unknown"} / ${backend.available ? "available" : "unavailable"} / ${backend.secure ? "secure" : "not secure"}</p>
+    ${warning}
+    <button class="toolbar-button" type="button" onclick="openScreen('credentials')">Open Credential Manager</button>`;
+}
+
+function renderCredentialManager() {
+  const backend = state.credentials?.backend || {};
+  const credentials = state.credentials?.credentials || [];
+  return `<div class="stack">
+    <div class="sync-summary">
+      <p><strong>${backend.backend_name || "Credential backend"}</strong></p>
+      <p>${backend.message || "Credential backend status is unknown."}</p>
+      <p>${backend.available ? "Available" : "Unavailable"} / ${backend.secure ? "Secure" : "Not secure"}${backend.dev_only ? " / Development only" : ""}</p>
+      ${backend.dev_only ? `<p class="event-error">Secrets are stored in the explicit insecure development fallback. Set up OS keychain support before real provider use.</p>` : ""}
+    </div>
+    <form id="credential-create-form" class="qso-form">
+      <label>Provider ID <input name="provider_id" class="placeholder-control" placeholder="qrz-stub" required /></label>
+      <label>Account ID <input name="account_id" class="placeholder-control" placeholder="local-account" required /></label>
+      <label>Service Type
+        <select name="service_type" class="placeholder-control">
+          <option value="callsign_lookup">callsign_lookup</option>
+          <option value="log_upload">log_upload</option>
+          <option value="authentication">authentication</option>
+        </select>
+      </label>
+      <label>Label <input name="label" class="placeholder-control" placeholder="QRZ token" required /></label>
+      <label>Secret <input name="secret" class="placeholder-control" type="password" autocomplete="new-password" placeholder="Secret is never displayed after save" required /></label>
+      <button class="toolbar-button" type="submit" ${backend.available ? "" : "disabled"}>Save Credential</button>
+    </form>
+    <div class="qso-list">${credentials
+      .map((credential) => `<article class="qso-row">
+        <strong>${credential.label}</strong>
+        <span>${credential.provider_id} / ${credential.service_type}</span>
+        <small>${credential.status}</small>
+        <div class="monitor-actions">
+          <button class="toolbar-button" type="button" data-credential-test="${credential.credential_id}">Test</button>
+          <button class="toolbar-button" type="button" data-credential-revoke="${credential.credential_id}">Revoke</button>
+        </div>
+      </article>`)
+      .join("") || `<p class="muted">No credential metadata records.</p>`}</div>
+  </div>`;
 }
 
 function renderPermissionSettings() {
@@ -750,6 +846,21 @@ function bindPanelControls() {
   byId("rig-refresh-button")?.addEventListener("click", refreshRigState);
   byId("rig-use-button")?.addEventListener("click", () => acceptRigSuggestion(true));
   byId("rig-mock-apply-button")?.addEventListener("click", applyMockRigSettings);
+  byId("credential-create-form")?.addEventListener("submit", submitCredentialCreate);
+  document.querySelectorAll("[data-credential-test]").forEach((button) => {
+    button.addEventListener("click", () => testCredential(button.dataset.credentialTest));
+  });
+  document.querySelectorAll("[data-credential-revoke]").forEach((button) => {
+    button.addEventListener("click", () => revokeCredential(button.dataset.credentialRevoke));
+  });
+  byId("net-session-start-form")?.addEventListener("submit", submitNetSessionStart);
+  byId("net-end-button")?.addEventListener("click", endActiveNet);
+  byId("net-checkin-form")?.addEventListener("submit", submitNetCheckin);
+  byId("net-traffic-form")?.addEventListener("submit", submitNetTraffic);
+  byId("net-report-export")?.addEventListener("click", exportNetReport);
+  document.querySelectorAll("[data-net-checkin-delete]").forEach((button) => {
+    button.addEventListener("click", () => deleteNetCheckin(button.dataset.netCheckinDelete));
+  });
 
   document.querySelectorAll("[data-qso-action]").forEach((button) => {
     button.addEventListener("click", () => {
@@ -1102,6 +1213,110 @@ function renderUploads() {
   </div>`;
 }
 
+function renderNetSessionControl() {
+  const active = state.netControl?.active_session;
+  return `<div class="stack">
+    <form id="net-session-start-form" class="qso-form">
+      <label>Net Name <input name="net_name" class="placeholder-control" value="ARES Weekly Net" required /></label>
+      <label>Station Callsign <input name="station_callsign" class="placeholder-control" value="${activeStationProfile()?.station_callsign || "KE8YGW"}" required /></label>
+      <label>Net Control Operator <input name="net_control_operator_id" class="placeholder-control" value="${activeStationProfile()?.operator_callsign || activeStationProfile()?.station_callsign || "KE8YGW"}" required /></label>
+      <label>Frequency Hz <input name="frequency_hz" class="placeholder-control" inputmode="numeric" value="${state.acceptedRigFields?.frequency_hz || ""}" /></label>
+      <label>Band <input name="band" class="placeholder-control" value="${state.acceptedRigFields?.band || ""}" /></label>
+      <label>Mode <input name="mode" class="placeholder-control" value="${state.acceptedRigFields?.mode || "FM"}" /></label>
+      <label>Notes <input name="notes" class="placeholder-control" /></label>
+      <button class="toolbar-button" type="submit" ${active ? "disabled" : ""}>Start Net</button>
+    </form>
+    <div class="sync-summary">
+      <p><strong>${active?.payload?.net_name || "No active net"}</strong></p>
+      <p>Status: ${active?.status || "inactive"} / Check-ins: ${active?.checkin_count || 0} / Traffic: ${active?.traffic_count || 0}</p>
+      <button id="net-end-button" class="toolbar-button" type="button" ${active ? "" : "disabled"}>End Net</button>
+    </div>
+  </div>`;
+}
+
+function renderNetCheckinEntry() {
+  const active = state.netControl?.active_session;
+  return `<form id="net-checkin-form" class="qso-form">
+    <p class="muted">${active ? `Checking into ${active.payload.net_name}` : "Start a net before accepting check-ins."}</p>
+    <label>Callsign <input id="net-checkin-callsign" name="callsign" class="placeholder-control" placeholder="K1ABC" /></label>
+    <label>Name <input name="operator_name" class="placeholder-control" /></label>
+    <label>Location <input name="location" class="placeholder-control" /></label>
+    <label>Grid <input name="grid" class="placeholder-control" /></label>
+    <label>Tactical Callsign <input name="tactical_callsign" class="placeholder-control" /></label>
+    <label>Status
+      <select name="status" class="placeholder-control">
+        <option value="checked_in">Checked In</option>
+        <option value="late">Late</option>
+        <option value="excused">Excused</option>
+        <option value="left">Left</option>
+      </select>
+    </label>
+    <label>Traffic
+      <select name="traffic" class="placeholder-control">
+        <option value="none">None</option>
+        <option value="listed">Listed</option>
+        <option value="priority">Priority</option>
+        <option value="emergency">Emergency</option>
+      </select>
+    </label>
+    <label>Notes <input name="notes" class="placeholder-control" /></label>
+    <button class="toolbar-button" type="submit" ${active ? "" : "disabled"}>Submit Check-In</button>
+  </form>`;
+}
+
+function renderNetRoster() {
+  const checkins = state.netControl?.checkins || [];
+  const warnings = state.netControl?.active_session?.duplicate_warnings || [];
+  return `<div class="stack">
+    ${warnings.map((warning) => `<p class="event-error">${warning}</p>`).join("")}
+    <div class="qso-list">${checkins
+      .map((checkin) => `<article class="qso-row">
+        <strong>${checkin.payload.callsign || checkin.payload.tactical_callsign || "Tactical only"}</strong>
+        <span>${checkin.payload.operator_name || ""} ${checkin.payload.location || ""}</span>
+        <small>${checkin.status} / ${checkin.traffic}</small>
+        <button class="toolbar-button" type="button" data-net-checkin-delete="${checkin.checkin_id}">Delete</button>
+      </article>`)
+      .join("") || `<p class="muted">No check-ins yet.</p>`}</div>
+  </div>`;
+}
+
+function renderNetTrafficQueue() {
+  const active = state.netControl?.active_session;
+  const traffic = state.netControl?.traffic || [];
+  return `<div class="stack">
+    <form id="net-traffic-form" class="qso-form">
+      <label>From <input name="from_callsign" class="placeholder-control" /></label>
+      <label>To <input name="to_callsign" class="placeholder-control" /></label>
+      <label>Precedence
+        <select name="precedence" class="placeholder-control">
+          <option value="routine">Routine</option>
+          <option value="priority">Priority</option>
+          <option value="emergency">Emergency</option>
+        </select>
+      </label>
+      <label>Summary <input name="summary" class="placeholder-control" required /></label>
+      <button class="toolbar-button" type="submit" ${active ? "" : "disabled"}>Add Traffic</button>
+    </form>
+    <div class="qso-list">${traffic
+      .map((item) => `<article class="qso-row ${item.precedence === "emergency" ? "event-error" : ""}">
+        <strong>${item.precedence}</strong>
+        <span>${item.summary}</span>
+        <small>${item.status || "listed"}</small>
+      </article>`)
+      .join("") || `<p class="muted">No listed traffic.</p>`}</div>
+  </div>`;
+}
+
+function renderNetReport() {
+  const active = state.netControl?.active_session;
+  return `<div class="stack">
+    <div class="monitor-actions">
+      <button id="net-report-export" class="toolbar-button" type="button" ${active ? "" : "disabled"}>Export Report Event</button>
+    </div>
+    <pre class="path-block">${state.netControl?.report_preview || "Start a net to build a report."}</pre>
+  </div>`;
+}
+
 function renderRecentQsos() {
   if (!state.qsos.length) {
     return `<p class="muted">No visible QSOs yet. Create one from Callsign Entry.</p>`;
@@ -1156,6 +1371,14 @@ async function refreshAwards() {
 
 async function refreshUploads() {
   state.uploads = await fetch("/api/uploads").then((response) => response.json());
+}
+
+async function refreshCredentials() {
+  state.credentials = await fetch("/api/credentials").then((response) => response.json());
+}
+
+async function refreshNetControl() {
+  state.netControl = await fetch("/api/net-control").then((response) => response.json());
 }
 
 function activeStationProfile() {
@@ -1225,6 +1448,201 @@ async function queueNotUploadedQsos() {
   await refreshUploads();
   await refreshRuntimeEvents();
   openScreen("uploads");
+}
+
+async function submitCredentialCreate(event) {
+  event.preventDefault();
+  const form = new FormData(event.currentTarget);
+  const payload = {
+    provider_id: form.get("provider_id")?.toString() || "",
+    account_id: form.get("account_id")?.toString() || "local-account",
+    service_type: form.get("service_type")?.toString() || "log_upload",
+    label: form.get("label")?.toString() || "Credential",
+    secret: form.get("secret")?.toString() || "",
+    metadata: { source: "gui" },
+  };
+  state.importSummary = await fetch("/api/credentials/create", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  }).then((response) => response.json());
+  await refreshCredentials();
+  await refreshRuntimeEvents();
+  openScreen("credentials");
+}
+
+async function testCredential(credentialId) {
+  state.importSummary = await fetch("/api/credentials/test", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ credential_id: credentialId }),
+  }).then((response) => response.json());
+  await refreshCredentials();
+  await refreshRuntimeEvents();
+  openScreen("credentials");
+}
+
+async function testFirstCredential() {
+  const credentialId = state.credentials?.credentials?.[0]?.credential_id;
+  if (credentialId) await testCredential(credentialId);
+  else openScreen("credentials");
+}
+
+async function revokeCredential(credentialId) {
+  state.importSummary = await fetch("/api/credentials/revoke", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ credential_id: credentialId }),
+  }).then((response) => response.json());
+  await refreshCredentials();
+  await refreshRuntimeEvents();
+  openScreen("credentials");
+}
+
+async function submitNetSessionStart(event) {
+  event.preventDefault();
+  const form = new FormData(event.currentTarget);
+  const payload = {
+    net_name: form.get("net_name")?.toString() || "Net",
+    station_callsign: form.get("station_callsign")?.toString() || "KE8YGW",
+    net_control_operator_id: form.get("net_control_operator_id")?.toString() || "KE8YGW",
+    frequency_hz: numberOrNull(form.get("frequency_hz")),
+    band: emptyToNull(form.get("band")),
+    mode: emptyToNull(form.get("mode")),
+    notes: emptyToNull(form.get("notes")),
+  };
+  state.importSummary = await fetch("/api/net/session/start", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  }).then((response) => response.json());
+  await refreshNetControl();
+  await refreshRuntimeEvents();
+  render();
+}
+
+function startNetFromPrompt() {
+  switchWorkspace("net-control");
+  requestAnimationFrame(() => byId("net-session-start-form")?.requestSubmit());
+}
+
+async function endActiveNet() {
+  const sessionId = state.netControl?.active_session?.net_session_id;
+  if (!sessionId) return;
+  state.importSummary = await fetch("/api/net/session/end", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ credential_id: sessionId }),
+  }).then((response) => response.json());
+  await refreshNetControl();
+  await refreshRuntimeEvents();
+  render();
+}
+
+async function submitNetCheckin(event) {
+  event.preventDefault();
+  const active = state.netControl?.active_session;
+  if (!active) return;
+  const form = new FormData(event.currentTarget);
+  const payload = {
+    net_session_id: active.net_session_id,
+    callsign: emptyToNull(form.get("callsign")),
+    operator_name: emptyToNull(form.get("operator_name")),
+    location: emptyToNull(form.get("location")),
+    grid: emptyToNull(form.get("grid")),
+    tactical_callsign: emptyToNull(form.get("tactical_callsign")),
+    status: form.get("status")?.toString() || "checked_in",
+    traffic: form.get("traffic")?.toString() || "none",
+    notes: emptyToNull(form.get("notes")),
+  };
+  state.importSummary = await fetch("/api/net/checkin/create", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  }).then((response) => response.json());
+  await refreshNetControl();
+  await refreshRuntimeEvents();
+  render();
+}
+
+async function addLateCheckinFromPrompt() {
+  const active = state.netControl?.active_session;
+  if (!active) {
+    switchWorkspace("net-control");
+    return;
+  }
+  const callsign = window.prompt("Late check-in callsign");
+  if (!callsign) return;
+  state.importSummary = await fetch("/api/net/checkin/create", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      net_session_id: active.net_session_id,
+      callsign,
+      status: "late",
+      traffic: "none",
+    }),
+  }).then((response) => response.json());
+  await refreshNetControl();
+  await refreshRuntimeEvents();
+  render();
+}
+
+async function deleteNetCheckin(checkinId) {
+  state.importSummary = await fetch("/api/net/checkin/delete", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ credential_id: checkinId }),
+  }).then((response) => response.json());
+  await refreshNetControl();
+  await refreshRuntimeEvents();
+  render();
+}
+
+async function submitNetTraffic(event) {
+  event.preventDefault();
+  const active = state.netControl?.active_session;
+  if (!active) return;
+  const form = new FormData(event.currentTarget);
+  state.importSummary = await fetch("/api/net/traffic/create", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      net_session_id: active.net_session_id,
+      from_callsign: emptyToNull(form.get("from_callsign")),
+      to_callsign: emptyToNull(form.get("to_callsign")),
+      precedence: form.get("precedence")?.toString() || "routine",
+      summary: form.get("summary")?.toString() || "",
+    }),
+  }).then((response) => response.json());
+  await refreshNetControl();
+  await refreshRuntimeEvents();
+  render();
+}
+
+async function exportNetReport() {
+  const sessionId = state.netControl?.active_session?.net_session_id;
+  if (!sessionId) return;
+  state.importSummary = await fetch("/api/net/report/export", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ credential_id: sessionId }),
+  }).then((response) => response.json());
+  await refreshNetControl();
+  await refreshRuntimeEvents();
+  render();
+}
+
+function emptyToNull(value) {
+  const text = value?.toString() || "";
+  return text.trim() ? text : null;
+}
+
+function numberOrNull(value) {
+  const text = value?.toString() || "";
+  if (!text.trim()) return null;
+  const parsed = Number.parseInt(text, 10);
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
 function clearQsoForm() {

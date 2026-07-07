@@ -15,23 +15,32 @@ This root roadmap summarizes the current implementation plan. Detailed architect
 - Plugin permission registry, grants, and enforcement hardening.
 - Unified Service Framework for lookup, upload, spotting, map, weather, propagation, and future providers.
 - Daily Driver Logging foundation: station/equipment profiles, award engine, advanced search, upload queue, and keyboard-first logging commands.
+- Secure Credential Storage abstraction with OS-keychain placeholder, explicit dev fallback, provider credential references, and Credential Manager UI.
+- Net Control MVP: sessions, check-ins, traffic queue, tombstone deletes, report export events, projection, workspace panels, and commands.
 
 ## Current Milestone
 
-Daily Driver Logging is now implemented at foundation level. The app can be seriously tested as a local-first logger with station defaults, QSO entry, lookup/rig suggestions, POTA/SOTA activation links, projection-backed awards/search, and provider-backed upload queue scaffolding.
+Secure Credential Storage and Net Control MVP are now implemented at foundation level. The app can manage safe credential metadata/backend status and can run a directed net workflow through proposal-backed official events.
 
 ## Recommended Next Milestone
 
-Real online service integrations:
+Maps + propagation, then real online service integrations:
+
+- Map workspace and provider-backed offline/online tile surfaces.
+- Propagation panels using solar/grayline/MUF provider skeletons.
+- Weather overlays for portable and EmComm workflows.
+- LoTW/eQSL/Club Log/QRZ real upload providers.
+- QRZ/HamQTH real lookup providers.
+- Native OS keychain/secret-store backend implementation.
+
+## Future Milestones
 
 - LoTW upload/download and confirmation pull.
 - eQSL upload.
 - Club Log upload.
 - QRZ Logbook upload.
 - QRZ/HamQTH real callsign lookup.
-- OS keychain/secret-store credential storage.
-
-## Future Milestones
+- OS keychain/secret-store production backend wiring.
 
 - Full Tauri packaging and native file dialogs.
 - Award rule databases and needed-list intelligence.

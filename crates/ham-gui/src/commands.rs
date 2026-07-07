@@ -177,6 +177,27 @@ impl CommandRegistry {
                 None,
                 None,
             ),
+            command(
+                "credentials.open",
+                "Open Credential Manager",
+                "Credentials",
+                None,
+                None,
+            ),
+            command(
+                "credentials.test",
+                "Test Credential",
+                "Credentials",
+                None,
+                None,
+            ),
+            command(
+                "credentials.create",
+                "Add Credential",
+                "Credentials",
+                None,
+                None,
+            ),
             command("rig.connect", "Connect Rig", "Rig Control", None, None),
             command(
                 "rig.disconnect",
@@ -414,6 +435,55 @@ impl CommandRegistry {
                 None,
             ),
             command(
+                "net.open",
+                "Open Net Control",
+                "Net Control",
+                None,
+                Some(WorkspaceId::NetControl),
+            ),
+            command(
+                "net.session.start",
+                "Start Net",
+                "Net Control",
+                None,
+                Some(WorkspaceId::NetControl),
+            ),
+            command(
+                "net.session.end",
+                "End Net",
+                "Net Control",
+                None,
+                Some(WorkspaceId::NetControl),
+            ),
+            command(
+                "net.checkin.focus",
+                "Focus Check-In Entry",
+                "Net Control",
+                None,
+                Some(WorkspaceId::NetControl),
+            ),
+            command(
+                "net.checkin.late",
+                "Add Late Check-In",
+                "Net Control",
+                None,
+                Some(WorkspaceId::NetControl),
+            ),
+            command(
+                "net.report.export",
+                "Export Net Report",
+                "Net Control",
+                None,
+                Some(WorkspaceId::NetControl),
+            ),
+            command(
+                "net.traffic.open",
+                "Open Traffic Queue",
+                "Net Control",
+                None,
+                Some(WorkspaceId::NetControl),
+            ),
+            command(
                 "sync.discovery.start",
                 "Start LAN Discovery",
                 "Sync",
@@ -608,6 +678,8 @@ mod tests {
         assert!(ids.contains(&"services.cache.clear"));
         assert!(ids.contains(&"services.lookup.test"));
         assert!(ids.contains(&"services.spotting.test"));
+        assert!(ids.contains(&"credentials.open"));
+        assert!(ids.contains(&"credentials.create"));
         assert!(ids.contains(&"rig.connect"));
         assert!(ids.contains(&"rig.disconnect"));
         assert!(ids.contains(&"rig.refresh-state"));
@@ -634,5 +706,8 @@ mod tests {
         assert!(ids.contains(&"logger.submit-qso"));
         assert!(ids.contains(&"logger.clear-form"));
         assert!(ids.contains(&"logger.accept-lookup-suggestions"));
+        assert!(ids.contains(&"net.open"));
+        assert!(ids.contains(&"net.session.start"));
+        assert!(ids.contains(&"net.report.export"));
     }
 }

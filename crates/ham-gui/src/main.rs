@@ -11,17 +11,18 @@ use std::{
 
 use ham_core::{
     build_diagnostic_bundle, default_official_event_log_path, default_service_registry,
-    export_adif, export_adif_with_activations, export_diagnostic_zip, import_adif,
-    lookup_callsign_with_service_framework, publish_rig_runtime_event, submit_proposal,
-    suggestion_from_rig_state, AdifImportOptions, CoreEventEnvelope, DiagnosticBundleInput,
-    DiagnosticReportType, EquipmentItem, EquipmentType, JsonPermissionGrantStore,
+    export_adif, export_adif_with_activations, export_diagnostic_zip, export_net_report_markdown,
+    import_adif, lookup_callsign_with_service_framework, publish_rig_runtime_event,
+    submit_proposal, suggestion_from_rig_state, AdifImportOptions, CoreEventEnvelope,
+    CredentialMetadata, CredentialStore, DiagnosticBundleInput, DiagnosticReportType,
+    EquipmentItem, EquipmentType, InsecureDevCredentialStore, JsonPermissionGrantStore,
     JsonStationBookStore, JsonlLogbookEventStore, LocalPrefixProvider, LogbookEventStore,
-    LookupCache, LookupCacheConfig, LookupProviderStatus, MockRigProvider, NewLogbookEvent,
-    OperatorRole, PermissionGrantSet, PermissionGrantStatus, PermissionRegistry,
+    LookupCache, LookupCacheConfig, LookupProviderStatus, MockRigProvider, NetControlProjection,
+    NewLogbookEvent, OperatorRole, PermissionGrantSet, PermissionGrantStatus, PermissionRegistry,
     PermissionSettings, Projection, ProposalContext, RigConnectionStatus, RigDevice, RigProvider,
     RigProviderStatus, RigState, RuntimeEventFilter, RuntimeEventSeverity, RuntimeLogConfig,
     ServiceCache, ServiceRegistry, ServiceRegistrySnapshot, StationBook, StationConfiguration,
-    StationProfile, UploadQueue, UploadTarget,
+    StationProfile, UnsupportedOsCredentialStore, UploadQueue, UploadTarget,
 };
 use ham_gui::{
     mock::{capability_labels, mock_plugins},
@@ -29,7 +30,9 @@ use ham_gui::{
 };
 use ham_plugin_sdk::{
     PluginCapability, PluginManifest, ProposalEnvelope, ServiceType, PROPOSAL_ACTIVATION_END,
-    PROPOSAL_ACTIVATION_START, PROPOSAL_QSO_ACTIVATION_LINK, PROPOSAL_QSO_CREATE,
+    PROPOSAL_ACTIVATION_START, PROPOSAL_NET_CHECKIN_CREATE, PROPOSAL_NET_CHECKIN_DELETE,
+    PROPOSAL_NET_REPORT_EXPORT, PROPOSAL_NET_SESSION_END, PROPOSAL_NET_SESSION_START,
+    PROPOSAL_NET_TRAFFIC_CREATE, PROPOSAL_QSO_ACTIVATION_LINK, PROPOSAL_QSO_CREATE,
     PROPOSAL_QSO_DELETE, PROPOSAL_QSO_NOTE_ADD, PROPOSAL_QSO_RESTORE,
 };
 use ham_sync::{
@@ -92,6 +95,19 @@ fn main() {
         seed_default_station_book(&mut station_book);
         let _ = station_store.save(&station_book);
     }
+    let credential_store: Box<dyn CredentialStore> =
+        if env::var("HAM_PLATFORM_ALLOW_INSECURE_DEV_CREDENTIALS")
+            .ok()
+            .as_deref()
+            == Some("1")
+        {
+            match InsecureDevCredentialStore::open(support_dir.join("dev-credentials.json"), true) {
+                Ok(store) => Box::new(store),
+                Err(_) => Box::new(UnsupportedOsCredentialStore),
+            }
+        } else {
+            Box::new(UnsupportedOsCredentialStore)
+        };
     let permission_registry = PermissionRegistry::mvp_default();
     let permission_settings = PermissionSettings::default();
     let mut permission_grants = permission_store.load().unwrap_or_default();
@@ -223,6 +239,7 @@ fn main() {
         rig_config: Mutex::new(RigUiConfig::default()),
         station_store,
         station_book: Mutex::new(station_book),
+        credential_store: Mutex::new(credential_store),
         upload_queue: Mutex::new(default_upload_queue()),
         last_report: Mutex::new(None),
         permission_registry,
@@ -256,6 +273,7 @@ struct AppState {
     rig_config: Mutex<RigUiConfig>,
     station_store: JsonStationBookStore,
     station_book: Mutex<StationBook>,
+    credential_store: Mutex<Box<dyn CredentialStore>>,
     upload_queue: Mutex<UploadQueue>,
     last_report: Mutex<Option<DiagnosticReportUploadResponse>>,
     permission_registry: PermissionRegistry,
@@ -449,6 +467,11 @@ fn handle_client(state: Arc<AppState>, mut stream: TcpStream) {
         }
         ("GET", "/api/services/providers") => json_response(&service_registry_snapshot(&state)),
         ("POST", "/api/services/cache/clear") => handle_service_cache_clear(&state, &request.body),
+        ("GET", "/api/credentials") => handle_credentials(&state),
+        ("POST", "/api/credentials/create") => handle_credential_create(&state, &request.body),
+        ("POST", "/api/credentials/update") => handle_credential_update(&state, &request.body),
+        ("POST", "/api/credentials/revoke") => handle_credential_revoke(&state, &request.body),
+        ("POST", "/api/credentials/test") => handle_credential_test(&state, &request.body),
         ("GET", "/api/runtime-events/export") => {
             let params = parse_query(query);
             let filter = runtime_filter_from_query(&params);
@@ -478,6 +501,13 @@ fn handle_client(state: Arc<AppState>, mut stream: TcpStream) {
         ("GET", "/api/search") => handle_search(&state, query),
         ("GET", "/api/uploads") => handle_uploads(&state),
         ("POST", "/api/uploads/queue") => handle_upload_queue_create(&state, &request.body),
+        ("GET", "/api/net-control") => handle_net_control_state(&state),
+        ("POST", "/api/net/session/start") => handle_net_session_start(&state, &request.body),
+        ("POST", "/api/net/session/end") => handle_net_session_end(&state, &request.body),
+        ("POST", "/api/net/checkin/create") => handle_net_checkin_create(&state, &request.body),
+        ("POST", "/api/net/checkin/delete") => handle_net_checkin_delete(&state, &request.body),
+        ("POST", "/api/net/traffic/create") => handle_net_traffic_create(&state, &request.body),
+        ("POST", "/api/net/report/export") => handle_net_report_export(&state, &request.body),
         ("GET", "/api/activations") => json_response(&activation_projection_payload(&state)),
         ("GET", "/api/lookup/callsign") => handle_lookup_callsign(&state, query),
         ("POST", "/api/lookup/cache/clear") => handle_lookup_cache_clear(&state),
@@ -628,6 +658,98 @@ struct ApiActivationRecord {
     band_summary: HashMap<String, usize>,
     mode_summary: HashMap<String, usize>,
     note_history: Vec<Value>,
+}
+
+#[derive(Debug, Serialize)]
+struct ApiCredentialPayload {
+    backend: ham_core::CredentialBackendStatus,
+    credentials: Vec<CredentialMetadata>,
+}
+
+#[derive(Debug, Serialize)]
+struct ApiNetControlPayload {
+    sessions: Vec<ApiNetSessionRecord>,
+    active_session: Option<ApiNetSessionRecord>,
+    templates: Vec<Value>,
+    checkins: Vec<ApiNetCheckInRecord>,
+    traffic: Vec<Value>,
+    report_preview: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ApiNetSessionRecord {
+    net_session_id: uuid::Uuid,
+    payload: Value,
+    status: String,
+    checkin_count: usize,
+    late_checkin_count: usize,
+    traffic_count: usize,
+    emergency_traffic_count: usize,
+    duplicate_warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ApiNetCheckInRecord {
+    checkin_id: uuid::Uuid,
+    payload: Value,
+    status: String,
+    traffic: String,
+    deleted: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct CredentialWriteRequest {
+    provider_id: String,
+    account_id: String,
+    service_type: ServiceType,
+    label: String,
+    secret: String,
+    metadata: Option<Value>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CredentialIdRequest {
+    credential_id: uuid::Uuid,
+}
+
+#[derive(Debug, Deserialize)]
+struct CredentialUpdateRequest {
+    credential_id: uuid::Uuid,
+    secret: String,
+    metadata: Option<Value>,
+}
+
+#[derive(Debug, Deserialize)]
+struct NetSessionStartRequest {
+    net_name: String,
+    station_callsign: String,
+    net_control_operator_id: String,
+    frequency_hz: Option<u64>,
+    band: Option<String>,
+    mode: Option<String>,
+    notes: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct NetCheckInCreateRequest {
+    net_session_id: uuid::Uuid,
+    callsign: Option<String>,
+    operator_name: Option<String>,
+    location: Option<String>,
+    grid: Option<String>,
+    tactical_callsign: Option<String>,
+    status: Option<String>,
+    traffic: Option<String>,
+    notes: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct NetTrafficCreateRequest {
+    net_session_id: uuid::Uuid,
+    from_callsign: Option<String>,
+    to_callsign: Option<String>,
+    precedence: String,
+    summary: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -845,6 +967,10 @@ fn pota_sota_context(state: &AppState) -> ProposalContext {
     context_for_manifest(state, pota_sota_manifest(), OperatorRole::Admin)
 }
 
+fn net_control_context(state: &AppState) -> ProposalContext {
+    context_for_manifest(state, net_control_manifest(), OperatorRole::Admin)
+}
+
 fn context_for_manifest(
     state: &AppState,
     plugin_manifest: PluginManifest,
@@ -893,6 +1019,12 @@ fn core_gui_manifest() -> PluginManifest {
             PluginCapability::StationEquipmentView,
             PluginCapability::StationEquipmentManage,
             PluginCapability::StationProfileUse,
+            PluginCapability::CredentialViewMetadata,
+            PluginCapability::CredentialCreate,
+            PluginCapability::CredentialUpdate,
+            PluginCapability::CredentialDelete,
+            PluginCapability::CredentialUse,
+            PluginCapability::CredentialTest,
             PluginCapability::SettingsRead,
             PluginCapability::SettingsWrite,
         ],
@@ -981,6 +1113,7 @@ fn plugin_manifests() -> Vec<PluginManifest> {
     vec![
         core_gui_manifest(),
         pota_sota_manifest(),
+        net_control_manifest(),
         lookup_manifest(),
         rig_manifest(),
         log_upload_manifest(),
@@ -989,6 +1122,43 @@ fn plugin_manifests() -> Vec<PluginManifest> {
         weather_manifest(),
         propagation_manifest(),
     ]
+}
+
+fn net_control_manifest() -> PluginManifest {
+    let mut manifest = PluginManifest::new(
+        "plugin.net-control",
+        "Net Control",
+        env!("CARGO_PKG_VERSION"),
+        vec![
+            PluginCapability::NetView,
+            PluginCapability::NetTemplateCreate,
+            PluginCapability::NetTemplateUpdate,
+            PluginCapability::NetSessionStart,
+            PluginCapability::NetSessionEnd,
+            PluginCapability::NetCheckinCreate,
+            PluginCapability::NetCheckinUpdate,
+            PluginCapability::NetCheckinDelete,
+            PluginCapability::NetTrafficManage,
+            PluginCapability::NetReportExport,
+        ],
+    );
+    manifest.description =
+        "Directed net sessions, check-ins, traffic queue, and net reports.".to_owned();
+    manifest.contributed_panels = vec![
+        "net-session-control".to_owned(),
+        "net-checkin-entry".to_owned(),
+        "net-checkin-roster".to_owned(),
+        "net-traffic-queue".to_owned(),
+        "net-report".to_owned(),
+    ];
+    manifest.contributed_commands = vec![
+        "net.open".to_owned(),
+        "net.session.start".to_owned(),
+        "net.session.end".to_owned(),
+        "net.checkin.focus".to_owned(),
+        "net.report.export".to_owned(),
+    ];
+    manifest
 }
 
 fn log_upload_manifest() -> PluginManifest {
@@ -1361,6 +1531,186 @@ fn handle_service_cache_clear(state: &AppState, body: &[u8]) -> Vec<u8> {
         None,
     );
     json_response(&json!({"ok": true, "cleared": cleared}))
+}
+
+fn handle_credentials(state: &AppState) -> Vec<u8> {
+    if let Err(response) = ensure_gui_permission(
+        state,
+        &core_gui_manifest(),
+        PluginCapability::CredentialViewMetadata,
+        "Credential metadata permission check",
+    ) {
+        return response;
+    }
+    let store = state
+        .credential_store
+        .lock()
+        .expect("credential store mutex should not be poisoned");
+    json_response(&ApiCredentialPayload {
+        backend: store.backend_status(),
+        credentials: store.list_metadata(),
+    })
+}
+
+fn handle_credential_create(state: &AppState, body: &[u8]) -> Vec<u8> {
+    if let Err(response) = ensure_gui_permission(
+        state,
+        &core_gui_manifest(),
+        PluginCapability::CredentialCreate,
+        "Credential create permission check",
+    ) {
+        return response;
+    }
+    let request = match serde_json::from_slice::<CredentialWriteRequest>(body) {
+        Ok(request) => request,
+        Err(_) => return json_error(400, "invalid credential create JSON"),
+    };
+    let mut metadata = CredentialMetadata::new(
+        request.provider_id,
+        request.account_id,
+        request.service_type,
+        request.label,
+    );
+    metadata.metadata = request.metadata.unwrap_or_else(|| json!({}));
+    let result = state
+        .credential_store
+        .lock()
+        .expect("credential store mutex should not be poisoned")
+        .store_credential(metadata, &request.secret);
+    match result {
+        Ok(metadata) => {
+            let _ = publish_gui_runtime(
+                state,
+                "credential.created",
+                RuntimeEventSeverity::Info,
+                "Credential metadata created",
+                Some(ham_core::credential_runtime_payload(&metadata)),
+                None,
+            );
+            json_response(&json!({"ok": true, "credential": metadata}))
+        }
+        Err(error) => {
+            json_response_with_status(400, &json!({"ok": false, "error": error.to_string()}))
+        }
+    }
+}
+
+fn handle_credential_update(state: &AppState, body: &[u8]) -> Vec<u8> {
+    if let Err(response) = ensure_gui_permission(
+        state,
+        &core_gui_manifest(),
+        PluginCapability::CredentialUpdate,
+        "Credential update permission check",
+    ) {
+        return response;
+    }
+    let request = match serde_json::from_slice::<CredentialUpdateRequest>(body) {
+        Ok(request) => request,
+        Err(_) => return json_error(400, "invalid credential update JSON"),
+    };
+    let result = state
+        .credential_store
+        .lock()
+        .expect("credential store mutex should not be poisoned")
+        .update_credential(request.credential_id, &request.secret, request.metadata);
+    match result {
+        Ok(metadata) => {
+            let _ = publish_gui_runtime(
+                state,
+                "credential.updated",
+                RuntimeEventSeverity::Info,
+                "Credential metadata updated",
+                Some(ham_core::credential_runtime_payload(&metadata)),
+                None,
+            );
+            json_response(&json!({"ok": true, "credential": metadata}))
+        }
+        Err(error) => {
+            json_response_with_status(400, &json!({"ok": false, "error": error.to_string()}))
+        }
+    }
+}
+
+fn handle_credential_revoke(state: &AppState, body: &[u8]) -> Vec<u8> {
+    if let Err(response) = ensure_gui_permission(
+        state,
+        &core_gui_manifest(),
+        PluginCapability::CredentialDelete,
+        "Credential revoke permission check",
+    ) {
+        return response;
+    }
+    let request = match serde_json::from_slice::<CredentialIdRequest>(body) {
+        Ok(request) => request,
+        Err(_) => return json_error(400, "invalid credential revoke JSON"),
+    };
+    let result = state
+        .credential_store
+        .lock()
+        .expect("credential store mutex should not be poisoned")
+        .revoke_credential(request.credential_id);
+    match result {
+        Ok(metadata) => {
+            let _ = publish_gui_runtime(
+                state,
+                "credential.deleted",
+                RuntimeEventSeverity::Info,
+                "Credential revoked",
+                Some(ham_core::credential_runtime_payload(&metadata)),
+                None,
+            );
+            json_response(&json!({"ok": true, "credential": metadata}))
+        }
+        Err(error) => {
+            json_response_with_status(400, &json!({"ok": false, "error": error.to_string()}))
+        }
+    }
+}
+
+fn handle_credential_test(state: &AppState, body: &[u8]) -> Vec<u8> {
+    if let Err(response) = ensure_gui_permission(
+        state,
+        &core_gui_manifest(),
+        PluginCapability::CredentialTest,
+        "Credential test permission check",
+    ) {
+        return response;
+    }
+    let request = match serde_json::from_slice::<CredentialIdRequest>(body) {
+        Ok(request) => request,
+        Err(_) => return json_error(400, "invalid credential test JSON"),
+    };
+    let _ = publish_gui_runtime(
+        state,
+        "credential.test.started",
+        RuntimeEventSeverity::Info,
+        "Testing credential availability",
+        Some(json!({"credential_id": request.credential_id})),
+        None,
+    );
+    let available = state
+        .credential_store
+        .lock()
+        .expect("credential store mutex should not be poisoned")
+        .test_credential(request.credential_id)
+        .unwrap_or(false);
+    let _ = publish_gui_runtime(
+        state,
+        if available {
+            "credential.test.completed"
+        } else {
+            "credential.test.failed"
+        },
+        if available {
+            RuntimeEventSeverity::Info
+        } else {
+            RuntimeEventSeverity::Warn
+        },
+        "Credential availability test completed",
+        Some(json!({"credential_id": request.credential_id, "available": available})),
+        None,
+    );
+    json_response(&json!({"ok": true, "available": available}))
 }
 
 fn handle_rig_status(state: &AppState) -> Vec<u8> {
@@ -2179,6 +2529,278 @@ fn handle_upload_queue_create(state: &AppState, body: &[u8]) -> Vec<u8> {
         None,
     );
     json_response(&json!({"ok": true, "job": job, "adif_preview": adif}))
+}
+
+fn handle_net_control_state(state: &AppState) -> Vec<u8> {
+    if let Err(response) = ensure_gui_permission(
+        state,
+        &net_control_manifest(),
+        PluginCapability::NetView,
+        "Net Control view permission check",
+    ) {
+        return response;
+    }
+    json_response(&net_control_payload(state))
+}
+
+fn net_control_payload(state: &AppState) -> ApiNetControlPayload {
+    let projection = rebuild_net_projection_for_gui(state);
+    let sessions = projection
+        .sessions(true)
+        .into_iter()
+        .map(api_net_session)
+        .collect::<Vec<_>>();
+    let active_session = projection.active_session().map(api_net_session);
+    let active_id = active_session
+        .as_ref()
+        .map(|session| session.net_session_id);
+    let checkins = active_id
+        .map(|session_id| {
+            projection
+                .checkins_for_session(session_id, false)
+                .into_iter()
+                .map(api_net_checkin)
+                .collect()
+        })
+        .unwrap_or_default();
+    let traffic = active_id
+        .map(|session_id| {
+            projection
+                .traffic_for_session(session_id)
+                .into_iter()
+                .map(|record| record.payload.clone())
+                .collect()
+        })
+        .unwrap_or_default();
+    let report_preview =
+        active_id.and_then(|session_id| export_net_report_markdown(&projection, session_id).ok());
+    ApiNetControlPayload {
+        sessions,
+        active_session,
+        templates: projection.templates().into_iter().cloned().collect(),
+        checkins,
+        traffic,
+        report_preview,
+    }
+}
+
+fn rebuild_net_projection_for_gui(state: &AppState) -> NetControlProjection {
+    let events = state
+        .proposal_runtime
+        .block_on(state.store.list_events(state.logbook_id))
+        .unwrap_or_default();
+    let mut projection = NetControlProjection::new();
+    let _ = projection.rebuild(&events);
+    projection
+}
+
+fn api_net_session(record: &ham_core::NetSessionRecord) -> ApiNetSessionRecord {
+    ApiNetSessionRecord {
+        net_session_id: record.net_session_id,
+        payload: record.payload.clone(),
+        status: format!("{:?}", record.status).to_ascii_lowercase(),
+        checkin_count: record.checkin_count,
+        late_checkin_count: record.late_checkin_count,
+        traffic_count: record.traffic_count,
+        emergency_traffic_count: record.emergency_traffic_count,
+        duplicate_warnings: record.duplicate_warnings.clone(),
+    }
+}
+
+fn api_net_checkin(record: &ham_core::NetCheckInRecord) -> ApiNetCheckInRecord {
+    ApiNetCheckInRecord {
+        checkin_id: record.checkin_id,
+        payload: record.payload.clone(),
+        status: format!("{:?}", record.status).to_ascii_lowercase(),
+        traffic: format!("{:?}", record.traffic).to_ascii_lowercase(),
+        deleted: record.deleted,
+    }
+}
+
+fn handle_net_session_start(state: &AppState, body: &[u8]) -> Vec<u8> {
+    let request = match serde_json::from_slice::<NetSessionStartRequest>(body) {
+        Ok(request) => request,
+        Err(_) => return json_error(400, "invalid net session start JSON"),
+    };
+    let mut payload = json!({
+        "station_callsign": request.station_callsign,
+        "net_control_operator_id": request.net_control_operator_id,
+        "net_name": request.net_name,
+        "started_at": chrono::Utc::now().to_rfc3339(),
+        "status": "active"
+    });
+    if let Some(value) = request.frequency_hz {
+        payload["frequency_hz"] = json!(value);
+    }
+    if let Some(value) = request.band {
+        payload["band"] = json!(value);
+    }
+    if let Some(value) = request.mode {
+        payload["mode"] = json!(value);
+    }
+    if let Some(value) = request.notes {
+        payload["notes"] = json!(value);
+    }
+    submit_net_proposal(state, PROPOSAL_NET_SESSION_START, None, payload)
+}
+
+fn handle_net_session_end(state: &AppState, body: &[u8]) -> Vec<u8> {
+    let request = match serde_json::from_slice::<CredentialIdRequest>(body) {
+        Ok(request) => request,
+        Err(_) => return json_error(400, "invalid net session end JSON"),
+    };
+    submit_net_proposal(
+        state,
+        PROPOSAL_NET_SESSION_END,
+        Some(request.credential_id),
+        json!({"ended_at": chrono::Utc::now().to_rfc3339()}),
+    )
+}
+
+fn handle_net_checkin_create(state: &AppState, body: &[u8]) -> Vec<u8> {
+    let request = match serde_json::from_slice::<NetCheckInCreateRequest>(body) {
+        Ok(request) => request,
+        Err(_) => return json_error(400, "invalid net check-in JSON"),
+    };
+    let mut payload = json!({
+        "net_session_id": request.net_session_id,
+        "checkin_time": chrono::Utc::now().to_rfc3339(),
+        "status": request.status.unwrap_or_else(|| "checked_in".to_owned()),
+        "traffic": request.traffic.unwrap_or_else(|| "none".to_owned())
+    });
+    for (key, value) in [
+        ("callsign", request.callsign),
+        ("operator_name", request.operator_name),
+        ("location", request.location),
+        ("grid", request.grid),
+        ("tactical_callsign", request.tactical_callsign),
+        ("notes", request.notes),
+    ] {
+        if let Some(value) = value.filter(|value| !value.trim().is_empty()) {
+            payload[key] = json!(value);
+        }
+    }
+    submit_net_proposal(state, PROPOSAL_NET_CHECKIN_CREATE, None, payload)
+}
+
+fn handle_net_checkin_delete(state: &AppState, body: &[u8]) -> Vec<u8> {
+    let request = match serde_json::from_slice::<CredentialIdRequest>(body) {
+        Ok(request) => request,
+        Err(_) => return json_error(400, "invalid net check-in delete JSON"),
+    };
+    submit_net_proposal(
+        state,
+        PROPOSAL_NET_CHECKIN_DELETE,
+        Some(request.credential_id),
+        json!({"reason": "operator tombstone"}),
+    )
+}
+
+fn handle_net_traffic_create(state: &AppState, body: &[u8]) -> Vec<u8> {
+    let request = match serde_json::from_slice::<NetTrafficCreateRequest>(body) {
+        Ok(request) => request,
+        Err(_) => return json_error(400, "invalid net traffic JSON"),
+    };
+    let now = chrono::Utc::now().to_rfc3339();
+    let mut payload = json!({
+        "net_session_id": request.net_session_id,
+        "precedence": request.precedence,
+        "summary": request.summary,
+        "status": "listed",
+        "created_at": now,
+        "updated_at": now
+    });
+    if let Some(value) = request.from_callsign {
+        payload["from_callsign"] = json!(value);
+    }
+    if let Some(value) = request.to_callsign {
+        payload["to_callsign"] = json!(value);
+    }
+    submit_net_proposal(state, PROPOSAL_NET_TRAFFIC_CREATE, None, payload)
+}
+
+fn handle_net_report_export(state: &AppState, body: &[u8]) -> Vec<u8> {
+    let request = match serde_json::from_slice::<CredentialIdRequest>(body) {
+        Ok(request) => request,
+        Err(_) => return json_error(400, "invalid net report export JSON"),
+    };
+    let projection = rebuild_net_projection_for_gui(state);
+    let report = match export_net_report_markdown(&projection, request.credential_id) {
+        Ok(report) => report,
+        Err(error) => {
+            return json_response_with_status(
+                400,
+                &json!({"ok": false, "error": error.to_string()}),
+            )
+        }
+    };
+    submit_net_proposal(
+        state,
+        PROPOSAL_NET_REPORT_EXPORT,
+        Some(request.credential_id),
+        json!({"format": "markdown", "summary": report}),
+    )
+}
+
+fn submit_net_proposal(
+    state: &AppState,
+    proposal_type: &str,
+    entity_id: Option<uuid::Uuid>,
+    payload: Value,
+) -> Vec<u8> {
+    let proposal = ProposalEnvelope::new(
+        proposal_type,
+        state.logbook_id,
+        entity_id,
+        Some(uuid::Uuid::new_v4()),
+        state.bridge.status().device_id,
+        "plugin.net-control",
+        1,
+        payload,
+    );
+    let result = state.proposal_runtime.block_on(submit_proposal(
+        state.store.as_ref(),
+        &state.bridge,
+        &net_control_context(state),
+        proposal,
+    ));
+    match result {
+        Ok(outcome) => {
+            let event_name = match proposal_type {
+                PROPOSAL_NET_SESSION_START => "net.session.started",
+                PROPOSAL_NET_SESSION_END => "net.session.ended",
+                PROPOSAL_NET_CHECKIN_CREATE => "net.checkin.accepted",
+                PROPOSAL_NET_TRAFFIC_CREATE => "net.traffic.created",
+                PROPOSAL_NET_REPORT_EXPORT => "net.report.exported",
+                _ => "net.proposal.accepted",
+            };
+            let _ = publish_gui_runtime(
+                state,
+                event_name,
+                RuntimeEventSeverity::Info,
+                "Net Control proposal accepted",
+                Some(json!({
+                    "official_event_id": outcome.official_event.event_id,
+                    "event_type": outcome.official_event.event_type
+                })),
+                None,
+            );
+            json_response(
+                &json!({"ok": true, "event": outcome.official_event, "net": net_control_payload(state)}),
+            )
+        }
+        Err(error) => {
+            let _ = publish_gui_runtime(
+                state,
+                "net.checkin.rejected",
+                RuntimeEventSeverity::Warn,
+                "Net Control proposal rejected",
+                None,
+                Some(error.to_string()),
+            );
+            json_response_with_status(400, &json!({"ok": false, "error": error.to_string()}))
+        }
+    }
 }
 
 fn activation_projection_payload(state: &AppState) -> ApiActivationPayload {

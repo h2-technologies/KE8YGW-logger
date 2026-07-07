@@ -95,6 +95,7 @@ pub struct ServiceProviderMetadata {
     pub required_permissions: Vec<PluginCapability>,
     pub required_config_keys: Vec<String>,
     pub optional_config_keys: Vec<String>,
+    pub required_credentials: Vec<String>,
     pub priority: i32,
     pub supports_offline: bool,
     pub requires_network_access: bool,
@@ -124,6 +125,7 @@ impl ServiceProviderMetadata {
             required_permissions,
             required_config_keys: Vec::new(),
             optional_config_keys: Vec::new(),
+            required_credentials: Vec::new(),
             priority,
             supports_offline,
             requires_network_access,
@@ -745,7 +747,7 @@ impl StubLogUploadProvider {
 fn upload_stub(
     provider_id: &str,
     display_name: &str,
-    required_config_key: &str,
+    required_credential_key: &str,
 ) -> StubLogUploadProvider {
     let mut metadata = ServiceProviderMetadata::new(
         provider_id,
@@ -759,7 +761,8 @@ fn upload_stub(
         false,
         true,
     );
-    metadata.required_config_keys = vec![required_config_key.to_owned()];
+    metadata.required_credentials = vec![required_credential_key.to_owned()];
+    metadata.required_config_keys = vec![format!("{required_credential_key}.credential_id")];
     StubLogUploadProvider {
         health: ProviderHealth::missing_config(provider_id, "Credentials are not configured"),
         metadata,
@@ -972,6 +975,7 @@ pub fn qrz_lookup_provider_metadata() -> ServiceProviderMetadata {
         true,
     );
     metadata.required_config_keys = vec!["qrz.username".to_owned(), "qrz.token".to_owned()];
+    metadata.required_credentials = vec!["qrz.lookup".to_owned()];
     metadata
 }
 
@@ -1287,5 +1291,15 @@ mod tests {
         serde_json::to_string(&upload).unwrap();
         let spot = MockSpottingProvider::default().spots[0].clone();
         serde_json::to_string(&spot).unwrap();
+    }
+
+    #[test]
+    fn upload_provider_config_references_credential_id() {
+        let provider = StubLogUploadProvider::lotw().metadata();
+        assert_eq!(provider.required_credentials, vec!["lotw.certificate_path"]);
+        assert!(provider
+            .required_config_keys
+            .iter()
+            .all(|key| key.ends_with(".credential_id")));
     }
 }

@@ -37,6 +37,10 @@ Plugin permissions and operator role permissions are independent:
 - Service cache clear is separate from service cache read/write.
 - Upload, spotting, map, weather, and propagation providers use separate
   permissions.
+- Credential metadata, credential use, credential update, credential delete, and
+  credential testing are separate permissions.
+- Net Control permissions are separate for viewing, templates, sessions,
+  check-ins, traffic, and report export.
 
 ## Official Log Protection
 
@@ -59,6 +63,23 @@ Runtime logs must not contain:
 - full AI prompts/responses by default
 - raw provider metadata that may contain secrets
 
+## Credential Storage
+
+Provider credentials are support/security state and must never be stored in
+official log events. Provider configuration should reference `credential_id`
+values. Secret values are retrieved only through `CredentialStore` after plugin
+permission and operator role checks pass.
+
+The MVP includes an OS keychain placeholder and an explicit opt-in insecure
+development fallback. Production online integrations must use native OS
+credential backends before storing real provider secrets.
+
+## Net Control Safety
+
+Net Control is an official append-only workflow. Sessions, check-ins, traffic,
+and report exports are written through proposals. Deleted check-ins are
+tombstone events and are hidden by projections by default.
+
 ## Authentication
 
 MVP cloud sync and support upload use pairing-code/token sessions. This is intentionally temporary but keeps hosted and self-hosted modes usable.
@@ -79,3 +100,5 @@ Future work:
 - The GUI assumes a local-admin posture for permission review.
 - Cloud server storage is in-memory in MVP.
 - LAN peers are not yet authenticated.
+- Native OS keychain backends are not implemented yet.
+- Net Control template UI and ICS-style exports are not complete.

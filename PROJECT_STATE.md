@@ -1,10 +1,10 @@
 # Project Status
 
-Current milestone: Daily Driver Logging foundation
+Current milestone: Secure Credential Storage and Net Control MVP
 
 Current version: 0.1.0
 
-Last update timestamp: 2026-07-06T19:49:27.7782842-04:00
+Last update timestamp: 2026-07-06T20:31:17.9365623-04:00
 
 Repository health status: Healthy. Formatting, Rust check, Clippy with warnings denied, full workspace tests, GUI JavaScript syntax check, and release build passed during this session.
 
@@ -37,6 +37,8 @@ Repository health status: Healthy. Formatting, Rust check, Clippy with warnings 
 - [x] Award engine foundation
 - [x] Projection-backed advanced search parser
 - [x] Upload queue foundation and official upload status event constants
+- [x] Secure credential storage abstraction and explicit dev fallback
+- [x] Net Control official events, proposals, validation, projection, and report export
 - [ ] Conflict resolution UI/model
 - [ ] Cryptographic signatures
 - [ ] Durable projection cache
@@ -49,6 +51,7 @@ Repository health status: Healthy. Formatting, Rust check, Clippy with warnings 
 - [x] Public proposal and official event constants
 - [x] Service type vocabulary for provider contributions
 - [x] Station/equipment and upload queue permissions
+- [x] Credential and Net Control permissions/event constants
 - [ ] Real plugin loading
 - [ ] Plugin sandboxing
 - [ ] Signed plugin packages
@@ -71,6 +74,8 @@ Repository health status: Healthy. Formatting, Rust check, Clippy with warnings 
 - [x] Awards workspace and award summary panel
 - [x] Advanced Search panel
 - [x] Uploads panel
+- [x] Credential Manager screen/panel
+- [x] Net Control workspace panels
 - [x] Keyboard-first logging command foundation
 - [ ] Interactive dockable panel movement
 - [ ] Native file dialogs
@@ -105,8 +110,9 @@ Repository health status: Healthy. Formatting, Rust check, Clippy with warnings 
 - [x] Station/equipment profile support
 - [x] Awards foundation
 - [x] Upload queue foundation
+- [x] Net Control MVP
 - [ ] Real LoTW/eQSL/Club Log/QRZ providers
-- [ ] Net Control
+- [x] Net Control MVP
 - [ ] EmComm
 - [ ] Contesting
 - [ ] Maps/propagation
@@ -132,9 +138,13 @@ The plugin system is currently static. Plugins are represented by manifests, req
 
 The unified service framework provides provider metadata, registry, selection, fallback, shared service cache, service authorization, and typed service request/response models for lookup, upload, spotting, map, weather, propagation, and future integrations.
 
+Credential storage is isolated behind `CredentialStore`. Credential metadata is support/security state and secret values stay behind the selected backend. The MVP has an OS keychain placeholder and an explicit opt-in insecure development file fallback.
+
 Station/equipment data is support/config state, not official event state. QSO official event payloads may reference profile/config/equipment IDs, but profile changes do not rewrite historical QSOs.
 
 The award engine computes rebuildable progress from QSO projections. Search also reads projections rather than raw official event storage. Upload jobs select projected QSOs and generate ADIF for service-framework upload providers.
+
+Net Control is a plugin-style workflow using the normal proposal pipeline. Net sessions, check-ins, traffic, tombstones, and report exports are official append-only events. `NetControlProjection` derives current roster/session/report state.
 
 Sync is split between `ham-sync` for protocol, peer, LAN/cloud models, safe replication, and in-memory server logic, plus `ham-sync-server` for the self-hosted HTTP-like server binary. LAN is preferred. Cloud/self-hosted sync is a fallback and uses the same verification rules.
 
@@ -150,7 +160,9 @@ Diagnostics include runtime event logs, redaction helpers, report ZIP generation
 
 # Current Workspace Structure
 
-- `crates/ham-core`: event bus, official events, stores, proposals, projections, ADIF, lookup, rig, diagnostics, permissions, service framework, station profiles, awards, search, upload queue.
+- `crates/ham-core`: event bus, official events, stores, proposals, projections, ADIF, lookup, rig, diagnostics, permissions, service framework, credential storage, Net Control, station profiles, awards, search, upload queue.
+- `crates/ham-core::credential`: credential metadata, store abstraction, OS placeholder backend, explicit insecure development fallback.
+- `crates/ham-core::net`: Net Control projection, session/check-in/traffic models, and report export.
 - `crates/ham-plugin-sdk`: plugin manifest, capabilities, service types, proposal envelope, public event constants.
 - `crates/ham-sync`: LAN discovery/handshake models, peer registry, safe replication, cloud API/client/server models, report upload models.
 - `crates/ham-sync-server`: self-hosted sync/report HTTP-like server binary.
@@ -170,7 +182,7 @@ Diagnostics include runtime event logs, redaction helpers, report ZIP generation
 
 - [ ] Add durable storage to the self-hosted sync/report server before real hosted use.
 - [ ] Implement trust pairing/authentication for LAN peers before unattended sync.
-- [ ] Add secure credential storage before real online upload/lookup providers.
+- [ ] Implement production OS keychain backends before real online upload/lookup provider credentials.
 
 ## High
 
@@ -211,7 +223,10 @@ Diagnostics include runtime event logs, redaction helpers, report ZIP generation
 - Service provider enablement and priority are currently in-memory GUI/server state.
 - Upload queue state is currently in-memory in the GUI.
 - Station profile editing exists in core models but not yet as full GUI forms.
-- External provider implementations are stubs until credential storage and live integrations are added.
+- External provider implementations are stubs until production credential storage and live integrations are added.
+- OS keychain support is represented by an unavailable placeholder; real native backends are still required.
+- The insecure dev credential fallback is plaintext and only suitable for local testing when explicitly enabled.
+- Net Control template create/edit UI is not complete; sessions/check-ins/traffic/report are implemented first.
 - JavaScript UI behavior has limited automated test coverage.
 
 ---
@@ -247,7 +262,8 @@ Diagnostics include runtime event logs, redaction helpers, report ZIP generation
 - Plugin permissions are checked with operator role permissions before protected actions.
 - Service requests also check provider-required permissions and operator role permissions.
 - Upload/network permissions are separate from ADIF export and status viewing.
-- Provider config schemas are present, but credential values are not stored until secure secret storage is added.
+- Provider config schemas reference credential IDs; raw credential values stay behind `CredentialStore`.
+- Native credential storage needs Windows/macOS/Linux backend implementations before real external credentials are safe for production use.
 
 ---
 
@@ -266,7 +282,9 @@ Diagnostics include runtime event logs, redaction helpers, report ZIP generation
 - Advanced Search: complete initial architecture note.
 - Upload Queue: complete initial architecture note.
 - Provider Development: complete initial provider author guide.
-- Credentials and Redaction: complete initial credential handling guidance.
+- Credentials and Redaction: current.
+- Credential Storage: complete MVP architecture note.
+- Net Control Plugin: complete MVP plugin/workflow note.
 - Developer Guide: current local workflow; daily-driver examples could be expanded.
 - API docs: Rust public item docs are partial and should be improved as APIs stabilize.
 
@@ -274,53 +292,86 @@ Diagnostics include runtime event logs, redaction helpers, report ZIP generation
 
 # Test Coverage
 
-- Core event hashing, chain verification, QSO proposals, projections, ADIF, lookup, rig, diagnostics, permissions, service framework, station profiles, awards, search, upload queue, and sync models have unit coverage.
+- Core event hashing, chain verification, QSO proposals, projections, ADIF, lookup, rig, diagnostics, permissions, service framework, credential store, Net Control, station profiles, awards, search, upload queue, and sync models have unit coverage.
 - GUI model serialization and command/panel foundations have partial coverage.
 - JavaScript UI behavior is mostly manually verified and should gain browser-level tests.
-- Current test run: `cargo test --workspace` passed with 126 total Rust tests across crates.
+- Current test run: `cargo test --workspace` passed with 138 total Rust tests across crates.
 
 ---
 
 # Current Milestone
 
-Current objective: make the application useful enough for a normal operator to seriously test as a daily logger.
+Current objective: add safe provider credential handling and the first Net Control operating-mode workflow.
 
 Completed work:
 
-- Station/equipment profile models and default application to QSO proposals.
-- Award engine foundation with DXCC/WAS and POTA/SOTA/Grid placeholders.
-- Projection-backed search parser and search execution.
-- Upload queue foundation and ADIF job generation.
-- GUI panels/workspace/commands for station, awards, search, uploads, and keyboard-first logging.
+- CredentialStore abstraction, credential metadata, OS placeholder backend, explicit insecure dev fallback, provider credential references, GUI credential manager, and credential runtime events.
+- Net Control proposal/event types, validation, projection, session/check-in/traffic/report handlers, workspace panels, command palette actions, and tests.
 
 Remaining work:
 
-- Add real provider integrations and durable provider/upload settings.
+- Implement real OS keychain backends.
+- Add Net Control templates UI, report file exports, and ICS-309 export.
 
 Expected completion criteria:
 
 - All required quality gates pass.
 - Documentation and project state are updated.
-- Daily-driver workflows are accessible in the GUI without bypassing proposal validation.
+- Credential and Net Control workflows are accessible in the GUI without bypassing proposal validation or secret redaction rules.
 
 ---
 
 # Recommended Next Milestone
 
-Real online service integrations:
+Maps + propagation, then real online service integrations:
 
-- LoTW real upload/download.
-- eQSL real upload.
-- Club Log real upload.
-- QRZ Logbook upload.
-- QRZ/HamQTH real lookup.
-- Provider credential storage through OS keychain/secret store.
+- Map workspace and provider-backed map/geocoding surfaces.
+- Propagation/weather provider panels for portable and EmComm workflows.
+- Native OS keychain/secret-store credential backends.
+- LoTW/eQSL/Club Log/QRZ real uploads and QRZ/HamQTH real lookup.
 
-This milestone should come before deeper award/confirmation work because confirmation and upload status need real provider identities, durable credentials, and provider result semantics.
+This milestone should come before deeper award/confirmation work because map/propagation context and real provider credentials shape later daily-driver and EmComm workflows.
 
 ---
 
 # Changelog
+
+## 2026-07-06
+
+Summary: Added Secure Credential Storage foundation and Net Control MVP.
+
+Major files changed:
+
+- `crates/ham-core/src/credential.rs`
+- `crates/ham-core/src/net.rs`
+- `crates/ham-core/src/proposal.rs`
+- `crates/ham-core/src/permissions.rs`
+- `crates/ham-core/src/service.rs`
+- `crates/ham-plugin-sdk/src/lib.rs`
+- `crates/ham-gui/src/main.rs`
+- `crates/ham-gui/src/shell.rs`
+- `crates/ham-gui/src/commands.rs`
+- `crates/ham-gui/src/mock.rs`
+- `crates/ham-gui/web/app.js`
+- `README.md`
+- `ROADMAP.md`
+- `docs/security/credential-storage.md`
+- `docs/plugins/net-control.md`
+
+Architectural decisions:
+
+- Credential metadata is support/security state; secrets are accessible only through `CredentialStore`.
+- Production OS keychain support is modeled but not linked yet; insecure local file storage requires explicit opt-in.
+- Net Control is implemented as a plugin-style workflow using proposals and official append-only events.
+- Net check-in deletion is a tombstone event hidden by projections by default.
+
+New plugins:
+
+- `plugin.net-control` built-in/static MVP plugin.
+
+Breaking changes:
+
+- New SDK permission variants, proposal constants, and official event constants were added; exhaustive downstream matches may need updates.
 
 ## 2026-07-06
 

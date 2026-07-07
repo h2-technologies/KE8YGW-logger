@@ -29,9 +29,23 @@ This catalog lists event types implemented or planned. Official events are appen
 - `official.log.upload.completed` - record provider upload completion.
 - `official.log.upload.failed` - record provider upload failure.
 
+### Net Control
+
+- `official.log.net.template.created`
+- `official.log.net.template.updated`
+- `official.log.net.session.started`
+- `official.log.net.session.ended`
+- `official.log.net.session.cancelled`
+- `official.log.net.checkin.created`
+- `official.log.net.checkin.updated`
+- `official.log.net.checkin.deleted` - tombstone a check-in.
+- `official.log.net.traffic.created`
+- `official.log.net.traffic.updated`
+- `official.log.net.report.exported`
+
 ### Planned
 
-- Award submissions, net control, EmComm forms, contest contacts, map annotations, and conflict-resolution branch metadata.
+- Award submissions, EmComm forms, contest contacts, map annotations, and conflict-resolution branch metadata.
 
 ## Proposal Events
 
@@ -53,6 +67,20 @@ This catalog lists event types implemented or planned. Official events are appen
 - `proposal.activation.end`
 - `proposal.activation.cancel`
 - `proposal.activation.note.add`
+
+### Net Control
+
+- `proposal.net.template.create`
+- `proposal.net.template.update`
+- `proposal.net.session.start`
+- `proposal.net.session.end`
+- `proposal.net.session.cancel`
+- `proposal.net.checkin.create`
+- `proposal.net.checkin.update`
+- `proposal.net.checkin.delete`
+- `proposal.net.traffic.create`
+- `proposal.net.traffic.update`
+- `proposal.net.report.export`
 
 ## Runtime Events
 
@@ -78,6 +106,8 @@ Runtime event categories are dotted strings. Current and planned category roots:
 - `awards.*`
 - `search.*`
 - `upload.*`
+- `credential.*`
+- `net.*`
 - `app.*`
 
 ## Implemented Runtime Event Examples
@@ -218,6 +248,27 @@ Runtime event categories are dotted strings. Current and planned category roots:
 - `logger.duplicate.warning`
 - `logger.lookup_suggestion.accepted`
 - `logger.rig_fields.applied`
+
+### Credentials and Net Control
+
+- `credential.store.available`
+- `credential.store.unavailable`
+- `credential.created`
+- `credential.updated`
+- `credential.deleted`
+- `credential.test.started`
+- `credential.test.completed`
+- `credential.test.failed`
+- `credential.access.denied`
+- `credential.redaction.applied`
+- `net.session.started`
+- `net.session.ended`
+- `net.checkin.received`
+- `net.checkin.accepted`
+- `net.checkin.rejected`
+- `net.checkin.duplicate_warning`
+- `net.traffic.created`
+- `net.report.exported`
 
 ## Catalog Rules
 
