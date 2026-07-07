@@ -542,3 +542,26 @@ New plugins:
 Breaking changes:
 
 - New SDK permissions and official upload event constants were added; exhaustive downstream matches may need updates.
+
+## 2026-07-06
+
+Summary: Pushed the Online Services ecosystem foundation and fixed the GUI logger callsign entry clearing during runtime event refreshes.
+
+Major files changed:
+
+- `crates/ham-gui/web/app.js`
+- `PROJECT_STATE.md`
+
+Architectural decisions:
+
+- The Casual Logger form now keeps an explicit in-progress QSO draft in GUI state so diagnostic event-bus refreshes do not destroy operator-entered fields.
+- Runtime event polling skips full shell re-rendering while logger forms are focused; the event stream catches up after the operator leaves or submits the form.
+- Rig autofill suggestions update the QSO draft, but manually typed QSO fields remain authoritative during proposal submission.
+
+New plugins:
+
+- None.
+
+Breaking changes:
+
+- None.

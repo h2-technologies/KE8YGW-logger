@@ -21,6 +21,13 @@ const state = {
   acceptedLookupFields: null,
   rigStatus: null,
   acceptedRigFields: null,
+  qsoDraft: {
+    contacted_callsign: "",
+    mode: "",
+    frequency_hz: "",
+    band: "",
+    notes: "",
+  },
   qsoError: "",
   duplicateWarning: "",
   importSummary: null,
@@ -41,6 +48,19 @@ const state = {
 };
 
 const byId = (id) => document.getElementById(id);
+
+function escapeHtml(value) {
+  return String(value ?? "").replace(/[&<>"']/g, (character) => {
+    const entities = {
+      "&": "&amp;",
+      "<": "&lt;",
+      ">": "&gt;",
+      '"': "&quot;",
+      "'": "&#39;",
+    };
+    return entities[character];
+  });
+}
 
 async function boot() {
   const payload = await fetch("/api/shell").then((response) => response.json());
@@ -884,7 +904,10 @@ function bindPanelControls() {
   const qsoForm = byId("qso-create-form");
   if (qsoForm) {
     qsoForm.addEventListener("submit", submitQsoCreate);
-    byId("callsign-entry-input")?.addEventListener("input", updateDuplicateWarning);
+    qsoForm.addEventListener("input", () => {
+      updateQsoDraftFromForm();
+      updateDuplicateWarning();
+    });
     byId("lookup-callsign-button")?.addEventListener("click", () => lookupCallsign(byId("callsign-entry-input")?.value || ""));
     byId("accept-lookup-button")?.addEventListener("click", acceptLookupSuggestion);
     byId("use-rig-button")?.addEventListener("click", () => acceptRigSuggestion(true));
@@ -970,7 +993,7 @@ async function refreshRuntimeEvents() {
   state.runtimeEvents = payload.runtime_events;
   state.runtimeStatus = payload.runtime_status;
   state.busConnected = payload.runtime_status.connected;
-  render();
+  if (!isLoggerFormFocused()) render();
 }
 
 function startRuntimeEventPolling() {
@@ -1046,10 +1069,14 @@ function renderRigControl() {
 }
 
 function renderCallsignEntry() {
+  const draft = state.qsoDraft || {};
+  const mode = draft.mode || state.acceptedRigFields?.mode || "";
+  const frequency = draft.frequency_hz || state.acceptedRigFields?.frequency_hz || "";
+  const band = draft.band || state.acceptedRigFields?.band || "";
   return `<form id="qso-create-form" class="qso-form">
       ${renderStationSummary()}
       <label>Contacted callsign
-        <input id="callsign-entry-input" name="contacted_callsign" class="placeholder-control" aria-label="Contacted callsign" placeholder="K1ABC" required />
+        <input id="callsign-entry-input" name="contacted_callsign" class="placeholder-control" aria-label="Contacted callsign" placeholder="K1ABC" value="${escapeHtml(draft.contacted_callsign || "")}" required />
       </label>
       <p id="duplicate-warning" class="event-error" ${state.duplicateWarning ? "" : "hidden"}>${state.duplicateWarning || ""}</p>
       <div class="monitor-actions">
@@ -1058,13 +1085,13 @@ function renderCallsignEntry() {
       </div>
       ${renderLookupSuggestion()}
       <label>Mode
-        <input name="mode" class="placeholder-control" aria-label="Mode" placeholder="SSB" value="${state.acceptedRigFields?.mode || ""}" required />
+        <input name="mode" class="placeholder-control" aria-label="Mode" placeholder="SSB" value="${escapeHtml(mode)}" required />
       </label>
       <label>Frequency Hz
-        <input name="frequency_hz" class="placeholder-control" aria-label="Frequency Hz" placeholder="14250000" inputmode="numeric" value="${state.acceptedRigFields?.frequency_hz || ""}" />
+        <input name="frequency_hz" class="placeholder-control" aria-label="Frequency Hz" placeholder="14250000" inputmode="numeric" value="${escapeHtml(frequency)}" />
       </label>
       <label>Band
-        <input name="band" class="placeholder-control" aria-label="Band" placeholder="20m" value="${state.acceptedRigFields?.band || ""}" />
+        <input name="band" class="placeholder-control" aria-label="Band" placeholder="20m" value="${escapeHtml(band)}" />
       </label>
       <div class="monitor-actions">
         <button id="refresh-rig-button" class="toolbar-button" type="button">Refresh Rig</button>
@@ -1072,7 +1099,7 @@ function renderCallsignEntry() {
       </div>
       ${renderRigSuggestion()}
       <label>Notes
-        <input name="notes" class="placeholder-control" aria-label="Notes" placeholder="Optional note" />
+        <input name="notes" class="placeholder-control" aria-label="Notes" placeholder="Optional note" value="${escapeHtml(draft.notes || "")}" />
       </label>
       <button class="toolbar-button" type="submit">Submit QSO Proposal</button>
       ${state.qsoError ? `<p class="event-error">${state.qsoError}</p>` : ""}
@@ -1958,10 +1985,45 @@ function numberOrNull(value) {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+function updateQsoDraftFromForm() {
+  const form = byId("qso-create-form");
+  if (!form) return;
+  const data = new FormData(form);
+  state.qsoDraft = {
+    contacted_callsign: data.get("contacted_callsign")?.toString() || "",
+    mode: data.get("mode")?.toString() || "",
+    frequency_hz: data.get("frequency_hz")?.toString() || "",
+    band: data.get("band")?.toString() || "",
+    notes: data.get("notes")?.toString() || "",
+  };
+}
+
+function clearQsoDraft() {
+  state.qsoDraft = {
+    contacted_callsign: "",
+    mode: "",
+    frequency_hz: "",
+    band: "",
+    notes: "",
+  };
+}
+
+function isLoggerFormFocused() {
+  const active = document.activeElement;
+  if (!active) return false;
+  return ["qso-create-form", "portable-qso-form"].some((formId) => {
+    const form = byId(formId);
+    return Boolean(form && form.contains(active));
+  });
+}
+
 function clearQsoForm() {
   byId("qso-create-form")?.reset();
+  clearQsoDraft();
   state.acceptedLookupFields = null;
   state.acceptedRigFields = null;
+  state.lookupSuggestion = null;
+  state.duplicateWarning = "";
   state.qsoError = "";
   render();
 }
@@ -2015,14 +2077,15 @@ async function submitQsoCreate(event) {
   const form = new FormData(event.currentTarget);
   const frequency = form.get("frequency_hz")?.toString().trim();
   const payload = {
+    ...(state.acceptedLookupFields || {}),
+    ...(state.acceptedRigFields || {}),
     contacted_callsign: form.get("contacted_callsign")?.toString() || "",
     mode: form.get("mode")?.toString() || "",
     band: form.get("band")?.toString() || "",
     notes: form.get("notes")?.toString() || "",
     frequency_hz: frequency ? Number(frequency) : null,
-    ...(state.acceptedLookupFields || {}),
-    ...(state.acceptedRigFields || {}),
   };
+  updateQsoDraftFromForm();
   updateDuplicateWarning();
   const response = await fetch("/api/qso/create", {
     method: "POST",
@@ -2032,9 +2095,13 @@ async function submitQsoCreate(event) {
   const result = await response.json();
   if (!response.ok) {
     state.qsoError = result.error || "QSO proposal rejected";
+    await refreshRuntimeEvents();
+    render();
+    return;
   } else {
     state.qsoError = "";
     event.currentTarget.reset();
+    clearQsoDraft();
   }
   await refreshQsos();
   await refreshActivations();
@@ -2261,6 +2328,12 @@ function acceptRigSuggestion(explicit = false) {
     rig_source: explicit ? "rig/manual-refresh" : suggestion.source,
     rig_id: suggestion.rig_id || null,
     rig_enriched_fields: suggestion.suggested_fields || [],
+  };
+  state.qsoDraft = {
+    ...state.qsoDraft,
+    frequency_hz: suggestion.frequency_hz?.toString() || state.qsoDraft.frequency_hz,
+    band: suggestion.band || state.qsoDraft.band,
+    mode: suggestion.mode || state.qsoDraft.mode,
   };
   render();
 }
