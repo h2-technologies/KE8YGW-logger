@@ -9,6 +9,7 @@ chrono.workspace = true
 ham-core = { path = "../ham-core" }
 ham-plugin-sdk = { path = "../ham-plugin-sdk" }
 ham-sync = { path = "../ham-sync" }
+rusqlite.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

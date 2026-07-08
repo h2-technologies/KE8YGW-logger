@@ -18,8 +18,13 @@ desktop and future native iOS clients.
 
 The new `ham-server` crate introduces the hosted API boundary, account/session
 models, device registration/revocation, logbook membership roles, and
-proposal-backed QSO routes. This is beta scaffolding: account/session state is
-currently in-memory and must be made durable before real hosted use.
+proposal-backed QSO routes. Hosted metadata now has a SQLite-backed durable
+store for beta server use, with the in-memory store retained only for focused
+unit tests and development fixtures.
+
+The self-hosted sync/report service now uses durable local storage by default:
+SQLite for sync metadata, append-only JSONL for official replicated events, and
+filesystem-backed diagnostic report payloads.
 
 ## Implemented API Slice
 
@@ -52,10 +57,77 @@ domain implementation lands.
 
 ## Required Before Production Hosted Use
 
-- Durable account/session/device/logbook storage.
-- Durable sync/report storage.
 - Token expiry/refresh/revocation policies.
 - Hosted deployment configuration.
 - Rate limiting and request IDs.
 - Provider adapter hardening.
 - Full contract tests against hosted and self-hosted modes.
+
+## Local Server Startup
+
+Hosted beta API:
+
+```powershell
+cargo run -p ham-server --bin ham-server
+```
+
+Self-hosted sync/report service:
+
+```powershell
+cargo run -p ham-sync-server --bin ham-sync-server
+```
+
+Default local addresses:
+
+- `ham-server`: `127.0.0.1:9750`
+- `ham-sync-server`: `127.0.0.1:9740`
+
+## Storage Paths
+
+The local development defaults use the platform log/data directory returned by
+`ham-core::default_log_directory()` unless an environment variable overrides
+the path.
+
+- `HAM_SERVER_BIND`: hosted API bind address, default `127.0.0.1:9750`.
+- `HAM_SERVER_METADATA_DB`: hosted metadata SQLite database. Stores users,
+  login sessions, devices, logbooks, memberships, API tokens, invites, and
+  schema migrations.
+- `HAM_SYNC_SERVER_BIND`: sync/report service bind address, default
+  `127.0.0.1:9740`.
+- `HAM_SYNC_PUBLIC_URL`: public sync service URL returned to clients.
+- `HAM_SYNC_SERVICE_MODE`: `self_hosted` or `hosted`.
+- `HAM_SYNC_PAIRING_CODE`: development pairing code.
+- `HAM_SYNC_METADATA_DB`: sync metadata SQLite database. Stores sync sessions,
+  known devices, revocation state, logbook access, pairing token records, sync
+  heads, report metadata, and schema migrations.
+- `HAM_SYNC_EVENT_LOG`: append-only JSONL official event log used by the sync
+  service.
+- `HAM_SYNC_REPORT_DIR`: filesystem directory for diagnostic report payloads.
+
+## Backup Considerations
+
+For v0.2 hosted/self-hosted beta backups, copy these files and directories while
+the service is stopped or after taking a filesystem/database snapshot:
+
+- Hosted metadata SQLite database.
+- Sync metadata SQLite database.
+- Sync official event JSONL file.
+- Diagnostic report payload directory.
+- Any separately configured official/support storage paths used by desktop or
+  local profiles.
+
+Credential secret values are not stored in these metadata databases and must be
+handled through the selected credential backend.
+
+## Migration Notes
+
+SQLite schema initialization is automatic at startup. The first migration is
+recorded in `schema_migrations` with version `1`. Future migrations should be
+additive and must preserve append-only official event history.
+
+## Current Limitations
+
+- Session expiry/refresh policy is still beta-level and not production hardened.
+- The hosted API still has reserved scaffold routes for several v0.2 workflows.
+- Provider adapters, upload execution, backup/restore UX, and desktop packaging
+  remain separate v0.2 work.

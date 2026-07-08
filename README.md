@@ -94,9 +94,9 @@ planning docs. The new `ham-server` crate introduces `/api/v1` hosted routes,
 bearer login/session handling, device identity/revocation, logbook membership
 roles, and proposal-backed QSO create/edit/delete/restore/note flows.
 
-This is not yet a production hosted release. Server account/session/device state
-is in-memory beta scaffolding, durable sync/report storage still needs to land,
-production credential backends are pending, live provider adapters remain
+This is not yet a production hosted release. Server account/session/device
+metadata is now durable SQLite beta storage and sync/report storage is durable,
+but production credential backends are pending, live provider adapters remain
 provider-framework work, and desktop packaging/native dialogs are still v0.2
 gaps.
 
@@ -632,10 +632,11 @@ GUI workflow:
    requires cloud sync pairing/authentication first.
 
 Authenticated upload uses `POST /api/v1/reports` on the sync server. The server
-validates the sync token, stores report metadata and bundle bytes in the MVP
-in-memory backend, and returns a `report_id`, status, received time, and bundle
-hash. Report status starts as `submitted`; future support tooling can move it
-through `triaged`, `investigating`, `waiting_on_user`, `fixed`, and `closed`.
+validates the sync token, stores report metadata in SQLite, stores bundle bytes
+in the configured report directory, and returns a `report_id`, status, received
+time, and bundle hash. Report status starts as `submitted`; future support
+tooling can move it through `triaged`, `investigating`, `waiting_on_user`,
+`fixed`, and `closed`.
 
 Runtime report events include:
 
@@ -648,10 +649,9 @@ Runtime report events include:
 - `diagnostics.upload.completed`
 - `diagnostics.upload.failed`
 
-Current limitations: uploaded report storage is in-memory in the MVP sync
-server, screenshots are not attached, report status tracking has no dashboard,
-and official log excerpts are intentionally deferred until there is an explicit
-user-approved workflow.
+Current limitations: screenshots are not attached, report status tracking has
+no dashboard, retention policy is not hardened, and official log excerpts are
+intentionally deferred until there is an explicit user-approved workflow.
 
 ## Durable Local Persistence
 
@@ -853,9 +853,9 @@ diagnostic logs, credentials, API keys, private plugin config, or mutable UI
 state.
 
 The shared `ham-sync` crate now defines cloud API messages, an MVP pairing
-session model, a cloud client abstraction, and an in-memory server backend used
-by tests and the self-hosted binary. Hosted and self-hosted deployments use the
-same server implementation.
+session model, a cloud client abstraction, an in-memory server backend used by
+tests, and a durable server backend used by the self-hosted binary. Hosted and
+self-hosted deployments use the same API semantics.
 
 MVP auth uses pairing-code/token sessions. A paired device receives a sync token
 scoped to an account, user, device, and explicit logbook IDs. The server rejects
@@ -926,11 +926,15 @@ HAM_SYNC_SERVER_BIND=127.0.0.1:9740
 HAM_SYNC_PUBLIC_URL=http://127.0.0.1:9740
 HAM_SYNC_SERVICE_MODE=self_hosted
 HAM_SYNC_PAIRING_CODE=local-dev-pairing-code
+HAM_SYNC_METADATA_DB=<platform-data-dir>/sync-server/sync.sqlite3
+HAM_SYNC_EVENT_LOG=<platform-data-dir>/sync-server/official-events.jsonl
+HAM_SYNC_REPORT_DIR=<platform-data-dir>/sync-server/reports
 ```
 
-See `.env.example` for the same settings. The MVP server uses an in-memory
-storage backend for development and tests; durable server-side storage is the
-next self-hosting task.
+See `.env.example` for the same settings. The sync/report server now uses
+durable local storage by default: SQLite metadata, append-only JSONL official
+event storage, and filesystem-backed diagnostic report payloads. The in-memory
+cloud sync server remains available for focused unit tests.
 
 Docker build:
 
@@ -941,7 +945,26 @@ docker run --rm -p 9740:9740 -e HAM_SYNC_PAIRING_CODE=change-me ke8ygw-sync-serv
 
 Current limitations: pairing is token-based MVP auth, events are not signed,
 end-to-end encryption is not implemented, automatic merge/conflict resolution is
-deferred, and the self-hosted server storage is not durable yet.
+deferred, and production deployment hardening such as rate limits, token
+rotation, and hosted observability is still pending.
+
+Run the hosted beta API:
+
+```powershell
+cargo run -p ham-server --bin ham-server
+```
+
+Default hosted API settings:
+
+```text
+HAM_SERVER_BIND=127.0.0.1:9750
+HAM_SERVER_METADATA_DB=<platform-data-dir>/server/ham-server.sqlite3
+```
+
+`ham-server` persists account, login session, device, logbook, membership, API
+token, invite, and schema migration metadata in SQLite. Official QSO mutations
+still go through the existing proposal pipeline and append-only official event
+model.
 
 ## GUI Architecture
 

@@ -45,6 +45,10 @@ The hosted beta API uses bearer sessions:
 - `POST /api/v1/auth/logout` invalidates the session.
 - Authenticated requests use `Authorization: Bearer <token>`.
 
+Hosted beta sessions are persisted in the server metadata database. A server
+restart must not invalidate an active session by itself. Logout persists the
+inactive session state, so a logged-out token remains invalid after restart.
+
 Current token transport:
 
 - `POST /api/v1/auth/pair` returns `session.sync_token`.
@@ -71,6 +75,11 @@ Client calls are scoped by account, logbook, user, and device:
 
 Cross-logbook access must be rejected. Revoked device sessions must not sync.
 Viewer sessions must not mutate official log state.
+
+Logbook membership and role checks are restart-stable. If a user cannot access a
+logbook before restart, the same request must still be rejected after restart.
+If a device is revoked, that revocation is durable and all sessions/sync tokens
+for that device must remain unusable after restart.
 
 ## Proposal-Based Official Mutations
 
@@ -261,6 +270,12 @@ Returns:
 Returns connection state, account/device identity when authenticated, server
 URL, and accessible logbook heads.
 
+The sync/report service persists sync sessions, device revocation state,
+per-account logbook access, current sync heads, and report metadata in SQLite.
+Official replicated event envelopes are stored append-only in JSONL. Clients
+should expect preview, push, pull, and status responses to survive server
+restart without requiring re-pairing, unless the device or token was revoked.
+
 ### Diagnostic Reports
 
 `POST /api/v1/reports`
@@ -271,6 +286,10 @@ not contain credentials, API tokens, or provider secrets.
 `GET /api/v1/reports/{report_id}?token=<sync_token>`
 
 Returns diagnostic report metadata for an authorized user/session.
+
+Diagnostic report metadata is durable. Report payloads are stored in the
+configured report directory and must remain available after restart. Report
+metadata and payloads are scoped to the owning account/session.
 
 ## Official Event Envelope
 

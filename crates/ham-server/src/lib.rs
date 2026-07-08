@@ -1,9 +1,14 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::HashMap,
+    fs,
+    path::{Path, PathBuf},
+    sync::{Arc, Mutex},
+};
 
 use chrono::{DateTime, Utc};
 use ham_core::{
-    default_service_registry, submit_proposal, InMemoryEventBus, InMemoryLogbookEventStore,
-    LogbookEventStore, OperatorRole, ProposalContext,
+    default_log_directory, default_service_registry, submit_proposal, InMemoryEventBus,
+    InMemoryLogbookEventStore, LogbookEventStore, OperatorRole, ProposalContext,
 };
 use ham_plugin_sdk::{
     PluginCapability, PluginManifest, ProposalEnvelope, PROPOSAL_QSO_CORRECT, PROPOSAL_QSO_CREATE,
@@ -12,6 +17,7 @@ use ham_plugin_sdk::{
 use ham_sync::{
     preview_pull_from_events, CloudPushEventsRequest, LogbookHeadSummary, PreviewPullRequest,
 };
+use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use thiserror::Error;
@@ -208,6 +214,16 @@ pub enum ApiError {
     Store(String),
 }
 
+#[derive(Debug, Error)]
+pub enum MetadataStoreError {
+    #[error("metadata store I/O error: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("metadata store SQLite error: {0}")]
+    Sqlite(#[from] rusqlite::Error),
+    #[error("metadata store serialization error: {0}")]
+    Serde(#[from] serde_json::Error),
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LoginRequest {
     pub email: String,
@@ -287,7 +303,7 @@ pub struct RouteCatalogResponse {
     pub scaffolded: Vec<String>,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 struct ServerState {
     users_by_email: HashMap<String, Uuid>,
     accounts: HashMap<Uuid, UserAccount>,
@@ -299,11 +315,310 @@ struct ServerState {
     api_tokens: HashMap<Uuid, ApiToken>,
 }
 
+trait HostedMetadataStore: Send + Sync + std::fmt::Debug {
+    fn load(&self) -> Result<ServerState, MetadataStoreError>;
+    fn save(&self, state: &ServerState) -> Result<(), MetadataStoreError>;
+    fn is_durable(&self) -> bool;
+    fn label(&self) -> String;
+}
+
+#[derive(Debug, Default)]
+struct InMemoryMetadataStore {
+    state: Mutex<ServerState>,
+}
+
+impl HostedMetadataStore for InMemoryMetadataStore {
+    fn load(&self) -> Result<ServerState, MetadataStoreError> {
+        Ok(self
+            .state
+            .lock()
+            .expect("metadata store mutex should not be poisoned")
+            .clone())
+    }
+
+    fn save(&self, state: &ServerState) -> Result<(), MetadataStoreError> {
+        *self
+            .state
+            .lock()
+            .expect("metadata store mutex should not be poisoned") = state.clone();
+        Ok(())
+    }
+
+    fn is_durable(&self) -> bool {
+        false
+    }
+
+    fn label(&self) -> String {
+        "in-memory".to_owned()
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct SqliteHostedMetadataStore {
+    path: PathBuf,
+}
+
+impl SqliteHostedMetadataStore {
+    pub fn open(path: impl Into<PathBuf>) -> Result<Self, MetadataStoreError> {
+        let path = path.into();
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let store = Self { path };
+        store.initialize_schema()?;
+        Ok(store)
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    fn connection(&self) -> Result<Connection, MetadataStoreError> {
+        Ok(Connection::open(&self.path)?)
+    }
+
+    fn initialize_schema(&self) -> Result<(), MetadataStoreError> {
+        let connection = self.connection()?;
+        connection.execute_batch(
+            r#"
+            CREATE TABLE IF NOT EXISTS schema_migrations (
+                version INTEGER PRIMARY KEY,
+                applied_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS users (
+                account_id TEXT PRIMARY KEY NOT NULL,
+                email TEXT NOT NULL UNIQUE,
+                payload TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS login_sessions (
+                token TEXT PRIMARY KEY NOT NULL,
+                account_id TEXT NOT NULL,
+                user_id TEXT NOT NULL,
+                device_id TEXT NOT NULL,
+                active INTEGER NOT NULL,
+                payload TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS devices (
+                device_id TEXT PRIMARY KEY NOT NULL,
+                account_id TEXT NOT NULL,
+                user_id TEXT NOT NULL,
+                revoked INTEGER NOT NULL,
+                payload TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS logbooks (
+                logbook_id TEXT PRIMARY KEY NOT NULL,
+                account_id TEXT NOT NULL,
+                payload TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS logbook_memberships (
+                logbook_id TEXT NOT NULL,
+                user_id TEXT NOT NULL,
+                account_id TEXT NOT NULL,
+                role TEXT NOT NULL,
+                payload TEXT NOT NULL,
+                PRIMARY KEY (logbook_id, user_id)
+            );
+            CREATE TABLE IF NOT EXISTS api_tokens (
+                token_id TEXT PRIMARY KEY NOT NULL,
+                account_id TEXT NOT NULL,
+                user_id TEXT NOT NULL,
+                device_id TEXT NOT NULL,
+                revoked INTEGER NOT NULL,
+                payload TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS server_invites (
+                invite_id TEXT PRIMARY KEY NOT NULL,
+                account_id TEXT NOT NULL,
+                logbook_id TEXT NOT NULL,
+                token TEXT NOT NULL UNIQUE,
+                payload TEXT NOT NULL
+            );
+            INSERT OR IGNORE INTO schema_migrations(version, applied_at)
+            VALUES (1, datetime('now'));
+            "#,
+        )?;
+        Ok(())
+    }
+}
+
+impl HostedMetadataStore for SqliteHostedMetadataStore {
+    fn load(&self) -> Result<ServerState, MetadataStoreError> {
+        let connection = self.connection()?;
+        let mut state = ServerState::default();
+
+        for account in load_payloads::<UserAccount>(&connection, "users")? {
+            state
+                .users_by_email
+                .insert(account.email.clone(), account.account_id);
+            state.accounts.insert(account.account_id, account);
+        }
+        for session in load_payloads::<LoginSession>(&connection, "login_sessions")? {
+            state
+                .sessions_by_token
+                .insert(session.token.clone(), session);
+        }
+        for device in load_payloads::<DeviceIdentity>(&connection, "devices")? {
+            state.devices.insert(device.device_id, device);
+        }
+        for logbook in load_payloads::<ApiLogbook>(&connection, "logbooks")? {
+            state.logbooks.insert(logbook.logbook_id, logbook);
+        }
+        state.memberships = load_payloads::<LogbookMembership>(&connection, "logbook_memberships")?;
+        for token in load_payloads::<ApiToken>(&connection, "api_tokens")? {
+            state.api_tokens.insert(token.token_id, token);
+        }
+        for invite in load_payloads::<ServerInvite>(&connection, "server_invites")? {
+            state.invites.insert(invite.invite_id, invite);
+        }
+
+        Ok(state)
+    }
+
+    fn save(&self, state: &ServerState) -> Result<(), MetadataStoreError> {
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        for table in [
+            "users",
+            "login_sessions",
+            "devices",
+            "logbooks",
+            "logbook_memberships",
+            "api_tokens",
+            "server_invites",
+        ] {
+            transaction.execute(&format!("DELETE FROM {table}"), [])?;
+        }
+
+        for account in state.accounts.values() {
+            transaction.execute(
+                "INSERT INTO users(account_id, email, payload) VALUES (?1, ?2, ?3)",
+                params![
+                    account.account_id.to_string(),
+                    account.email,
+                    serde_json::to_string(account)?
+                ],
+            )?;
+        }
+        for session in state.sessions_by_token.values() {
+            transaction.execute(
+                "INSERT INTO login_sessions(token, account_id, user_id, device_id, active, payload)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![
+                    session.token,
+                    session.account_id.to_string(),
+                    session.user_id.to_string(),
+                    session.device_id.to_string(),
+                    if session.active { 1_i64 } else { 0_i64 },
+                    serde_json::to_string(session)?
+                ],
+            )?;
+        }
+        for device in state.devices.values() {
+            transaction.execute(
+                "INSERT INTO devices(device_id, account_id, user_id, revoked, payload)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![
+                    device.device_id.to_string(),
+                    device.account_id.to_string(),
+                    device.user_id.to_string(),
+                    if device.revoked { 1_i64 } else { 0_i64 },
+                    serde_json::to_string(device)?
+                ],
+            )?;
+        }
+        for logbook in state.logbooks.values() {
+            transaction.execute(
+                "INSERT INTO logbooks(logbook_id, account_id, payload) VALUES (?1, ?2, ?3)",
+                params![
+                    logbook.logbook_id.to_string(),
+                    logbook.account_id.to_string(),
+                    serde_json::to_string(logbook)?
+                ],
+            )?;
+        }
+        for membership in &state.memberships {
+            transaction.execute(
+                "INSERT INTO logbook_memberships(logbook_id, user_id, account_id, role, payload)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![
+                    membership.logbook_id.to_string(),
+                    membership.user_id.to_string(),
+                    membership.account_id.to_string(),
+                    serde_json::to_string(&membership.role)?,
+                    serde_json::to_string(membership)?
+                ],
+            )?;
+        }
+        for token in state.api_tokens.values() {
+            transaction.execute(
+                "INSERT INTO api_tokens(token_id, account_id, user_id, device_id, revoked, payload)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![
+                    token.token_id.to_string(),
+                    token.account_id.to_string(),
+                    token.user_id.to_string(),
+                    token.device_id.to_string(),
+                    if token.revoked { 1_i64 } else { 0_i64 },
+                    serde_json::to_string(token)?
+                ],
+            )?;
+        }
+        for invite in state.invites.values() {
+            transaction.execute(
+                "INSERT INTO server_invites(invite_id, account_id, logbook_id, token, payload)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![
+                    invite.invite_id.to_string(),
+                    invite.account_id.to_string(),
+                    invite.logbook_id.to_string(),
+                    invite.token,
+                    serde_json::to_string(invite)?
+                ],
+            )?;
+        }
+        transaction.commit()?;
+        Ok(())
+    }
+
+    fn is_durable(&self) -> bool {
+        true
+    }
+
+    fn label(&self) -> String {
+        self.path.display().to_string()
+    }
+}
+
+fn load_payloads<T: for<'de> Deserialize<'de>>(
+    connection: &Connection,
+    table: &str,
+) -> Result<Vec<T>, MetadataStoreError> {
+    let mut statement = connection.prepare(&format!("SELECT payload FROM {table}"))?;
+    let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
+    let mut values = Vec::new();
+    for row in rows {
+        values.push(serde_json::from_str(&row?)?);
+    }
+    Ok(values)
+}
+
 #[derive(Debug, Clone)]
 pub struct HostedServer {
     state: Arc<RwLock<ServerState>>,
+    metadata_store: Arc<dyn HostedMetadataStore>,
     store: Arc<InMemoryLogbookEventStore>,
     bus: Arc<InMemoryEventBus>,
+}
+
+pub fn default_metadata_db_path() -> PathBuf {
+    std::env::var("HAM_SERVER_METADATA_DB").map_or_else(
+        |_| {
+            default_log_directory()
+                .join("server")
+                .join("ham-server.sqlite3")
+        },
+        PathBuf::from,
+    )
 }
 
 impl Default for HostedServer {
@@ -314,11 +629,29 @@ impl Default for HostedServer {
 
 impl HostedServer {
     pub fn new() -> Self {
-        Self {
-            state: Arc::new(RwLock::new(ServerState::default())),
+        Self::new_in_memory()
+    }
+
+    pub fn new_in_memory() -> Self {
+        let metadata_store = Arc::new(InMemoryMetadataStore::default());
+        Self::with_metadata_store(metadata_store).expect("in-memory metadata store should load")
+    }
+
+    pub fn with_sqlite_metadata(path: impl Into<PathBuf>) -> Result<Self, MetadataStoreError> {
+        let metadata_store = Arc::new(SqliteHostedMetadataStore::open(path)?);
+        Self::with_metadata_store(metadata_store)
+    }
+
+    fn with_metadata_store(
+        metadata_store: Arc<dyn HostedMetadataStore>,
+    ) -> Result<Self, MetadataStoreError> {
+        let state = metadata_store.load()?;
+        Ok(Self {
+            state: Arc::new(RwLock::new(state)),
+            metadata_store,
             store: Arc::new(InMemoryLogbookEventStore::new()),
             bus: Arc::new(InMemoryEventBus::new(256)),
-        }
+        })
     }
 
     pub async fn handle(&self, request: ApiRequest) -> ApiResponse {
@@ -394,7 +727,8 @@ impl HostedServer {
             "sessions": state.sessions_by_token.values().filter(|session| session.active).count(),
             "invites": state.invites.len(),
             "api_tokens": state.api_tokens.len(),
-            "durable_server_storage": false,
+            "durable_server_storage": self.metadata_store.is_durable(),
+            "metadata_store": self.metadata_store.label(),
             "ios_release_target": "v1.1_native_swiftui"
         }))
     }
@@ -478,6 +812,7 @@ impl HostedServer {
             .sessions_by_token
             .insert(session.token.clone(), session.clone());
         let logbooks = visible_logbooks(&state, account.user_id);
+        self.persist_metadata(&state)?;
         Ok(json!(LoginResponse {
             account,
             session,
@@ -494,6 +829,7 @@ impl HostedServer {
             .get_mut(&token)
             .ok_or(ApiError::Unauthenticated)?;
         session.active = false;
+        self.persist_metadata(&state)?;
         Ok(json!({"ok": true}))
     }
 
@@ -557,6 +893,7 @@ impl HostedServer {
             role: LogbookRole::Owner,
             created_at: now,
         });
+        self.persist_metadata(&state)?;
         Ok(json!({"logbook": logbook}))
     }
 
@@ -601,6 +938,8 @@ impl HostedServer {
             logbook.station_callsign = input.station_callsign;
         }
         logbook.updated_at = Utc::now();
+        let logbook = logbook.clone();
+        self.persist_metadata(&state)?;
         Ok(json!({"logbook": logbook}))
     }
 
@@ -829,6 +1168,8 @@ impl HostedServer {
             .await
             .devices
             .insert(device.device_id, device.clone());
+        let state = self.state.read().await;
+        self.persist_metadata(&state)?;
         Ok(json!({"device": device}))
     }
 
@@ -863,6 +1204,7 @@ impl HostedServer {
                 session.active = false;
             }
         }
+        self.persist_metadata(&state)?;
         Ok(json!({"ok": true}))
     }
 
@@ -979,6 +1321,12 @@ impl HostedServer {
         })
     }
 
+    fn persist_metadata(&self, state: &ServerState) -> Result<(), ApiError> {
+        self.metadata_store
+            .save(state)
+            .map_err(|error| ApiError::Store(error.to_string()))
+    }
+
     #[cfg(test)]
     async fn add_membership_for_email(
         &self,
@@ -1009,6 +1357,7 @@ impl HostedServer {
             role,
             created_at: Utc::now(),
         });
+        self.persist_metadata(&state)?;
         Ok(())
     }
 }
@@ -1348,6 +1697,14 @@ fn path_segments(path: &str) -> Vec<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
+
+    fn sqlite_test_path(label: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "ke8ygw-ham-server-{label}-{}.sqlite3",
+            Uuid::new_v4()
+        ))
+    }
 
     async fn login(server: &HostedServer, email: &str) -> (String, Uuid, Uuid) {
         let response = server
@@ -1649,5 +2006,124 @@ mod tests {
         assert_eq!(response.status, 200);
         let payload: Value = response.json();
         assert_eq!(payload["implemented"], false);
+    }
+
+    #[tokio::test]
+    async fn sqlite_metadata_preserves_user_session_logbook_and_device_after_restart() {
+        let path = sqlite_test_path("metadata-restart");
+        let server = HostedServer::with_sqlite_metadata(&path).unwrap();
+        let (token, logbook_id, device_id) = login(&server, "owner@example.test").await;
+
+        let restarted = HostedServer::with_sqlite_metadata(&path).unwrap();
+        let session = restarted
+            .handle(ApiRequest::get("/api/v1/auth/session").with_bearer(&token))
+            .await;
+        assert_eq!(session.status, 200);
+        let session: SessionResponse = session.json();
+        assert_eq!(session.device.device_id, device_id);
+        assert_eq!(session.memberships[0].logbook_id, logbook_id);
+
+        let logbooks = restarted
+            .handle(ApiRequest::get("/api/v1/logbooks").with_bearer(token))
+            .await;
+        assert_eq!(logbooks.status, 200);
+        let payload: Value = logbooks.json();
+        assert_eq!(payload["logbooks"].as_array().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn sqlite_metadata_preserves_logout_and_device_revocation_after_restart() {
+        let path = sqlite_test_path("logout-revoke");
+        let server = HostedServer::with_sqlite_metadata(&path).unwrap();
+        let (token, _, device_id) = login(&server, "owner@example.test").await;
+
+        let logout = server
+            .handle(ApiRequest::json("POST", "/api/v1/auth/logout", &json!({})).with_bearer(&token))
+            .await;
+        assert_eq!(logout.status, 200);
+        let restarted = HostedServer::with_sqlite_metadata(&path).unwrap();
+        let session = restarted
+            .handle(ApiRequest::get("/api/v1/auth/session").with_bearer(&token))
+            .await;
+        assert_eq!(session.status, 401);
+
+        let (new_token, _, _) = login(&restarted, "owner@example.test").await;
+        let revoke = restarted
+            .handle(
+                ApiRequest::json(
+                    "POST",
+                    format!("/api/v1/devices/{device_id}/revoke"),
+                    &json!({}),
+                )
+                .with_bearer(&new_token),
+            )
+            .await;
+        assert_eq!(revoke.status, 200);
+        let restarted_again = HostedServer::with_sqlite_metadata(&path).unwrap();
+        let sync = restarted_again
+            .handle(ApiRequest::get("/api/v1/sync/status").with_bearer(token))
+            .await;
+        assert_eq!(sync.status, 401);
+    }
+
+    #[tokio::test]
+    async fn sqlite_metadata_preserves_membership_roles_and_scope_after_restart() {
+        let path = sqlite_test_path("roles");
+        let server = HostedServer::with_sqlite_metadata(&path).unwrap();
+        let (owner_token, logbook_id, _) = login(&server, "owner@example.test").await;
+        let (operator_token, _, _) = login(&server, "operator@example.test").await;
+        let (viewer_token, _, _) = login(&server, "viewer@example.test").await;
+        let (other_token, _, _) = login(&server, "other@example.test").await;
+        server
+            .add_membership_for_email("operator@example.test", logbook_id, LogbookRole::Operator)
+            .await
+            .unwrap();
+        server
+            .add_membership_for_email("viewer@example.test", logbook_id, LogbookRole::Viewer)
+            .await
+            .unwrap();
+
+        let restarted = HostedServer::with_sqlite_metadata(&path).unwrap();
+        let op_created = create_qso(&restarted, &operator_token, logbook_id).await;
+        assert!(op_created["event"]["event_hash"].is_string());
+
+        let viewer_write = restarted
+            .handle(
+                ApiRequest::json(
+                    "POST",
+                    "/api/v1/qsos",
+                    &QsoWriteRequest {
+                        logbook_id,
+                        contacted_callsign: Some("N0CALL".to_owned()),
+                        station_callsign: None,
+                        operator_callsign: None,
+                        started_at: Some("2026-07-08T00:00:00Z".to_owned()),
+                        mode: Some("SSB".to_owned()),
+                        band: None,
+                        frequency_hz: None,
+                        notes: None,
+                        fields: Map::new(),
+                    },
+                )
+                .with_bearer(&viewer_token),
+            )
+            .await;
+        assert_eq!(viewer_write.status, 403);
+
+        let other_read = restarted
+            .handle(
+                ApiRequest::get(format!("/api/v1/qsos?logbook_id={logbook_id}"))
+                    .with_bearer(other_token),
+            )
+            .await;
+        assert_eq!(other_read.status, 403);
+
+        let owner_read = restarted
+            .handle(
+                ApiRequest::get(format!("/api/v1/qsos?logbook_id={logbook_id}"))
+                    .with_bearer(owner_token),
+            )
+            .await;
+        assert_eq!(owner_read.status, 200);
     }
 }

@@ -150,6 +150,8 @@ Repository health status: Healthy for this v0.2 slice. Formatting, Rust check, C
 - [x] Desktop release documentation
 - [x] Dedicated `ham-server` hosted API crate added to workspace
 - [x] Hosted API route tests for auth, scoping, roles, revoked devices, and QSO lifecycle
+- [x] Durable hosted metadata storage for `ham-server`
+- [x] Durable sync/report storage for `ham-sync-server`
 - [ ] Docs link checker
 - [ ] Coverage reporting
 
@@ -175,9 +177,9 @@ The mapping framework is implemented as a core GIS/service layer. `ham-core::map
 
 The Online Services ecosystem is implemented as a provider-backed service layer. `ham-core::online` owns connected provider metadata, upload/download engine models, confirmation records, DX/POTA/SOTA spot normalization, provider health states, automation tasks, notifications, and safe cache helpers. Live network adapters remain behind provider boundaries and must use `CredentialStore`.
 
-Sync is split between `ham-sync` for protocol, peer, LAN/cloud models, safe replication, and in-memory server logic, plus `ham-sync-server` for the self-hosted HTTP-like server binary. LAN is preferred. Cloud/self-hosted sync is a fallback and uses the same verification rules.
+Sync is split between `ham-sync` for protocol, peer, LAN/cloud models, safe replication, in-memory test server logic, and durable sync/report server logic, plus `ham-sync-server` for the self-hosted HTTP-like server binary. LAN is preferred. Cloud/self-hosted sync is a fallback and uses the same verification rules.
 
-Storage uses append-only JSONL official events for the MVP. Runtime logs are separate rotating JSONL files. Support/config state uses lightweight versioned JSON files for provider settings, service cache metadata, upload queue state, map layer preferences, lookup/rig UI config, online automation/notification support state, station profiles, saved searches, permission grants, and credential metadata. Secret values remain outside support storage behind `CredentialStore`.
+Storage uses append-only JSONL official events for the MVP. Hosted server metadata uses SQLite for users, sessions, devices, logbooks, memberships, API tokens, invites, and schema migrations. The sync/report server uses SQLite for sync metadata, append-only JSONL for replicated official events, and filesystem-backed diagnostic report payloads. Runtime logs are separate rotating JSONL files. Support/config state uses lightweight versioned JSON files for provider settings, service cache metadata, upload queue state, map layer preferences, lookup/rig UI config, online automation/notification support state, station profiles, saved searches, permission grants, and credential metadata. Secret values remain outside support storage behind `CredentialStore`.
 
 The GUI is `ham-gui`, a web-first shell served by Rust. It is Tauri-ready but not yet a packaged Tauri app. It consumes core bridge APIs, projections, runtime events, service framework state, and proposal endpoints.
 
@@ -199,9 +201,9 @@ Diagnostics include runtime event logs, redaction helpers, report ZIP generation
 - `crates/ham-core::net`: Net Control projection, session/check-in/traffic models, and report export.
 - `crates/ham-core::online`: online provider metadata, upload/download engine models, confirmation records, spot parsing, automation, notification, and provider health helpers.
 - `crates/ham-plugin-sdk`: plugin manifest, capabilities, service types, proposal envelope, public event constants.
-- `crates/ham-sync`: LAN discovery/handshake models, peer registry, safe replication, cloud API/client/server models, report upload models.
-- `crates/ham-sync-server`: self-hosted sync/report HTTP-like server binary.
-- `crates/ham-server`: hosted web/server API boundary with beta in-memory account, session, device, logbook, role, provider, sync, and QSO lifecycle routes.
+- `crates/ham-sync`: LAN discovery/handshake models, peer registry, safe replication, cloud API/client/server models, durable sync/report storage, and report upload models.
+- `crates/ham-sync-server`: self-hosted sync/report HTTP-like server binary using durable local storage by default.
+- `crates/ham-server`: hosted web/server API boundary with durable SQLite account, session, device, logbook, role, provider, sync, and QSO lifecycle metadata routes.
 - `crates/ham-gui`: Rust bridge/server, GUI shell models, command registry, static web UI.
 - `crates/ham-cli`: CLI commands for ADIF and chain/projection operations.
 - `docs/architecture`: service framework, online services, station profiles, award engine, search, and upload queue architecture notes.
@@ -217,8 +219,8 @@ Diagnostics include runtime event logs, redaction helpers, report ZIP generation
 
 ## Critical
 
-- [ ] Replace `ham-server` in-memory account/session/device/logbook scaffolding with durable storage before hosted beta use.
-- [ ] Add durable storage to the self-hosted sync/report server before real hosted use.
+- [x] Replace `ham-server` in-memory account/session/device/logbook scaffolding with durable storage before hosted beta use.
+- [x] Add durable storage to the self-hosted sync/report server before real hosted use.
 - [ ] Implement trust pairing/authentication for LAN peers before unattended sync.
 - [ ] Implement production OS keychain backends before real online upload/lookup provider credentials.
 
@@ -258,9 +260,9 @@ Diagnostics include runtime event logs, redaction helpers, report ZIP generation
 
 - Several blueprint-recommended crates are currently implemented as modules inside `ham-core`; this is acceptable for MVP but should be revisited as APIs grow.
 - The GUI is a static web shell served by Rust rather than a packaged Tauri desktop app.
-- `ham-server` now defines the hosted API boundary, but account/session/device/logbook metadata is in-memory beta scaffolding.
+- `ham-server` now defines the hosted API boundary and persists account/session/device/logbook metadata in SQLite.
 - Plugin loading is static; no sandbox, signature verification, or process isolation exists yet.
-- The sync server uses in-memory storage for cloud sync events and uploaded reports.
+- The sync server uses durable SQLite metadata, JSONL official event storage, and filesystem report payload storage; production migration/retention policy still needs hardening.
 - LAN discovery/replication has strong models but needs real multi-instance transport wiring.
 - Permission scopes are mostly recorded rather than fully enforced.
 - Station profile editing exists in core models but not yet as full GUI forms.
@@ -375,6 +377,11 @@ Completed work:
 - Enforced account/logbook/device scoping in the hosted QSO slice.
 - Kept QSO create/edit/delete/restore/note writes on the existing proposal pipeline.
 - Added route-level tests for cross-logbook rejection, role behavior, logout invalidation, revoked device sync rejection, route catalog coverage, and QSO create/list/edit/delete/restore/note lifecycle.
+- Added SQLite-backed hosted metadata persistence for users, login sessions, devices, logbooks, memberships, API tokens, server invites, and schema migrations.
+- Updated `ham-server` to use durable metadata storage by default, with in-memory storage retained for focused tests.
+- Added durable sync/report storage using SQLite metadata, append-only JSONL official event storage, and filesystem diagnostic report payloads.
+- Updated `ham-sync-server` to start with durable local storage by default.
+- Added restart tests for hosted metadata persistence, sync state persistence, device revocation persistence, invalid chain rejection after restart, and diagnostic report metadata/payload persistence.
 - Added `docs/V0_2_RELEASE_PLAN.md`, `docs/DESKTOP_RELEASE.md`, and `docs/HOSTED_WEB_RELEASE.md`.
 - Updated `README.md`, `ROADMAP.md`, `docs/ROADMAP.md`, `docs/V1_RELEASE_PLAN.md`, `docs/V1_1_IOS_NATIVE_PLAN.md`, and `docs/API_CLIENT_CONTRACT.md`.
 - Bumped workspace package version to 0.2.0.
@@ -388,9 +395,7 @@ Completed work:
 
 Remaining work:
 
-- Make `ham-server` account/session/device/logbook metadata durable.
 - Add hosted route implementations for ADIF, station/equipment, activations, Net Control, maps, uploads, provider mutation/test, and sync pull.
-- Add durable sync/report storage.
 - Add Tauri desktop packaging and native desktop file dialogs.
 - Add backup/restore and divergence review UX.
 - Add LAN peer-to-peer transport and trust pairing.
@@ -413,9 +418,10 @@ Quality gates from this v0.2 slice:
 - `cargo fmt --all -- --check`: passed.
 - `cargo check --workspace --all-targets`: passed.
 - `cargo clippy --workspace --all-targets -- -D warnings`: passed.
-- `cargo test --workspace`: passed, 171 Rust tests total.
+- `cargo test --workspace`: passed, 178 Rust tests total.
 - `node --check crates/ham-gui/web/app.js`: passed.
 - `cargo build -p ham-server`: passed.
+- `cargo build -p ham-sync-server`: passed.
 - Browser-level tests: not run; no Playwright/equivalent suite is configured yet.
 - Tauri/desktop build checks: not run; no Tauri desktop package exists yet.
 - Docs link checker: not run; not configured.
@@ -424,10 +430,8 @@ Quality gates from this v0.2 slice:
 
 # Recommended Next Milestone
 
-Durable Hosted Storage and Desktop Packaging:
+Hosted Route Completion and Desktop Packaging:
 
-- Durable `ham-server` account/session/device/logbook metadata storage.
-- Durable sync/report storage shared by hosted/self-hosted modes.
 - Hosted route implementations beyond the QSO slice.
 - Tauri desktop packaging and native file dialogs.
 - Browser-level GUI tests and CI wiring.
@@ -449,11 +453,51 @@ This milestone should come next because the provider metadata, credential refere
 
 ## 2026-07-08
 
-Summary: Started the v0.2 almost-v1 beta by adding a dedicated hosted API crate,
+Summary: Added durable hosted metadata storage and durable sync/report storage
+for the v0.2 beta server path.
+
+Major files changed:
+
+- `Cargo.toml`
+- `Cargo.lock`
+- `.env.example`
+- `crates/ham-server/Cargo.toml`
+- `crates/ham-server/src/lib.rs`
+- `crates/ham-server/src/main.rs`
+- `crates/ham-sync/Cargo.toml`
+- `crates/ham-sync/src/lib.rs`
+- `crates/ham-sync-server/src/main.rs`
+- `README.md`
+- `docs/V0_2_RELEASE_PLAN.md`
+- `docs/API_CLIENT_CONTRACT.md`
+- `docs/HOSTED_WEB_RELEASE.md`
+- `PROJECT_STATE.md`
+
+Storage schema added:
+
+- `ham-server` SQLite metadata: `schema_migrations`, `users`,
+  `login_sessions`, `devices`, `logbooks`, `logbook_memberships`,
+  `api_tokens`, and `server_invites`.
+- `ham-sync` SQLite metadata: `schema_migrations`, `sync_sessions`,
+  `sync_devices`, `sync_logbook_access`, `pairing_tokens`, `sync_state`, and
+  `diagnostic_reports`.
+- `ham-sync` durable payloads: append-only JSONL official event log and
+  filesystem diagnostic report bundles.
+
+Architectural decisions:
+
+- `ham-server` uses SQLite metadata by default in the binary; in-memory metadata
+  remains available for focused route tests.
+- `ham-sync-server` uses durable local storage by default; the in-memory cloud
+  sync server remains available for deterministic unit tests.
+- Official QSO/log mutation semantics remain proposal-backed or verified
+  append-only event replication; no direct official-state mutation was added.
+
+Summary from previous v0.2 pass: Started the v0.2 almost-v1 beta by adding a dedicated hosted API crate,
 release planning docs, account/session/device/logbook scaffolding, and
 proposal-backed hosted QSO lifecycle routes.
 
-Major files changed:
+Major files changed in previous v0.2 pass:
 
 - `Cargo.toml`
 - `Cargo.lock`
@@ -471,13 +515,11 @@ Major files changed:
 - `docs/HOSTED_WEB_RELEASE.md`
 - `PROJECT_STATE.md`
 
-Architectural decisions:
+Architectural decisions from previous v0.2 pass:
 
 - `ham-server` is the hosted web/server API boundary for v0.2 work.
 - Hosted QSO create/edit/delete/restore/note routes submit proposals through
   `ham-core::submit_proposal`; they do not mutate official log state directly.
-- Account/session/device/logbook models are in-memory beta scaffolding until
-  durable hosted storage lands.
 - v1.0 remains hosted web + desktop only; native SwiftUI iOS stays v1.1.
 
 New crates:

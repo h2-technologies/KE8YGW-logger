@@ -9,7 +9,7 @@ use std::{
 use ham_sync::{
     CloudAuth, CloudHealthResponse, CloudPreviewPullRequest, CloudPullEventsRequest,
     CloudPushEventsRequest, CloudServerConfig, CloudServiceMode, DiagnosticReportUploadRequest,
-    InMemoryCloudSyncServer, PairDeviceRequest,
+    DurableCloudSyncPaths, DurableCloudSyncServer, PairDeviceRequest,
 };
 use serde::Serialize;
 use serde_json::json;
@@ -28,6 +28,21 @@ fn main() {
         _ => CloudServiceMode::SelfHosted,
     };
 
+    let paths = DurableCloudSyncPaths::from_env();
+    let server = match DurableCloudSyncServer::open(
+        CloudServerConfig {
+            mode,
+            public_url,
+            pairing_code,
+        },
+        paths.clone(),
+    ) {
+        Ok(server) => Arc::new(server),
+        Err(error) => {
+            eprintln!("failed to initialize durable sync storage: {error}");
+            process::exit(1);
+        }
+    };
     let listener = match TcpListener::bind(&addr) {
         Ok(listener) => listener,
         Err(error) => {
@@ -36,15 +51,15 @@ fn main() {
         }
     };
     let runtime = tokio::runtime::Runtime::new().expect("sync server runtime should start");
-    let server = Arc::new(InMemoryCloudSyncServer::new(CloudServerConfig {
-        mode,
-        public_url,
-        pairing_code,
-    }));
 
     println!("ham-sync-server listening on http://{addr}");
     println!("mode: {mode:?}");
-    println!("storage: in-memory MVP backend");
+    println!("metadata database: {}", paths.metadata_db_path.display());
+    println!(
+        "official event log: {}",
+        paths.official_event_log_path.display()
+    );
+    println!("report directory: {}", paths.report_dir.display());
 
     for stream in listener.incoming() {
         match stream {
@@ -62,7 +77,7 @@ struct HttpRequest {
 }
 
 fn handle_client(
-    server: Arc<InMemoryCloudSyncServer>,
+    server: Arc<DurableCloudSyncServer>,
     runtime: &tokio::runtime::Runtime,
     mut stream: TcpStream,
 ) {

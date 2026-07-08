@@ -2,16 +2,19 @@
 
 use std::{
     collections::{HashMap, HashSet},
+    fs,
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, UdpSocket},
+    path::PathBuf,
     sync::Arc,
     time::Duration,
 };
 
 use chrono::{DateTime, Utc};
 use ham_core::{
-    validate_supported_remote_event, CoreEventEnvelope, InMemoryLogbookEventStore,
-    LogbookEventStore, StoreError,
+    default_log_directory, validate_supported_remote_event, CoreEventEnvelope,
+    InMemoryLogbookEventStore, JsonlLogbookEventStore, LogbookEventStore, StoreError,
 };
+use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::sync::RwLock;
@@ -962,6 +965,287 @@ pub struct InMemoryCloudSyncServer {
     auth: Arc<RwLock<CloudAuthState>>,
 }
 
+#[derive(Debug, Clone)]
+pub struct DurableCloudSyncServer {
+    config: CloudServerConfig,
+    store: Arc<JsonlLogbookEventStore>,
+    metadata: Arc<SqliteCloudMetadataStore>,
+    reports_dir: PathBuf,
+}
+
+#[derive(Debug, Clone)]
+pub struct DurableCloudSyncPaths {
+    pub metadata_db_path: PathBuf,
+    pub official_event_log_path: PathBuf,
+    pub report_dir: PathBuf,
+}
+
+impl DurableCloudSyncPaths {
+    pub fn from_env() -> Self {
+        Self {
+            metadata_db_path: std::env::var("HAM_SYNC_METADATA_DB").map_or_else(
+                |_| {
+                    default_log_directory()
+                        .join("sync-server")
+                        .join("sync.sqlite3")
+                },
+                PathBuf::from,
+            ),
+            official_event_log_path: std::env::var("HAM_SYNC_EVENT_LOG").map_or_else(
+                |_| {
+                    default_log_directory()
+                        .join("sync-server")
+                        .join("official-events.jsonl")
+                },
+                PathBuf::from,
+            ),
+            report_dir: std::env::var("HAM_SYNC_REPORT_DIR").map_or_else(
+                |_| default_log_directory().join("sync-server").join("reports"),
+                PathBuf::from,
+            ),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct SqliteCloudMetadataStore {
+    path: PathBuf,
+}
+
+#[derive(Debug, Clone)]
+struct StoredReportRef {
+    metadata: DiagnosticReportMetadata,
+    bundle_path: PathBuf,
+}
+
+impl SqliteCloudMetadataStore {
+    fn open(path: impl Into<PathBuf>) -> Result<Self, CloudSyncError> {
+        let path = path.into();
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).map_err(cloud_store_error)?;
+        }
+        let store = Self { path };
+        store.initialize_schema()?;
+        Ok(store)
+    }
+
+    fn connection(&self) -> Result<Connection, CloudSyncError> {
+        Connection::open(&self.path).map_err(cloud_store_error)
+    }
+
+    fn initialize_schema(&self) -> Result<(), CloudSyncError> {
+        let connection = self.connection()?;
+        connection
+            .execute_batch(
+                r#"
+                CREATE TABLE IF NOT EXISTS schema_migrations (
+                    version INTEGER PRIMARY KEY,
+                    applied_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS sync_sessions (
+                    sync_token TEXT PRIMARY KEY NOT NULL,
+                    account_id TEXT NOT NULL,
+                    user_id TEXT NOT NULL,
+                    device_id TEXT NOT NULL,
+                    revoked INTEGER NOT NULL DEFAULT 0,
+                    payload TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS sync_devices (
+                    device_id TEXT PRIMARY KEY NOT NULL,
+                    account_id TEXT NOT NULL,
+                    user_id TEXT NOT NULL,
+                    device_name TEXT NOT NULL,
+                    revoked INTEGER NOT NULL DEFAULT 0,
+                    payload TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS sync_logbook_access (
+                    account_id TEXT NOT NULL,
+                    logbook_id TEXT NOT NULL,
+                    PRIMARY KEY (account_id, logbook_id)
+                );
+                CREATE TABLE IF NOT EXISTS pairing_tokens (
+                    pairing_code TEXT PRIMARY KEY NOT NULL,
+                    created_at TEXT NOT NULL,
+                    revoked INTEGER NOT NULL DEFAULT 0
+                );
+                CREATE TABLE IF NOT EXISTS sync_state (
+                    logbook_id TEXT PRIMARY KEY NOT NULL,
+                    head_hash TEXT,
+                    event_count INTEGER NOT NULL DEFAULT 0,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS diagnostic_reports (
+                    report_id TEXT PRIMARY KEY NOT NULL,
+                    account_id TEXT NOT NULL,
+                    user_id TEXT NOT NULL,
+                    device_id TEXT,
+                    bundle_path TEXT NOT NULL,
+                    payload TEXT NOT NULL
+                );
+                INSERT OR IGNORE INTO schema_migrations(version, applied_at)
+                VALUES (1, datetime('now'));
+                "#,
+            )
+            .map_err(cloud_store_error)?;
+        Ok(())
+    }
+
+    fn save_session(&self, session: &CloudSession) -> Result<(), CloudSyncError> {
+        let connection = self.connection()?;
+        connection
+            .execute(
+                "INSERT OR REPLACE INTO sync_sessions(sync_token, account_id, user_id, device_id, revoked, payload)
+                 VALUES (?1, ?2, ?3, ?4, 0, ?5)",
+                params![
+                    session.sync_token,
+                    session.account_id,
+                    session.user_id,
+                    session.device_id.to_string(),
+                    serde_json::to_string(session).map_err(cloud_store_error)?
+                ],
+            )
+            .map_err(cloud_store_error)?;
+        connection
+            .execute(
+                "INSERT OR REPLACE INTO sync_devices(device_id, account_id, user_id, device_name, revoked, payload)
+                 VALUES (?1, ?2, ?3, ?4, COALESCE((SELECT revoked FROM sync_devices WHERE device_id = ?1), 0), ?5)",
+                params![
+                    session.device_id.to_string(),
+                    session.account_id,
+                    session.user_id,
+                    session.device_name,
+                    serde_json::to_string(session).map_err(cloud_store_error)?
+                ],
+            )
+            .map_err(cloud_store_error)?;
+        for logbook_id in &session.authorized_logbooks {
+            connection
+                .execute(
+                    "INSERT OR IGNORE INTO sync_logbook_access(account_id, logbook_id) VALUES (?1, ?2)",
+                    params![session.account_id, logbook_id.to_string()],
+                )
+                .map_err(cloud_store_error)?;
+        }
+        Ok(())
+    }
+
+    fn session(&self, auth: &CloudAuth) -> Result<CloudSession, CloudSyncError> {
+        let connection = self.connection()?;
+        let mut statement = connection
+            .prepare(
+                "SELECT s.payload
+                 FROM sync_sessions s
+                 JOIN sync_devices d ON d.device_id = s.device_id
+                 WHERE s.sync_token = ?1 AND s.revoked = 0 AND d.revoked = 0",
+            )
+            .map_err(cloud_store_error)?;
+        let payload = statement
+            .query_row(params![auth.sync_token], |row| row.get::<_, String>(0))
+            .map_err(|error| match error {
+                rusqlite::Error::QueryReturnedNoRows => CloudSyncError::Unauthenticated,
+                other => cloud_store_error(other),
+            })?;
+        serde_json::from_str(&payload).map_err(cloud_store_error)
+    }
+
+    fn revoke_device(&self, device_id: Uuid) -> Result<(), CloudSyncError> {
+        let connection = self.connection()?;
+        connection
+            .execute(
+                "UPDATE sync_devices SET revoked = 1 WHERE device_id = ?1",
+                params![device_id.to_string()],
+            )
+            .map_err(cloud_store_error)?;
+        connection
+            .execute(
+                "UPDATE sync_sessions SET revoked = 1 WHERE device_id = ?1",
+                params![device_id.to_string()],
+            )
+            .map_err(cloud_store_error)?;
+        Ok(())
+    }
+
+    fn account_logbooks(&self, account_id: &str) -> Result<HashSet<Uuid>, CloudSyncError> {
+        let connection = self.connection()?;
+        let mut statement = connection
+            .prepare("SELECT logbook_id FROM sync_logbook_access WHERE account_id = ?1")
+            .map_err(cloud_store_error)?;
+        let rows = statement
+            .query_map(params![account_id], |row| row.get::<_, String>(0))
+            .map_err(cloud_store_error)?;
+        let mut logbooks = HashSet::new();
+        for row in rows {
+            let value = row.map_err(cloud_store_error)?;
+            let logbook_id = Uuid::parse_str(&value)
+                .map_err(|error| CloudSyncError::Store(error.to_string()))?;
+            logbooks.insert(logbook_id);
+        }
+        Ok(logbooks)
+    }
+
+    fn update_sync_state(
+        &self,
+        logbook_id: Uuid,
+        head_hash: Option<String>,
+        event_count: usize,
+    ) -> Result<(), CloudSyncError> {
+        let connection = self.connection()?;
+        connection
+            .execute(
+                "INSERT OR REPLACE INTO sync_state(logbook_id, head_hash, event_count, updated_at)
+                 VALUES (?1, ?2, ?3, ?4)",
+                params![
+                    logbook_id.to_string(),
+                    head_hash,
+                    event_count as i64,
+                    Utc::now().to_rfc3339()
+                ],
+            )
+            .map_err(cloud_store_error)?;
+        Ok(())
+    }
+
+    fn save_report(&self, report: &StoredReportRef) -> Result<(), CloudSyncError> {
+        let connection = self.connection()?;
+        connection
+            .execute(
+                "INSERT OR REPLACE INTO diagnostic_reports(report_id, account_id, user_id, device_id, bundle_path, payload)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![
+                    report.metadata.report_id,
+                    report.metadata.account_id,
+                    report.metadata.user_id,
+                    Option::<String>::None,
+                    report.bundle_path.display().to_string(),
+                    serde_json::to_string(&report.metadata).map_err(cloud_store_error)?
+                ],
+            )
+            .map_err(cloud_store_error)?;
+        Ok(())
+    }
+
+    fn report(&self, report_id: &str) -> Result<StoredReportRef, CloudSyncError> {
+        let connection = self.connection()?;
+        let mut statement = connection
+            .prepare("SELECT payload, bundle_path FROM diagnostic_reports WHERE report_id = ?1")
+            .map_err(cloud_store_error)?;
+        let (payload, bundle_path) = statement
+            .query_row(params![report_id], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(|error| match error {
+                rusqlite::Error::QueryReturnedNoRows => {
+                    CloudSyncError::Validation("report not found".to_owned())
+                }
+                other => cloud_store_error(other),
+            })?;
+        Ok(StoredReportRef {
+            metadata: serde_json::from_str(&payload).map_err(cloud_store_error)?,
+            bundle_path: PathBuf::from(bundle_path),
+        })
+    }
+}
+
 impl InMemoryCloudSyncServer {
     pub fn new(config: CloudServerConfig) -> Self {
         Self {
@@ -1313,6 +1597,359 @@ impl InMemoryCloudSyncServer {
     }
 }
 
+impl DurableCloudSyncServer {
+    pub fn open(
+        config: CloudServerConfig,
+        paths: DurableCloudSyncPaths,
+    ) -> Result<Self, CloudSyncError> {
+        if let Some(parent) = paths.official_event_log_path.parent() {
+            fs::create_dir_all(parent).map_err(cloud_store_error)?;
+        }
+        fs::create_dir_all(&paths.report_dir).map_err(cloud_store_error)?;
+        Ok(Self {
+            config,
+            store: Arc::new(
+                JsonlLogbookEventStore::open(paths.official_event_log_path)
+                    .map_err(cloud_store_error)?,
+            ),
+            metadata: Arc::new(SqliteCloudMetadataStore::open(paths.metadata_db_path)?),
+            reports_dir: paths.report_dir,
+        })
+    }
+
+    pub fn health(&self) -> CloudHealthResponse {
+        CloudHealthResponse {
+            ok: true,
+            service: "ke8ygw-sync-server".to_owned(),
+            version: env!("CARGO_PKG_VERSION").to_owned(),
+            mode: self.config.mode,
+        }
+    }
+
+    pub async fn pair_device(&self, request: PairDeviceRequest) -> PairDeviceResponse {
+        if request.pairing_code != self.config.pairing_code {
+            return PairDeviceResponse {
+                accepted: false,
+                reason: Some("invalid pairing code".to_owned()),
+                session: None,
+            };
+        }
+
+        let token = format!("sync-{}-{}", request.account_id, Uuid::new_v4());
+        let session = CloudSession {
+            account_id: request.account_id,
+            user_id: request.user_id,
+            device_id: request.device_id,
+            device_name: request.device_name,
+            sync_token: token,
+            authorized_logbooks: request.requested_logbooks,
+            issued_at: Utc::now(),
+        };
+        if let Err(error) = self.metadata.save_session(&session) {
+            return PairDeviceResponse {
+                accepted: false,
+                reason: Some(error.to_string()),
+                session: None,
+            };
+        }
+        PairDeviceResponse {
+            accepted: true,
+            reason: None,
+            session: Some(session),
+        }
+    }
+
+    pub async fn list_logbooks(
+        &self,
+        auth: &CloudAuth,
+    ) -> Result<ListLogbooksResponse, CloudSyncError> {
+        let session = self.authorize(auth).await?;
+        let mut logbooks = Vec::new();
+        for logbook_id in self.metadata.account_logbooks(&session.account_id)? {
+            logbooks.push(self.get_head(auth, logbook_id).await?);
+        }
+        logbooks.sort_by_key(|logbook| logbook.logbook_id);
+        Ok(ListLogbooksResponse { logbooks })
+    }
+
+    pub async fn get_head(
+        &self,
+        auth: &CloudAuth,
+        logbook_id: Uuid,
+    ) -> Result<LogbookHeadSummary, CloudSyncError> {
+        self.authorize_logbook(auth, logbook_id).await?;
+        let events = self
+            .store
+            .list_events(logbook_id)
+            .await
+            .map_err(cloud_store_error)?;
+        Ok(LogbookHeadSummary {
+            logbook_id,
+            head_hash: events.last().map(|event| event.event_hash.clone()),
+            event_count: Some(events.len() as u64),
+        })
+    }
+
+    pub async fn event_metadata(
+        &self,
+        auth: &CloudAuth,
+        logbook_id: Uuid,
+        after_hash: Option<String>,
+    ) -> Result<GetEventMetadataResponse, CloudSyncError> {
+        self.authorize_logbook(auth, logbook_id).await?;
+        let events = self
+            .store
+            .list_events_after(logbook_id, after_hash)
+            .await
+            .map_err(cloud_store_error)?;
+        Ok(GetEventMetadataResponse {
+            logbook_id,
+            events: events.iter().map(metadata_for_event).collect(),
+        })
+    }
+
+    pub async fn preview_pull(
+        &self,
+        request: CloudPreviewPullRequest,
+    ) -> Result<PreviewPullResponse, CloudSyncError> {
+        self.authorize_logbook(&request.auth, request.logbook_id)
+            .await?;
+        let events = self
+            .store
+            .list_events(request.logbook_id)
+            .await
+            .map_err(cloud_store_error)?;
+        Ok(preview_pull_from_events(
+            PreviewPullRequest {
+                peer_id: "cloud".to_owned(),
+                logbook_id: request.logbook_id,
+                local_head_hash: request.local_head_hash,
+            },
+            &events,
+        ))
+    }
+
+    pub async fn pull_events(
+        &self,
+        request: CloudPullEventsRequest,
+    ) -> Result<CloudPullEventsResponse, CloudSyncError> {
+        self.authorize_logbook(&request.auth, request.logbook_id)
+            .await?;
+        let events = self
+            .store
+            .list_events(request.logbook_id)
+            .await
+            .map_err(cloud_store_error)?;
+        let preview = preview_pull_from_events(
+            PreviewPullRequest {
+                peer_id: "cloud".to_owned(),
+                logbook_id: request.logbook_id,
+                local_head_hash: request.local_head_hash,
+            },
+            &events,
+        );
+        let event_hashes = preview
+            .events
+            .iter()
+            .map(|event| event.event_hash.as_str())
+            .collect::<HashSet<_>>();
+        let events = events
+            .into_iter()
+            .filter(|event| event_hashes.contains(event.event_hash.as_str()))
+            .collect();
+        Ok(CloudPullEventsResponse { preview, events })
+    }
+
+    pub async fn push_events(
+        &self,
+        request: CloudPushEventsRequest,
+    ) -> Result<CloudPushEventsResponse, CloudSyncError> {
+        self.authorize_logbook(&request.auth, request.logbook_id)
+            .await?;
+        if request
+            .events
+            .iter()
+            .any(|event| event.logbook_id != request.logbook_id)
+        {
+            return Err(CloudSyncError::UnauthorizedLogbook(request.logbook_id));
+        }
+
+        let mut accepted_count = 0usize;
+        let mut ignored_duplicate_count = 0usize;
+        let mut errors = Vec::new();
+        for event in request.events {
+            if let Err(error) = validate_supported_remote_event(&event) {
+                errors.push(error.to_string());
+                break;
+            }
+            match self.store.get_event(event.event_id).await {
+                Ok(Some(existing)) if existing == event => {
+                    ignored_duplicate_count += 1;
+                    continue;
+                }
+                Ok(Some(_)) => {
+                    errors.push(format!(
+                        "event id {} already exists with different content",
+                        event.event_id
+                    ));
+                    break;
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    errors.push(error.to_string());
+                    break;
+                }
+            }
+            match self.store.append_verified_remote_event(event).await {
+                Ok(_) => accepted_count += 1,
+                Err(error) => {
+                    errors.push(error.to_string());
+                    break;
+                }
+            }
+        }
+
+        let server_head_hash = self
+            .store
+            .get_head(request.logbook_id)
+            .await
+            .map_err(cloud_store_error)?;
+        let event_count = self
+            .store
+            .list_events(request.logbook_id)
+            .await
+            .map_err(cloud_store_error)?
+            .len();
+        self.metadata.update_sync_state(
+            request.logbook_id,
+            server_head_hash.clone(),
+            event_count,
+        )?;
+        let status = if errors.is_empty() {
+            ReplicationStatus::Pulled
+        } else if errors
+            .iter()
+            .any(|error| error.contains("does not connect") || error.contains("previous hash"))
+        {
+            ReplicationStatus::Diverged
+        } else {
+            ReplicationStatus::Rejected
+        };
+        Ok(CloudPushEventsResponse {
+            status,
+            accepted_count,
+            ignored_duplicate_count,
+            rejected_count: errors.len(),
+            server_head_hash,
+            errors,
+        })
+    }
+
+    pub async fn upload_report(
+        &self,
+        request: DiagnosticReportUploadRequest,
+    ) -> Result<DiagnosticReportUploadResponse, CloudSyncError> {
+        let session = self.authorize(&request.auth).await?;
+        if request.bundle_hash.trim().is_empty() || request.bundle_bytes.is_empty() {
+            return Err(CloudSyncError::Validation(
+                "diagnostic report bundle is empty".to_owned(),
+            ));
+        }
+        fs::create_dir_all(&self.reports_dir).map_err(cloud_store_error)?;
+        let report_id = format!("rpt-{}", Uuid::new_v4());
+        let received_at = Utc::now();
+        let bundle_path = self.reports_dir.join(format!("{report_id}.bin"));
+        fs::write(&bundle_path, &request.bundle_bytes).map_err(cloud_store_error)?;
+        let metadata = DiagnosticReportMetadata {
+            report_id: report_id.clone(),
+            user_id: session.user_id,
+            account_id: session.account_id,
+            app_version: request.app_version,
+            core_version: request.core_version,
+            platform: request.platform,
+            created_at: received_at,
+            report_type: request.report_type,
+            plugin_list: request.plugin_list,
+            sync_state_summary: request.sync_state_summary,
+            short_description: request.short_description,
+            bundle_hash: request.bundle_hash.clone(),
+            status: DiagnosticReportStatus::Submitted,
+        };
+        self.metadata.save_report(&StoredReportRef {
+            metadata,
+            bundle_path,
+        })?;
+        Ok(DiagnosticReportUploadResponse {
+            report_id,
+            status: DiagnosticReportStatus::Submitted,
+            received_at,
+            bundle_hash: request.bundle_hash,
+        })
+    }
+
+    pub async fn report_metadata(
+        &self,
+        auth: &CloudAuth,
+        report_id: &str,
+    ) -> Result<DiagnosticReportMetadata, CloudSyncError> {
+        let session = self.authorize(auth).await?;
+        let report = self.metadata.report(report_id)?;
+        if report.metadata.account_id != session.account_id {
+            return Err(CloudSyncError::Unauthenticated);
+        }
+        Ok(report.metadata)
+    }
+
+    pub fn report_bundle_bytes(&self, report_id: &str) -> Result<Vec<u8>, CloudSyncError> {
+        let report = self.metadata.report(report_id)?;
+        fs::read(report.bundle_path).map_err(cloud_store_error)
+    }
+
+    pub fn revoke_device(&self, device_id: Uuid) -> Result<(), CloudSyncError> {
+        self.metadata.revoke_device(device_id)
+    }
+
+    pub async fn status(
+        &self,
+        auth: Option<&CloudAuth>,
+    ) -> Result<CloudSyncStatusResponse, CloudSyncError> {
+        let Some(auth) = auth else {
+            return Ok(CloudSyncStatusResponse {
+                connection_state: CloudConnectionState::Disconnected,
+                account_id: None,
+                device_id: None,
+                server_url: self.config.public_url.clone(),
+                accessible_logbooks: Vec::new(),
+            });
+        };
+        let session = self.authorize(auth).await?;
+        let logbooks = self.list_logbooks(auth).await?.logbooks;
+        Ok(CloudSyncStatusResponse {
+            connection_state: CloudConnectionState::Connected,
+            account_id: Some(session.account_id),
+            device_id: Some(session.device_id),
+            server_url: self.config.public_url.clone(),
+            accessible_logbooks: logbooks,
+        })
+    }
+
+    async fn authorize(&self, auth: &CloudAuth) -> Result<CloudSession, CloudSyncError> {
+        self.metadata.session(auth)
+    }
+
+    async fn authorize_logbook(
+        &self,
+        auth: &CloudAuth,
+        logbook_id: Uuid,
+    ) -> Result<CloudSession, CloudSyncError> {
+        let session = self.authorize(auth).await?;
+        if !session.authorized_logbooks.contains(&logbook_id) {
+            return Err(CloudSyncError::UnauthorizedLogbook(logbook_id));
+        }
+        Ok(session)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct CloudSyncClient {
     server: InMemoryCloudSyncServer,
@@ -1401,7 +2038,7 @@ impl CloudSyncClient {
     }
 }
 
-fn cloud_store_error(error: StoreError) -> CloudSyncError {
+fn cloud_store_error(error: impl std::fmt::Display) -> CloudSyncError {
     CloudSyncError::Store(error.to_string())
 }
 
@@ -1512,6 +2149,31 @@ mod tests {
             .await
             .unwrap();
         client
+    }
+
+    fn durable_paths(label: &str) -> DurableCloudSyncPaths {
+        let root = std::env::temp_dir().join(format!("ke8ygw-ham-sync-{label}-{}", Uuid::new_v4()));
+        DurableCloudSyncPaths {
+            metadata_db_path: root.join("sync.sqlite3"),
+            official_event_log_path: root.join("official-events.jsonl"),
+            report_dir: root.join("reports"),
+        }
+    }
+
+    fn durable_server(paths: &DurableCloudSyncPaths) -> DurableCloudSyncServer {
+        DurableCloudSyncServer::open(CloudServerConfig::default(), paths.clone()).unwrap()
+    }
+
+    fn pair_request(logbook_id: Uuid, device_id: Uuid) -> PairDeviceRequest {
+        PairDeviceRequest {
+            pairing_code: "local-dev-pairing-code".to_owned(),
+            account_id: "acct-1".to_owned(),
+            user_id: "user-1".to_owned(),
+            device_id,
+            device_name: "Test Device".to_owned(),
+            requested_logbooks: vec![logbook_id],
+            role_hints: vec!["admin".to_owned()],
+        }
     }
 
     fn sample_report_request(token: &str) -> DiagnosticReportUploadRequest {
@@ -2067,5 +2729,148 @@ mod tests {
         let push = client.push_events(logbook_id, divergent).await.unwrap();
 
         assert_eq!(push.status, ReplicationStatus::Diverged);
+    }
+
+    #[tokio::test]
+    async fn durable_sync_state_survives_restart() {
+        let paths = durable_paths("state-survives-restart");
+        let logbook_id = Uuid::new_v4();
+        let server = durable_server(&paths);
+        let session = server
+            .pair_device(pair_request(logbook_id, Uuid::new_v4()))
+            .await
+            .session
+            .unwrap();
+        let auth = CloudAuth {
+            sync_token: session.sync_token.clone(),
+        };
+        let events = remote_chain(logbook_id, 2);
+
+        let push = server
+            .push_events(CloudPushEventsRequest {
+                auth: auth.clone(),
+                logbook_id,
+                events: events.clone(),
+            })
+            .await
+            .unwrap();
+        assert_eq!(push.accepted_count, 2);
+
+        let restarted = durable_server(&paths);
+        let preview = restarted
+            .preview_pull(CloudPreviewPullRequest {
+                auth: auth.clone(),
+                logbook_id,
+                local_head_hash: None,
+            })
+            .await
+            .unwrap();
+        assert_eq!(preview.status, ReplicationStatus::RemoteAhead);
+        assert_eq!(preview.missing_event_count, 2);
+
+        let duplicate = restarted
+            .push_events(CloudPushEventsRequest {
+                auth,
+                logbook_id,
+                events,
+            })
+            .await
+            .unwrap();
+        assert_eq!(duplicate.accepted_count, 0);
+        assert_eq!(duplicate.ignored_duplicate_count, 2);
+    }
+
+    #[tokio::test]
+    async fn durable_sync_rejects_revoked_device_after_restart() {
+        let paths = durable_paths("revoked-device");
+        let logbook_id = Uuid::new_v4();
+        let device_id = Uuid::new_v4();
+        let server = durable_server(&paths);
+        let session = server
+            .pair_device(pair_request(logbook_id, device_id))
+            .await
+            .session
+            .unwrap();
+        let auth = CloudAuth {
+            sync_token: session.sync_token,
+        };
+
+        server.revoke_device(device_id).unwrap();
+        let restarted = durable_server(&paths);
+        let error = restarted.status(Some(&auth)).await.unwrap_err();
+
+        assert_eq!(error, CloudSyncError::Unauthenticated);
+    }
+
+    #[tokio::test]
+    async fn durable_sync_rejects_invalid_chain_after_restart() {
+        let paths = durable_paths("invalid-chain");
+        let logbook_id = Uuid::new_v4();
+        let server = durable_server(&paths);
+        let session = server
+            .pair_device(pair_request(logbook_id, Uuid::new_v4()))
+            .await
+            .session
+            .unwrap();
+        let auth = CloudAuth {
+            sync_token: session.sync_token.clone(),
+        };
+        let first = remote_chain(logbook_id, 1);
+        server
+            .push_events(CloudPushEventsRequest {
+                auth: auth.clone(),
+                logbook_id,
+                events: first,
+            })
+            .await
+            .unwrap();
+
+        let restarted = durable_server(&paths);
+        let mut broken = new_event(logbook_id, Some("not-the-server-head".to_owned()));
+        broken.event_hash = broken.calculate_hash();
+        let push = restarted
+            .push_events(CloudPushEventsRequest {
+                auth,
+                logbook_id,
+                events: vec![broken],
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(push.status, ReplicationStatus::Diverged);
+        assert_eq!(push.accepted_count, 0);
+    }
+
+    #[tokio::test]
+    async fn durable_report_metadata_and_payload_survive_restart() {
+        let paths = durable_paths("reports");
+        let logbook_id = Uuid::new_v4();
+        let server = durable_server(&paths);
+        let session = server
+            .pair_device(pair_request(logbook_id, Uuid::new_v4()))
+            .await
+            .session
+            .unwrap();
+        let auth = CloudAuth {
+            sync_token: session.sync_token.clone(),
+        };
+        let mut request = sample_report_request(&auth.sync_token);
+        request.bundle_bytes = b"redacted diagnostic payload".to_vec();
+        request.bundle_hash = "redacted-hash".to_owned();
+
+        let upload = server.upload_report(request).await.unwrap();
+        let restarted = durable_server(&paths);
+        let metadata = restarted
+            .report_metadata(&auth, upload.report_id.as_str())
+            .await
+            .unwrap();
+        let payload = restarted
+            .report_bundle_bytes(upload.report_id.as_str())
+            .unwrap();
+
+        assert_eq!(metadata.status, DiagnosticReportStatus::Submitted);
+        assert_eq!(metadata.bundle_hash, "redacted-hash");
+        assert_eq!(payload, b"redacted diagnostic payload");
+        assert!(!String::from_utf8_lossy(&payload).contains("super-secret"));
     }
 }

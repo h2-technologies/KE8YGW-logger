@@ -20,7 +20,8 @@ iOS client in v1.1.
 - [x] Proposal-backed QSO create/edit/delete/restore/note API routes.
 - [x] Route tests for auth, logbook scoping, roles, logout, revoked devices, and
   QSO lifecycle.
-- [ ] Durable hosted server sync/report/account storage.
+- [x] Durable hosted server account/session/device/logbook metadata storage.
+- [x] Durable self-hosted sync/report metadata and payload storage.
 - [ ] Production OS credential backend wiring.
 - [ ] Live Tier 1 provider adapters.
 - [ ] Upload queue execution against live/fake providers.
@@ -45,6 +46,9 @@ iOS client in v1.1.
 - Operator role can log QSOs.
 - Logout invalidates sessions.
 - Revoked device sessions cannot sync.
+- Hosted account/session/device/logbook metadata survives server restart.
+- Sync events, heads, device revocation, and diagnostic reports survive sync
+  server restart.
 - Existing app architecture remains intact.
 - Workspace compiles and tests pass.
 - Remaining gaps are documented in `PROJECT_STATE.md`.
@@ -66,9 +70,9 @@ iOS client in v1.1.
 
 ## Known Risks
 
-- `ham-server` account/session/device storage is currently in-memory beta
-  scaffolding.
-- `ham-sync-server` still uses in-memory sync/report storage.
+- SQLite schema evolution is intentionally minimal and needs production
+  migration policy hardening before v1.0.
+- Session expiry/refresh policy is still beta-level.
 - Native credential backends are still placeholders.
 - Live provider adapters are still mostly metadata/stub-backed.
 - GUI browser tests are not yet present.
@@ -78,7 +82,6 @@ iOS client in v1.1.
 
 ## v1.0 Delta After v0.2
 
-- Replace in-memory hosted server state with durable storage.
 - Finish production credential backends.
 - Complete provider adapters and provider error handling.
 - Finish desktop packaging/signing/notarization decisions.

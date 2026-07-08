@@ -5,7 +5,7 @@ use std::{
     process,
 };
 
-use ham_server::{parse_query, split_target, ApiRequest, HostedServer};
+use ham_server::{default_metadata_db_path, parse_query, split_target, ApiRequest, HostedServer};
 
 fn main() {
     let addr = env::var("HAM_SERVER_BIND").unwrap_or_else(|_| "127.0.0.1:9750".to_owned());
@@ -17,10 +17,22 @@ fn main() {
         }
     };
     let runtime = tokio::runtime::Runtime::new().expect("ham-server runtime should start");
-    let server = HostedServer::new();
+    let metadata_db = env::var("HAM_SERVER_METADATA_DB")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| default_metadata_db_path());
+    let server = match HostedServer::with_sqlite_metadata(&metadata_db) {
+        Ok(server) => server,
+        Err(error) => {
+            eprintln!(
+                "failed to open ham-server metadata database at {}: {error}",
+                metadata_db.display()
+            );
+            process::exit(1);
+        }
+    };
 
     println!("ham-server listening on http://{addr}");
-    println!("mode: hosted beta in-memory account/session scaffolding");
+    println!("metadata database: {}", metadata_db.display());
 
     for stream in listener.incoming() {
         match stream {
