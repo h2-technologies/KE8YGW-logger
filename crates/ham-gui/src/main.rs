@@ -10,24 +10,24 @@ use std::{
 };
 
 use ham_core::{
-    build_diagnostic_bundle, confirmations_from_adif, default_official_event_log_path,
-    default_service_registry, dx_cluster_spot_to_spot, export_adif, export_adif_with_activations,
-    export_diagnostic_zip, export_net_report_markdown, grayline_snapshot, import_adif,
-    lookup_callsign_with_service_framework, maidenhead_to_coordinate, missing_credential_status,
-    mock_propagation_forecast, mock_weather, online_services_dashboard, parse_dx_cluster_line,
-    pota_spot_to_spot, publish_rig_runtime_event, qso_map_objects, station_markers_from_profiles,
-    submit_proposal, suggestion_from_rig_state, AdifImportOptions, Coordinate, CoreEventEnvelope,
-    CredentialMetadata, CredentialStore, DiagnosticBundleInput, DiagnosticReportType,
-    EquipmentItem, EquipmentType, InsecureDevCredentialStore, JsonPermissionGrantStore,
-    JsonStationBookStore, JsonSupportStore, JsonlLogbookEventStore, LocalPrefixProvider,
-    LogbookEventStore, LookupCache, LookupCacheConfig, LookupProviderStatus, MapLayerStack,
-    MockRigProvider, NetControlProjection, NewLogbookEvent, NotificationSeverity,
+    build_diagnostic_bundle, confirmations_from_adif, default_credential_store,
+    default_official_event_log_path, default_service_registry, dx_cluster_spot_to_spot,
+    export_adif, export_adif_with_activations, export_diagnostic_zip, export_net_report_markdown,
+    grayline_snapshot, import_adif, lookup_callsign_with_service_framework,
+    maidenhead_to_coordinate, missing_credential_status, mock_propagation_forecast, mock_weather,
+    online_services_dashboard, parse_dx_cluster_line, pota_spot_to_spot, publish_rig_runtime_event,
+    qso_map_objects, station_markers_from_profiles, submit_proposal, suggestion_from_rig_state,
+    AdifImportOptions, Coordinate, CoreEventEnvelope, CredentialMetadata, CredentialStore,
+    DiagnosticBundleInput, DiagnosticReportType, EquipmentItem, EquipmentType,
+    JsonPermissionGrantStore, JsonStationBookStore, JsonSupportStore, JsonlLogbookEventStore,
+    LocalPrefixProvider, LogbookEventStore, LookupCache, LookupCacheConfig, LookupProviderStatus,
+    MapLayerStack, MockRigProvider, NetControlProjection, NewLogbookEvent, NotificationSeverity,
     OnlineAutomationTask, OnlineNotification, OnlineProviderStatus, OperatorRole,
     PermissionGrantSet, PermissionGrantStatus, PermissionRegistry, PermissionSettings,
     PotaSpotRecord, Projection, ProposalContext, RigConnectionStatus, RigDevice, RigProvider,
     RigProviderStatus, RigState, RuntimeEventFilter, RuntimeEventSeverity, RuntimeLogConfig,
     ServiceCache, ServiceCacheEntry, ServiceRegistry, ServiceRegistrySnapshot, StationBook,
-    StationConfiguration, StationProfile, UnsupportedOsCredentialStore, UploadQueue, UploadTarget,
+    StationConfiguration, StationProfile, UploadQueue, UploadTarget,
 };
 use ham_gui::{
     mock::{capability_labels, mock_plugins},
@@ -114,19 +114,12 @@ fn main() {
         seed_default_station_book(&mut station_book);
         let _ = station_store.save(&station_book);
     }
+    let allow_insecure_dev_credentials = env::var("HAM_PLATFORM_ALLOW_INSECURE_DEV_CREDENTIALS")
+        .ok()
+        .as_deref()
+        == Some("1");
     let credential_store: Box<dyn CredentialStore> =
-        if env::var("HAM_PLATFORM_ALLOW_INSECURE_DEV_CREDENTIALS")
-            .ok()
-            .as_deref()
-            == Some("1")
-        {
-            match InsecureDevCredentialStore::open(support_dir.join("dev-credentials.json"), true) {
-                Ok(store) => Box::new(store),
-                Err(_) => Box::new(UnsupportedOsCredentialStore),
-            }
-        } else {
-            Box::new(UnsupportedOsCredentialStore)
-        };
+        default_credential_store(&support_dir, allow_insecure_dev_credentials);
     let permission_registry = PermissionRegistry::mvp_default();
     let permission_settings = PermissionSettings::default();
     let mut permission_grants = permission_store.load().unwrap_or_default();

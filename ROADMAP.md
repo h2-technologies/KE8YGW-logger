@@ -43,14 +43,14 @@ v1.1 is the first native iOS target: SwiftUI, App Store-ready Xcode project, nat
 
 Live Provider Adapters, Credentials, and Desktop Runtime:
 
-- Wire real Tauri runtime commands and package validation.
-- Implement production OS credential backends.
+- Add the actual Tauri runtime wrapper crate and validate package builds.
+- Validate production OS credential backends on release runners.
 - Implement live Tier 1 provider adapters.
 - Browser-level GUI tests.
 
 Then continue Live Provider Adapters and Production Credential Backends:
 
-- Native OS keychain/secret-store backend implementation.
+- Native OS keychain/secret-store release hardening.
 - Real QRZ XML and HamQTH lookup clients.
 - Real LoTW/eQSL/Club Log/QRZ/HRDLog upload clients.
 - Real LoTW/eQSL/Club Log/QRZ confirmation download clients.
@@ -61,7 +61,7 @@ Then continue Live Provider Adapters and Production Credential Backends:
 
 ## Future Milestones
 
-- v0.2 almost-v1 beta completion: live provider/credential hardening, real Tauri packaging commands, LAN trust pairing, station/equipment GUI polish, interactive map polish, browser tests, and CI release hardening.
+- v0.2 almost-v1 beta completion: live provider adapter work, real Tauri packaging wrapper, LAN trust pairing, station/equipment GUI polish, interactive map polish, browser tests, and CI release hardening.
 - v1.0 web + desktop production release: hosted web, installable desktop, stabilized API/storage/sync/providers, production credentials, docs cleanup, and beta bug fixes.
 - v1.1 native iOS release: SwiftUI app, native offline queue, Keychain, native ADIF document flows, native Maps, iPhone/iPad layouts, and TestFlight/App Store readiness.
 - LoTW upload/download and confirmation pull.
@@ -69,7 +69,7 @@ Then continue Live Provider Adapters and Production Credential Backends:
 - Club Log upload.
 - QRZ Logbook upload.
 - QRZ/HamQTH real callsign lookup.
-- OS keychain/secret-store production backend wiring.
+- OS keychain/secret-store release-runner validation.
 
 - Full Tauri runtime packaging and installer/signing polish.
 - Award rule databases and needed-list intelligence.

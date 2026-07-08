@@ -54,15 +54,15 @@ client. v1.1 is the native SwiftUI iOS release. See `V1_RELEASE_PLAN.md`,
 
 11. **Unified Service Framework**
     - Shared provider registry, provider metadata, provider selection/fallback, service cache, service permissions, lookup refactor, upload/spotting/map/weather/propagation provider skeletons, GUI Service Providers screen, docs/tests.
-    - Status: implemented as the next architecture layer. Live external providers and secure credential storage remain planned.
+    - Status: implemented as the next architecture layer. Live external providers remain planned; credential storage now has OS backend wiring and still needs release-runner validation.
 
 12. **Daily Driver Logging**
     - Station/equipment profiles, award engine foundation, advanced search/filtering, upload queue foundation, keyboard-first logging improvements.
     - Status: implemented at foundation level. Real online providers, durable upload queue settings, and full award databases remain planned.
 
 13. **Secure Credentials + Net Control MVP**
-    - Credential store abstraction, OS keychain placeholder, explicit dev fallback, credential manager UI, net roster/check-ins/traffic queue, tactical callsigns, and reports.
-    - Status: implemented at foundation level. ICS exports and EmComm workspace remain planned.
+    - Credential store abstraction, OS keychain/secret-store backend wiring, explicit dev fallback, credential manager UI, net roster/check-ins/traffic queue, tactical callsigns, and reports.
+    - Status: implemented at foundation level. Clean-platform credential validation, ICS exports, and EmComm workspace remain planned.
 
 14. **Contesting MVP**
     - Contest framework, exchange templates, dupes, scoring, multiplier projections, Cabrillo export, keyboard-first contest workspace, Field Day template.
@@ -74,15 +74,15 @@ client. v1.1 is the native SwiftUI iOS release. See `V1_RELEASE_PLAN.md`,
 
 16. **Online Services Ecosystem**
     - LoTW/eQSL/Club Log/QRZ/HRDLog provider metadata, QRZ/HamQTH/FCC lookup metadata, DX Cluster/RBN/POTA/SOTA spot models, NOAA/Open-Meteo/OSM provider metadata, upload/download engine models, confirmation import events, automation, notifications, and Online Services workspace.
-    - Status: implemented at foundation level. Live network adapters, durable scheduler execution, and production keychain backends remain planned.
+    - Status: implemented at foundation level. Live network adapters and durable scheduler execution remain planned.
 
 ## Dependency Order
 
 The next high-impact work should minimize future rewrites:
 
 1. Extract shared plugin/UI manifests only when static plugin definitions become a blocker.
-2. Wire the real Tauri runtime commands, package validation, browser tests, and
+2. Add the actual Tauri runtime wrapper, package validation, browser tests, and
    CI release checks before public tester use.
 3. Add real peer-to-peer LAN transport and trust pairing before unattended sync.
 4. Add role/account/session models before broad multi-operator workflows.
-5. Build live network adapters on top of the Online Services foundation: QRZ XML API, HamQTH, LoTW, eQSL, Club Log, QRZ Logbook, DX Cluster, POTA spots, SOTAWatch, real propagation/weather providers, automatic upload processing, and OS keychain/secret-store credentials.
+5. Build live network adapters on top of the Online Services foundation: QRZ XML API, HamQTH, LoTW, eQSL, Club Log, QRZ Logbook, DX Cluster, POTA spots, SOTAWatch, real propagation/weather providers, and automatic upload processing.

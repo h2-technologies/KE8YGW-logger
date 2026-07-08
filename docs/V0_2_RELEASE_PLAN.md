@@ -36,7 +36,11 @@ iOS client in v1.1.
 - [x] User-facing backup/restore and divergence review GUI surfaces.
 - [x] Desktop packaging foundation with `ham-desktop` and `src-tauri` config.
 - [x] Native desktop file dialog bridge contract for import/export flows.
-- [ ] Production OS credential backend wiring.
+- [x] Desktop/native dialog command helper implementation.
+- [x] Production OS credential backend wiring for Windows Credential Manager,
+  macOS Keychain, and Linux Secret Service/libsecret tooling.
+- [x] Provider credential validation response hooks and upload missing-credential
+  safety checks.
 - [ ] Live Tier 1 provider adapters.
 - [ ] Upload queue execution against live providers.
 - [ ] Confirmation download/reconciliation UI.
@@ -80,6 +84,12 @@ iOS client in v1.1.
   divergence detail, and divergence report export surfaces.
 - Desktop packaging foundation exists and release mode is documented as
   no-dev-server.
+- Desktop native dialog command helpers cover ADIF, backup, diagnostics,
+  divergence reports, and app data directory selection, with browser fallback
+  intact.
+- Credential storage uses OS backends when available, keeps plaintext fallback
+  explicit/dev-only, and redaction tests cover provider settings, backups,
+  diagnostics, upload history, divergence/report surfaces, and API responses.
 - Sync events, heads, device revocation, and diagnostic reports survive sync
   server restart.
 - Existing app architecture remains intact.
@@ -106,23 +116,25 @@ iOS client in v1.1.
 - SurrealDB schema evolution is intentionally minimal and needs production
   migration policy hardening before v1.0.
 - Session expiry/refresh policy is still beta-level.
-- Native credential backends are still placeholders.
+- OS credential backends are implemented through platform APIs/tools, but
+  environment-specific validation is still needed on clean Windows, macOS, and
+  Linux packaging runners.
 - Live provider adapters are still mostly metadata/stub-backed; hosted provider
   tests and uploads use fake/stub behavior for deterministic CI.
 - Backup import is intentionally conservative: it supports same-logbook clean
   append/idempotent replay and blocks divergent targets rather than merging.
 - GUI browser tests are not yet present.
-- Full Tauri runtime packaging is not wired into CI yet; the foundation config
-  and desktop crate are present.
+- Full Tauri runtime packaging is not wired into CI yet; the foundation config,
+  desktop crate, and command helpers are present.
 - Permission scopes are enforced in the implemented hosted slices but not yet
   consistently across every older GUI/local route.
 
 ## v1.0 Delta After v0.2
 
-- Finish production credential backends.
+- Validate production credential backends on release runners.
 - Complete live provider adapters and provider error handling.
 - Harden backup import UX and add browser-level coverage.
-- Finish real Tauri runtime command implementation and packaging/signing/
+- Add the actual Tauri runtime wrapper, then finish packaging/signing/
   notarization decisions.
 - Add browser-level GUI tests and release artifact checks.
 - Tighten documentation and operator-facing setup guides.

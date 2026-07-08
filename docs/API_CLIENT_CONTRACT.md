@@ -102,6 +102,12 @@ logging; Viewer remains read-only.
 Provider settings must contain credential IDs/references only. API clients must
 not send raw password, token, API key, or secret fields in provider config; the
 server rejects secret-looking keys and never returns credential secret values.
+Provider test responses expose credential-reference status fields such as
+`credential_reference_present`, `credential_reference_status`, and
+`credential_reference_resolves`, but never include resolved secret material.
+Desktop/local clients resolve credential IDs through `CredentialStore`; hosted
+server provider settings remain reference-only unless a future explicit server
+secret vault is designed.
 
 ## Error Shape
 
@@ -390,7 +396,9 @@ define and test endpoints or equivalent proposal APIs for:
   provider history endpoints.
 - Backup restore/import UX hardening after the conservative v0.2 same-logbook
   import foundation.
-- Provider-specific credential setup flows and health checks.
+- Provider-specific credential setup flows, health checks, and server-side
+  secret-vault design if hosted deployments need to resolve provider
+  credentials directly.
 - Native-client divergence report presentation.
 
 Those endpoints must use the same semantics as the Rust proposal pipeline and

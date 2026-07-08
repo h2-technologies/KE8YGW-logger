@@ -110,10 +110,12 @@ The previous scaffolded workflow routes now have beta implementations. Future
 routes should be added explicitly rather than treated as hidden mutable state.
 
 Provider settings store credential IDs/references only. The provider test route
-is deterministic in CI through fake/mock mode and reports missing credential
-references without returning secret values. Upload queue execution currently
-generates ADIF from official projections and stores queue/history metadata in
-SurrealDB, but it does not yet call live external provider APIs.
+is deterministic in CI through fake/mock mode and reports credential reference
+presence/status/resolution without returning secret values. Upload queue
+execution currently generates ADIF from official projections and stores
+queue/history metadata in SurrealDB, but it does not yet call live external
+provider APIs. Hosted deployments must keep raw provider secrets outside
+SurrealDB unless a future explicit server-side secret vault is added.
 
 Activation and Net Control writes go through core proposal validation and append
 official events. Current core role policy requires Admin/Owner for those

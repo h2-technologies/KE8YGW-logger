@@ -568,6 +568,15 @@ mod tests {
             .files
             .iter()
             .any(|file| file.name == "sync-status.json"));
+        let payload = String::from_utf8(
+            bundle
+                .files
+                .iter()
+                .flat_map(|file| file.bytes.clone())
+                .collect::<Vec<_>>(),
+        )
+        .unwrap();
+        assert!(!payload.contains("TEST_SECRET_SHOULD_NOT_APPEAR"));
         fs::remove_dir_all(dir).unwrap();
     }
 
@@ -614,7 +623,9 @@ mod tests {
             session_id: Uuid::new_v4(),
             account_id: Some("account".to_owned()),
             plugins: json!([{"plugin_id": "core.gui", "enabled": true}]),
-            sync_status: Some(json!({"state": "ok", "sync_token": "secret"})),
+            sync_status: Some(
+                json!({"state": "ok", "sync_token": "TEST_SECRET_SHOULD_NOT_APPEAR"}),
+            ),
             user_notes: "notes".to_owned(),
         }
     }

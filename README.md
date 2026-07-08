@@ -100,12 +100,14 @@ routes, map summaries/settings, backup export/dry-run/import, divergence review,
 and sync preview/push/pull.
 
 This is not yet a production hosted release. Server account/session/device
-metadata is now durable SurrealDB beta storage and sync/report storage is durable,
-but production credential backends are pending, live provider adapters remain
-provider-framework work, upload execution is still fake/stub-provider based, and
-the full Tauri runtime/package build remains v0.2 work. A `ham-desktop` crate,
-`src-tauri` packaging config, backup/restore GUI, divergence review GUI, and
-desktop-native dialog bridge contract are now present.
+metadata is now durable SurrealDB beta storage and sync/report storage is
+durable. Production OS credential backend wiring now exists for Windows
+Credential Manager, macOS Keychain, and Linux Secret Service/libsecret tooling,
+but release-runner validation is still pending. Live provider adapters remain
+provider-framework work, upload execution is still fake/stub-provider based,
+and the full Tauri runtime/package build remains v0.2 work. A `ham-desktop`
+crate, `src-tauri` packaging config, backup/restore GUI, divergence review GUI,
+and desktop-native dialog command helpers are now present.
 
 ## Architecture
 
@@ -164,9 +166,10 @@ Credential metadata is support/security state; secret values are isolated behind
 the credential backend and are never written to official events, runtime logs,
 diagnostic reports, or provider config.
 
-The MVP includes an OS keychain placeholder for Windows Credential Manager,
-macOS Keychain, and Linux Secret Service, plus an explicit opt-in insecure
-development fallback. The fallback is only enabled when:
+The v0.2 credential layer includes OS backend wiring for Windows Credential
+Manager, macOS Keychain through `security`, and Linux Secret Service through
+`secret-tool`, plus an explicit opt-in insecure development fallback. The
+fallback is only enabled when:
 
 ```powershell
 $env:HAM_PLATFORM_ALLOW_INSECURE_DEV_CREDENTIALS = "1"
@@ -990,8 +993,9 @@ using static HTML, CSS, and JavaScript.
 
 This is a web-first foundation that is Tauri-ready: the current `ham-gui` binary
 serves the same assets the `src-tauri` desktop shell is configured to embed.
-The `ham-desktop` crate records the desktop runtime and native dialog contract.
-The full Tauri Rust runtime and installer build are still deferred so CI stays
+The `ham-desktop` crate records the desktop runtime and native dialog command
+helpers, including cancellation handling and path redaction. The full Tauri
+Rust runtime wrapper and installer build are still deferred so CI stays
 lightweight while the project finishes beta functionality.
 
 The default shell includes:

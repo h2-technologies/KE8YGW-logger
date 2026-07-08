@@ -4,9 +4,9 @@ Current milestone: v0.2 almost-v1 beta
 
 Current version: 0.2.0
 
-Last update timestamp: 2026-07-08T05:18:00-04:00
+Last update timestamp: 2026-07-08T12:01:06-04:00
 
-Repository health status: Healthy for this v0.2 slice. Formatting, Rust check, Clippy with warnings denied, full workspace tests, GUI JavaScript syntax check, and targeted hosted server build passed during this session. Browser-level tests, Tauri packaging checks, docs link checks, and release artifact builds are not yet configured.
+Repository health status: Healthy for this v0.2 desktop/credential slice. Formatting, Rust check, Clippy with warnings denied, full workspace tests, GUI JavaScript syntax check, targeted server/sync/desktop builds, and `git diff --check` passed during this session. Tauri CLI/package validation was attempted and remains blocked by missing Tauri runtime crate/package prerequisites. Browser-level tests, docs link checks, and release artifact builds are not yet configured.
 
 ---
 
@@ -38,7 +38,8 @@ Repository health status: Healthy for this v0.2 slice. Formatting, Rust check, C
 - [x] Award engine foundation
 - [x] Projection-backed advanced search parser
 - [x] Upload queue foundation and official upload status event constants
-- [x] Secure credential storage abstraction and explicit dev fallback
+- [x] Secure credential storage abstraction, production OS backend wiring, and
+  explicit dev fallback
 - [x] Net Control official events, proposals, validation, projection, and report export
 - [x] GIS coordinate, bounds, path, polygon, layer, marker, and overlay models
 - [x] Maidenhead grid validation, normalization, encode/decode, bounds, precision, and neighbors
@@ -97,7 +98,7 @@ Repository health status: Healthy for this v0.2 slice. Formatting, Rust check, C
 - [x] Service provider enable/disable and priority controls persisted through support storage
 - [x] Keyboard-first logging command foundation
 - [ ] Interactive dockable panel movement
-- [ ] Native file dialogs
+- [x] Native file dialog command helpers and browser fallback bridge
 - [ ] Full Tauri packaging
 
 ## Sync
@@ -165,7 +166,7 @@ The plugin system is currently static. Plugins are represented by manifests, req
 
 The unified service framework provides provider metadata, registry, selection, fallback, shared service cache, service authorization, and typed service request/response models for lookup, upload, spotting, map, weather, propagation, online services, and future integrations.
 
-Credential storage is isolated behind `CredentialStore`. Credential metadata is support/security state and secret values stay behind the selected backend. The MVP has an OS keychain placeholder and an explicit opt-in insecure development file fallback.
+Credential storage is isolated behind `CredentialStore`. Credential metadata is support/security state and secret values stay behind the selected backend. The v0.2 backend selection uses Windows Credential Manager, macOS Keychain through `security`, or Linux Secret Service through `secret-tool` when available. The insecure development file fallback remains explicit opt-in only.
 
 Station/equipment data is support/config state, not official event state. QSO official event payloads may reference profile/config/equipment IDs, but profile changes do not rewrite historical QSOs.
 
@@ -181,7 +182,7 @@ Sync is split between `ham-sync` for protocol, peer, LAN/cloud models, safe repl
 
 Storage uses append-only JSONL official events for the MVP. Hosted server metadata uses SurrealDB for users, sessions, devices, logbooks, memberships, API tokens, invites, and schema migrations. The sync/report server uses SurrealDB for sync/support metadata, append-only JSONL for replicated official events, and filesystem-backed diagnostic report payloads. Runtime logs are separate rotating JSONL files. Local GUI support/config state still uses lightweight versioned JSON files for map layer preferences, lookup/rig UI config, station profiles, saved searches, permission grants, and credential metadata. Secret values remain outside support storage behind `CredentialStore`.
 
-The GUI is `ham-gui`, a web-first shell served by Rust. It is Tauri-ready but not yet a packaged Tauri app. It consumes core bridge APIs, projections, runtime events, service framework state, and proposal endpoints.
+The GUI is `ham-gui`, a web-first shell served by Rust. It is Tauri-ready but not yet a packaged Tauri app. It consumes core bridge APIs, projections, runtime events, service framework state, and proposal endpoints. The shared web UI detects desktop native-dialog commands and falls back to browser/server file flows outside desktop mode.
 
 The Maps workspace consumes `/api/maps/state` and `/api/maps/layer/toggle`. It displays derived QSO/station map objects, layer state, selected-object context, grayline, propagation, weather, and map status fields.
 
@@ -196,7 +197,7 @@ Diagnostics include runtime event logs, redaction helpers, report ZIP generation
 # Current Workspace Structure
 
 - `crates/ham-core`: event bus, official events, stores, proposals, projections, ADIF, lookup, rig, diagnostics, permissions, service framework, online services, credential storage, Net Control, station profiles, awards, search, upload queue.
-- `crates/ham-core::credential`: credential metadata, store abstraction, OS placeholder backend, explicit insecure development fallback.
+- `crates/ham-core::credential`: credential metadata, store abstraction, OS credential backends, explicit insecure development fallback.
 - `crates/ham-core::map`: GIS models, Maidenhead grid engine, great-circle engine, map layers, markers, provider metadata, grayline, propagation, and weather models.
 - `crates/ham-core::net`: Net Control projection, session/check-in/traffic models, and report export.
 - `crates/ham-core::online`: online provider metadata, upload/download engine models, confirmation records, spot parsing, automation, notification, and provider health helpers.
@@ -205,6 +206,7 @@ Diagnostics include runtime event logs, redaction helpers, report ZIP generation
 - `crates/ham-sync-server`: self-hosted sync/report HTTP-like server binary using durable local storage by default.
 - `crates/ham-server`: hosted web/server API boundary with durable SurrealDB account, session, device, logbook, role, station/equipment, provider, upload, sync, and QSO lifecycle metadata/API routes.
 - `crates/ham-gui`: Rust bridge/server, GUI shell models, command registry, static web UI.
+- `crates/ham-desktop`: desktop runtime configuration and testable native-dialog command helpers for the Tauri wrapper.
 - `crates/ham-cli`: CLI commands for ADIF and chain/projection operations.
 - `docs/architecture`: service framework, online services, station profiles, award engine, search, and upload queue architecture notes.
 - `docs/plugins`: provider and online provider development guides.
@@ -222,7 +224,7 @@ Diagnostics include runtime event logs, redaction helpers, report ZIP generation
 - [x] Replace `ham-server` in-memory account/session/device/logbook scaffolding with durable storage before hosted beta use.
 - [x] Add durable storage to the self-hosted sync/report server before real hosted use.
 - [ ] Implement trust pairing/authentication for LAN peers before unattended sync.
-- [ ] Implement production OS keychain backends before real online upload/lookup provider credentials.
+- [ ] Validate production OS keychain/secret-store backends on clean release runners before real online upload/lookup provider credentials are enabled for testers.
 
 ## High
 
@@ -231,7 +233,7 @@ Diagnostics include runtime event logs, redaction helpers, report ZIP generation
 - [ ] Enforce permission scopes consistently across account, logbook, and station boundaries.
 - [ ] Add role/account/session models and UI beyond the MVP local-admin assumption.
 - [ ] Implement real LAN peer-to-peer transport for replication endpoints.
-- [ ] Add conflict/divergence review UX.
+- [x] Add conflict/divergence review UX foundation.
 - [ ] Add real tile/geocoding/weather/propagation providers through the map service framework.
 - [ ] Implement live network adapters for LoTW/eQSL/Club Log/QRZ/HRDLog uploads and confirmations.
 - [ ] Implement live QRZ XML, HamQTH, FCC ULS, DX Cluster, RBN, POTA, SOTAWatch, NOAA, Open-Meteo, and OSM adapters.
@@ -242,8 +244,8 @@ Diagnostics include runtime event logs, redaction helpers, report ZIP generation
 - [ ] Add station profile and equipment create/edit GUI forms.
 - [ ] Add full award rule databases and needed-list computation.
 - [ ] Add saved-search GUI persistence flow.
-- [ ] Add native file dialogs for import/export/report bundles.
-- [ ] Add Tauri packaging.
+- [x] Add native file dialog command helpers for import/export/report bundles.
+- [ ] Add actual Tauri runtime wrapper and package validation.
 - [ ] Add projection cache persistence and startup optimization.
 - [ ] Extend support storage to provider account state and notification read/unread state.
 
@@ -270,11 +272,11 @@ Diagnostics include runtime event logs, redaction helpers, report ZIP generation
 - LAN discovery/replication has strong models but needs real multi-instance transport wiring.
 - Permission scopes are mostly recorded rather than fully enforced.
 - Station profile editing exists in core models but not yet as full GUI forms.
-- External provider implementations are stubs until production credential storage and live integrations are added.
+- External provider implementations are stubs until live integrations are added.
 - Online Services has production-shaped provider metadata and parsers, but live network clients are not enabled yet.
 - Automation tasks are modeled but not executed by a durable scheduler.
 - Confirmation downloads append official events, but provider-specific matching to historical QSOs needs deeper reconciliation.
-- OS keychain support is represented by an unavailable placeholder; real native backends are still required.
+- OS credential backend wiring is implemented, but it still needs release-runner and packaged-app validation on Windows, macOS, and Linux.
 - The insecure dev credential fallback is plaintext and only suitable for local testing when explicitly enabled.
 - Net Control template create/edit UI is not complete; sessions/check-ins/traffic/report are implemented first.
 - The Maps workspace currently renders a structured preview rather than full tile/vector map rendering.
@@ -364,7 +366,7 @@ Diagnostics include runtime event logs, redaction helpers, report ZIP generation
 - Core event hashing, chain verification, QSO proposals, projections, ADIF, lookup, rig, diagnostics, permissions, service framework, credential store, Net Control, station profiles, awards, search, upload queue, sync models, GIS models, grid conversion, great-circle math, map layers, marker serialization, provider metadata, grayline calculations, online provider metadata, retry logic, confirmation parsing, spot parsing, cache stats, and notification models have unit coverage.
 - GUI model serialization and command/panel foundations have partial coverage.
 - JavaScript UI behavior is mostly manually verified and should gain browser-level tests.
-- Current test run: `cargo test --workspace` passed with 192 total Rust tests across crates.
+- Current test run: `cargo test --workspace` passed with 197 total Rust tests across crates.
 
 ---
 
@@ -401,6 +403,11 @@ Completed work:
 - Added divergence review GUI screens with local/remote heads, safe pull/push flags, recommended action, and report export.
 - Added `ham-desktop` desktop foundation crate and root `src-tauri` packaging configuration.
 - Added desktop-native dialog bridge detection in the web UI for ADIF import/export, backup import/export, diagnostic bundle export, and divergence report export.
+- Added testable `ham-desktop` native-dialog command helpers for ADIF import/export, backup import/export, diagnostic bundle export, divergence report export, and app data directory selection.
+- Added Windows Credential Manager, macOS Keychain, and Linux Secret Service/libsecret credential backend wiring behind `OsCredentialStore`.
+- Updated GUI/local credential selection to use OS credential storage when available and keep the insecure file fallback explicit opt-in only.
+- Added credential safety tests covering the `TEST_SECRET_SHOULD_NOT_APPEAR` sentinel across metadata sidecars, diagnostics, provider responses, upload history, and backup export.
+- Added provider test response fields for credential-reference status/resolution without returning secret values.
 - Updated Surreal-backed `ham-server` mode to use a JSONL official event store path while preserving in-memory stores for focused tests.
 - Added `docs/V0_2_RELEASE_PLAN.md`, `docs/DESKTOP_RELEASE.md`, and `docs/HOSTED_WEB_RELEASE.md`.
 - Updated `README.md`, `ROADMAP.md`, `docs/ROADMAP.md`, `docs/V1_RELEASE_PLAN.md`, `docs/V1_1_IOS_NATIVE_PLAN.md`, and `docs/API_CLIENT_CONTRACT.md`.
@@ -415,14 +422,13 @@ Completed work:
 
 Remaining work:
 
-- Wire the real Tauri runtime dependency/commands and package validation.
+- Add the actual Tauri runtime wrapper crate and package validation.
 - Harden backup restore UX and add browser-level coverage.
-- Add native desktop app data directory selection implementation.
 - Add LAN peer-to-peer transport and trust pairing.
 - Enforce permission scopes across all older GUI/local routes, not only the new hosted QSO slice.
 - Add browser-level GUI tests.
-- Implement live network adapters and credential validation for the registered providers.
-- Implement production OS credential backends.
+- Implement live network adapters for the registered providers.
+- Validate OS credential backends on clean Windows/macOS/Linux packaging runners.
 - Execute queued uploads against real providers and append provider-specific upload/confirmation events where core supports them.
 - Add account settings, scheduler state, and notification read state.
 - Add browser-level GUI tests for online service interactions.
@@ -438,29 +444,30 @@ Quality gates from this v0.2 slice:
 - `cargo fmt --all -- --check`: passed.
 - `cargo check --workspace --all-targets`: passed.
 - `cargo clippy --workspace --all-targets -- -D warnings`: passed.
-- `cargo test --workspace`: passed, 192 Rust tests total.
+- `cargo test --workspace`: passed, 197 Rust tests total.
 - `node --check crates/ham-gui/web/app.js`: passed.
 - `cargo build -p ham-server`: passed.
 - `cargo build -p ham-sync-server`: passed.
-- Browser-level tests: not run; no Playwright/equivalent suite is configured yet.
 - `cargo build -p ham-desktop`: passed.
-- Tauri CLI/package build: not run; full Tauri runtime dependency is not wired yet.
+- `git diff --check`: passed.
+- `cargo tauri info`: completed; reported missing WebView2, missing Visual Studio/MSVC SDK detection, and no detected Tauri runtime packages.
+- `cargo tauri build`: failed before packaging with `Error Input watch path is neither a file nor a directory`; `src-tauri` still has config/README only and no real Tauri Rust runtime crate.
+- Browser-level tests: not run; no Playwright/equivalent suite is configured yet.
 - Docs link checker: not run; not configured.
 
 ---
 
 # Recommended Next Milestone
 
-Live Provider Adapters, Credentials, and Desktop Runtime:
+Live Provider Adapters and Tauri Runtime:
 
-- Real Tauri runtime commands and package validation.
-- Production OS credential backends.
+- Actual Tauri runtime wrapper and package validation.
+- OS credential backend validation on release runners.
 - Live Tier 1 provider adapters.
 - Browser-level GUI tests and CI wiring.
 
-Then continue Live Provider Adapters and Production Credential Backends:
+Then continue Live Provider Adapters:
 
-- Native OS keychain/secret-store credential backends.
 - Live QRZ XML and HamQTH lookup clients.
 - Live LoTW/eQSL/Club Log/QRZ/HRDLog upload and confirmation clients.
 - DX Cluster Telnet background client, POTA spots, SOTAWatch, and RBN adapters.
@@ -474,6 +481,54 @@ This milestone should come next because the provider metadata, credential refere
 # Changelog
 
 ## 2026-07-08
+
+Summary: Added desktop native-dialog command helpers, production OS credential
+backend wiring, provider credential validation response hooks, and expanded
+secret-redaction tests.
+
+Major files changed:
+
+- `crates/ham-core/Cargo.toml`
+- `crates/ham-core/src/credential.rs`
+- `crates/ham-core/src/diagnostics.rs`
+- `crates/ham-core/src/lib.rs`
+- `crates/ham-desktop/src/lib.rs`
+- `crates/ham-gui/src/main.rs`
+- `crates/ham-server/src/lib.rs`
+- `README.md`
+- `ROADMAP.md`
+- `PROJECT_STATE.md`
+- `docs/ROADMAP.md`
+- `docs/V0_2_RELEASE_PLAN.md`
+- `docs/HOSTED_WEB_RELEASE.md`
+- `docs/DESKTOP_RELEASE.md`
+- `docs/API_CLIENT_CONTRACT.md`
+- `docs/security/credential-storage.md`
+
+Quality gates:
+
+- `cargo fmt --all -- --check`: passed.
+- `cargo check --workspace --all-targets`: passed.
+- `cargo clippy --workspace --all-targets -- -D warnings`: passed.
+- `cargo test --workspace`: passed, 197 Rust tests total.
+- `node --check crates/ham-gui/web/app.js`: passed.
+- `cargo build -p ham-server`: passed.
+- `cargo build -p ham-sync-server`: passed.
+- `cargo build -p ham-desktop`: passed.
+- `git diff --check`: passed.
+- `cargo tauri info`: completed and reported missing WebView2, missing Visual
+  Studio/MSVC SDK detection, and no detected Tauri runtime packages.
+- `cargo tauri build`: failed before packaging with `Error Input watch path is
+  neither a file nor a directory`; `src-tauri` still lacks a full Tauri Rust
+  runtime crate.
+
+Remaining gaps:
+
+- Actual Tauri runtime wrapper and installer/package validation remain.
+- Live provider adapters and real upload execution remain.
+- OS credential backends need clean release-runner validation.
+- Browser-level GUI tests and release artifact hardening remain.
+- LAN peer-to-peer trust pairing remains.
 
 Summary: Added safe backup import, backup/restore GUI, divergence review GUI,
 desktop packaging foundation, and native dialog bridge contract.

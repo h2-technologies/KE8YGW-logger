@@ -35,9 +35,10 @@ pub use bus::{
     RuntimeEventEnvelope, RuntimeEventFilter, RuntimeEventSeverity,
 };
 pub use credential::{
-    authorize_credential_action, credential_runtime_payload, os_backend_name,
-    required_credentials_satisfied, CredentialBackendStatus, CredentialError, CredentialMetadata,
-    CredentialStatus, CredentialStore, InsecureDevCredentialStore, UnsupportedOsCredentialStore,
+    authorize_credential_action, credential_runtime_payload, default_credential_store,
+    os_backend_name, required_credentials_satisfied, CredentialBackendStatus, CredentialError,
+    CredentialMetadata, CredentialStatus, CredentialStore, InsecureDevCredentialStore,
+    OsCredentialStore, UnsupportedOsCredentialStore,
 };
 pub use diagnostics::{
     action_timeline, build_diagnostic_bundle, bundle_content_hash, export_diagnostic_zip,

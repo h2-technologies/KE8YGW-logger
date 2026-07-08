@@ -18,23 +18,27 @@ history, or included in runtime diagnostic payloads.
 
 The MVP includes:
 
-- `UnsupportedOsCredentialStore`: reports the intended OS backend for the
-  current platform, but does not link native keychain libraries yet.
+- `OsCredentialStore`: stores safe credential metadata in local support storage
+  and stores secret values in the platform credential backend.
+- `UnsupportedOsCredentialStore`: reports a clear unavailable/unsupported
+  backend when the platform backend or required helper tooling is unavailable.
 - `InsecureDevCredentialStore`: an explicit opt-in development fallback that
   writes a local JSON file. It is marked insecure and must not be silently
   enabled for production use.
 
-Future production builds should wire:
+The current OS backend wiring is:
 
-- Windows Credential Manager
-- macOS Keychain
-- Linux Secret Service/libsecret
+- Windows Credential Manager through the Windows credential APIs.
+- macOS Keychain through the `security` command-line interface.
+- Linux Secret Service/libsecret through `secret-tool`.
 
 ## Fallback Behavior
 
-The GUI only enables the development fallback when
+The GUI/local desktop path selects `OsCredentialStore` when the platform backend
+is available. It only enables the development fallback when
 `HAM_PLATFORM_ALLOW_INSECURE_DEV_CREDENTIALS=1` is set. Otherwise the credential
-screen shows the OS keychain placeholder as unavailable.
+screen shows a secure backend unavailable/configuration error rather than
+silently writing plaintext credentials.
 
 ## Provider Usage
 
@@ -65,7 +69,8 @@ redaction helpers. Secret-like fields such as `password`, `token`, `secret`,
 
 ## Current Limitations
 
-- Native OS keychain access is modeled but not implemented in this crate build.
+- OS credential access is implemented but still needs validation on clean
+  Windows/macOS/Linux release runners and packaged desktop builds.
 - The development fallback is plaintext and exists only to test UI and provider
   integration behavior.
 - Credential rotation is a placeholder.

@@ -3041,17 +3041,30 @@ impl HostedServer {
         let enabled = setting.as_ref().is_some_and(|setting| setting.enabled);
         let requires_credential = !provider.metadata.required_credentials.is_empty()
             || !provider.metadata.required_config_keys.is_empty();
+        let credential_reference_status = if mock_mode {
+            "mock_bypassed"
+        } else if requires_credential && !credential_present {
+            "missing"
+        } else if credential_present {
+            "reference_present"
+        } else {
+            "not_required"
+        };
+        let credential_reference_resolves =
+            mock_mode || credential_reference_status == "reference_present";
         let (status, diagnostic_message) = if mock_mode {
             ("ok", "fake provider test succeeded")
         } else if requires_credential && !credential_present {
             ("missing_credential", "credential reference is required")
         } else {
-            ("ok", "provider configuration is structurally valid")
+            ("ok", "provider credential reference is structurally valid")
         };
         Ok(json!({
             "provider_id": provider_id,
             "enabled": enabled,
             "credential_reference_present": credential_present,
+            "credential_reference_status": credential_reference_status,
+            "credential_reference_resolves": credential_reference_resolves,
             "test_status": status,
             "diagnostic_message": diagnostic_message,
             "redacted_error": Value::Null
@@ -5639,6 +5652,7 @@ mod tests {
 
     #[tokio::test]
     async fn provider_settings_and_upload_queue_are_redacted_scoped_and_durable() {
+        const TEST_SECRET: &str = "TEST_SECRET_SHOULD_NOT_APPEAR";
         let path = surreal_test_path("providers-upload");
         let server = open_surreal_test_server(&path);
         let (owner_token, logbook_id, _) = login(&server, "owner@example.test").await;
@@ -5660,7 +5674,7 @@ mod tests {
                         credential_id: None,
                         config: Map::from_iter([(
                             "token".to_owned(),
-                            Value::String("test-secret".to_owned()),
+                            Value::String(TEST_SECRET.to_owned()),
                         )]),
                     },
                 )
@@ -5703,7 +5717,7 @@ mod tests {
             .await;
         assert_eq!(patched.status, 200);
         let patched: Value = patched.json();
-        assert!(!patched.to_string().contains("test-secret"));
+        assert!(!patched.to_string().contains(TEST_SECRET));
 
         let test = server
             .handle(
@@ -5716,7 +5730,11 @@ mod tests {
             )
             .await;
         assert_eq!(test.status, 200);
-        assert_eq!(test.json::<Value>()["test_status"], "ok");
+        let test = test.json::<Value>();
+        assert_eq!(test["test_status"], "ok");
+        assert_eq!(test["credential_reference_status"], "mock_bypassed");
+        assert_eq!(test["credential_reference_resolves"], true);
+        assert!(!test.to_string().contains(TEST_SECRET));
 
         let failed = server
             .handle(
@@ -5757,7 +5775,7 @@ mod tests {
         assert_eq!(retried.status, 200);
         let retried: Value = retried.json();
         assert_eq!(retried["upload"]["status"], "succeeded");
-        assert!(!retried.to_string().contains("test-secret"));
+        assert!(!retried.to_string().contains(TEST_SECRET));
 
         server.reload_metadata_from_store().await.unwrap();
         let uploads = server
@@ -5770,6 +5788,7 @@ mod tests {
         let uploads: Value = uploads.json();
         assert_eq!(uploads["uploads"].as_array().unwrap().len(), 1);
         assert_eq!(uploads["uploads"][0]["status"], "succeeded");
+        assert!(!uploads.to_string().contains(TEST_SECRET));
     }
 
     #[tokio::test]
@@ -5910,6 +5929,7 @@ mod tests {
 
     #[tokio::test]
     async fn backup_export_and_dry_run_are_scoped_and_redacted() {
+        const TEST_SECRET: &str = "TEST_SECRET_SHOULD_NOT_APPEAR";
         let path = surreal_test_path("backups");
         let server = open_surreal_test_server(&path);
         let (owner_token, logbook_id, _) = login(&server, "owner@example.test").await;
@@ -5931,6 +5951,25 @@ mod tests {
             )
             .await;
         assert_eq!(patched.status, 200);
+        let raw_secret = server
+            .handle(
+                ApiRequest::json(
+                    "PATCH",
+                    "/api/v1/providers/lotw-stub",
+                    &ProviderPatchRequest {
+                        logbook_id,
+                        enabled: None,
+                        credential_id: None,
+                        config: Map::from_iter([(
+                            "client_secret".to_owned(),
+                            Value::String(TEST_SECRET.to_owned()),
+                        )]),
+                    },
+                )
+                .with_bearer(&owner_token),
+            )
+            .await;
+        assert_eq!(raw_secret.status, 400);
 
         let backup = server
             .handle(
@@ -5958,7 +5997,7 @@ mod tests {
                 .len(),
             1
         );
-        assert!(!backup.to_string().contains("test-secret"));
+        assert!(!backup.to_string().contains(TEST_SECRET));
 
         let dry_run = server
             .handle(
