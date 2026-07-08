@@ -23,7 +23,7 @@ This root roadmap summarizes the current implementation plan. Detailed architect
 
 ## Current Milestone
 
-Online Services Ecosystem is implemented at foundation level. The app can inspect connected provider metadata, credential requirements, upload queue stats, confirmation download models, spot feeds, provider health, automation tasks, notifications, weather, and propagation from a dedicated workspace.
+v0.2 almost-v1 beta is underway. The first v0.2 slice adds release planning docs and a dedicated `ham-server` hosted API boundary with beta account/session/device/logbook scaffolding, role-scoped logbook access, proposal-backed QSO lifecycle routes, provider/sync/device route scaffolding, and route tests.
 
 ## Release Scope Correction
 
@@ -33,7 +33,15 @@ v1.1 is the first native iOS target: SwiftUI, App Store-ready Xcode project, nat
 
 ## Recommended Next Milestone
 
-Live Provider Adapters and Production Credential Backends:
+Durable Hosted Storage and Desktop Packaging:
+
+- Durable account/session/device/logbook storage for `ham-server`.
+- Durable sync/report storage for hosted/self-hosted server use.
+- Route coverage for ADIF, station/equipment, activation, Net Control, maps, uploads, and provider config.
+- Tauri desktop packaging and native file dialogs.
+- Browser-level GUI tests.
+
+Then continue Live Provider Adapters and Production Credential Backends:
 
 - Native OS keychain/secret-store backend implementation.
 - Real QRZ XML and HamQTH lookup clients.
@@ -46,6 +54,9 @@ Live Provider Adapters and Production Credential Backends:
 
 ## Future Milestones
 
+- v0.2 almost-v1 beta completion: hosted API/storage hardening, desktop packaging, backup/restore, divergence review, LAN trust pairing, station/equipment forms, interactive map, browser tests, and CI release hardening.
+- v1.0 web + desktop production release: hosted web, installable desktop, stabilized API/storage/sync/providers, production credentials, docs cleanup, and beta bug fixes.
+- v1.1 native iOS release: SwiftUI app, native offline queue, Keychain, native ADIF document flows, native Maps, iPhone/iPad layouts, and TestFlight/App Store readiness.
 - LoTW upload/download and confirmation pull.
 - eQSL upload.
 - Club Log upload.

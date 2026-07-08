@@ -1,12 +1,12 @@
 # Project Status
 
-Current milestone: MVP Productionization
+Current milestone: v0.2 almost-v1 beta
 
-Current version: 0.1.0
+Current version: 0.2.0
 
-Last update timestamp: 2026-07-07T00:00:00-04:00
+Last update timestamp: 2026-07-08T02:17:07.2791287-04:00
 
-Repository health status: Healthy. Formatting, Rust check, Clippy with warnings denied, full workspace tests, GUI JavaScript syntax check, and release build passed during this session.
+Repository health status: Healthy for this v0.2 slice. Formatting, Rust check, Clippy with warnings denied, full workspace tests, GUI JavaScript syntax check, and targeted hosted server build passed during this session. Browser-level tests, Tauri packaging checks, docs link checks, and release artifact builds are not yet configured.
 
 ---
 
@@ -14,6 +14,7 @@ Repository health status: Healthy. Formatting, Rust check, Clippy with warnings 
 
 ## Core
 
+- [x] Workspace package version bumped to 0.2.0 for the v0.2 beta line
 - [x] Typed event bus
 - [x] Runtime event model, filtering, replay, and JSONL log rotation
 - [x] Official event envelope and deterministic SHA-256 hashing
@@ -144,6 +145,11 @@ Repository health status: Healthy. Formatting, Rust check, Clippy with warnings 
 - [x] Tagged release workflow
 - [x] Cross-platform artifact packaging
 - [x] Self-hosted sync Dockerfile
+- [x] v0.2/v1.0/v1.1 release plan documentation
+- [x] Hosted web release documentation
+- [x] Desktop release documentation
+- [x] Dedicated `ham-server` hosted API crate added to workspace
+- [x] Hosted API route tests for auth, scoping, roles, revoked devices, and QSO lifecycle
 - [ ] Docs link checker
 - [ ] Coverage reporting
 
@@ -195,6 +201,7 @@ Diagnostics include runtime event logs, redaction helpers, report ZIP generation
 - `crates/ham-plugin-sdk`: plugin manifest, capabilities, service types, proposal envelope, public event constants.
 - `crates/ham-sync`: LAN discovery/handshake models, peer registry, safe replication, cloud API/client/server models, report upload models.
 - `crates/ham-sync-server`: self-hosted sync/report HTTP-like server binary.
+- `crates/ham-server`: hosted web/server API boundary with beta in-memory account, session, device, logbook, role, provider, sync, and QSO lifecycle routes.
 - `crates/ham-gui`: Rust bridge/server, GUI shell models, command registry, static web UI.
 - `crates/ham-cli`: CLI commands for ADIF and chain/projection operations.
 - `docs/architecture`: service framework, online services, station profiles, award engine, search, and upload queue architecture notes.
@@ -210,6 +217,7 @@ Diagnostics include runtime event logs, redaction helpers, report ZIP generation
 
 ## Critical
 
+- [ ] Replace `ham-server` in-memory account/session/device/logbook scaffolding with durable storage before hosted beta use.
 - [ ] Add durable storage to the self-hosted sync/report server before real hosted use.
 - [ ] Implement trust pairing/authentication for LAN peers before unattended sync.
 - [ ] Implement production OS keychain backends before real online upload/lookup provider credentials.
@@ -250,6 +258,7 @@ Diagnostics include runtime event logs, redaction helpers, report ZIP generation
 
 - Several blueprint-recommended crates are currently implemented as modules inside `ham-core`; this is acceptable for MVP but should be revisited as APIs grow.
 - The GUI is a static web shell served by Rust rather than a packaged Tauri desktop app.
+- `ham-server` now defines the hosted API boundary, but account/session/device/logbook metadata is in-memory beta scaffolding.
 - Plugin loading is static; no sandbox, signature verification, or process isolation exists yet.
 - The sync server uses in-memory storage for cloud sync events and uploaded reports.
 - LAN discovery/replication has strong models but needs real multi-instance transport wiring.
@@ -333,6 +342,12 @@ Diagnostics include runtime event logs, redaction helpers, report ZIP generation
 - Plugin Map Providers: complete initial provider author guide.
 - Online Services: complete initial architecture note.
 - Online Provider Development: complete initial provider author guide.
+- v0.2 Release Plan: added for the almost-v1 beta checklist, risks, acceptance, and v1.0 delta.
+- v1.0 Release Plan: updated to clarify hosted web + desktop only and no PWA-as-iOS.
+- v1.1 Native iOS Plan: updated to require a real native SwiftUI app, not a web wrapper.
+- API Client Contract: updated with `/api/v1`, bearer sessions, device identity, logbook scoping, and proposal-based mutation rules.
+- Hosted Web Release: added for `ham-server` route coverage and production hosted gaps.
+- Desktop Release: added for Tauri/native dialog packaging expectations.
 - Developer Guide: current local workflow; daily-driver examples could be expanded.
 - API docs: Rust public item docs are partial and should be improved as APIs stabilize.
 
@@ -343,16 +358,26 @@ Diagnostics include runtime event logs, redaction helpers, report ZIP generation
 - Core event hashing, chain verification, QSO proposals, projections, ADIF, lookup, rig, diagnostics, permissions, service framework, credential store, Net Control, station profiles, awards, search, upload queue, sync models, GIS models, grid conversion, great-circle math, map layers, marker serialization, provider metadata, grayline calculations, online provider metadata, retry logic, confirmation parsing, spot parsing, cache stats, and notification models have unit coverage.
 - GUI model serialization and command/panel foundations have partial coverage.
 - JavaScript UI behavior is mostly manually verified and should gain browser-level tests.
-- Current test run: `cargo test --workspace` passed with 164 total Rust tests across crates.
+- Current test run: `cargo test --workspace` passed with 171 total Rust tests across crates.
 
 ---
 
 # Current Milestone
 
-Current objective: finish MVP productionization, starting with durable support storage.
+Current objective: finish v0.2 almost-v1 beta by hardening hosted API/storage, desktop packaging, provider execution, sync trust, and GUI tests.
 
 Completed work:
 
+- Added `ham-server` as a dedicated hosted API crate and binary.
+- Added hosted API models for `UserAccount`, `LoginSession`, `DeviceIdentity`, `LogbookMembership`, `LogbookRole`, `ServerInvite`, and `ApiToken`.
+- Added `/api/v1` hosted API boundary for health/status, login/logout/session, logbooks, QSO lifecycle, providers, sync status/preview/push, devices, and route catalog.
+- Added scaffolded reserved responses for ADIF, station/equipment, activations, Net Control, maps, uploads, provider detail/test/update, and sync pull routes.
+- Enforced account/logbook/device scoping in the hosted QSO slice.
+- Kept QSO create/edit/delete/restore/note writes on the existing proposal pipeline.
+- Added route-level tests for cross-logbook rejection, role behavior, logout invalidation, revoked device sync rejection, route catalog coverage, and QSO create/list/edit/delete/restore/note lifecycle.
+- Added `docs/V0_2_RELEASE_PLAN.md`, `docs/DESKTOP_RELEASE.md`, and `docs/HOSTED_WEB_RELEASE.md`.
+- Updated `README.md`, `ROADMAP.md`, `docs/ROADMAP.md`, `docs/V1_RELEASE_PLAN.md`, `docs/V1_1_IOS_NATIVE_PLAN.md`, and `docs/API_CLIENT_CONTRACT.md`.
+- Bumped workspace package version to 0.2.0.
 - Connected provider metadata for LoTW, eQSL, Club Log, QRZ Logbook, HRDLog, QRZ XML, HamQTH, FCC ULS, prefix fallback, DX Cluster, RBN, POTA, SOTAWatch, NOAA Space Weather, NOAA Weather, Open-Meteo, OpenStreetMap, offline tile cache, and reverse geocoder.
 - Upload engine retry policy, execution result, upload stats, provider health, and notification foundation.
 - Confirmation download model and official append-only confirmation status event path.
@@ -363,6 +388,14 @@ Completed work:
 
 Remaining work:
 
+- Make `ham-server` account/session/device/logbook metadata durable.
+- Add hosted route implementations for ADIF, station/equipment, activations, Net Control, maps, uploads, provider mutation/test, and sync pull.
+- Add durable sync/report storage.
+- Add Tauri desktop packaging and native desktop file dialogs.
+- Add backup/restore and divergence review UX.
+- Add LAN peer-to-peer transport and trust pairing.
+- Enforce permission scopes across all older GUI/local routes, not only the new hosted QSO slice.
+- Add browser-level GUI tests.
 - Implement live network adapters and credential validation for the registered providers.
 - Implement production OS credential backends.
 - Execute queued uploads against real providers and append provider-specific upload/confirmation events.
@@ -375,11 +408,31 @@ Expected completion criteria:
 - Documentation and project state are updated.
 - Online services use the Unified Service Framework, CredentialStore, permissions, runtime events, and official append-only confirmation events.
 
+Quality gates from this v0.2 slice:
+
+- `cargo fmt --all -- --check`: passed.
+- `cargo check --workspace --all-targets`: passed.
+- `cargo clippy --workspace --all-targets -- -D warnings`: passed.
+- `cargo test --workspace`: passed, 171 Rust tests total.
+- `node --check crates/ham-gui/web/app.js`: passed.
+- `cargo build -p ham-server`: passed.
+- Browser-level tests: not run; no Playwright/equivalent suite is configured yet.
+- Tauri/desktop build checks: not run; no Tauri desktop package exists yet.
+- Docs link checker: not run; not configured.
+
 ---
 
 # Recommended Next Milestone
 
-Live Provider Adapters and Production Credential Backends:
+Durable Hosted Storage and Desktop Packaging:
+
+- Durable `ham-server` account/session/device/logbook metadata storage.
+- Durable sync/report storage shared by hosted/self-hosted modes.
+- Hosted route implementations beyond the QSO slice.
+- Tauri desktop packaging and native file dialogs.
+- Browser-level GUI tests and CI wiring.
+
+Then continue Live Provider Adapters and Production Credential Backends:
 
 - Native OS keychain/secret-store credential backends.
 - Live QRZ XML and HamQTH lookup clients.
@@ -393,6 +446,47 @@ This milestone should come next because the provider metadata, credential refere
 ---
 
 # Changelog
+
+## 2026-07-08
+
+Summary: Started the v0.2 almost-v1 beta by adding a dedicated hosted API crate,
+release planning docs, account/session/device/logbook scaffolding, and
+proposal-backed hosted QSO lifecycle routes.
+
+Major files changed:
+
+- `Cargo.toml`
+- `Cargo.lock`
+- `crates/ham-server/Cargo.toml`
+- `crates/ham-server/src/lib.rs`
+- `crates/ham-server/src/main.rs`
+- `README.md`
+- `ROADMAP.md`
+- `docs/ROADMAP.md`
+- `docs/V0_2_RELEASE_PLAN.md`
+- `docs/V1_RELEASE_PLAN.md`
+- `docs/V1_1_IOS_NATIVE_PLAN.md`
+- `docs/API_CLIENT_CONTRACT.md`
+- `docs/DESKTOP_RELEASE.md`
+- `docs/HOSTED_WEB_RELEASE.md`
+- `PROJECT_STATE.md`
+
+Architectural decisions:
+
+- `ham-server` is the hosted web/server API boundary for v0.2 work.
+- Hosted QSO create/edit/delete/restore/note routes submit proposals through
+  `ham-core::submit_proposal`; they do not mutate official log state directly.
+- Account/session/device/logbook models are in-memory beta scaffolding until
+  durable hosted storage lands.
+- v1.0 remains hosted web + desktop only; native SwiftUI iOS stays v1.1.
+
+New crates:
+
+- `ham-server`
+
+Breaking changes:
+
+- Workspace package version changed from `0.1.0` to `0.2.0`.
 
 ## 2026-07-06
 

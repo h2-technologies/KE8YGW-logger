@@ -1,7 +1,7 @@
 # v1.1 Native iOS Plan
 
-v1.1 is the first iOS release. It must be a real native iOS app, not a PWA and
-not a pinned hosted web app.
+v1.1 is the first iOS release. It must be a real native iOS app, not a PWA, not
+a pinned hosted web app, and not a thin web wrapper.
 
 ## Target
 
@@ -28,6 +28,7 @@ is also documented as part of the stable client contract.
 Recommended app layers:
 
 - SwiftUI views for iPhone and iPad.
+- Native iOS navigation and forms.
 - View models with explicit loading, error, empty, dirty, and offline states.
 - API client generated or hand-written from `docs/API_CLIENT_CONTRACT.md`.
 - Local persistence for offline pending mutations and cached read models.

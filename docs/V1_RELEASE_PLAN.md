@@ -1,8 +1,8 @@
 # v1.0 Release Plan
 
-v1.0 is a hosted web and desktop release. iOS is not part of v1.0, and the
-project must not treat a PWA, pinned website, or Home Screen install as the iOS
-client.
+v1.0 is a hosted web and installable desktop release. iOS is not part of v1.0,
+and the project must not treat a PWA, pinned website, or Home Screen install as
+the iOS client.
 
 ## Target
 
@@ -23,6 +23,17 @@ client.
 - No service-worker offline queue as the required mobile strategy.
 - No claim that a pinned web app is the iOS client.
 - No Rust FFI work for iOS in v1.0.
+
+## Stabilization Focus
+
+- Hosted API and self-hosted API compatibility.
+- Durable account/session/device/logbook storage.
+- Durable sync/report storage.
+- Sync safety and divergence reporting.
+- Production credential backends.
+- Provider adapter reliability and failure surfaces.
+- Desktop packaging and native file flows.
+- Documentation cleanup and beta bug fixes.
 
 ## Product Surfaces
 

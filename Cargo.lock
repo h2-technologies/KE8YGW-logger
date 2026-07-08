@@ -161,7 +161,7 @@ dependencies = [
 
 [[package]]
 name = "ham-cli"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "ham-core",
  "ham-plugin-sdk",
@@ -171,7 +171,7 @@ dependencies = [
 
 [[package]]
 name = "ham-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "async-trait",
  "chrono",
@@ -186,7 +186,7 @@ dependencies = [
 
 [[package]]
 name = "ham-gui"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "async-trait",
  "chrono",
@@ -201,7 +201,7 @@ dependencies = [
 
 [[package]]
 name = "ham-plugin-sdk"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "chrono",
  "serde",
@@ -210,8 +210,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "ham-server"
+version = "0.2.0"
+dependencies = [
+ "chrono",
+ "ham-core",
+ "ham-plugin-sdk",
+ "ham-sync",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "ham-sync"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "chrono",
  "ham-core",
@@ -224,7 +239,7 @@ dependencies = [
 
 [[package]]
 name = "ham-sync-server"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "ham-sync",
  "serde",

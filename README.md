@@ -11,12 +11,18 @@ passes should start with these documents:
 
 - [Master Blueprint](docs/MASTER_BLUEPRINT.md): locked architecture decisions,
   system model, MVP scope, and crate migration notes.
+- [v0.2 Release Plan](docs/V0_2_RELEASE_PLAN.md): almost-v1 beta checklist,
+  acceptance criteria, risks, and v1.0 delta.
 - [v1.0 Release Plan](docs/V1_RELEASE_PLAN.md): hosted web, desktop,
   shared core/API, sync, providers, and credential storage scope.
 - [v1.1 Native iOS Plan](docs/V1_1_IOS_NATIVE_PLAN.md): SwiftUI iOS app
   scope, offline queue, native ADIF flows, Maps, and TestFlight target.
 - [API Client Contract](docs/API_CLIENT_CONTRACT.md): hosted/self-hosted API
   rules and future native-client contract requirements.
+- [Hosted Web Release](docs/HOSTED_WEB_RELEASE.md): hosted web/server mode,
+  implemented API slice, and production gaps.
+- [Desktop Release](docs/DESKTOP_RELEASE.md): installable desktop target,
+  Tauri/native dialog expectations, and v1.0 polish.
 - [iOS App Store Readiness](docs/IOS_APPSTORE_READINESS.md): v1.1 native iOS
   App Store, privacy, entitlement, and review checklist.
 - [Roadmap](docs/ROADMAP.md): compressed vertical implementation passes and
@@ -75,9 +81,24 @@ passes should start with these documents:
 - `ham-plugin-sdk`: public plugin manifest, capability, proposal, and event constant types.
 - `ham-sync`: local-first discovery, handshake, head comparison, and safe pull replication models.
 - `ham-sync-server`: self-hostable cloud relay/sync service binary using the shared safe replication protocol.
+- `ham-server`: hosted web/server API boundary with beta account, session,
+  device, logbook, QSO, provider, sync, and device routes.
 - `ham-cli`: placeholder command-line entry point.
 - `ham-gui`: initial GUI shell, workspace model, panel registry, command registry,
   and static web shell served by a small Rust binary.
+
+## v0.2 Almost-v1 Beta Status
+
+The current v0.2 pass adds a dedicated hosted API/server crate and release
+planning docs. The new `ham-server` crate introduces `/api/v1` hosted routes,
+bearer login/session handling, device identity/revocation, logbook membership
+roles, and proposal-backed QSO create/edit/delete/restore/note flows.
+
+This is not yet a production hosted release. Server account/session/device state
+is in-memory beta scaffolding, durable sync/report storage still needs to land,
+production credential backends are pending, live provider adapters remain
+provider-framework work, and desktop packaging/native dialogs are still v0.2
+gaps.
 
 ## Architecture
 
@@ -1024,6 +1045,7 @@ just build    # debug build for all workspace crates
 just release  # release build for all workspace crates
 just gui      # run the local GUI shell at http://127.0.0.1:9467
 just sync-server # run the self-hosted sync server at http://127.0.0.1:9740
+cargo run -p ham-server --bin ham-server # run hosted beta API at http://127.0.0.1:9750
 just ci       # formatting check, clippy, tests, and debug build
 ```
 
@@ -1038,6 +1060,7 @@ cargo build --workspace
 cargo build --release --workspace
 cargo run -p ham-gui --bin ham-gui
 cargo run -p ham-sync-server --bin ham-sync-server
+cargo run -p ham-server --bin ham-server
 ```
 
 ## CI

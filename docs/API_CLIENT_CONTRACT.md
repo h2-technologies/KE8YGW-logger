@@ -20,12 +20,30 @@ in v1.1.
 - Official log mutations must flow through validated proposals or verified
   event replication paths.
 
+## Versioned API Strategy
+
+`/api/v1` is the stable beta contract for hosted web, desktop, self-hosted
+server, and the future native iOS client. Backward-compatible fields may be
+added under `/api/v1`; breaking changes require a new API version.
+
+Current `ham-server` routes reserve the broader v0.2 surface while implementing
+auth, sessions, devices, logbooks, QSO lifecycle, provider listing, and sync
+preview/push status slices first.
+
 ## Authentication
 
 The current sync API uses a pairing request that returns a `sync_token`.
 Production v1.0 login may replace or supplement pairing for hosted web and
 desktop sessions, but the resulting client token contract must remain stable for
 future native clients.
+
+The hosted beta API uses bearer sessions:
+
+- `POST /api/v1/auth/login` creates or restores a beta account session.
+- `GET /api/v1/auth/session` returns account, session, device, and membership
+  data.
+- `POST /api/v1/auth/logout` invalidates the session.
+- Authenticated requests use `Authorization: Bearer <token>`.
 
 Current token transport:
 
@@ -40,6 +58,25 @@ v1.0 hardening target:
 - Never log tokens or include them in diagnostic bundles.
 - Tokens must be revocable and scoped to account, user, device, and authorized
   logbooks.
+
+## Account, Device, and Logbook Scope
+
+Client calls are scoped by account, logbook, user, and device:
+
+- `UserAccount` owns the user/account identity.
+- `LoginSession` binds a bearer token to account, user, and device.
+- `DeviceIdentity` tracks desktop/web/native-client installs and revocation.
+- `LogbookMembership` grants a user a role on a logbook.
+- `LogbookRole` is `owner`, `admin`, `operator`, or `viewer`.
+
+Cross-logbook access must be rejected. Revoked device sessions must not sync.
+Viewer sessions must not mutate official log state.
+
+## Proposal-Based Official Mutations
+
+Hosted QSO create, edit, delete, restore, and note routes submit
+`ProposalEnvelope` values to `ham-core::submit_proposal`. The hosted API must
+not directly create or modify official QSO records.
 
 ## Error Shape
 
