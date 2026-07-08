@@ -45,7 +45,7 @@ The hosted beta API uses bearer sessions:
 - `POST /api/v1/auth/logout` invalidates the session.
 - Authenticated requests use `Authorization: Bearer <token>`.
 
-Hosted beta sessions are persisted in the server metadata database. A server
+Hosted beta sessions are persisted in the SurrealDB server metadata store. A server
 restart must not invalidate an active session by itself. Logout persists the
 inactive session state, so a logged-out token remains invalid after restart.
 
@@ -271,7 +271,9 @@ Returns connection state, account/device identity when authenticated, server
 URL, and accessible logbook heads.
 
 The sync/report service persists sync sessions, device revocation state,
-per-account logbook access, current sync heads, and report metadata in SQLite.
+per-account logbook access, current sync heads, sync event references, report
+metadata, provider settings without secrets, and upload queue/history metadata
+in SurrealDB.
 Official replicated event envelopes are stored append-only in JSONL. Clients
 should expect preview, push, pull, and status responses to survive server
 restart without requiring re-pairing, unless the device or token was revoked.

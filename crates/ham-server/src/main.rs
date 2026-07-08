@@ -5,7 +5,7 @@ use std::{
     process,
 };
 
-use ham_server::{default_metadata_db_path, parse_query, split_target, ApiRequest, HostedServer};
+use ham_server::{parse_query, split_target, ApiRequest, HostedServer, SurrealHostedConfig};
 
 fn main() {
     let addr = env::var("HAM_SERVER_BIND").unwrap_or_else(|_| "127.0.0.1:9750".to_owned());
@@ -17,22 +17,20 @@ fn main() {
         }
     };
     let runtime = tokio::runtime::Runtime::new().expect("ham-server runtime should start");
-    let metadata_db = env::var("HAM_SERVER_METADATA_DB")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|_| default_metadata_db_path());
-    let server = match HostedServer::with_sqlite_metadata(&metadata_db) {
+    let metadata_config = SurrealHostedConfig::from_env();
+    let metadata_label = metadata_config.label();
+    let server = match HostedServer::with_surreal_config(metadata_config) {
         Ok(server) => server,
         Err(error) => {
             eprintln!(
-                "failed to open ham-server metadata database at {}: {error}",
-                metadata_db.display()
+                "failed to open ham-server SurrealDB metadata store at {metadata_label}: {error}"
             );
             process::exit(1);
         }
     };
 
     println!("ham-server listening on http://{addr}");
-    println!("metadata database: {}", metadata_db.display());
+    println!("metadata store: {metadata_label}");
 
     for stream in listener.incoming() {
         match stream {

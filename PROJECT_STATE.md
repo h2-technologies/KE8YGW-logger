@@ -179,7 +179,7 @@ The Online Services ecosystem is implemented as a provider-backed service layer.
 
 Sync is split between `ham-sync` for protocol, peer, LAN/cloud models, safe replication, in-memory test server logic, and durable sync/report server logic, plus `ham-sync-server` for the self-hosted HTTP-like server binary. LAN is preferred. Cloud/self-hosted sync is a fallback and uses the same verification rules.
 
-Storage uses append-only JSONL official events for the MVP. Hosted server metadata uses SQLite for users, sessions, devices, logbooks, memberships, API tokens, invites, and schema migrations. The sync/report server uses SQLite for sync metadata, append-only JSONL for replicated official events, and filesystem-backed diagnostic report payloads. Runtime logs are separate rotating JSONL files. Support/config state uses lightweight versioned JSON files for provider settings, service cache metadata, upload queue state, map layer preferences, lookup/rig UI config, online automation/notification support state, station profiles, saved searches, permission grants, and credential metadata. Secret values remain outside support storage behind `CredentialStore`.
+Storage uses append-only JSONL official events for the MVP. Hosted server metadata uses SurrealDB for users, sessions, devices, logbooks, memberships, API tokens, invites, and schema migrations. The sync/report server uses SurrealDB for sync/support metadata, append-only JSONL for replicated official events, and filesystem-backed diagnostic report payloads. Runtime logs are separate rotating JSONL files. Local GUI support/config state still uses lightweight versioned JSON files for map layer preferences, lookup/rig UI config, station profiles, saved searches, permission grants, and credential metadata. Secret values remain outside support storage behind `CredentialStore`.
 
 The GUI is `ham-gui`, a web-first shell served by Rust. It is Tauri-ready but not yet a packaged Tauri app. It consumes core bridge APIs, projections, runtime events, service framework state, and proposal endpoints.
 
@@ -203,7 +203,7 @@ Diagnostics include runtime event logs, redaction helpers, report ZIP generation
 - `crates/ham-plugin-sdk`: plugin manifest, capabilities, service types, proposal envelope, public event constants.
 - `crates/ham-sync`: LAN discovery/handshake models, peer registry, safe replication, cloud API/client/server models, durable sync/report storage, and report upload models.
 - `crates/ham-sync-server`: self-hosted sync/report HTTP-like server binary using durable local storage by default.
-- `crates/ham-server`: hosted web/server API boundary with durable SQLite account, session, device, logbook, role, provider, sync, and QSO lifecycle metadata routes.
+- `crates/ham-server`: hosted web/server API boundary with durable SurrealDB account, session, device, logbook, role, provider, sync, and QSO lifecycle metadata routes.
 - `crates/ham-gui`: Rust bridge/server, GUI shell models, command registry, static web UI.
 - `crates/ham-cli`: CLI commands for ADIF and chain/projection operations.
 - `docs/architecture`: service framework, online services, station profiles, award engine, search, and upload queue architecture notes.
@@ -260,9 +260,13 @@ Diagnostics include runtime event logs, redaction helpers, report ZIP generation
 
 - Several blueprint-recommended crates are currently implemented as modules inside `ham-core`; this is acceptable for MVP but should be revisited as APIs grow.
 - The GUI is a static web shell served by Rust rather than a packaged Tauri desktop app.
-- `ham-server` now defines the hosted API boundary and persists account/session/device/logbook metadata in SQLite.
+- `ham-server` now defines the hosted API boundary and persists account/session/device/logbook metadata in SurrealDB.
 - Plugin loading is static; no sandbox, signature verification, or process isolation exists yet.
-- The sync server uses durable SQLite metadata, JSONL official event storage, and filesystem report payload storage; production migration/retention policy still needs hardening.
+- The sync server uses durable SurrealDB metadata/support storage, JSONL official event storage, and filesystem report payload storage; production migration/retention policy still needs hardening.
+- Embedded local SurrealDB currently uses SurrealKV. On Windows, SurrealKV holds
+  an exclusive in-process file lock, so unit tests verify durable reloads
+  through the storage abstraction instead of opening a second embedded handle to
+  the same directory in one process.
 - LAN discovery/replication has strong models but needs real multi-instance transport wiring.
 - Permission scopes are mostly recorded rather than fully enforced.
 - Station profile editing exists in core models but not yet as full GUI forms.
@@ -377,9 +381,9 @@ Completed work:
 - Enforced account/logbook/device scoping in the hosted QSO slice.
 - Kept QSO create/edit/delete/restore/note writes on the existing proposal pipeline.
 - Added route-level tests for cross-logbook rejection, role behavior, logout invalidation, revoked device sync rejection, route catalog coverage, and QSO create/list/edit/delete/restore/note lifecycle.
-- Added SQLite-backed hosted metadata persistence for users, login sessions, devices, logbooks, memberships, API tokens, server invites, and schema migrations.
+- Replaced SQLite-backed hosted metadata persistence with SurrealDB-backed persistence for users, login sessions, devices, logbooks, memberships, API tokens, server invites, and schema migrations.
 - Updated `ham-server` to use durable metadata storage by default, with in-memory storage retained for focused tests.
-- Added durable sync/report storage using SQLite metadata, append-only JSONL official event storage, and filesystem diagnostic report payloads.
+- Added durable sync/report/support storage using SurrealDB metadata, append-only JSONL official event storage, filesystem diagnostic report payloads, provider settings without secrets, and upload queue/history metadata.
 - Updated `ham-sync-server` to start with durable local storage by default.
 - Added restart tests for hosted metadata persistence, sync state persistence, device revocation persistence, invalid chain rejection after restart, and diagnostic report metadata/payload persistence.
 - Added `docs/V0_2_RELEASE_PLAN.md`, `docs/DESKTOP_RELEASE.md`, and `docs/HOSTED_WEB_RELEASE.md`.
@@ -418,7 +422,7 @@ Quality gates from this v0.2 slice:
 - `cargo fmt --all -- --check`: passed.
 - `cargo check --workspace --all-targets`: passed.
 - `cargo clippy --workspace --all-targets -- -D warnings`: passed.
-- `cargo test --workspace`: passed, 178 Rust tests total.
+- `cargo test --workspace`: passed, 180 Rust tests total.
 - `node --check crates/ham-gui/web/app.js`: passed.
 - `cargo build -p ham-server`: passed.
 - `cargo build -p ham-sync-server`: passed.
@@ -475,18 +479,19 @@ Major files changed:
 
 Storage schema added:
 
-- `ham-server` SQLite metadata: `schema_migrations`, `users`,
+- `ham-server` SurrealDB metadata: `schema_migrations`, `users`,
   `login_sessions`, `devices`, `logbooks`, `logbook_memberships`,
   `api_tokens`, and `server_invites`.
-- `ham-sync` SQLite metadata: `schema_migrations`, `sync_sessions`,
-  `sync_devices`, `sync_logbook_access`, `pairing_tokens`, `sync_state`, and
-  `diagnostic_reports`.
+- `ham-sync` SurrealDB metadata/support state: `schema_migrations`,
+  `sync_sessions`, `sync_devices`, `sync_logbook_access`, `pairing_tokens`,
+  `sync_heads`, `sync_event_refs`, `diagnostic_reports`, `provider_settings`,
+  and `upload_queue_history`.
 - `ham-sync` durable payloads: append-only JSONL official event log and
   filesystem diagnostic report bundles.
 
 Architectural decisions:
 
-- `ham-server` uses SQLite metadata by default in the binary; in-memory metadata
+- `ham-server` uses SurrealDB metadata by default in the binary; in-memory metadata
   remains available for focused route tests.
 - `ham-sync-server` uses durable local storage by default; the in-memory cloud
   sync server remains available for deterministic unit tests.

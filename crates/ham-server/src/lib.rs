@@ -1,8 +1,9 @@
 use std::{
     collections::HashMap,
     fs,
-    path::{Path, PathBuf},
+    path::PathBuf,
     sync::{Arc, Mutex},
+    thread,
 };
 
 use chrono::{DateTime, Utc};
@@ -17,12 +18,24 @@ use ham_plugin_sdk::{
 use ham_sync::{
     preview_pull_from_events, CloudPushEventsRequest, LogbookHeadSummary, PreviewPullRequest,
 };
-use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Map, Value};
+use serde_json::{json, Map, Value as JsonValue};
+use sha2::{Digest, Sha256};
+use surrealdb::{
+    engine::{
+        any::Any,
+        local::{Db, SurrealKv},
+    },
+    opt::auth::Root,
+    types::Value as SurrealDbValue,
+    Surreal,
+};
 use thiserror::Error;
+use tokio::runtime::Runtime;
 use tokio::sync::RwLock;
 use uuid::Uuid;
+
+type Value = JsonValue;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UserAccount {
@@ -218,10 +231,12 @@ pub enum ApiError {
 pub enum MetadataStoreError {
     #[error("metadata store I/O error: {0}")]
     Io(#[from] std::io::Error),
-    #[error("metadata store SQLite error: {0}")]
-    Sqlite(#[from] rusqlite::Error),
+    #[error("metadata store SurrealDB error: {0}")]
+    Surreal(#[from] surrealdb::Error),
     #[error("metadata store serialization error: {0}")]
     Serde(#[from] serde_json::Error),
+    #[error("metadata store thread failed")]
+    Thread,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -354,230 +369,362 @@ impl HostedMetadataStore for InMemoryMetadataStore {
 }
 
 #[derive(Debug, Clone)]
-pub struct SqliteHostedMetadataStore {
-    path: PathBuf,
+pub enum SurrealHostedEndpoint {
+    LocalSurrealKv {
+        path: PathBuf,
+    },
+    RemoteWs {
+        endpoint: String,
+        username: String,
+        password: String,
+    },
 }
 
-impl SqliteHostedMetadataStore {
-    pub fn open(path: impl Into<PathBuf>) -> Result<Self, MetadataStoreError> {
-        let path = path.into();
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)?;
+#[derive(Debug, Clone)]
+pub struct SurrealHostedConfig {
+    pub endpoint: SurrealHostedEndpoint,
+    pub namespace: String,
+    pub database: String,
+}
+
+impl SurrealHostedConfig {
+    pub fn local(path: impl Into<PathBuf>) -> Self {
+        Self {
+            endpoint: SurrealHostedEndpoint::LocalSurrealKv { path: path.into() },
+            namespace: "ke8ygw".to_owned(),
+            database: "ham_server".to_owned(),
         }
-        let store = Self { path };
-        store.initialize_schema()?;
-        Ok(store)
     }
 
-    pub fn path(&self) -> &Path {
-        &self.path
+    pub fn from_env() -> Self {
+        let namespace =
+            std::env::var("HAM_SERVER_SURREAL_NAMESPACE").unwrap_or_else(|_| "ke8ygw".to_owned());
+        let database = std::env::var("HAM_SERVER_SURREAL_DATABASE")
+            .unwrap_or_else(|_| "ham_server".to_owned());
+        if let Ok(endpoint) = std::env::var("HAM_SERVER_SURREAL_ENDPOINT") {
+            return Self {
+                endpoint: SurrealHostedEndpoint::RemoteWs {
+                    endpoint,
+                    username: std::env::var("HAM_SERVER_SURREAL_USER")
+                        .unwrap_or_else(|_| "root".to_owned()),
+                    password: std::env::var("HAM_SERVER_SURREAL_PASS")
+                        .unwrap_or_else(|_| "root".to_owned()),
+                },
+                namespace,
+                database,
+            };
+        }
+        Self {
+            endpoint: SurrealHostedEndpoint::LocalSurrealKv {
+                path: default_metadata_store_path(),
+            },
+            namespace,
+            database,
+        }
     }
 
-    fn connection(&self) -> Result<Connection, MetadataStoreError> {
-        Ok(Connection::open(&self.path)?)
-    }
-
-    fn initialize_schema(&self) -> Result<(), MetadataStoreError> {
-        let connection = self.connection()?;
-        connection.execute_batch(
-            r#"
-            CREATE TABLE IF NOT EXISTS schema_migrations (
-                version INTEGER PRIMARY KEY,
-                applied_at TEXT NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS users (
-                account_id TEXT PRIMARY KEY NOT NULL,
-                email TEXT NOT NULL UNIQUE,
-                payload TEXT NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS login_sessions (
-                token TEXT PRIMARY KEY NOT NULL,
-                account_id TEXT NOT NULL,
-                user_id TEXT NOT NULL,
-                device_id TEXT NOT NULL,
-                active INTEGER NOT NULL,
-                payload TEXT NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS devices (
-                device_id TEXT PRIMARY KEY NOT NULL,
-                account_id TEXT NOT NULL,
-                user_id TEXT NOT NULL,
-                revoked INTEGER NOT NULL,
-                payload TEXT NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS logbooks (
-                logbook_id TEXT PRIMARY KEY NOT NULL,
-                account_id TEXT NOT NULL,
-                payload TEXT NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS logbook_memberships (
-                logbook_id TEXT NOT NULL,
-                user_id TEXT NOT NULL,
-                account_id TEXT NOT NULL,
-                role TEXT NOT NULL,
-                payload TEXT NOT NULL,
-                PRIMARY KEY (logbook_id, user_id)
-            );
-            CREATE TABLE IF NOT EXISTS api_tokens (
-                token_id TEXT PRIMARY KEY NOT NULL,
-                account_id TEXT NOT NULL,
-                user_id TEXT NOT NULL,
-                device_id TEXT NOT NULL,
-                revoked INTEGER NOT NULL,
-                payload TEXT NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS server_invites (
-                invite_id TEXT PRIMARY KEY NOT NULL,
-                account_id TEXT NOT NULL,
-                logbook_id TEXT NOT NULL,
-                token TEXT NOT NULL UNIQUE,
-                payload TEXT NOT NULL
-            );
-            INSERT OR IGNORE INTO schema_migrations(version, applied_at)
-            VALUES (1, datetime('now'));
-            "#,
-        )?;
-        Ok(())
+    pub fn label(&self) -> String {
+        match &self.endpoint {
+            SurrealHostedEndpoint::LocalSurrealKv { path } => {
+                format!("surrealdb+surrealkv://{}", path.display())
+            }
+            SurrealHostedEndpoint::RemoteWs { endpoint, .. } => {
+                format!("surrealdb+remote://{endpoint}")
+            }
+        }
     }
 }
 
-impl HostedMetadataStore for SqliteHostedMetadataStore {
+#[derive(Clone)]
+enum SurrealHostedClient {
+    Local(Surreal<Db>),
+    Remote(Surreal<Any>),
+}
+
+impl std::fmt::Debug for SurrealHostedClient {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Local(_) => formatter.write_str("Local(Surreal<Db>)"),
+            Self::Remote(_) => formatter.write_str("Remote(Surreal<Any>)"),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct SurrealHostedMetadataStore {
+    runtime: Arc<Mutex<Option<Runtime>>>,
+    client: Arc<Mutex<Option<SurrealHostedClient>>>,
+    config: SurrealHostedConfig,
+}
+
+#[derive(Debug, Deserialize)]
+struct PayloadRow<T> {
+    payload: T,
+}
+
+impl SurrealHostedMetadataStore {
+    pub fn open(config: SurrealHostedConfig) -> Result<Self, MetadataStoreError> {
+        let (runtime, client) = thread::spawn({
+            let config = config.clone();
+            move || {
+                let runtime = Runtime::new().map_err(MetadataStoreError::Io)?;
+                let client = runtime.block_on(async {
+                    let client = connect_hosted_surreal(&config).await?;
+                    initialize_hosted_schema(&client).await?;
+                    Ok::<_, MetadataStoreError>(client)
+                })?;
+                Ok::<_, MetadataStoreError>((runtime, client))
+            }
+        })
+        .join()
+        .map_err(|_| MetadataStoreError::Thread)??;
+        Ok(Self {
+            runtime: Arc::new(Mutex::new(Some(runtime))),
+            client: Arc::new(Mutex::new(Some(client))),
+            config,
+        })
+    }
+
+    pub fn open_local(path: impl Into<PathBuf>) -> Result<Self, MetadataStoreError> {
+        Self::open(SurrealHostedConfig::local(path))
+    }
+
+    fn run<T, Fut>(
+        &self,
+        operation: impl FnOnce(SurrealHostedClient) -> Fut + Send + 'static,
+    ) -> Result<T, MetadataStoreError>
+    where
+        T: Send + 'static,
+        Fut: std::future::Future<Output = Result<T, MetadataStoreError>> + Send + 'static,
+    {
+        let runtime = self.runtime.clone();
+        let client = self
+            .client
+            .lock()
+            .expect("SurrealDB client mutex should not be poisoned")
+            .as_ref()
+            .ok_or(MetadataStoreError::Thread)?
+            .clone();
+        thread::spawn(move || {
+            let guard = runtime
+                .lock()
+                .expect("SurrealDB runtime mutex should not be poisoned");
+            let runtime = guard.as_ref().ok_or(MetadataStoreError::Thread)?;
+            runtime.block_on(operation(client))
+        })
+        .join()
+        .map_err(|_| MetadataStoreError::Thread)?
+    }
+}
+
+impl Drop for SurrealHostedMetadataStore {
+    fn drop(&mut self) {
+        let client = self
+            .client
+            .lock()
+            .expect("SurrealDB client mutex should not be poisoned")
+            .take();
+        let runtime = self
+            .runtime
+            .lock()
+            .expect("SurrealDB runtime mutex should not be poisoned")
+            .take();
+        if client.is_some() || runtime.is_some() {
+            let _ = thread::spawn(move || {
+                drop(client);
+                drop(runtime);
+            })
+            .join();
+        }
+    }
+}
+
+async fn connect_hosted_surreal(
+    config: &SurrealHostedConfig,
+) -> Result<SurrealHostedClient, MetadataStoreError> {
+    match &config.endpoint {
+        SurrealHostedEndpoint::LocalSurrealKv { path } => {
+            fs::create_dir_all(path)?;
+            let db = Surreal::new::<SurrealKv>(path.display().to_string()).await?;
+            db.use_ns(&config.namespace)
+                .use_db(&config.database)
+                .await?;
+            Ok(SurrealHostedClient::Local(db))
+        }
+        SurrealHostedEndpoint::RemoteWs {
+            endpoint,
+            username,
+            password,
+        } => {
+            let db = Surreal::<Any>::init();
+            db.connect(endpoint.as_str()).await?;
+            db.signin(Root {
+                username: username.clone(),
+                password: password.clone(),
+            })
+            .await?;
+            db.use_ns(&config.namespace)
+                .use_db(&config.database)
+                .await?;
+            Ok(SurrealHostedClient::Remote(db))
+        }
+    }
+}
+
+impl HostedMetadataStore for SurrealHostedMetadataStore {
     fn load(&self) -> Result<ServerState, MetadataStoreError> {
-        let connection = self.connection()?;
-        let mut state = ServerState::default();
+        self.run(|client| async move {
+            let mut state = ServerState::default();
 
-        for account in load_payloads::<UserAccount>(&connection, "users")? {
-            state
-                .users_by_email
-                .insert(account.email.clone(), account.account_id);
-            state.accounts.insert(account.account_id, account);
-        }
-        for session in load_payloads::<LoginSession>(&connection, "login_sessions")? {
-            state
-                .sessions_by_token
-                .insert(session.token.clone(), session);
-        }
-        for device in load_payloads::<DeviceIdentity>(&connection, "devices")? {
-            state.devices.insert(device.device_id, device);
-        }
-        for logbook in load_payloads::<ApiLogbook>(&connection, "logbooks")? {
-            state.logbooks.insert(logbook.logbook_id, logbook);
-        }
-        state.memberships = load_payloads::<LogbookMembership>(&connection, "logbook_memberships")?;
-        for token in load_payloads::<ApiToken>(&connection, "api_tokens")? {
-            state.api_tokens.insert(token.token_id, token);
-        }
-        for invite in load_payloads::<ServerInvite>(&connection, "server_invites")? {
-            state.invites.insert(invite.invite_id, invite);
-        }
+            for account in select_payloads::<UserAccount>(&client, "users").await? {
+                state
+                    .users_by_email
+                    .insert(account.email.clone(), account.account_id);
+                state.accounts.insert(account.account_id, account);
+            }
+            for session in select_payloads::<LoginSession>(&client, "login_sessions").await? {
+                state
+                    .sessions_by_token
+                    .insert(session.token.clone(), session);
+            }
+            for device in select_payloads::<DeviceIdentity>(&client, "devices").await? {
+                state.devices.insert(device.device_id, device);
+            }
+            for logbook in select_payloads::<ApiLogbook>(&client, "logbooks").await? {
+                state.logbooks.insert(logbook.logbook_id, logbook);
+            }
+            state.memberships =
+                select_payloads::<LogbookMembership>(&client, "logbook_memberships").await?;
+            for token in select_payloads::<ApiToken>(&client, "api_tokens").await? {
+                state.api_tokens.insert(token.token_id, token);
+            }
+            for invite in select_payloads::<ServerInvite>(&client, "server_invites").await? {
+                state.invites.insert(invite.invite_id, invite);
+            }
 
-        Ok(state)
+            Ok(state)
+        })
     }
 
     fn save(&self, state: &ServerState) -> Result<(), MetadataStoreError> {
-        let mut connection = self.connection()?;
-        let transaction = connection.transaction()?;
-        for table in [
-            "users",
-            "login_sessions",
-            "devices",
-            "logbooks",
-            "logbook_memberships",
-            "api_tokens",
-            "server_invites",
-        ] {
-            transaction.execute(&format!("DELETE FROM {table}"), [])?;
-        }
+        let state = state.clone();
+        self.run(move |client| async move {
+            for table in [
+                "users",
+                "login_sessions",
+                "devices",
+                "logbooks",
+                "logbook_memberships",
+                "api_tokens",
+                "server_invites",
+            ] {
+                delete_table(&client, table).await?;
+            }
 
-        for account in state.accounts.values() {
-            transaction.execute(
-                "INSERT INTO users(account_id, email, payload) VALUES (?1, ?2, ?3)",
-                params![
+            for account in state.accounts.values() {
+                create_record(
+                    &client,
+                    "users",
                     account.account_id.to_string(),
-                    account.email,
-                    serde_json::to_string(account)?
-                ],
-            )?;
-        }
-        for session in state.sessions_by_token.values() {
-            transaction.execute(
-                "INSERT INTO login_sessions(token, account_id, user_id, device_id, active, payload)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                params![
-                    session.token,
-                    session.account_id.to_string(),
-                    session.user_id.to_string(),
-                    session.device_id.to_string(),
-                    if session.active { 1_i64 } else { 0_i64 },
-                    serde_json::to_string(session)?
-                ],
-            )?;
-        }
-        for device in state.devices.values() {
-            transaction.execute(
-                "INSERT INTO devices(device_id, account_id, user_id, revoked, payload)
-                 VALUES (?1, ?2, ?3, ?4, ?5)",
-                params![
+                    json!({
+                        "account_id": account.account_id,
+                        "user_id": account.user_id,
+                        "email": account.email,
+                        "payload": account,
+                    }),
+                )
+                .await?;
+            }
+            for session in state.sessions_by_token.values() {
+                create_record(
+                    &client,
+                    "login_sessions",
+                    session_token_hash(&session.token),
+                    json!({
+                        "account_id": session.account_id,
+                        "user_id": session.user_id,
+                        "device_id": session.device_id,
+                        "active": session.active,
+                        "token_hash": session_token_hash(&session.token),
+                        "payload": session,
+                    }),
+                )
+                .await?;
+            }
+            for device in state.devices.values() {
+                create_record(
+                    &client,
+                    "devices",
                     device.device_id.to_string(),
-                    device.account_id.to_string(),
-                    device.user_id.to_string(),
-                    if device.revoked { 1_i64 } else { 0_i64 },
-                    serde_json::to_string(device)?
-                ],
-            )?;
-        }
-        for logbook in state.logbooks.values() {
-            transaction.execute(
-                "INSERT INTO logbooks(logbook_id, account_id, payload) VALUES (?1, ?2, ?3)",
-                params![
+                    json!({
+                        "account_id": device.account_id,
+                        "user_id": device.user_id,
+                        "device_id": device.device_id,
+                        "revoked": device.revoked,
+                        "payload": device,
+                    }),
+                )
+                .await?;
+            }
+            for logbook in state.logbooks.values() {
+                create_record(
+                    &client,
+                    "logbooks",
                     logbook.logbook_id.to_string(),
-                    logbook.account_id.to_string(),
-                    serde_json::to_string(logbook)?
-                ],
-            )?;
-        }
-        for membership in &state.memberships {
-            transaction.execute(
-                "INSERT INTO logbook_memberships(logbook_id, user_id, account_id, role, payload)
-                 VALUES (?1, ?2, ?3, ?4, ?5)",
-                params![
-                    membership.logbook_id.to_string(),
-                    membership.user_id.to_string(),
-                    membership.account_id.to_string(),
-                    serde_json::to_string(&membership.role)?,
-                    serde_json::to_string(membership)?
-                ],
-            )?;
-        }
-        for token in state.api_tokens.values() {
-            transaction.execute(
-                "INSERT INTO api_tokens(token_id, account_id, user_id, device_id, revoked, payload)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                params![
+                    json!({
+                        "account_id": logbook.account_id,
+                        "logbook_id": logbook.logbook_id,
+                        "payload": logbook,
+                    }),
+                )
+                .await?;
+            }
+            for membership in &state.memberships {
+                create_record(
+                    &client,
+                    "logbook_memberships",
+                    format!("{}-{}", membership.logbook_id, membership.user_id),
+                    json!({
+                        "account_id": membership.account_id,
+                        "logbook_id": membership.logbook_id,
+                        "user_id": membership.user_id,
+                        "role": membership.role,
+                        "payload": membership,
+                    }),
+                )
+                .await?;
+            }
+            for token in state.api_tokens.values() {
+                create_record(
+                    &client,
+                    "api_tokens",
                     token.token_id.to_string(),
-                    token.account_id.to_string(),
-                    token.user_id.to_string(),
-                    token.device_id.to_string(),
-                    if token.revoked { 1_i64 } else { 0_i64 },
-                    serde_json::to_string(token)?
-                ],
-            )?;
-        }
-        for invite in state.invites.values() {
-            transaction.execute(
-                "INSERT INTO server_invites(invite_id, account_id, logbook_id, token, payload)
-                 VALUES (?1, ?2, ?3, ?4, ?5)",
-                params![
+                    json!({
+                        "account_id": token.account_id,
+                        "user_id": token.user_id,
+                        "device_id": token.device_id,
+                        "revoked": token.revoked,
+                        "payload": token,
+                    }),
+                )
+                .await?;
+            }
+            for invite in state.invites.values() {
+                create_record(
+                    &client,
+                    "server_invites",
                     invite.invite_id.to_string(),
-                    invite.account_id.to_string(),
-                    invite.logbook_id.to_string(),
-                    invite.token,
-                    serde_json::to_string(invite)?
-                ],
-            )?;
-        }
-        transaction.commit()?;
-        Ok(())
+                    json!({
+                        "account_id": invite.account_id,
+                        "logbook_id": invite.logbook_id,
+                        "token": invite.token,
+                        "payload": invite,
+                    }),
+                )
+                .await?;
+            }
+            Ok(())
+        })
     }
 
     fn is_durable(&self) -> bool {
@@ -585,21 +732,112 @@ impl HostedMetadataStore for SqliteHostedMetadataStore {
     }
 
     fn label(&self) -> String {
-        self.path.display().to_string()
+        self.config.label()
     }
 }
 
-fn load_payloads<T: for<'de> Deserialize<'de>>(
-    connection: &Connection,
-    table: &str,
-) -> Result<Vec<T>, MetadataStoreError> {
-    let mut statement = connection.prepare(&format!("SELECT payload FROM {table}"))?;
-    let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
-    let mut values = Vec::new();
-    for row in rows {
-        values.push(serde_json::from_str(&row?)?);
+async fn initialize_hosted_schema(client: &SurrealHostedClient) -> Result<(), MetadataStoreError> {
+    let schema = r#"
+        DEFINE TABLE IF NOT EXISTS schema_migrations SCHEMALESS;
+        DEFINE TABLE IF NOT EXISTS users SCHEMALESS;
+        DEFINE TABLE IF NOT EXISTS login_sessions SCHEMALESS;
+        DEFINE TABLE IF NOT EXISTS devices SCHEMALESS;
+        DEFINE TABLE IF NOT EXISTS logbooks SCHEMALESS;
+        DEFINE TABLE IF NOT EXISTS logbook_memberships SCHEMALESS;
+        DEFINE TABLE IF NOT EXISTS api_tokens SCHEMALESS;
+        DEFINE TABLE IF NOT EXISTS server_invites SCHEMALESS;
+        DEFINE INDEX IF NOT EXISTS users_email_idx ON TABLE users COLUMNS email UNIQUE;
+        DEFINE INDEX IF NOT EXISTS users_account_idx ON TABLE users COLUMNS account_id;
+        DEFINE INDEX IF NOT EXISTS sessions_token_hash_idx ON TABLE login_sessions COLUMNS token_hash UNIQUE;
+        DEFINE INDEX IF NOT EXISTS sessions_account_idx ON TABLE login_sessions COLUMNS account_id;
+        DEFINE INDEX IF NOT EXISTS sessions_device_idx ON TABLE login_sessions COLUMNS device_id;
+        DEFINE INDEX IF NOT EXISTS devices_account_idx ON TABLE devices COLUMNS account_id;
+        DEFINE INDEX IF NOT EXISTS devices_device_idx ON TABLE devices COLUMNS device_id;
+        DEFINE INDEX IF NOT EXISTS logbooks_account_idx ON TABLE logbooks COLUMNS account_id;
+        DEFINE INDEX IF NOT EXISTS memberships_account_idx ON TABLE logbook_memberships COLUMNS account_id;
+        DEFINE INDEX IF NOT EXISTS memberships_logbook_idx ON TABLE logbook_memberships COLUMNS logbook_id;
+        DEFINE INDEX IF NOT EXISTS api_tokens_account_idx ON TABLE api_tokens COLUMNS account_id;
+        DEFINE INDEX IF NOT EXISTS invites_account_idx ON TABLE server_invites COLUMNS account_id;
+        UPSERT schema_migrations:hosted_v1 SET version = 1, component = 'ham-server', applied_at = time::now();
+    "#;
+    query_checked(client, schema).await
+}
+
+async fn query_checked(
+    client: &SurrealHostedClient,
+    query: &str,
+) -> Result<(), MetadataStoreError> {
+    match client {
+        SurrealHostedClient::Local(db) => {
+            db.query(query).await?.check()?;
+        }
+        SurrealHostedClient::Remote(db) => {
+            db.query(query).await?.check()?;
+        }
     }
-    Ok(values)
+    Ok(())
+}
+
+async fn delete_table(
+    client: &SurrealHostedClient,
+    table: &'static str,
+) -> Result<(), MetadataStoreError> {
+    match client {
+        SurrealHostedClient::Local(db) => {
+            let _: Vec<SurrealDbValue> = db.delete(table).await?;
+        }
+        SurrealHostedClient::Remote(db) => {
+            let _: Vec<SurrealDbValue> = db.delete(table).await?;
+        }
+    }
+    Ok(())
+}
+
+async fn create_record(
+    client: &SurrealHostedClient,
+    table: &'static str,
+    id: String,
+    content: Value,
+) -> Result<(), MetadataStoreError> {
+    match client {
+        SurrealHostedClient::Local(db) => {
+            let _: Option<SurrealDbValue> =
+                db.upsert((table, id.as_str())).content(content).await?;
+        }
+        SurrealHostedClient::Remote(db) => {
+            let _: Option<SurrealDbValue> =
+                db.upsert((table, id.as_str())).content(content).await?;
+        }
+    }
+    Ok(())
+}
+
+async fn select_payloads<T: for<'de> Deserialize<'de>>(
+    client: &SurrealHostedClient,
+    table: &'static str,
+) -> Result<Vec<T>, MetadataStoreError> {
+    let query = format!("SELECT * FROM {table};");
+    let rows: Vec<SurrealDbValue> = match client {
+        SurrealHostedClient::Local(db) => {
+            let mut response = db.query(query.as_str()).await?;
+            response.take(0)?
+        }
+        SurrealHostedClient::Remote(db) => {
+            let mut response = db.query(query.as_str()).await?;
+            response.take(0)?
+        }
+    };
+    rows.into_iter()
+        .map(|row| {
+            serde_json::from_value::<PayloadRow<T>>(row.into_json_value())
+                .map(|row| row.payload)
+                .map_err(MetadataStoreError::Serde)
+        })
+        .collect()
+}
+
+fn session_token_hash(token: &str) -> String {
+    format!("{:x}", Sha256::digest(token.as_bytes()))
 }
 
 #[derive(Debug, Clone)]
@@ -610,13 +848,9 @@ pub struct HostedServer {
     bus: Arc<InMemoryEventBus>,
 }
 
-pub fn default_metadata_db_path() -> PathBuf {
-    std::env::var("HAM_SERVER_METADATA_DB").map_or_else(
-        |_| {
-            default_log_directory()
-                .join("server")
-                .join("ham-server.sqlite3")
-        },
+pub fn default_metadata_store_path() -> PathBuf {
+    std::env::var("HAM_SERVER_SURREAL_PATH").map_or_else(
+        |_| default_log_directory().join("server").join("surrealdb"),
         PathBuf::from,
     )
 }
@@ -637,8 +871,13 @@ impl HostedServer {
         Self::with_metadata_store(metadata_store).expect("in-memory metadata store should load")
     }
 
-    pub fn with_sqlite_metadata(path: impl Into<PathBuf>) -> Result<Self, MetadataStoreError> {
-        let metadata_store = Arc::new(SqliteHostedMetadataStore::open(path)?);
+    pub fn with_surreal_metadata(path: impl Into<PathBuf>) -> Result<Self, MetadataStoreError> {
+        let metadata_store = Arc::new(SurrealHostedMetadataStore::open_local(path)?);
+        Self::with_metadata_store(metadata_store)
+    }
+
+    pub fn with_surreal_config(config: SurrealHostedConfig) -> Result<Self, MetadataStoreError> {
+        let metadata_store = Arc::new(SurrealHostedMetadataStore::open(config)?);
         Self::with_metadata_store(metadata_store)
     }
 
@@ -1328,6 +1567,13 @@ impl HostedServer {
     }
 
     #[cfg(test)]
+    async fn reload_metadata_from_store(&self) -> Result<(), MetadataStoreError> {
+        let state = self.metadata_store.load()?;
+        *self.state.write().await = state;
+        Ok(())
+    }
+
+    #[cfg(test)]
     async fn add_membership_for_email(
         &self,
         email: &str,
@@ -1699,11 +1945,25 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
 
-    fn sqlite_test_path(label: &str) -> PathBuf {
-        std::env::temp_dir().join(format!(
-            "ke8ygw-ham-server-{label}-{}.sqlite3",
-            Uuid::new_v4()
-        ))
+    fn surreal_test_path(label: &str) -> PathBuf {
+        std::env::temp_dir().join(format!("ke8ygw-ham-server-{label}-{}", Uuid::new_v4()))
+    }
+
+    fn open_surreal_test_server(path: &PathBuf) -> HostedServer {
+        let mut last_error = None;
+        for _ in 0..20 {
+            match HostedServer::with_surreal_metadata(path) {
+                Ok(server) => return server,
+                Err(error) => {
+                    last_error = Some(error);
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                }
+            }
+        }
+        panic!(
+            "failed to open SurrealDB test server: {}",
+            last_error.unwrap()
+        );
     }
 
     async fn login(server: &HostedServer, email: &str) -> (String, Uuid, Uuid) {
@@ -2009,13 +2269,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn sqlite_metadata_preserves_user_session_logbook_and_device_after_restart() {
-        let path = sqlite_test_path("metadata-restart");
-        let server = HostedServer::with_sqlite_metadata(&path).unwrap();
+    async fn surreal_metadata_preserves_user_session_logbook_and_device_after_store_reload() {
+        let path = surreal_test_path("metadata-restart");
+        let server = open_surreal_test_server(&path);
         let (token, logbook_id, device_id) = login(&server, "owner@example.test").await;
-
-        let restarted = HostedServer::with_sqlite_metadata(&path).unwrap();
-        let session = restarted
+        server.reload_metadata_from_store().await.unwrap();
+        let session = server
             .handle(ApiRequest::get("/api/v1/auth/session").with_bearer(&token))
             .await;
         assert_eq!(session.status, 200);
@@ -2023,7 +2282,7 @@ mod tests {
         assert_eq!(session.device.device_id, device_id);
         assert_eq!(session.memberships[0].logbook_id, logbook_id);
 
-        let logbooks = restarted
+        let logbooks = server
             .handle(ApiRequest::get("/api/v1/logbooks").with_bearer(token))
             .await;
         assert_eq!(logbooks.status, 200);
@@ -2032,23 +2291,23 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn sqlite_metadata_preserves_logout_and_device_revocation_after_restart() {
-        let path = sqlite_test_path("logout-revoke");
-        let server = HostedServer::with_sqlite_metadata(&path).unwrap();
+    async fn surreal_metadata_preserves_logout_and_device_revocation_after_store_reload() {
+        let path = surreal_test_path("logout-revoke");
+        let server = open_surreal_test_server(&path);
         let (token, _, device_id) = login(&server, "owner@example.test").await;
 
         let logout = server
             .handle(ApiRequest::json("POST", "/api/v1/auth/logout", &json!({})).with_bearer(&token))
             .await;
         assert_eq!(logout.status, 200);
-        let restarted = HostedServer::with_sqlite_metadata(&path).unwrap();
-        let session = restarted
+        server.reload_metadata_from_store().await.unwrap();
+        let session = server
             .handle(ApiRequest::get("/api/v1/auth/session").with_bearer(&token))
             .await;
         assert_eq!(session.status, 401);
 
-        let (new_token, _, _) = login(&restarted, "owner@example.test").await;
-        let revoke = restarted
+        let (new_token, _, _) = login(&server, "owner@example.test").await;
+        let revoke = server
             .handle(
                 ApiRequest::json(
                     "POST",
@@ -2059,17 +2318,17 @@ mod tests {
             )
             .await;
         assert_eq!(revoke.status, 200);
-        let restarted_again = HostedServer::with_sqlite_metadata(&path).unwrap();
-        let sync = restarted_again
+        server.reload_metadata_from_store().await.unwrap();
+        let sync = server
             .handle(ApiRequest::get("/api/v1/sync/status").with_bearer(token))
             .await;
         assert_eq!(sync.status, 401);
     }
 
     #[tokio::test]
-    async fn sqlite_metadata_preserves_membership_roles_and_scope_after_restart() {
-        let path = sqlite_test_path("roles");
-        let server = HostedServer::with_sqlite_metadata(&path).unwrap();
+    async fn surreal_metadata_preserves_membership_roles_and_scope_after_store_reload() {
+        let path = surreal_test_path("roles");
+        let server = open_surreal_test_server(&path);
         let (owner_token, logbook_id, _) = login(&server, "owner@example.test").await;
         let (operator_token, _, _) = login(&server, "operator@example.test").await;
         let (viewer_token, _, _) = login(&server, "viewer@example.test").await;
@@ -2082,12 +2341,11 @@ mod tests {
             .add_membership_for_email("viewer@example.test", logbook_id, LogbookRole::Viewer)
             .await
             .unwrap();
-
-        let restarted = HostedServer::with_sqlite_metadata(&path).unwrap();
-        let op_created = create_qso(&restarted, &operator_token, logbook_id).await;
+        server.reload_metadata_from_store().await.unwrap();
+        let op_created = create_qso(&server, &operator_token, logbook_id).await;
         assert!(op_created["event"]["event_hash"].is_string());
 
-        let viewer_write = restarted
+        let viewer_write = server
             .handle(
                 ApiRequest::json(
                     "POST",
@@ -2110,7 +2368,7 @@ mod tests {
             .await;
         assert_eq!(viewer_write.status, 403);
 
-        let other_read = restarted
+        let other_read = server
             .handle(
                 ApiRequest::get(format!("/api/v1/qsos?logbook_id={logbook_id}"))
                     .with_bearer(other_token),
@@ -2118,7 +2376,7 @@ mod tests {
             .await;
         assert_eq!(other_read.status, 403);
 
-        let owner_read = restarted
+        let owner_read = server
             .handle(
                 ApiRequest::get(format!("/api/v1/qsos?logbook_id={logbook_id}"))
                     .with_bearer(owner_token),

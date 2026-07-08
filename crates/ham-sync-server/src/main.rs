@@ -54,7 +54,7 @@ fn main() {
 
     println!("ham-sync-server listening on http://{addr}");
     println!("mode: {mode:?}");
-    println!("metadata database: {}", paths.metadata_db_path.display());
+    println!("metadata store: {}", paths.metadata_store_path.display());
     println!(
         "official event log: {}",
         paths.official_event_log_path.display()

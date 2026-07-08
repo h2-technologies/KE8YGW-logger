@@ -70,7 +70,7 @@ iOS client in v1.1.
 
 ## Known Risks
 
-- SQLite schema evolution is intentionally minimal and needs production
+- SurrealDB schema evolution is intentionally minimal and needs production
   migration policy hardening before v1.0.
 - Session expiry/refresh policy is still beta-level.
 - Native credential backends are still placeholders.

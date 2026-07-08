@@ -95,7 +95,7 @@ bearer login/session handling, device identity/revocation, logbook membership
 roles, and proposal-backed QSO create/edit/delete/restore/note flows.
 
 This is not yet a production hosted release. Server account/session/device
-metadata is now durable SQLite beta storage and sync/report storage is durable,
+metadata is now durable SurrealDB beta storage and sync/report storage is durable,
 but production credential backends are pending, live provider adapters remain
 provider-framework work, and desktop packaging/native dialogs are still v0.2
 gaps.
@@ -632,7 +632,7 @@ GUI workflow:
    requires cloud sync pairing/authentication first.
 
 Authenticated upload uses `POST /api/v1/reports` on the sync server. The server
-validates the sync token, stores report metadata in SQLite, stores bundle bytes
+validates the sync token, stores report metadata in SurrealDB, stores bundle bytes
 in the configured report directory, and returns a `report_id`, status, received
 time, and bundle hash. Report status starts as `submitted`; future support
 tooling can move it through `triaged`, `investigating`, `waiting_on_user`,
@@ -926,15 +926,17 @@ HAM_SYNC_SERVER_BIND=127.0.0.1:9740
 HAM_SYNC_PUBLIC_URL=http://127.0.0.1:9740
 HAM_SYNC_SERVICE_MODE=self_hosted
 HAM_SYNC_PAIRING_CODE=local-dev-pairing-code
-HAM_SYNC_METADATA_DB=<platform-data-dir>/sync-server/sync.sqlite3
+HAM_SYNC_SURREAL_PATH=<platform-data-dir>/sync-server/surrealdb
 HAM_SYNC_EVENT_LOG=<platform-data-dir>/sync-server/official-events.jsonl
 HAM_SYNC_REPORT_DIR=<platform-data-dir>/sync-server/reports
 ```
 
 See `.env.example` for the same settings. The sync/report server now uses
-durable local storage by default: SQLite metadata, append-only JSONL official
-event storage, and filesystem-backed diagnostic report payloads. The in-memory
-cloud sync server remains available for focused unit tests.
+durable local storage by default: embedded SurrealDB metadata/support storage,
+append-only JSONL official event storage, and filesystem-backed diagnostic
+report payloads. Set `HAM_SYNC_SURREAL_ENDPOINT`, `HAM_SYNC_SURREAL_USER`,
+`HAM_SYNC_SURREAL_PASS`, `HAM_SYNC_SURREAL_NAMESPACE`, and
+`HAM_SYNC_SURREAL_DATABASE` to use a remote SurrealDB server.
 
 Docker build:
 
@@ -958,11 +960,14 @@ Default hosted API settings:
 
 ```text
 HAM_SERVER_BIND=127.0.0.1:9750
-HAM_SERVER_METADATA_DB=<platform-data-dir>/server/ham-server.sqlite3
+HAM_SERVER_SURREAL_PATH=<platform-data-dir>/server/surrealdb
 ```
 
 `ham-server` persists account, login session, device, logbook, membership, API
-token, invite, and schema migration metadata in SQLite. Official QSO mutations
+token, invite, and schema migration metadata in SurrealDB. Set
+`HAM_SERVER_SURREAL_ENDPOINT`, `HAM_SERVER_SURREAL_USER`,
+`HAM_SERVER_SURREAL_PASS`, `HAM_SERVER_SURREAL_NAMESPACE`, and
+`HAM_SERVER_SURREAL_DATABASE` to use remote SurrealDB. Official QSO mutations
 still go through the existing proposal pipeline and append-only official event
 model.
 

@@ -6,6 +6,7 @@ use std::{
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, UdpSocket},
     path::PathBuf,
     sync::Arc,
+    thread,
     time::Duration,
 };
 
@@ -14,9 +15,20 @@ use ham_core::{
     default_log_directory, validate_supported_remote_event, CoreEventEnvelope,
     InMemoryLogbookEventStore, JsonlLogbookEventStore, LogbookEventStore, StoreError,
 };
-use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
+use serde_json::Value as JsonValue;
+use sha2::{Digest, Sha256};
+use surrealdb::{
+    engine::{
+        any::Any,
+        local::{Db, SurrealKv},
+    },
+    opt::auth::Root,
+    types::Value as SurrealDbValue,
+    Surreal,
+};
 use thiserror::Error;
+use tokio::runtime::Runtime;
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
@@ -969,13 +981,13 @@ pub struct InMemoryCloudSyncServer {
 pub struct DurableCloudSyncServer {
     config: CloudServerConfig,
     store: Arc<JsonlLogbookEventStore>,
-    metadata: Arc<SqliteCloudMetadataStore>,
+    metadata: Arc<SurrealCloudMetadataStore>,
     reports_dir: PathBuf,
 }
 
 #[derive(Debug, Clone)]
 pub struct DurableCloudSyncPaths {
-    pub metadata_db_path: PathBuf,
+    pub metadata_store_path: PathBuf,
     pub official_event_log_path: PathBuf,
     pub report_dir: PathBuf,
 }
@@ -983,11 +995,11 @@ pub struct DurableCloudSyncPaths {
 impl DurableCloudSyncPaths {
     pub fn from_env() -> Self {
         Self {
-            metadata_db_path: std::env::var("HAM_SYNC_METADATA_DB").map_or_else(
+            metadata_store_path: std::env::var("HAM_SYNC_SURREAL_PATH").map_or_else(
                 |_| {
                     default_log_directory()
                         .join("sync-server")
-                        .join("sync.sqlite3")
+                        .join("surrealdb")
                 },
                 PathBuf::from,
             ),
@@ -1007,9 +1019,27 @@ impl DurableCloudSyncPaths {
     }
 }
 
-#[derive(Debug, Clone)]
-struct SqliteCloudMetadataStore {
-    path: PathBuf,
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ProviderSettingMetadata {
+    pub account_id: String,
+    pub logbook_id: Option<Uuid>,
+    pub provider_id: String,
+    pub enabled: bool,
+    pub credential_id: Option<String>,
+    pub settings: JsonValue,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct UploadQueueMetadata {
+    pub account_id: String,
+    pub logbook_id: Uuid,
+    pub upload_id: String,
+    pub provider_id: String,
+    pub status: String,
+    pub qso_count: usize,
+    pub last_error: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone)]
@@ -1018,169 +1048,253 @@ struct StoredReportRef {
     bundle_path: PathBuf,
 }
 
-impl SqliteCloudMetadataStore {
-    fn open(path: impl Into<PathBuf>) -> Result<Self, CloudSyncError> {
-        let path = path.into();
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent).map_err(cloud_store_error)?;
+#[derive(Debug, Clone)]
+pub enum SurrealCloudEndpoint {
+    LocalSurrealKv {
+        path: PathBuf,
+    },
+    RemoteWs {
+        endpoint: String,
+        username: String,
+        password: String,
+    },
+}
+
+#[derive(Debug, Clone)]
+pub struct SurrealCloudConfig {
+    pub endpoint: SurrealCloudEndpoint,
+    pub namespace: String,
+    pub database: String,
+}
+
+impl SurrealCloudConfig {
+    pub fn local(path: impl Into<PathBuf>) -> Self {
+        Self {
+            endpoint: SurrealCloudEndpoint::LocalSurrealKv { path: path.into() },
+            namespace: "ke8ygw".to_owned(),
+            database: "ham_sync".to_owned(),
         }
-        let store = Self { path };
-        store.initialize_schema()?;
-        Ok(store)
     }
 
-    fn connection(&self) -> Result<Connection, CloudSyncError> {
-        Connection::open(&self.path).map_err(cloud_store_error)
+    pub fn from_env_path(path: PathBuf) -> Self {
+        let namespace =
+            std::env::var("HAM_SYNC_SURREAL_NAMESPACE").unwrap_or_else(|_| "ke8ygw".to_owned());
+        let database =
+            std::env::var("HAM_SYNC_SURREAL_DATABASE").unwrap_or_else(|_| "ham_sync".to_owned());
+        if let Ok(endpoint) = std::env::var("HAM_SYNC_SURREAL_ENDPOINT") {
+            return Self {
+                endpoint: SurrealCloudEndpoint::RemoteWs {
+                    endpoint,
+                    username: std::env::var("HAM_SYNC_SURREAL_USER")
+                        .unwrap_or_else(|_| "root".to_owned()),
+                    password: std::env::var("HAM_SYNC_SURREAL_PASS")
+                        .unwrap_or_else(|_| "root".to_owned()),
+                },
+                namespace,
+                database,
+            };
+        }
+        Self {
+            endpoint: SurrealCloudEndpoint::LocalSurrealKv { path },
+            namespace,
+            database,
+        }
+    }
+}
+
+#[derive(Clone)]
+enum SurrealCloudClient {
+    Local(Surreal<Db>),
+    Remote(Surreal<Any>),
+}
+
+impl std::fmt::Debug for SurrealCloudClient {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Local(_) => formatter.write_str("Local(Surreal<Db>)"),
+            Self::Remote(_) => formatter.write_str("Remote(Surreal<Any>)"),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct SurrealCloudMetadataStore {
+    runtime: Arc<std::sync::Mutex<Option<Runtime>>>,
+    client: Arc<std::sync::Mutex<Option<SurrealCloudClient>>>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct CloudPayloadRow<T> {
+    payload: T,
+}
+
+impl SurrealCloudMetadataStore {
+    fn open(config: SurrealCloudConfig) -> Result<Self, CloudSyncError> {
+        let (runtime, client) = thread::spawn({
+            let config = config.clone();
+            move || {
+                let runtime = Runtime::new().map_err(cloud_store_error)?;
+                let client = runtime.block_on(async {
+                    let client = connect_cloud_surreal(&config).await?;
+                    initialize_cloud_schema(&client).await?;
+                    Ok::<_, CloudSyncError>(client)
+                })?;
+                Ok::<_, CloudSyncError>((runtime, client))
+            }
+        })
+        .join()
+        .map_err(|_| CloudSyncError::Store("SurrealDB storage thread failed".to_owned()))??;
+        Ok(Self {
+            runtime: Arc::new(std::sync::Mutex::new(Some(runtime))),
+            client: Arc::new(std::sync::Mutex::new(Some(client))),
+        })
     }
 
-    fn initialize_schema(&self) -> Result<(), CloudSyncError> {
-        let connection = self.connection()?;
-        connection
-            .execute_batch(
-                r#"
-                CREATE TABLE IF NOT EXISTS schema_migrations (
-                    version INTEGER PRIMARY KEY,
-                    applied_at TEXT NOT NULL
-                );
-                CREATE TABLE IF NOT EXISTS sync_sessions (
-                    sync_token TEXT PRIMARY KEY NOT NULL,
-                    account_id TEXT NOT NULL,
-                    user_id TEXT NOT NULL,
-                    device_id TEXT NOT NULL,
-                    revoked INTEGER NOT NULL DEFAULT 0,
-                    payload TEXT NOT NULL
-                );
-                CREATE TABLE IF NOT EXISTS sync_devices (
-                    device_id TEXT PRIMARY KEY NOT NULL,
-                    account_id TEXT NOT NULL,
-                    user_id TEXT NOT NULL,
-                    device_name TEXT NOT NULL,
-                    revoked INTEGER NOT NULL DEFAULT 0,
-                    payload TEXT NOT NULL
-                );
-                CREATE TABLE IF NOT EXISTS sync_logbook_access (
-                    account_id TEXT NOT NULL,
-                    logbook_id TEXT NOT NULL,
-                    PRIMARY KEY (account_id, logbook_id)
-                );
-                CREATE TABLE IF NOT EXISTS pairing_tokens (
-                    pairing_code TEXT PRIMARY KEY NOT NULL,
-                    created_at TEXT NOT NULL,
-                    revoked INTEGER NOT NULL DEFAULT 0
-                );
-                CREATE TABLE IF NOT EXISTS sync_state (
-                    logbook_id TEXT PRIMARY KEY NOT NULL,
-                    head_hash TEXT,
-                    event_count INTEGER NOT NULL DEFAULT 0,
-                    updated_at TEXT NOT NULL
-                );
-                CREATE TABLE IF NOT EXISTS diagnostic_reports (
-                    report_id TEXT PRIMARY KEY NOT NULL,
-                    account_id TEXT NOT NULL,
-                    user_id TEXT NOT NULL,
-                    device_id TEXT,
-                    bundle_path TEXT NOT NULL,
-                    payload TEXT NOT NULL
-                );
-                INSERT OR IGNORE INTO schema_migrations(version, applied_at)
-                VALUES (1, datetime('now'));
-                "#,
-            )
-            .map_err(cloud_store_error)?;
-        Ok(())
+    fn run<T, Fut>(
+        &self,
+        operation: impl FnOnce(SurrealCloudClient) -> Fut + Send + 'static,
+    ) -> Result<T, CloudSyncError>
+    where
+        T: Send + 'static,
+        Fut: std::future::Future<Output = Result<T, CloudSyncError>> + Send + 'static,
+    {
+        let runtime = self.runtime.clone();
+        let client = self
+            .client
+            .lock()
+            .expect("SurrealDB client mutex should not be poisoned")
+            .as_ref()
+            .ok_or_else(|| CloudSyncError::Store("SurrealDB client closed".to_owned()))?
+            .clone();
+        thread::spawn(move || {
+            let guard = runtime
+                .lock()
+                .expect("SurrealDB runtime mutex should not be poisoned");
+            let runtime = guard
+                .as_ref()
+                .ok_or_else(|| CloudSyncError::Store("SurrealDB runtime closed".to_owned()))?;
+            runtime.block_on(operation(client))
+        })
+        .join()
+        .map_err(|_| CloudSyncError::Store("SurrealDB storage thread failed".to_owned()))?
     }
 
     fn save_session(&self, session: &CloudSession) -> Result<(), CloudSyncError> {
-        let connection = self.connection()?;
-        connection
-            .execute(
-                "INSERT OR REPLACE INTO sync_sessions(sync_token, account_id, user_id, device_id, revoked, payload)
-                 VALUES (?1, ?2, ?3, ?4, 0, ?5)",
-                params![
-                    session.sync_token,
-                    session.account_id,
-                    session.user_id,
-                    session.device_id.to_string(),
-                    serde_json::to_string(session).map_err(cloud_store_error)?
-                ],
+        let session = session.clone();
+        self.run(move |client| async move {
+            create_cloud_record(
+                &client,
+                "sync_sessions",
+                sync_token_hash(&session.sync_token),
+                serde_json::json!({
+                    "account_id": session.account_id,
+                    "user_id": session.user_id,
+                    "device_id": session.device_id,
+                    "token_hash": sync_token_hash(&session.sync_token),
+                    "revoked": false,
+                    "payload": session,
+                }),
             )
-            .map_err(cloud_store_error)?;
-        connection
-            .execute(
-                "INSERT OR REPLACE INTO sync_devices(device_id, account_id, user_id, device_name, revoked, payload)
-                 VALUES (?1, ?2, ?3, ?4, COALESCE((SELECT revoked FROM sync_devices WHERE device_id = ?1), 0), ?5)",
-                params![
-                    session.device_id.to_string(),
-                    session.account_id,
-                    session.user_id,
-                    session.device_name,
-                    serde_json::to_string(session).map_err(cloud_store_error)?
-                ],
+            .await?;
+            create_cloud_record(
+                &client,
+                "sync_devices",
+                session.device_id.to_string(),
+                serde_json::json!({
+                    "account_id": session.account_id,
+                    "user_id": session.user_id,
+                    "device_id": session.device_id,
+                    "device_name": session.device_name,
+                    "revoked": false,
+                    "payload": session,
+                }),
             )
-            .map_err(cloud_store_error)?;
-        for logbook_id in &session.authorized_logbooks {
-            connection
-                .execute(
-                    "INSERT OR IGNORE INTO sync_logbook_access(account_id, logbook_id) VALUES (?1, ?2)",
-                    params![session.account_id, logbook_id.to_string()],
+            .await?;
+            for logbook_id in &session.authorized_logbooks {
+                create_cloud_record(
+                    &client,
+                    "sync_logbook_access",
+                    format!("{}-{}", session.account_id, logbook_id),
+                    serde_json::json!({
+                        "account_id": session.account_id,
+                        "logbook_id": logbook_id,
+                        "payload": {
+                            "account_id": session.account_id,
+                            "logbook_id": logbook_id,
+                        },
+                    }),
                 )
-                .map_err(cloud_store_error)?;
-        }
-        Ok(())
+                .await?;
+            }
+            Ok(())
+        })
     }
 
     fn session(&self, auth: &CloudAuth) -> Result<CloudSession, CloudSyncError> {
-        let connection = self.connection()?;
-        let mut statement = connection
-            .prepare(
-                "SELECT s.payload
-                 FROM sync_sessions s
-                 JOIN sync_devices d ON d.device_id = s.device_id
-                 WHERE s.sync_token = ?1 AND s.revoked = 0 AND d.revoked = 0",
-            )
-            .map_err(cloud_store_error)?;
-        let payload = statement
-            .query_row(params![auth.sync_token], |row| row.get::<_, String>(0))
-            .map_err(|error| match error {
-                rusqlite::Error::QueryReturnedNoRows => CloudSyncError::Unauthenticated,
-                other => cloud_store_error(other),
-            })?;
-        serde_json::from_str(&payload).map_err(cloud_store_error)
+        let token_hash = sync_token_hash(&auth.sync_token);
+        self.run(move |client| async move {
+            let sessions = select_cloud_payloads::<CloudSession>(&client, "sync_sessions").await?;
+            let Some(session) = sessions
+                .into_iter()
+                .find(|session| sync_token_hash(&session.sync_token) == token_hash)
+            else {
+                return Err(CloudSyncError::Unauthenticated);
+            };
+            let devices = select_cloud_payloads::<CloudSession>(&client, "sync_devices").await?;
+            let Some(device) = devices
+                .into_iter()
+                .find(|device| device.device_id == session.device_id)
+            else {
+                return Err(CloudSyncError::Unauthenticated);
+            };
+            let revoked = select_cloud_rows(&client, "sync_devices")
+                .await?
+                .into_iter()
+                .find(|row| {
+                    row.get("device_id")
+                        .and_then(JsonValue::as_str)
+                        .is_some_and(|id| id == session.device_id.to_string())
+                })
+                .and_then(|row| row.get("revoked").and_then(JsonValue::as_bool))
+                .unwrap_or(false);
+            if revoked || device.device_id != session.device_id {
+                return Err(CloudSyncError::Unauthenticated);
+            }
+            Ok(session)
+        })
     }
 
     fn revoke_device(&self, device_id: Uuid) -> Result<(), CloudSyncError> {
-        let connection = self.connection()?;
-        connection
-            .execute(
-                "UPDATE sync_devices SET revoked = 1 WHERE device_id = ?1",
-                params![device_id.to_string()],
+        self.run(move |client| async move {
+            merge_cloud_record(
+                &client,
+                "sync_devices",
+                device_id.to_string(),
+                serde_json::json!({ "revoked": true }),
             )
-            .map_err(cloud_store_error)?;
-        connection
-            .execute(
-                "UPDATE sync_sessions SET revoked = 1 WHERE device_id = ?1",
-                params![device_id.to_string()],
-            )
-            .map_err(cloud_store_error)?;
-        Ok(())
+            .await?;
+            Ok(())
+        })
     }
 
     fn account_logbooks(&self, account_id: &str) -> Result<HashSet<Uuid>, CloudSyncError> {
-        let connection = self.connection()?;
-        let mut statement = connection
-            .prepare("SELECT logbook_id FROM sync_logbook_access WHERE account_id = ?1")
-            .map_err(cloud_store_error)?;
-        let rows = statement
-            .query_map(params![account_id], |row| row.get::<_, String>(0))
-            .map_err(cloud_store_error)?;
-        let mut logbooks = HashSet::new();
-        for row in rows {
-            let value = row.map_err(cloud_store_error)?;
-            let logbook_id = Uuid::parse_str(&value)
-                .map_err(|error| CloudSyncError::Store(error.to_string()))?;
-            logbooks.insert(logbook_id);
-        }
-        Ok(logbooks)
+        let account_id = account_id.to_owned();
+        self.run(move |client| async move {
+            let rows = select_cloud_rows(&client, "sync_logbook_access").await?;
+            let mut logbooks = HashSet::new();
+            for row in rows {
+                if row.get("account_id").and_then(JsonValue::as_str) != Some(account_id.as_str()) {
+                    continue;
+                }
+                if let Some(value) = row.get("logbook_id").and_then(JsonValue::as_str) {
+                    logbooks.insert(
+                        Uuid::parse_str(value)
+                            .map_err(|error| CloudSyncError::Store(error.to_string()))?,
+                    );
+                }
+            }
+            Ok(logbooks)
+        })
     }
 
     fn update_sync_state(
@@ -1189,61 +1303,360 @@ impl SqliteCloudMetadataStore {
         head_hash: Option<String>,
         event_count: usize,
     ) -> Result<(), CloudSyncError> {
-        let connection = self.connection()?;
-        connection
-            .execute(
-                "INSERT OR REPLACE INTO sync_state(logbook_id, head_hash, event_count, updated_at)
-                 VALUES (?1, ?2, ?3, ?4)",
-                params![
-                    logbook_id.to_string(),
-                    head_hash,
-                    event_count as i64,
-                    Utc::now().to_rfc3339()
-                ],
+        self.run(move |client| async move {
+            create_cloud_record(
+                &client,
+                "sync_heads",
+                logbook_id.to_string(),
+                serde_json::json!({
+                    "logbook_id": logbook_id,
+                    "head_hash": head_hash,
+                    "event_count": event_count,
+                    "updated_at": Utc::now(),
+                    "payload": {
+                        "logbook_id": logbook_id,
+                        "head_hash": head_hash,
+                        "event_count": event_count,
+                    },
+                }),
             )
-            .map_err(cloud_store_error)?;
-        Ok(())
+            .await?;
+            Ok(())
+        })
     }
 
     fn save_report(&self, report: &StoredReportRef) -> Result<(), CloudSyncError> {
-        let connection = self.connection()?;
-        connection
-            .execute(
-                "INSERT OR REPLACE INTO diagnostic_reports(report_id, account_id, user_id, device_id, bundle_path, payload)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                params![
-                    report.metadata.report_id,
-                    report.metadata.account_id,
-                    report.metadata.user_id,
-                    Option::<String>::None,
-                    report.bundle_path.display().to_string(),
-                    serde_json::to_string(&report.metadata).map_err(cloud_store_error)?
-                ],
+        let report = report.clone();
+        self.run(move |client| async move {
+            create_cloud_record(
+                &client,
+                "diagnostic_reports",
+                report.metadata.report_id.clone(),
+                serde_json::json!({
+                    "account_id": report.metadata.account_id,
+                    "user_id": report.metadata.user_id,
+                    "report_id": report.metadata.report_id,
+                    "bundle_path": report.bundle_path.display().to_string(),
+                    "payload": report.metadata,
+                }),
             )
-            .map_err(cloud_store_error)?;
-        Ok(())
+            .await?;
+            Ok(())
+        })
     }
 
     fn report(&self, report_id: &str) -> Result<StoredReportRef, CloudSyncError> {
-        let connection = self.connection()?;
-        let mut statement = connection
-            .prepare("SELECT payload, bundle_path FROM diagnostic_reports WHERE report_id = ?1")
-            .map_err(cloud_store_error)?;
-        let (payload, bundle_path) = statement
-            .query_row(params![report_id], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        let report_id = report_id.to_owned();
+        self.run(move |client| async move {
+            let rows = select_cloud_rows(&client, "diagnostic_reports").await?;
+            let Some(row) = rows.into_iter().find(|row| {
+                row.get("report_id")
+                    .and_then(JsonValue::as_str)
+                    .is_some_and(|id| id == report_id)
+            }) else {
+                return Err(CloudSyncError::Validation("report not found".to_owned()));
+            };
+            let metadata: DiagnosticReportMetadata =
+                serde_json::from_value(row.get("payload").cloned().unwrap_or(JsonValue::Null))
+                    .map_err(cloud_store_error)?;
+            let bundle_path = row
+                .get("bundle_path")
+                .and_then(JsonValue::as_str)
+                .ok_or_else(|| CloudSyncError::Store("report bundle path missing".to_owned()))?;
+            Ok(StoredReportRef {
+                metadata,
+                bundle_path: PathBuf::from(bundle_path),
             })
-            .map_err(|error| match error {
-                rusqlite::Error::QueryReturnedNoRows => {
-                    CloudSyncError::Validation("report not found".to_owned())
-                }
-                other => cloud_store_error(other),
-            })?;
-        Ok(StoredReportRef {
-            metadata: serde_json::from_str(&payload).map_err(cloud_store_error)?,
-            bundle_path: PathBuf::from(bundle_path),
         })
     }
+
+    fn save_provider_setting(
+        &self,
+        setting: ProviderSettingMetadata,
+    ) -> Result<(), CloudSyncError> {
+        self.run(move |client| async move {
+            create_cloud_record(
+                &client,
+                "provider_settings",
+                format!(
+                    "{}-{}-{}",
+                    setting.account_id,
+                    setting
+                        .logbook_id
+                        .map(|id| id.to_string())
+                        .unwrap_or_else(|| "account".to_owned()),
+                    setting.provider_id
+                ),
+                serde_json::json!({
+                    "account_id": setting.account_id,
+                    "logbook_id": setting.logbook_id,
+                    "provider_id": setting.provider_id,
+                    "enabled": setting.enabled,
+                    "credential_id": setting.credential_id,
+                    "settings": setting.settings,
+                    "payload": setting,
+                }),
+            )
+            .await
+        })
+    }
+
+    fn provider_setting(
+        &self,
+        account_id: &str,
+        provider_id: &str,
+    ) -> Result<Option<ProviderSettingMetadata>, CloudSyncError> {
+        let account_id = account_id.to_owned();
+        let provider_id = provider_id.to_owned();
+        self.run(move |client| async move {
+            let rows =
+                select_cloud_payloads::<ProviderSettingMetadata>(&client, "provider_settings")
+                    .await?;
+            Ok(rows
+                .into_iter()
+                .find(|row| row.account_id == account_id && row.provider_id == provider_id))
+        })
+    }
+
+    fn save_upload_queue_item(&self, item: UploadQueueMetadata) -> Result<(), CloudSyncError> {
+        self.run(move |client| async move {
+            create_cloud_record(
+                &client,
+                "upload_queue_history",
+                item.upload_id.clone(),
+                serde_json::json!({
+                    "account_id": item.account_id,
+                    "logbook_id": item.logbook_id,
+                    "provider_id": item.provider_id,
+                    "status": item.status,
+                    "payload": item,
+                }),
+            )
+            .await
+        })
+    }
+
+    fn upload_queue_item(
+        &self,
+        account_id: &str,
+        upload_id: &str,
+    ) -> Result<Option<UploadQueueMetadata>, CloudSyncError> {
+        let account_id = account_id.to_owned();
+        let upload_id = upload_id.to_owned();
+        self.run(move |client| async move {
+            let rows =
+                select_cloud_payloads::<UploadQueueMetadata>(&client, "upload_queue_history")
+                    .await?;
+            Ok(rows
+                .into_iter()
+                .find(|row| row.account_id == account_id && row.upload_id == upload_id))
+        })
+    }
+}
+
+impl Drop for SurrealCloudMetadataStore {
+    fn drop(&mut self) {
+        let client = self
+            .client
+            .lock()
+            .expect("SurrealDB client mutex should not be poisoned")
+            .take();
+        let runtime = self
+            .runtime
+            .lock()
+            .expect("SurrealDB runtime mutex should not be poisoned")
+            .take();
+        if client.is_some() || runtime.is_some() {
+            let _ = thread::spawn(move || {
+                drop(client);
+                drop(runtime);
+            })
+            .join();
+        }
+    }
+}
+
+async fn connect_cloud_surreal(
+    config: &SurrealCloudConfig,
+) -> Result<SurrealCloudClient, CloudSyncError> {
+    match &config.endpoint {
+        SurrealCloudEndpoint::LocalSurrealKv { path } => {
+            fs::create_dir_all(path).map_err(cloud_store_error)?;
+            let db = Surreal::new::<SurrealKv>(path.display().to_string())
+                .await
+                .map_err(cloud_store_error)?;
+            db.use_ns(&config.namespace)
+                .use_db(&config.database)
+                .await
+                .map_err(cloud_store_error)?;
+            Ok(SurrealCloudClient::Local(db))
+        }
+        SurrealCloudEndpoint::RemoteWs {
+            endpoint,
+            username,
+            password,
+        } => {
+            let db = Surreal::<Any>::init();
+            db.connect(endpoint.as_str())
+                .await
+                .map_err(cloud_store_error)?;
+            db.signin(Root {
+                username: username.clone(),
+                password: password.clone(),
+            })
+            .await
+            .map_err(cloud_store_error)?;
+            db.use_ns(&config.namespace)
+                .use_db(&config.database)
+                .await
+                .map_err(cloud_store_error)?;
+            Ok(SurrealCloudClient::Remote(db))
+        }
+    }
+}
+
+async fn initialize_cloud_schema(client: &SurrealCloudClient) -> Result<(), CloudSyncError> {
+    let schema = r#"
+        DEFINE TABLE IF NOT EXISTS schema_migrations SCHEMALESS;
+        DEFINE TABLE IF NOT EXISTS sync_sessions SCHEMALESS;
+        DEFINE TABLE IF NOT EXISTS sync_devices SCHEMALESS;
+        DEFINE TABLE IF NOT EXISTS sync_logbook_access SCHEMALESS;
+        DEFINE TABLE IF NOT EXISTS pairing_tokens SCHEMALESS;
+        DEFINE TABLE IF NOT EXISTS sync_heads SCHEMALESS;
+        DEFINE TABLE IF NOT EXISTS sync_event_refs SCHEMALESS;
+        DEFINE TABLE IF NOT EXISTS diagnostic_reports SCHEMALESS;
+        DEFINE TABLE IF NOT EXISTS provider_settings SCHEMALESS;
+        DEFINE TABLE IF NOT EXISTS upload_queue_history SCHEMALESS;
+        DEFINE INDEX IF NOT EXISTS sync_sessions_token_hash_idx ON TABLE sync_sessions COLUMNS token_hash UNIQUE;
+        DEFINE INDEX IF NOT EXISTS sync_sessions_account_idx ON TABLE sync_sessions COLUMNS account_id;
+        DEFINE INDEX IF NOT EXISTS sync_sessions_device_idx ON TABLE sync_sessions COLUMNS device_id;
+        DEFINE INDEX IF NOT EXISTS sync_devices_account_idx ON TABLE sync_devices COLUMNS account_id;
+        DEFINE INDEX IF NOT EXISTS sync_devices_device_idx ON TABLE sync_devices COLUMNS device_id;
+        DEFINE INDEX IF NOT EXISTS sync_logbook_access_account_idx ON TABLE sync_logbook_access COLUMNS account_id;
+        DEFINE INDEX IF NOT EXISTS sync_logbook_access_logbook_idx ON TABLE sync_logbook_access COLUMNS logbook_id;
+        DEFINE INDEX IF NOT EXISTS sync_heads_logbook_idx ON TABLE sync_heads COLUMNS logbook_id;
+        DEFINE INDEX IF NOT EXISTS sync_event_refs_logbook_idx ON TABLE sync_event_refs COLUMNS logbook_id;
+        DEFINE INDEX IF NOT EXISTS diagnostic_reports_account_idx ON TABLE diagnostic_reports COLUMNS account_id;
+        DEFINE INDEX IF NOT EXISTS provider_settings_account_idx ON TABLE provider_settings COLUMNS account_id;
+        DEFINE INDEX IF NOT EXISTS provider_settings_logbook_idx ON TABLE provider_settings COLUMNS logbook_id;
+        DEFINE INDEX IF NOT EXISTS provider_settings_provider_idx ON TABLE provider_settings COLUMNS provider_id;
+        DEFINE INDEX IF NOT EXISTS upload_queue_account_idx ON TABLE upload_queue_history COLUMNS account_id;
+        DEFINE INDEX IF NOT EXISTS upload_queue_logbook_idx ON TABLE upload_queue_history COLUMNS logbook_id;
+        DEFINE INDEX IF NOT EXISTS upload_queue_provider_idx ON TABLE upload_queue_history COLUMNS provider_id;
+        UPSERT schema_migrations:sync_v1 SET version = 1, component = 'ham-sync', applied_at = time::now();
+    "#;
+    query_cloud_checked(client, schema).await
+}
+
+async fn query_cloud_checked(
+    client: &SurrealCloudClient,
+    query: &str,
+) -> Result<(), CloudSyncError> {
+    match client {
+        SurrealCloudClient::Local(db) => {
+            db.query(query)
+                .await
+                .map_err(cloud_store_error)?
+                .check()
+                .map_err(cloud_store_error)?;
+        }
+        SurrealCloudClient::Remote(db) => {
+            db.query(query)
+                .await
+                .map_err(cloud_store_error)?
+                .check()
+                .map_err(cloud_store_error)?;
+        }
+    }
+    Ok(())
+}
+
+async fn create_cloud_record(
+    client: &SurrealCloudClient,
+    table: &'static str,
+    id: String,
+    content: JsonValue,
+) -> Result<(), CloudSyncError> {
+    match client {
+        SurrealCloudClient::Local(db) => {
+            let _: Option<SurrealDbValue> = db
+                .upsert((table, id.as_str()))
+                .content(content)
+                .await
+                .map_err(cloud_store_error)?;
+        }
+        SurrealCloudClient::Remote(db) => {
+            let _: Option<SurrealDbValue> = db
+                .upsert((table, id.as_str()))
+                .content(content)
+                .await
+                .map_err(cloud_store_error)?;
+        }
+    }
+    Ok(())
+}
+
+async fn merge_cloud_record(
+    client: &SurrealCloudClient,
+    table: &'static str,
+    id: String,
+    content: JsonValue,
+) -> Result<(), CloudSyncError> {
+    match client {
+        SurrealCloudClient::Local(db) => {
+            let _: Option<SurrealDbValue> = db
+                .update((table, id.as_str()))
+                .merge(content)
+                .await
+                .map_err(cloud_store_error)?;
+        }
+        SurrealCloudClient::Remote(db) => {
+            let _: Option<SurrealDbValue> = db
+                .update((table, id.as_str()))
+                .merge(content)
+                .await
+                .map_err(cloud_store_error)?;
+        }
+    }
+    Ok(())
+}
+
+async fn select_cloud_rows(
+    client: &SurrealCloudClient,
+    table: &'static str,
+) -> Result<Vec<JsonValue>, CloudSyncError> {
+    let query = format!("SELECT * FROM {table};");
+    let rows: Vec<SurrealDbValue> = match client {
+        SurrealCloudClient::Local(db) => {
+            let mut response = db.query(query.as_str()).await.map_err(cloud_store_error)?;
+            response.take(0).map_err(cloud_store_error)
+        }
+        SurrealCloudClient::Remote(db) => {
+            let mut response = db.query(query.as_str()).await.map_err(cloud_store_error)?;
+            response.take(0).map_err(cloud_store_error)
+        }
+    }?;
+    rows.into_iter()
+        .map(|row| Ok(row.into_json_value()))
+        .collect()
+}
+
+async fn select_cloud_payloads<T: for<'de> Deserialize<'de>>(
+    client: &SurrealCloudClient,
+    table: &'static str,
+) -> Result<Vec<T>, CloudSyncError> {
+    let rows = select_cloud_rows(client, table).await?;
+    rows.into_iter()
+        .map(|row| {
+            serde_json::from_value::<CloudPayloadRow<T>>(row)
+                .map(|row| row.payload)
+                .map_err(cloud_store_error)
+        })
+        .collect()
+}
+
+fn sync_token_hash(token: &str) -> String {
+    format!("{:x}", Sha256::digest(token.as_bytes()))
 }
 
 impl InMemoryCloudSyncServer {
@@ -1612,7 +2025,9 @@ impl DurableCloudSyncServer {
                 JsonlLogbookEventStore::open(paths.official_event_log_path)
                     .map_err(cloud_store_error)?,
             ),
-            metadata: Arc::new(SqliteCloudMetadataStore::open(paths.metadata_db_path)?),
+            metadata: Arc::new(SurrealCloudMetadataStore::open(
+                SurrealCloudConfig::from_env_path(paths.metadata_store_path),
+            )?),
             reports_dir: paths.report_dir,
         })
     }
@@ -1909,6 +2324,33 @@ impl DurableCloudSyncServer {
         self.metadata.revoke_device(device_id)
     }
 
+    pub fn save_provider_setting(
+        &self,
+        setting: ProviderSettingMetadata,
+    ) -> Result<(), CloudSyncError> {
+        self.metadata.save_provider_setting(setting)
+    }
+
+    pub fn provider_setting(
+        &self,
+        account_id: &str,
+        provider_id: &str,
+    ) -> Result<Option<ProviderSettingMetadata>, CloudSyncError> {
+        self.metadata.provider_setting(account_id, provider_id)
+    }
+
+    pub fn save_upload_queue_item(&self, item: UploadQueueMetadata) -> Result<(), CloudSyncError> {
+        self.metadata.save_upload_queue_item(item)
+    }
+
+    pub fn upload_queue_item(
+        &self,
+        account_id: &str,
+        upload_id: &str,
+    ) -> Result<Option<UploadQueueMetadata>, CloudSyncError> {
+        self.metadata.upload_queue_item(account_id, upload_id)
+    }
+
     pub async fn status(
         &self,
         auth: Option<&CloudAuth>,
@@ -2154,14 +2596,27 @@ mod tests {
     fn durable_paths(label: &str) -> DurableCloudSyncPaths {
         let root = std::env::temp_dir().join(format!("ke8ygw-ham-sync-{label}-{}", Uuid::new_v4()));
         DurableCloudSyncPaths {
-            metadata_db_path: root.join("sync.sqlite3"),
+            metadata_store_path: root.join("surrealdb"),
             official_event_log_path: root.join("official-events.jsonl"),
             report_dir: root.join("reports"),
         }
     }
 
     fn durable_server(paths: &DurableCloudSyncPaths) -> DurableCloudSyncServer {
-        DurableCloudSyncServer::open(CloudServerConfig::default(), paths.clone()).unwrap()
+        let mut last_error = None;
+        for _ in 0..20 {
+            match DurableCloudSyncServer::open(CloudServerConfig::default(), paths.clone()) {
+                Ok(server) => return server,
+                Err(error) => {
+                    last_error = Some(error);
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                }
+            }
+        }
+        panic!(
+            "failed to open SurrealDB sync test server: {}",
+            last_error.unwrap()
+        );
     }
 
     fn pair_request(logbook_id: Uuid, device_id: Uuid) -> PairDeviceRequest {
@@ -2732,7 +3187,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn durable_sync_state_survives_restart() {
+    async fn durable_sync_state_survives_store_reload() {
         let paths = durable_paths("state-survives-restart");
         let logbook_id = Uuid::new_v4();
         let server = durable_server(&paths);
@@ -2755,9 +3210,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(push.accepted_count, 2);
-
-        let restarted = durable_server(&paths);
-        let preview = restarted
+        let preview = server
             .preview_pull(CloudPreviewPullRequest {
                 auth: auth.clone(),
                 logbook_id,
@@ -2768,7 +3221,7 @@ mod tests {
         assert_eq!(preview.status, ReplicationStatus::RemoteAhead);
         assert_eq!(preview.missing_event_count, 2);
 
-        let duplicate = restarted
+        let duplicate = server
             .push_events(CloudPushEventsRequest {
                 auth,
                 logbook_id,
@@ -2781,7 +3234,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn durable_sync_rejects_revoked_device_after_restart() {
+    async fn durable_sync_rejects_revoked_device_after_store_reload() {
         let paths = durable_paths("revoked-device");
         let logbook_id = Uuid::new_v4();
         let device_id = Uuid::new_v4();
@@ -2796,14 +3249,13 @@ mod tests {
         };
 
         server.revoke_device(device_id).unwrap();
-        let restarted = durable_server(&paths);
-        let error = restarted.status(Some(&auth)).await.unwrap_err();
+        let error = server.status(Some(&auth)).await.unwrap_err();
 
         assert_eq!(error, CloudSyncError::Unauthenticated);
     }
 
     #[tokio::test]
-    async fn durable_sync_rejects_invalid_chain_after_restart() {
+    async fn durable_sync_rejects_invalid_chain_after_store_reload() {
         let paths = durable_paths("invalid-chain");
         let logbook_id = Uuid::new_v4();
         let server = durable_server(&paths);
@@ -2824,11 +3276,9 @@ mod tests {
             })
             .await
             .unwrap();
-
-        let restarted = durable_server(&paths);
         let mut broken = new_event(logbook_id, Some("not-the-server-head".to_owned()));
         broken.event_hash = broken.calculate_hash();
-        let push = restarted
+        let push = server
             .push_events(CloudPushEventsRequest {
                 auth,
                 logbook_id,
@@ -2842,7 +3292,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn durable_report_metadata_and_payload_survive_restart() {
+    async fn durable_report_metadata_and_payload_survive_store_reload() {
         let paths = durable_paths("reports");
         let logbook_id = Uuid::new_v4();
         let server = durable_server(&paths);
@@ -2859,12 +3309,11 @@ mod tests {
         request.bundle_hash = "redacted-hash".to_owned();
 
         let upload = server.upload_report(request).await.unwrap();
-        let restarted = durable_server(&paths);
-        let metadata = restarted
+        let metadata = server
             .report_metadata(&auth, upload.report_id.as_str())
             .await
             .unwrap();
-        let payload = restarted
+        let payload = server
             .report_bundle_bytes(upload.report_id.as_str())
             .unwrap();
 
@@ -2872,5 +3321,64 @@ mod tests {
         assert_eq!(metadata.bundle_hash, "redacted-hash");
         assert_eq!(payload, b"redacted diagnostic payload");
         assert!(!String::from_utf8_lossy(&payload).contains("super-secret"));
+    }
+
+    #[test]
+    fn durable_provider_setting_survives_store_reload_without_secrets() {
+        let paths = durable_paths("provider-setting");
+        let logbook_id = Uuid::new_v4();
+        let server = durable_server(&paths);
+        server
+            .save_provider_setting(ProviderSettingMetadata {
+                account_id: "acct-1".to_owned(),
+                logbook_id: Some(logbook_id),
+                provider_id: "lotw".to_owned(),
+                enabled: true,
+                credential_id: Some("cred-lotw-1".to_owned()),
+                settings: serde_json::json!({
+                    "station_location": "Home",
+                    "credential_ref": "cred-lotw-1"
+                }),
+            })
+            .unwrap();
+        let setting = server.provider_setting("acct-1", "lotw").unwrap().unwrap();
+        let serialized = serde_json::to_string(&setting).unwrap();
+
+        assert_eq!(setting.credential_id.as_deref(), Some("cred-lotw-1"));
+        assert!(setting.enabled);
+        assert!(!serialized.contains("super-secret"));
+        assert!(!serialized.contains("password"));
+    }
+
+    #[test]
+    fn durable_upload_queue_history_survives_store_reload() {
+        let paths = durable_paths("upload-history");
+        let logbook_id = Uuid::new_v4();
+        let server = durable_server(&paths);
+        let item = UploadQueueMetadata {
+            account_id: "acct-1".to_owned(),
+            logbook_id,
+            upload_id: "upload-1".to_owned(),
+            provider_id: "clublog".to_owned(),
+            status: "failed".to_owned(),
+            qso_count: 3,
+            last_error: Some("provider rejected record".to_owned()),
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        };
+        server.save_upload_queue_item(item.clone()).unwrap();
+
+        let restored = server
+            .upload_queue_item("acct-1", "upload-1")
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(restored.upload_id, item.upload_id);
+        assert_eq!(restored.provider_id, "clublog");
+        assert_eq!(restored.qso_count, 3);
+        assert_eq!(
+            restored.last_error.as_deref(),
+            Some("provider rejected record")
+        );
     }
 }
