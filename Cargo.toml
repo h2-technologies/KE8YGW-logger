@@ -7,6 +7,7 @@ members = [
     "crates/ham-server",
     "crates/ham-cli",
     "crates/ham-gui",
+    "crates/ham-desktop",
 ]
 resolver = "2"
 

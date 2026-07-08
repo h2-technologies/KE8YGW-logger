@@ -147,6 +147,20 @@ pub fn default_panel_registry() -> Vec<PanelDefinition> {
             WorkspaceId::ALL,
         ),
         panel(
+            "divergence-review",
+            "Divergence Review",
+            "core.sync",
+            ["sync.view"],
+            WorkspaceId::ALL,
+        ),
+        panel(
+            "backup-restore",
+            "Backup and Restore",
+            "core.backup",
+            ["backup.export", "backup.import"],
+            WorkspaceId::ALL,
+        ),
+        panel(
             "event-bus-monitor",
             "Event Bus Monitor",
             "core.diagnostics",
@@ -465,6 +479,8 @@ fn default_layout(id: WorkspaceId) -> WorkspaceLayout {
             place("sync-status", PanelRegion::Center, 20),
             place("event-bus-monitor", PanelRegion::Bottom, 10),
             place("diagnostic-reports", PanelRegion::RightInspector, 10),
+            place("backup-restore", PanelRegion::RightInspector, 15),
+            place("divergence-review", PanelRegion::RightInspector, 18),
             place("service-providers", PanelRegion::RightInspector, 20),
             place("credential-manager", PanelRegion::RightInspector, 25),
             place("awards-summary", PanelRegion::RightInspector, 30),
@@ -610,5 +626,7 @@ mod tests {
         assert!(ids.contains(&"map-layers"));
         assert!(ids.contains(&"online-providers"));
         assert!(ids.contains(&"online-upload-queue"));
+        assert!(ids.contains(&"backup-restore"));
+        assert!(ids.contains(&"divergence-review"));
     }
 }

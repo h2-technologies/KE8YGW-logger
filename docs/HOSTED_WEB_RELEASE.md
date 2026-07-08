@@ -21,10 +21,11 @@ models, device registration/revocation, logbook membership roles, and
 proposal-backed QSO routes. It now also exposes hosted station/equipment
 support metadata routes, ADIF import/export, provider settings/test routes,
 upload queue execution foundation, activation routes, Net Control routes, map
-summary/settings routes, backup export/dry-run routes, sync pull, and
+summary/settings routes, backup export/dry-run/import routes, sync pull, and
 divergence review. Hosted metadata now has a SurrealDB-backed durable store for
 beta server use, with the in-memory store retained only for focused unit tests
-and development fixtures.
+and development fixtures. Surreal-backed hosted server mode now also opens a
+JSONL official event store so official history remains append-only and durable.
 
 The self-hosted sync/report service now uses durable local storage by default:
 SurrealDB for sync/support metadata, append-only JSONL for official replicated
@@ -86,6 +87,7 @@ events, and filesystem-backed diagnostic report payloads.
 - `GET /api/v1/backups/:id`
 - `GET /api/v1/backups/:id/download`
 - `POST /api/v1/backups/import/dry-run`
+- `POST /api/v1/backups/import`
 - `GET /api/v1/providers`
 - `GET /api/v1/providers/:id`
 - `PATCH /api/v1/providers/:id`
@@ -119,8 +121,12 @@ workflow mutations; Viewer can read only. Map QSO/station/path responses are
 derived from official projections and station profile support metadata. Map
 settings, backup records, and divergence reports are support metadata in
 SurrealDB. Backup export includes official events and support state without
-credential secrets; import is dry-run only in this slice. Divergence review
-reports safe pull/push states and never performs automatic merge.
+credential secrets. Backup import requires dry-run confirmation, validates the
+manifest and event chain, appends only verified missing official events, skips
+exact duplicate replay, restores support metadata into the authorized
+account/logbook scope, strips provider credential references, and blocks
+divergent targets. Divergence review reports safe pull/push states and never
+performs automatic merge.
 
 ## Required Before Production Hosted Use
 
@@ -156,6 +162,8 @@ The local development defaults use the platform log/data directory returned by
 the path.
 
 - `HAM_SERVER_BIND`: hosted API bind address, default `127.0.0.1:9750`.
+- `HAM_SERVER_EVENT_LOG_PATH`: append-only JSONL official event log for
+  `ham-server` hosted mode.
 - `HAM_SERVER_SURREAL_PATH`: embedded local SurrealDB path. Stores users,
   login sessions, devices, logbooks, memberships, API tokens, invites, station
   profiles, equipment profiles, provider settings without secrets, upload
@@ -198,6 +206,20 @@ the service is stopped or after taking a filesystem/database snapshot:
 Credential secret values are not stored in SurrealDB records and must be
 handled through the selected credential backend.
 
+The hosted backup API has two import phases:
+
+1. `POST /api/v1/backups/import/dry-run` validates the manifest, format
+   version, logbook scope, official event hash chain, duplicate event IDs, and
+   missing provider credential references. It does not write state.
+2. `POST /api/v1/backups/import` requires `confirm_dry_run: true`, repeats
+   validation, blocks divergent target heads, appends only the verified missing
+   event suffix, verifies the final chain, rebuilds projections, restores
+   support metadata into the target scope, and returns the final head plus
+   restored support sections.
+
+Imports never rewrite existing official events and never automatically merge
+divergent histories.
+
 ## Migration Notes
 
 SurrealDB schema initialization is automatic at startup through checked
@@ -217,5 +239,7 @@ embedded lock.
 - Session expiry/refresh policy is still beta-level and not production hardened.
 - Provider adapters are still fake/stub-backed through the hosted upload/test
   routes; live network execution remains separate v0.2 work.
-- Backup import is dry-run only. Full restore/import, backup UX, and desktop
-  packaging remain separate v0.2 work.
+- Backup import is conservative and same-logbook only. Importing a backup into
+  a different logbook would require re-authoring official events and is blocked
+  for v0.2.
+- Full Tauri runtime packaging is not wired into hosted CI yet.

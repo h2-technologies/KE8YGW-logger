@@ -195,8 +195,8 @@ pub async fn import_adif<S, B>(
     options: &AdifImportOptions,
 ) -> AdifImportSummary
 where
-    S: LogbookEventStore,
-    B: EventBus,
+    S: LogbookEventStore + ?Sized,
+    B: EventBus + ?Sized,
 {
     let mut summary = AdifImportSummary::default();
     let records = parse_adif(input);

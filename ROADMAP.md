@@ -28,8 +28,10 @@ metadata/support storage plus beta routes for account/session/device/logbook
 scaffolding, role-scoped logbook access, proposal-backed QSO lifecycle,
 station/equipment profiles, ADIF import/export, provider settings/test, upload
 queue execution foundation, activation/Net Control routes, map summaries,
-backup export/dry-run, divergence review, sync preview/push/pull, and route
-tests.
+backup export/dry-run/import, divergence review, sync preview/push/pull, and
+route tests. The GUI now has backup/restore and divergence review surfaces, and
+the repository has a `ham-desktop` crate plus `src-tauri` packaging foundation
+and native dialog bridge contract.
 
 ## Release Scope Correction
 
@@ -39,11 +41,11 @@ v1.1 is the first native iOS target: SwiftUI, App Store-ready Xcode project, nat
 
 ## Recommended Next Milestone
 
-Restore, Desktop Packaging, and Beta UX:
+Live Provider Adapters, Credentials, and Desktop Runtime:
 
-- Complete full backup restore/import after dry-run approval.
-- Add user-facing divergence review/export UX.
-- Tauri desktop packaging and native file dialogs.
+- Wire real Tauri runtime commands and package validation.
+- Implement production OS credential backends.
+- Implement live Tier 1 provider adapters.
 - Browser-level GUI tests.
 
 Then continue Live Provider Adapters and Production Credential Backends:
@@ -59,7 +61,7 @@ Then continue Live Provider Adapters and Production Credential Backends:
 
 ## Future Milestones
 
-- v0.2 almost-v1 beta completion: hosted API/storage hardening, desktop packaging, backup/restore, divergence review, LAN trust pairing, station/equipment forms, interactive map, browser tests, and CI release hardening.
+- v0.2 almost-v1 beta completion: live provider/credential hardening, real Tauri packaging commands, LAN trust pairing, station/equipment GUI polish, interactive map polish, browser tests, and CI release hardening.
 - v1.0 web + desktop production release: hosted web, installable desktop, stabilized API/storage/sync/providers, production credentials, docs cleanup, and beta bug fixes.
 - v1.1 native iOS release: SwiftUI app, native offline queue, Keychain, native ADIF document flows, native Maps, iPhone/iPad layouts, and TestFlight/App Store readiness.
 - LoTW upload/download and confirmation pull.
@@ -69,9 +71,9 @@ Then continue Live Provider Adapters and Production Credential Backends:
 - QRZ/HamQTH real callsign lookup.
 - OS keychain/secret-store production backend wiring.
 
-- Full Tauri packaging and native file dialogs.
+- Full Tauri runtime packaging and installer/signing polish.
 - Award rule databases and needed-list intelligence.
 - Durable upload queue and provider settings.
 - LAN trust pairing UX and real peer-to-peer transport.
-- Conflict/divergence review UI.
+- Conflict/divergence review UI hardening.
 - Net Control, EmComm, Contesting, Maps, Propagation, and AI plugins.

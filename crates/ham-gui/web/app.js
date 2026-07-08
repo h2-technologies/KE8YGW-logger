@@ -31,6 +31,8 @@ const state = {
   qsoError: "",
   duplicateWarning: "",
   importSummary: null,
+  backupState: { lastBackup: null, dryRun: null, importResult: null },
+  divergenceReview: null,
   reportPreview: null,
   lastReport: null,
   syncState: null,
@@ -129,6 +131,7 @@ function bindShellControls() {
   byId("command-button").addEventListener("click", openCommandPalette);
   byId("import-adif-button").addEventListener("click", importAdifFromPrompt);
   byId("export-adif-button").addEventListener("click", exportAdifFromPrompt);
+  byId("backup-button").addEventListener("click", () => openScreen("backups"));
   byId("settings-button").addEventListener("click", () => openScreen("settings"));
   byId("plugins-button").addEventListener("click", () => openScreen("plugins"));
   byId("close-screen").addEventListener("click", closeScreen);
@@ -349,6 +352,10 @@ function panelContent(panel) {
       return renderNetReport();
     case "sync-status":
       return renderSyncStatus();
+    case "backup-restore":
+      return renderBackupRestorePanel();
+    case "divergence-review":
+      return renderDivergencePanel();
     case "rig-control":
       return renderRigControl();
     case "map-placeholder":
@@ -439,6 +446,12 @@ function runCommand(commandId) {
   if (command.id === "diagnostics.report.export") exportDiagnosticZipFromScreen();
   if (command.id === "diagnostics.report.upload") uploadDiagnosticReportFromScreen();
   if (command.id === "diagnostics.report.copy-last-id") copyLastReportId();
+  if (command.id === "backup.open") openScreen("backups");
+  if (command.id === "backup.export") exportBackupFromScreen();
+  if (command.id === "backup.restore.dry-run") dryRunBackupRestoreFromScreen();
+  if (command.id === "backup.restore.import") importBackupFromScreen();
+  if (command.id === "sync.divergence.review") openDivergenceReview();
+  if (command.id === "sync.divergence.export") exportDivergenceReportFromScreen();
   if (command.id === "adif.import") importAdifFromPrompt();
   if (command.id === "adif.export") exportAdifFromPrompt();
   if (command.id === "lookup.callsign") lookupCallsignFromPrompt();
@@ -600,6 +613,22 @@ function openScreen(kind) {
     title.textContent = "Report a Problem";
     body.innerHTML = renderReportProblem();
     bindReportProblemControls();
+    return;
+  }
+
+  if (kind === "backups") {
+    eyebrow.textContent = "Backup";
+    title.textContent = "Backup and Restore";
+    body.innerHTML = renderBackupRestoreScreen();
+    bindBackupRestoreControls();
+    return;
+  }
+
+  if (kind === "divergence-review") {
+    eyebrow.textContent = "Sync";
+    title.textContent = "Divergence Review";
+    body.innerHTML = renderDivergenceReviewScreen();
+    bindDivergenceControls();
     return;
   }
 
@@ -920,6 +949,112 @@ function bindReportProblemControls() {
   byId("report-upload")?.addEventListener("click", uploadDiagnosticReportFromScreen);
   byId("report-copy-id")?.addEventListener("click", copyLastReportId);
   byId("report-type")?.addEventListener("change", refreshReportPreview);
+}
+
+function renderBackupRestorePanel() {
+  const last = state.backupState.lastBackup;
+  return `<div class="stack">
+    <p>Backup current logbook, validate restore payloads, and import only when the dry-run is safe.</p>
+    <div class="monitor-actions">
+      <button class="toolbar-button" type="button" onclick="openScreen('backups')">Open Backup Workflow</button>
+      <button class="toolbar-button" type="button" onclick="exportBackupFromScreen()">Export Backup</button>
+    </div>
+    ${last ? `<pre class="path-block">${JSON.stringify(last.manifest || last, null, 2)}</pre>` : `<p class="muted">No backup exported in this session.</p>`}
+  </div>`;
+}
+
+function renderBackupRestoreScreen() {
+  const dryRun = state.backupState.dryRun;
+  const result = state.backupState.importResult;
+  return `<div class="qso-form">
+    <label>Backup Export Path
+      <input id="backup-export-path" class="placeholder-control" placeholder="C:\\Temp\\ke8ygw-backup.json" />
+    </label>
+    <div class="monitor-actions">
+      <button id="backup-export-browse" class="toolbar-button" type="button">Choose Export Path</button>
+      <button id="backup-export-run" class="toolbar-button" type="button">Export Current Logbook</button>
+    </div>
+    <div class="sync-summary">
+      <p><strong>Backup contents</strong></p>
+      <p><span class="pill">official event stream</span><span class="pill">station profiles</span><span class="pill">upload queue</span><span class="pill">map preferences</span></p>
+      <p><strong>Excluded</strong></p>
+      <p><span class="pill">credential secrets</span><span class="pill">session tokens</span><span class="pill">device tokens</span><span class="pill">runtime logs</span></p>
+      ${state.backupState.lastBackup ? `<pre class="path-block">${JSON.stringify(state.backupState.lastBackup.manifest || state.backupState.lastBackup, null, 2)}</pre>` : ""}
+    </div>
+    <label>Backup Import Path
+      <input id="backup-import-path" class="placeholder-control" placeholder="C:\\Temp\\ke8ygw-backup.json" />
+    </label>
+    <div class="monitor-actions">
+      <button id="backup-import-browse" class="toolbar-button" type="button">Choose Backup</button>
+      <button id="backup-dry-run" class="toolbar-button" type="button">Run Dry-Run</button>
+      <button id="backup-import-run" class="toolbar-button" type="button" ${dryRun?.ok ? "" : "disabled"}>Import Safe Backup</button>
+    </div>
+    ${dryRun ? renderRestoreDryRun(dryRun) : `<p class="muted">Choose a backup and run dry-run before importing.</p>`}
+    ${result ? `<div class="sync-summary"><p><strong>Import Result</strong></p><pre class="path-block">${JSON.stringify(result, null, 2)}</pre></div>` : ""}
+  </div>`;
+}
+
+function renderRestoreDryRun(dryRun) {
+  const severity = dryRun.ok ? "info" : "error";
+  return `<div class="sync-summary">
+    <p><strong>Dry-Run Review</strong> <span class="severity severity-${severity}">${dryRun.ok ? "safe" : "blocked"}</span></p>
+    <p>Backup version: ${dryRun.backup_version ?? "unknown"} / source logbook: <small>${dryRun.source_logbook_id || "unknown"}</small></p>
+    <p>Target logbook: <small>${dryRun.target_logbook_id || "current"}</small></p>
+    <p>Official events: ${dryRun.official_event_count || dryRun.event_count || 0} / skipped duplicates: ${dryRun.skipped_duplicate_count || 0}</p>
+    <p>Support sections: ${(dryRun.support_sections || []).map((section) => `<span class="pill">${escapeHtml(section)}</span>`).join("") || "none"}</p>
+    <p>Missing credentials: ${(dryRun.missing_credentials || dryRun.missing_credential_references || []).map((item) => `<span class="pill">${escapeHtml(item)}</span>`).join("") || "none"}</p>
+    ${(dryRun.warnings || []).map((warning) => `<p class="event-warn">${escapeHtml(warning)}</p>`).join("")}
+    ${(dryRun.errors || []).map((error) => `<p class="event-error">${escapeHtml(error)}</p>`).join("")}
+  </div>`;
+}
+
+function bindBackupRestoreControls() {
+  byId("backup-export-browse")?.addEventListener("click", chooseBackupExportPath);
+  byId("backup-import-browse")?.addEventListener("click", chooseBackupImportPath);
+  byId("backup-export-run")?.addEventListener("click", exportBackupFromScreen);
+  byId("backup-dry-run")?.addEventListener("click", dryRunBackupRestoreFromScreen);
+  byId("backup-import-run")?.addEventListener("click", importBackupFromScreen);
+}
+
+function renderDivergencePanel() {
+  const review = state.divergenceReview;
+  return `<div class="stack">
+    <p>Review sync heads before pulling or pushing. Divergent chains are blocked from automatic merge.</p>
+    <div class="monitor-actions">
+      <button class="toolbar-button" type="button" onclick="openDivergenceReview()">Review Divergence</button>
+      <button class="toolbar-button" type="button" onclick="exportDivergenceReportFromScreen()">Export Report</button>
+    </div>
+    ${review ? renderDivergenceReview(review) : `<p class="muted">No divergence report loaded.</p>`}
+  </div>`;
+}
+
+function renderDivergenceReviewScreen() {
+  return `<div class="stack">
+    <div class="monitor-actions">
+      <button id="divergence-refresh" class="toolbar-button" type="button">Refresh Review</button>
+      <button id="divergence-export" class="toolbar-button" type="button">Export Report</button>
+    </div>
+    ${state.divergenceReview ? renderDivergenceReview(state.divergenceReview) : `<p class="muted">Refresh to inspect current sync head state.</p>`}
+  </div>`;
+}
+
+function renderDivergenceReview(review) {
+  return `<div class="sync-summary">
+    <p><strong>Divergence:</strong> <span class="severity severity-${review.divergence_detected ? "error" : "info"}">${review.divergence_detected ? "detected" : "not detected"}</span></p>
+    <p>Local head: <small>${review.local_head_hash || "genesis"}</small></p>
+    <p>Remote head: <small>${review.remote_head_hash || "unknown"}</small></p>
+    <p>Common ancestor: <small>${review.common_ancestor || "unknown"}</small></p>
+    <p>Missing local events: ${review.missing_local_event_count || 0} / missing remote events: ${review.missing_remote_event_count || 0}</p>
+    <p>Safe pull: ${review.can_safely_pull ? "yes" : "no"} / safe push: ${review.can_safely_push ? "yes" : "no"}</p>
+    <p>Revoked device state: ${review.revoked_device_state || "unknown"}</p>
+    <p><strong>Recommended action:</strong> ${escapeHtml(review.recommended_action || "No action available.")}</p>
+    ${review.divergence_detected ? `<p class="event-error">Automatic merge is intentionally unavailable. Export this report for manual review.</p>` : ""}
+  </div>`;
+}
+
+function bindDivergenceControls() {
+  byId("divergence-refresh")?.addEventListener("click", refreshDivergenceReview);
+  byId("divergence-export")?.addEventListener("click", exportDivergenceReportFromScreen);
 }
 
 function redactionSummaryText(summary) {
@@ -2406,7 +2541,9 @@ async function refreshReportPreview() {
 
 async function exportDiagnosticZipFromScreen() {
   const reportType = byId("report-type")?.value || "basic";
-  const path = byId("report-output-path")?.value || window.prompt("Path to write diagnostic ZIP");
+  const path =
+    byId("report-output-path")?.value ||
+    (await chooseSavePath("diagnostic-bundle", "Path to write diagnostic ZIP"));
   if (!path) return;
   const response = await fetch("/api/diagnostics/report/export", {
     method: "POST",
@@ -2592,7 +2729,7 @@ async function runQsoAction(action, qsoId) {
 }
 
 async function importAdifFromPrompt() {
-  const path = window.prompt("Path to ADIF file to import");
+  const path = await chooseOpenPath("adif", "Path to ADIF file to import");
   if (!path) return;
   const response = await fetch("/api/adif/import", {
     method: "POST",
@@ -2608,7 +2745,7 @@ async function importAdifFromPrompt() {
 }
 
 async function exportAdifFromPrompt() {
-  const path = window.prompt("Path to write ADIF export");
+  const path = (await chooseSavePath("adif", "Path to write ADIF export")) || "";
   if (!path) return;
   const response = await fetch("/api/adif/export", {
     method: "POST",
@@ -2618,6 +2755,111 @@ async function exportAdifFromPrompt() {
   state.importSummary = await response.json();
   await refreshRuntimeEvents();
   openScreen("import-summary");
+}
+
+async function chooseSavePath(kind, promptLabel) {
+  const invoke = window.__TAURI__?.core?.invoke || window.__TAURI__?.tauri?.invoke;
+  if (invoke) {
+    try {
+      const selected = await invoke("desktop_dialog_save", { kind });
+      if (selected) return selected;
+    } catch (_) {
+      // Browser fallback keeps web/server mode independent from Tauri.
+    }
+  }
+  return window.prompt(promptLabel);
+}
+
+async function chooseOpenPath(kind, promptLabel) {
+  const invoke = window.__TAURI__?.core?.invoke || window.__TAURI__?.tauri?.invoke;
+  if (invoke) {
+    try {
+      const selected = await invoke("desktop_dialog_open", { kind });
+      if (selected) return selected;
+    } catch (_) {
+      // Browser fallback keeps web/server mode independent from Tauri.
+    }
+  }
+  return window.prompt(promptLabel);
+}
+
+async function chooseBackupExportPath() {
+  const path = await chooseSavePath("backup", "Path to write backup JSON");
+  if (path) byId("backup-export-path").value = path;
+}
+
+async function chooseBackupImportPath() {
+  const path = await chooseOpenPath("backup", "Path to backup JSON to restore");
+  if (path) byId("backup-import-path").value = path;
+}
+
+async function exportBackupFromScreen() {
+  let path = byId("backup-export-path")?.value;
+  if (!path) path = await chooseSavePath("backup", "Path to write backup JSON");
+  if (!path) return;
+  const response = await fetch("/api/backup/export", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ path }),
+  });
+  state.backupState.lastBackup = await response.json();
+  state.importSummary = state.backupState.lastBackup;
+  openScreen("backups");
+}
+
+async function dryRunBackupRestoreFromScreen() {
+  let path = byId("backup-import-path")?.value;
+  if (!path) path = await chooseOpenPath("backup", "Path to backup JSON to validate");
+  if (!path) return;
+  const response = await fetch("/api/backup/import/dry-run", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ path }),
+  });
+  state.backupState.dryRun = await response.json();
+  state.backupState.importResult = null;
+  openScreen("backups");
+}
+
+async function importBackupFromScreen() {
+  const path = byId("backup-import-path")?.value;
+  if (!path || !state.backupState.dryRun?.ok) return;
+  const response = await fetch("/api/backup/import", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ path, confirm_dry_run: true }),
+  });
+  state.backupState.importResult = await response.json();
+  await refreshQsos();
+  await refreshStation();
+  await refreshUploads();
+  await refreshMapState();
+  await refreshRuntimeEvents();
+  openScreen("backups");
+  render();
+}
+
+async function refreshDivergenceReview() {
+  state.divergenceReview = await fetch("/api/sync/divergence/review").then((response) => response.json());
+  openScreen("divergence-review");
+  render();
+}
+
+async function openDivergenceReview() {
+  await refreshDivergenceReview();
+}
+
+async function exportDivergenceReportFromScreen() {
+  const path = await chooseSavePath("divergence-report", "Path to write divergence report JSON");
+  if (!path) return;
+  const response = await fetch("/api/sync/divergence/export", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ path }),
+  });
+  state.importSummary = await response.json();
+  state.divergenceReview = state.importSummary.report || state.divergenceReview;
+  openScreen("divergence-review");
 }
 
 async function verifyLogChain() {

@@ -1467,6 +1467,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "ham-desktop"
+version = "0.2.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "ham-gui"
 version = "0.2.0"
 dependencies = [

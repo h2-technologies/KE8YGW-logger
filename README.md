@@ -96,14 +96,16 @@ login/session handling, device identity/revocation, logbook membership roles,
 proposal-backed QSO create/edit/delete/restore/note flows, hosted
 station/equipment support metadata, ADIF import/export, provider settings/test
 routes, upload queue execution foundation, activation and Net Control workflow
-routes, map summaries/settings, backup export/dry-run, divergence review, and
-sync preview/push/pull.
+routes, map summaries/settings, backup export/dry-run/import, divergence review,
+and sync preview/push/pull.
 
 This is not yet a production hosted release. Server account/session/device
 metadata is now durable SurrealDB beta storage and sync/report storage is durable,
 but production credential backends are pending, live provider adapters remain
-provider-framework work, upload execution is still fake/stub-provider based,
-and desktop packaging/native dialogs are still v0.2 gaps.
+provider-framework work, upload execution is still fake/stub-provider based, and
+the full Tauri runtime/package build remains v0.2 work. A `ham-desktop` crate,
+`src-tauri` packaging config, backup/restore GUI, divergence review GUI, and
+desktop-native dialog bridge contract are now present.
 
 ## Architecture
 
@@ -711,11 +713,13 @@ duplicate when contacted callsign and mode match, band matches when provided,
 and `started_at` is within 10 minutes. Duplicates are skipped by default and
 reported in the import summary.
 
-GUI import/export currently uses path prompts because native file dialogs are
-not wired yet:
+GUI import/export uses normal browser/server path prompts and switches to the
+desktop-native dialog bridge when the Tauri commands are available:
 
-- `Import ADIF` reads an ADIF file from a typed path.
-- `Export ADIF` writes visible, non-deleted QSOs to a typed path.
+- `Import ADIF` reads an ADIF file selected through native desktop dialogs or
+  a browser/server path prompt.
+- `Export ADIF` writes visible, non-deleted QSOs through native desktop dialogs
+  or a browser/server path prompt.
 
 CLI commands:
 
@@ -985,9 +989,10 @@ mock plugin data, and a small local web server. The web side renders the shell
 using static HTML, CSS, and JavaScript.
 
 This is a web-first foundation that is Tauri-ready: the current `ham-gui` binary
-serves the same assets a future Tauri desktop shell can embed. Tauri was not
-added yet so CI stays lightweight while the project is still defining the shell
-and core integration contracts.
+serves the same assets the `src-tauri` desktop shell is configured to embed.
+The `ham-desktop` crate records the desktop runtime and native dialog contract.
+The full Tauri Rust runtime and installer build are still deferred so CI stays
+lightweight while the project finishes beta functionality.
 
 The default shell includes:
 

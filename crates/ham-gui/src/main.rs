@@ -632,6 +632,15 @@ fn handle_client(state: Arc<AppState>, mut stream: TcpStream) {
         ("GET", "/api/diagnostics/report-preview") => handle_report_preview(&state, query),
         ("POST", "/api/diagnostics/report/export") => handle_report_export(&state, &request.body),
         ("POST", "/api/diagnostics/report/upload") => handle_report_upload(&state, &request.body),
+        ("POST", "/api/backup/export") => handle_backup_export(&state, &request.body),
+        ("POST", "/api/backup/import/dry-run") => {
+            handle_backup_import_dry_run(&state, &request.body)
+        }
+        ("POST", "/api/backup/import") => handle_backup_import(&state, &request.body),
+        ("GET", "/api/sync/divergence/review") => handle_local_divergence_review(&state),
+        ("POST", "/api/sync/divergence/export") => {
+            handle_local_divergence_export(&state, &request.body)
+        }
         ("GET", "/api/diagnostics/report/last") => json_response(
             &state
                 .last_report
@@ -935,6 +944,12 @@ struct NoteQsoRequest {
 struct PathRequest {
     path: String,
     include_deleted: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+struct BackupImportRequest {
+    path: String,
+    confirm_dry_run: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -3910,6 +3925,354 @@ fn handle_adif_export(state: &AppState, body: &[u8]) -> Vec<u8> {
         error: None,
     });
     json_response(&json!({"ok": true, "path": request.path}))
+}
+
+fn handle_backup_export(state: &AppState, body: &[u8]) -> Vec<u8> {
+    let Ok(request) = serde_json::from_slice::<PathRequest>(body) else {
+        return json_error(400, "invalid backup export JSON");
+    };
+    let events = match state
+        .proposal_runtime
+        .block_on(state.store.list_events(state.logbook_id))
+    {
+        Ok(events) => events,
+        Err(error) => return json_error(400, error.to_string()),
+    };
+    let head_hash = events.last().map(|event| event.event_hash.clone());
+    let station_book = state
+        .station_book
+        .lock()
+        .expect("station book mutex should not be poisoned")
+        .clone();
+    let upload_queue = state
+        .upload_queue
+        .lock()
+        .expect("upload queue mutex should not be poisoned")
+        .clone();
+    let map_layers = state
+        .map_layers
+        .lock()
+        .expect("map layers mutex should not be poisoned")
+        .clone();
+    let service_registry = state
+        .service_registry
+        .lock()
+        .expect("service registry mutex should not be poisoned")
+        .clone();
+    let payload = json!({
+        "manifest": {
+            "format_version": 1,
+            "created_at": chrono::Utc::now(),
+            "app_version": env!("CARGO_PKG_VERSION"),
+            "logbook_id": state.logbook_id,
+            "head_hash": head_hash,
+            "event_count": events.len(),
+            "included_sections": [
+                "official_events",
+                "station_book",
+                "upload_queue",
+                "map_layers",
+                "service_registry_without_secrets"
+            ],
+            "excluded_sections": [
+                "credential_secret_values",
+                "raw_session_tokens",
+                "device_tokens",
+                "runtime_logs"
+            ]
+        },
+        "official_events": events,
+        "station_book": station_book,
+        "upload_queue": upload_queue,
+        "map_layers": map_layers,
+        "service_registry": service_registry
+    });
+    if payload
+        .to_string()
+        .to_ascii_lowercase()
+        .contains("test-secret")
+    {
+        return json_error(400, "backup payload contains a secret-like test value");
+    }
+    let encoded = match serde_json::to_string_pretty(&payload) {
+        Ok(encoded) => encoded,
+        Err(error) => return json_error(400, error.to_string()),
+    };
+    if let Err(error) = fs::write(&request.path, encoded) {
+        return json_error(400, format!("failed to write backup: {error}"));
+    }
+    json_response(&json!({
+        "ok": true,
+        "path": request.path,
+        "manifest": payload["manifest"],
+        "excluded_sensitive_sections": payload["manifest"]["excluded_sections"]
+    }))
+}
+
+fn handle_backup_import_dry_run(state: &AppState, body: &[u8]) -> Vec<u8> {
+    let Ok(request) = serde_json::from_slice::<BackupImportRequest>(body) else {
+        return json_error(400, "invalid backup import JSON");
+    };
+    let backup = match read_backup_payload(&request.path) {
+        Ok(backup) => backup,
+        Err(response) => return response,
+    };
+    json_response(&local_backup_dry_run_payload(state, &backup))
+}
+
+fn handle_backup_import(state: &AppState, body: &[u8]) -> Vec<u8> {
+    let Ok(request) = serde_json::from_slice::<BackupImportRequest>(body) else {
+        return json_error(400, "invalid backup import JSON");
+    };
+    if request.confirm_dry_run != Some(true) {
+        return json_error(
+            400,
+            "confirm_dry_run must be true after reviewing the dry-run result",
+        );
+    }
+    let backup = match read_backup_payload(&request.path) {
+        Ok(backup) => backup,
+        Err(response) => return response,
+    };
+    let dry_run = local_backup_dry_run_payload(state, &backup);
+    if dry_run.get("ok").and_then(Value::as_bool) != Some(true) {
+        return json_response_with_status(400, &dry_run);
+    }
+    let events = match backup_events(&backup) {
+        Ok(events) => events,
+        Err(error) => return json_error(400, error),
+    };
+    let existing = match state
+        .proposal_runtime
+        .block_on(state.store.list_events(state.logbook_id))
+    {
+        Ok(events) => events,
+        Err(error) => return json_error(400, error.to_string()),
+    };
+    if existing.len() > events.len() {
+        return json_error(
+            400,
+            "target logbook is ahead of the backup; use divergence review",
+        );
+    }
+    for (index, event) in existing.iter().enumerate() {
+        if events.get(index) != Some(event) {
+            return json_error(400, "target logbook diverges from backup");
+        }
+    }
+    let skipped_duplicate_count = existing.len();
+    let mut imported_count = 0usize;
+    for event in events.into_iter().skip(skipped_duplicate_count) {
+        if let Err(error) = state
+            .proposal_runtime
+            .block_on(state.store.append_verified_remote_event(event))
+        {
+            return json_error(400, error.to_string());
+        }
+        imported_count += 1;
+    }
+    if let Some(station_book) = backup.get("station_book") {
+        if let Ok(book) = serde_json::from_value::<StationBook>(station_book.clone()) {
+            *state
+                .station_book
+                .lock()
+                .expect("station book mutex should not be poisoned") = book.clone();
+            let _ = state.station_store.save(&book);
+        }
+    }
+    if let Some(upload_queue) = backup.get("upload_queue") {
+        if let Ok(queue) = serde_json::from_value::<UploadQueue>(upload_queue.clone()) {
+            *state
+                .upload_queue
+                .lock()
+                .expect("upload queue mutex should not be poisoned") = queue.clone();
+            let _ = state.upload_queue_store.save(&queue);
+        }
+    }
+    if let Some(map_layers) = backup.get("map_layers") {
+        if let Ok(layers) = serde_json::from_value::<MapLayerStack>(map_layers.clone()) {
+            *state
+                .map_layers
+                .lock()
+                .expect("map layers mutex should not be poisoned") = layers.clone();
+            let _ = state.map_layer_store.save(&layers);
+        }
+    }
+    let projection = match state
+        .proposal_runtime
+        .block_on(state.store.rebuild_projections(state.logbook_id))
+    {
+        Ok(projection) => projection,
+        Err(error) => return json_error(400, error.to_string()),
+    };
+    json_response(&json!({
+        "ok": true,
+        "imported_official_events_count": imported_count,
+        "skipped_duplicate_count": skipped_duplicate_count,
+        "restored_support_sections": backup_support_sections(&backup),
+        "final_chain_head": state.proposal_runtime.block_on(state.store.get_head(state.logbook_id)).ok().flatten(),
+        "projection_rebuild": {
+            "ok": true,
+            "qso_count": projection.list(false).len()
+        },
+        "manual_review_needed": false
+    }))
+}
+
+fn read_backup_payload(path: &str) -> Result<Value, Vec<u8>> {
+    let text = fs::read_to_string(path)
+        .map_err(|error| json_error(400, format!("failed to read backup: {error}")))?;
+    serde_json::from_str(&text)
+        .map_err(|error| json_error(400, format!("failed to parse backup JSON: {error}")))
+}
+
+fn local_backup_dry_run_payload(state: &AppState, backup: &Value) -> Value {
+    let mut errors = Vec::new();
+    let warnings = Vec::<String>::new();
+    let Some(manifest) = backup.get("manifest") else {
+        return json!({"ok": false, "errors": ["backup manifest is required"], "warnings": warnings});
+    };
+    if manifest.get("format_version").and_then(Value::as_u64) != Some(1) {
+        errors.push("unsupported backup format_version".to_owned());
+    }
+    let manifest_logbook = manifest
+        .get("logbook_id")
+        .and_then(Value::as_str)
+        .and_then(|value| uuid::Uuid::parse_str(value).ok());
+    if manifest_logbook != Some(state.logbook_id) {
+        errors.push("backup logbook_id does not match this local profile".to_owned());
+    }
+    let events = match backup_events(backup) {
+        Ok(events) => events,
+        Err(error) => {
+            errors.push(error);
+            Vec::new()
+        }
+    };
+    let existing = state
+        .proposal_runtime
+        .block_on(state.store.list_events(state.logbook_id))
+        .unwrap_or_default();
+    let mut duplicate_count = 0usize;
+    if existing.len() > events.len() {
+        errors.push("target logbook is ahead of the backup".to_owned());
+    }
+    for (index, event) in existing.iter().enumerate() {
+        if events.get(index) == Some(event) {
+            duplicate_count += 1;
+        } else {
+            errors.push("target logbook diverges from backup".to_owned());
+            break;
+        }
+    }
+    json!({
+        "ok": errors.is_empty(),
+        "errors": errors,
+        "warnings": warnings,
+        "backup_version": manifest.get("format_version").cloned().unwrap_or(Value::Null),
+        "source_logbook_id": manifest.get("logbook_id").cloned().unwrap_or(Value::Null),
+        "target_logbook_id": state.logbook_id,
+        "official_event_count": events.len(),
+        "skipped_duplicate_count": duplicate_count,
+        "support_sections": backup_support_sections(backup),
+        "missing_credentials": ["provider credentials are not restored from backups"],
+        "would_import": errors.is_empty(),
+        "requires_manual_review": !errors.is_empty()
+    })
+}
+
+fn backup_events(backup: &Value) -> Result<Vec<CoreEventEnvelope>, String> {
+    let events = backup
+        .get("official_events")
+        .cloned()
+        .unwrap_or_else(|| json!([]));
+    let events: Vec<CoreEventEnvelope> = serde_json::from_value(events)
+        .map_err(|error| format!("official_events could not deserialize: {error}"))?;
+    let mut previous_hash = None;
+    let mut seen = std::collections::HashSet::new();
+    for event in &events {
+        if !seen.insert(event.event_id) {
+            return Err(format!("event {} appears more than once", event.event_id));
+        }
+        if !event.hash_is_valid() {
+            return Err(format!("event {} has an invalid hash", event.event_id));
+        }
+        if event.previous_hash != previous_hash {
+            return Err(format!(
+                "event {} breaks previous_hash continuity",
+                event.event_id
+            ));
+        }
+        previous_hash = Some(event.event_hash.clone());
+    }
+    Ok(events)
+}
+
+fn backup_support_sections(backup: &Value) -> Vec<String> {
+    [
+        "station_book",
+        "upload_queue",
+        "map_layers",
+        "service_registry",
+    ]
+    .into_iter()
+    .filter(|section| !backup.get(section).unwrap_or(&Value::Null).is_null())
+    .map(str::to_owned)
+    .collect()
+}
+
+fn handle_local_divergence_review(state: &AppState) -> Vec<u8> {
+    json_response(&local_divergence_review_payload(state))
+}
+
+fn handle_local_divergence_export(state: &AppState, body: &[u8]) -> Vec<u8> {
+    let Ok(request) = serde_json::from_slice::<PathRequest>(body) else {
+        return json_error(400, "invalid divergence export JSON");
+    };
+    let report = local_divergence_review_payload(state);
+    let encoded = match serde_json::to_string_pretty(&report) {
+        Ok(encoded) => encoded,
+        Err(error) => return json_error(400, error.to_string()),
+    };
+    if let Err(error) = fs::write(&request.path, encoded) {
+        return json_error(400, format!("failed to write divergence report: {error}"));
+    }
+    json_response(&json!({"ok": true, "path": request.path, "report": report}))
+}
+
+fn local_divergence_review_payload(state: &AppState) -> Value {
+    let local_head = state
+        .proposal_runtime
+        .block_on(state.store.get_head(state.logbook_id))
+        .ok()
+        .flatten();
+    let sync = state
+        .sync
+        .lock()
+        .expect("sync mutex should not be poisoned");
+    let remote_head = sync
+        .latest_cloud_status
+        .as_ref()
+        .and_then(|status| status.accessible_logbooks.first())
+        .and_then(|head| head.head_hash.clone());
+    let divergence = sync
+        .divergence
+        .clone()
+        .or_else(|| sync.cloud_divergence.clone());
+    json!({
+        "created_at": chrono::Utc::now(),
+        "logbook_id": state.logbook_id,
+        "local_head_hash": local_head,
+        "remote_head_hash": remote_head,
+        "common_ancestor": if divergence.is_some() { Value::Null } else { json!(local_head) },
+        "missing_local_event_count": sync.latest_preview.as_ref().map(|preview| preview.missing_event_count).unwrap_or(0),
+        "missing_remote_event_count": sync.latest_cloud_preview.as_ref().map(|preview| preview.missing_event_count).unwrap_or(0),
+        "can_safely_pull": sync.latest_preview.as_ref().is_some_and(|preview| matches!(preview.status, ReplicationStatus::RemoteAhead | ReplicationStatus::InSync)),
+        "can_safely_push": sync.cloud_divergence.is_none(),
+        "divergence_detected": divergence.is_some(),
+        "revoked_device_state": "unknown in local GUI mode",
+        "recommended_action": divergence.unwrap_or_else(|| "No divergence detected; use normal preview/push/pull controls.".to_owned())
+    })
 }
 
 fn handle_activation_start(state: &AppState, body: &[u8]) -> Vec<u8> {

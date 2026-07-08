@@ -133,8 +133,8 @@ pub async fn submit_proposal<S, B>(
     proposal: ProposalEnvelope,
 ) -> Result<ProposalOutcome, ProposalValidationError>
 where
-    S: LogbookEventStore,
-    B: EventBus,
+    S: LogbookEventStore + ?Sized,
+    B: EventBus + ?Sized,
 {
     publish_proposal_runtime_event(
         bus,
@@ -204,8 +204,8 @@ async fn submit_proposal_inner<S, B>(
     proposal: ProposalEnvelope,
 ) -> Result<ProposalOutcome, ProposalValidationError>
 where
-    S: LogbookEventStore,
-    B: EventBus,
+    S: LogbookEventStore + ?Sized,
+    B: EventBus + ?Sized,
 {
     if proposal.source_plugin_id != context.plugin_manifest.plugin_id {
         return Err(ProposalValidationError::PluginMismatch {
@@ -328,7 +328,7 @@ async fn publish_permission_check_event<B>(
     summary: &str,
 ) -> Result<(), ProposalValidationError>
 where
-    B: EventBus,
+    B: EventBus + ?Sized,
 {
     bus.publish(BusEvent::Runtime(RuntimeEventEnvelope::new(
         event_type,
@@ -356,7 +356,7 @@ async fn validate_qso_schema<S>(
     proposal: &ProposalEnvelope,
 ) -> Result<(), ProposalValidationError>
 where
-    S: LogbookEventStore,
+    S: LogbookEventStore + ?Sized,
 {
     if proposal.schema_version == 0 {
         return Err(ProposalValidationError::InvalidSchema(
@@ -712,7 +712,7 @@ async fn require_existing_qso<S>(
     proposal: &ProposalEnvelope,
 ) -> Result<Uuid, ProposalValidationError>
 where
-    S: LogbookEventStore,
+    S: LogbookEventStore + ?Sized,
 {
     let qso_id = require_entity_id(proposal)?;
     let projection = store.rebuild_projections(proposal.logbook_id).await?;
@@ -729,7 +729,7 @@ async fn require_existing_activation<S>(
     proposal: &ProposalEnvelope,
 ) -> Result<Uuid, ProposalValidationError>
 where
-    S: LogbookEventStore,
+    S: LogbookEventStore + ?Sized,
 {
     let activation_id = require_entity_id(proposal)?;
     let projection = store
@@ -748,7 +748,7 @@ async fn rebuild_net_projection<S>(
     logbook_id: Uuid,
 ) -> Result<NetControlProjection, ProposalValidationError>
 where
-    S: LogbookEventStore,
+    S: LogbookEventStore + ?Sized,
 {
     let events = store.list_events(logbook_id).await?;
     let mut projection = NetControlProjection::new();
@@ -763,7 +763,7 @@ async fn require_existing_net_template<S>(
     proposal: &ProposalEnvelope,
 ) -> Result<Uuid, ProposalValidationError>
 where
-    S: LogbookEventStore,
+    S: LogbookEventStore + ?Sized,
 {
     let template_id = require_entity_id(proposal)?;
     let projection = rebuild_net_projection(store, proposal.logbook_id).await?;
@@ -783,7 +783,7 @@ async fn require_existing_net_session<S>(
     proposal: &ProposalEnvelope,
 ) -> Result<Uuid, ProposalValidationError>
 where
-    S: LogbookEventStore,
+    S: LogbookEventStore + ?Sized,
 {
     let session_id = require_entity_id(proposal)?;
     let projection = rebuild_net_projection(store, proposal.logbook_id).await?;
@@ -800,7 +800,7 @@ async fn require_existing_active_net_session<S>(
     proposal: &ProposalEnvelope,
 ) -> Result<Uuid, ProposalValidationError>
 where
-    S: LogbookEventStore,
+    S: LogbookEventStore + ?Sized,
 {
     let session_id = require_existing_net_session(store, proposal).await?;
     let projection = rebuild_net_projection(store, proposal.logbook_id).await?;
@@ -822,7 +822,7 @@ async fn require_existing_net_checkin<S>(
     proposal: &ProposalEnvelope,
 ) -> Result<Uuid, ProposalValidationError>
 where
-    S: LogbookEventStore,
+    S: LogbookEventStore + ?Sized,
 {
     let checkin_id = require_entity_id(proposal)?;
     let projection = rebuild_net_projection(store, proposal.logbook_id).await?;
@@ -1023,7 +1023,7 @@ async fn publish_proposal_runtime_event<B>(
     error: Option<String>,
 ) -> Result<(), ProposalValidationError>
 where
-    B: EventBus,
+    B: EventBus + ?Sized,
 {
     bus.publish(BusEvent::Runtime(RuntimeEventEnvelope::new(
         event_type,

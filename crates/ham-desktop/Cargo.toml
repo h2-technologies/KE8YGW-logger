@@ -1,0 +1,17 @@
+[package]
+name = "ham-desktop"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+
+[lib]
+name = "ham_desktop"
+path = "src/lib.rs"
+
+[[bin]]
+name = "ham-desktop"
+path = "src/main.rs"

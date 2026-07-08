@@ -111,6 +111,28 @@ impl CommandRegistry {
                 None,
                 None,
             ),
+            command(
+                "backup.open",
+                "Open Backup and Restore",
+                "Backup",
+                None,
+                None,
+            ),
+            command("backup.export", "Export Backup", "Backup", None, None),
+            command(
+                "backup.restore.dry-run",
+                "Validate Backup Restore",
+                "Backup",
+                None,
+                None,
+            ),
+            command(
+                "backup.restore.import",
+                "Import Backup",
+                "Backup",
+                None,
+                None,
+            ),
             command("adif.import", "Import ADIF", "Logging", None, None),
             command("adif.export", "Export ADIF", "Logging", None, None),
             command("lookup.callsign", "Lookup Callsign", "Lookup", None, None),
@@ -694,6 +716,20 @@ impl CommandRegistry {
                 None,
                 None,
             ),
+            command(
+                "sync.divergence.review",
+                "Review Sync Divergence",
+                "Sync",
+                None,
+                None,
+            ),
+            command(
+                "sync.divergence.export",
+                "Export Divergence Report",
+                "Sync",
+                None,
+                None,
+            ),
         ];
 
         commands.extend(WorkspaceId::ALL.into_iter().map(|workspace| {
@@ -775,6 +811,10 @@ mod tests {
         assert!(ids.contains(&"diagnostics.report.export"));
         assert!(ids.contains(&"diagnostics.report.upload"));
         assert!(ids.contains(&"diagnostics.report.copy-last-id"));
+        assert!(ids.contains(&"backup.open"));
+        assert!(ids.contains(&"backup.export"));
+        assert!(ids.contains(&"backup.restore.dry-run"));
+        assert!(ids.contains(&"backup.restore.import"));
         assert!(ids.contains(&"adif.import"));
         assert!(ids.contains(&"adif.export"));
         assert!(ids.contains(&"lookup.callsign"));
@@ -801,6 +841,8 @@ mod tests {
         assert!(ids.contains(&"sync.cloud.connect"));
         assert!(ids.contains(&"sync.cloud.pull"));
         assert!(ids.contains(&"sync.identity.copy"));
+        assert!(ids.contains(&"sync.divergence.review"));
+        assert!(ids.contains(&"sync.divergence.export"));
         assert!(ids.contains(&"station.profiles.open"));
         assert!(ids.contains(&"station.equipment.open"));
         assert!(ids.contains(&"awards.open"));

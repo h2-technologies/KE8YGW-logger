@@ -319,11 +319,13 @@ The hosted `/api/v1` beta surface uses bearer sessions and currently implements:
   official Net Control events; reads are projection-derived.
 - Map QSO/station/path/settings routes. QSO and path data are derived from
   official projections; map settings are SurrealDB support metadata.
-- Backup export and import dry-run routes. Export includes official events and
-  support metadata without credential secrets. Dry-run validates manifest,
-  target scope, event hash integrity, event-chain continuity, and missing
-  credential references. Full restore/import is intentionally not automatic in
-  this slice.
+- Backup export, import dry-run, and import routes. Export includes official
+  events and support metadata without credential secrets. Dry-run validates
+  manifest, target scope, event hash integrity, event-chain continuity,
+  duplicate event IDs, and missing credential references. Import requires
+  explicit dry-run confirmation, appends only verified missing official events,
+  skips exact duplicate replay, restores scoped support metadata, strips
+  provider credential references, and blocks divergent targets.
 - Sync status/preview/push/pull routes. Pull returns only events missing after
   the requested local head for logbooks the bearer session may read.
 - Sync divergence review routes. Reviews report local/client head,
@@ -386,7 +388,8 @@ define and test endpoints or equivalent proposal APIs for:
 - Submit QSO create, edit, delete, restore, and note proposals.
 - Pagination/filter hardening for QSO, activation, Net Control, map, backup, and
   provider history endpoints.
-- Full backup restore/import after dry-run approval.
+- Backup restore/import UX hardening after the conservative v0.2 same-logbook
+  import foundation.
 - Provider-specific credential setup flows and health checks.
 - Native-client divergence report presentation.
 

@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     fs,
     path::PathBuf,
     sync::{Arc, Mutex},
@@ -11,8 +11,9 @@ use ham_core::{
     adif_for_upload_job, default_log_directory, default_service_registry, export_adif, import_adif,
     qso_map_objects, station_markers_from_profiles, submit_proposal, AdifImportOptions, Coordinate,
     CoreEventEnvelope, EquipmentItem, EquipmentStatus, EquipmentType, InMemoryEventBus,
-    InMemoryLogbookEventStore, LogbookEventStore, MapLayerStack, NetControlProjection,
-    OperatorRole, Projection, ProposalContext, RegisteredServiceProvider, StationProfile,
+    InMemoryLogbookEventStore, JsonlLogbookEventStore, LogbookEventStore, MapLayerStack,
+    NetControlProjection, OperatorRole, Projection, ProposalContext, RegisteredServiceProvider,
+    StationProfile,
 };
 use ham_plugin_sdk::{
     PluginCapability, PluginManifest, ProposalEnvelope, PROPOSAL_ACTIVATION_CREATE,
@@ -242,6 +243,8 @@ pub enum MetadataStoreError {
     Surreal(#[from] surrealdb::Error),
     #[error("metadata store serialization error: {0}")]
     Serde(#[from] serde_json::Error),
+    #[error("official event store error: {0}")]
+    OfficialStore(String),
     #[error("metadata store thread failed")]
     Thread,
 }
@@ -440,6 +443,13 @@ pub struct BackupExportRequest {
 pub struct BackupDryRunRequest {
     pub logbook_id: Uuid,
     pub backup: Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BackupImportRequest {
+    pub logbook_id: Uuid,
+    pub backup: Value,
+    pub confirm_dry_run: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1249,17 +1259,28 @@ fn session_token_hash(token: &str) -> String {
     format!("{:x}", Sha256::digest(token.as_bytes()))
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct HostedServer {
     state: Arc<RwLock<ServerState>>,
     metadata_store: Arc<dyn HostedMetadataStore>,
-    store: Arc<InMemoryLogbookEventStore>,
+    store: Arc<dyn LogbookEventStore>,
     bus: Arc<InMemoryEventBus>,
 }
 
 pub fn default_metadata_store_path() -> PathBuf {
     std::env::var("HAM_SERVER_SURREAL_PATH").map_or_else(
         |_| default_log_directory().join("server").join("surrealdb"),
+        PathBuf::from,
+    )
+}
+
+pub fn default_server_official_event_log_path() -> PathBuf {
+    std::env::var("HAM_SERVER_EVENT_LOG_PATH").map_or_else(
+        |_| {
+            default_log_directory()
+                .join("server")
+                .join("official-events.jsonl")
+        },
         PathBuf::from,
     )
 }
@@ -1281,13 +1302,35 @@ impl HostedServer {
     }
 
     pub fn with_surreal_metadata(path: impl Into<PathBuf>) -> Result<Self, MetadataStoreError> {
+        Self::with_surreal_paths(path, default_server_official_event_log_path())
+    }
+
+    pub fn with_surreal_paths(
+        metadata_path: impl Into<PathBuf>,
+        official_event_log_path: impl Into<PathBuf>,
+    ) -> Result<Self, MetadataStoreError> {
+        let official_store = Arc::new(
+            JsonlLogbookEventStore::open(official_event_log_path)
+                .map_err(|error| MetadataStoreError::OfficialStore(error.to_string()))?,
+        );
+        let metadata_store = Arc::new(SurrealHostedMetadataStore::open_local(metadata_path)?);
+        Self::with_metadata_and_event_store(metadata_store, official_store)
+    }
+
+    pub fn with_surreal_metadata_only(
+        path: impl Into<PathBuf>,
+    ) -> Result<Self, MetadataStoreError> {
         let metadata_store = Arc::new(SurrealHostedMetadataStore::open_local(path)?);
         Self::with_metadata_store(metadata_store)
     }
 
     pub fn with_surreal_config(config: SurrealHostedConfig) -> Result<Self, MetadataStoreError> {
+        let official_store = Arc::new(
+            JsonlLogbookEventStore::open(default_server_official_event_log_path())
+                .map_err(|error| MetadataStoreError::OfficialStore(error.to_string()))?,
+        );
         let metadata_store = Arc::new(SurrealHostedMetadataStore::open(config)?);
-        Self::with_metadata_store(metadata_store)
+        Self::with_metadata_and_event_store(metadata_store, official_store)
     }
 
     fn with_metadata_store(
@@ -1298,6 +1341,19 @@ impl HostedServer {
             state: Arc::new(RwLock::new(state)),
             metadata_store,
             store: Arc::new(InMemoryLogbookEventStore::new()),
+            bus: Arc::new(InMemoryEventBus::new(256)),
+        })
+    }
+
+    fn with_metadata_and_event_store(
+        metadata_store: Arc<dyn HostedMetadataStore>,
+        store: Arc<dyn LogbookEventStore>,
+    ) -> Result<Self, MetadataStoreError> {
+        let state = metadata_store.load()?;
+        Ok(Self {
+            state: Arc::new(RwLock::new(state)),
+            metadata_store,
+            store,
             bus: Arc::new(InMemoryEventBus::new(256)),
         })
     }
@@ -1443,6 +1499,7 @@ impl HostedServer {
             ("POST", ["api", "v1", "backups", "import", "dry-run"]) => {
                 self.backup_import_dry_run(&request).await
             }
+            ("POST", ["api", "v1", "backups", "import"]) => self.backup_import(&request).await,
             ("GET", ["api", "v1", "providers"]) => self.providers(&request).await,
             ("GET", ["api", "v1", "providers", provider_id]) => {
                 self.provider_detail(&request, provider_id).await
@@ -2683,8 +2740,100 @@ impl HostedServer {
         let input: BackupDryRunRequest = parse_json(&request.body)?;
         self.require_logbook_role(request, input.logbook_id, LogbookAccess::Admin)
             .await?;
-        let result = validate_backup_dry_run(input.logbook_id, &input.backup);
-        Ok(json!(result))
+        let plan = validate_backup_plan(input.logbook_id, &input.backup);
+        Ok(plan.to_dry_run_response())
+    }
+
+    async fn backup_import(&self, request: &ApiRequest) -> Result<Value, ApiError> {
+        let input: BackupImportRequest = parse_json(&request.body)?;
+        if !input.confirm_dry_run {
+            return Err(ApiError::BadRequest(
+                "confirm_dry_run must be true after reviewing /api/v1/backups/import/dry-run"
+                    .to_owned(),
+            ));
+        }
+        let auth = self
+            .require_logbook_role(request, input.logbook_id, LogbookAccess::Admin)
+            .await?;
+        let plan = validate_backup_plan(input.logbook_id, &input.backup);
+        if !plan.ok {
+            return Err(ApiError::BadRequest(
+                plan.errors
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| "backup import validation failed".to_owned()),
+            ));
+        }
+
+        let existing_events = self
+            .store
+            .list_events(input.logbook_id)
+            .await
+            .map_err(|error| ApiError::Store(error.to_string()))?;
+        let mut errors = Vec::new();
+        if existing_events.len() > plan.events.len() {
+            errors.push("target logbook is ahead of the backup; use divergence review".to_owned());
+        } else {
+            for (index, existing) in existing_events.iter().enumerate() {
+                if plan.events.get(index) != Some(existing) {
+                    errors.push(format!(
+                        "target logbook diverges before backup event {}",
+                        existing.event_id
+                    ));
+                    break;
+                }
+            }
+        }
+        if !errors.is_empty() {
+            return Err(ApiError::BadRequest(errors.join("; ")));
+        }
+
+        let skipped_duplicate_count = existing_events.len();
+        let mut imported_official_events_count = 0usize;
+        for event in plan.events.iter().skip(skipped_duplicate_count).cloned() {
+            self.store
+                .append_verified_remote_event(event)
+                .await
+                .map_err(|error| ApiError::Store(error.to_string()))?;
+            imported_official_events_count += 1;
+        }
+        self.store
+            .verify_chain(input.logbook_id)
+            .await
+            .map_err(|error| ApiError::Store(error.to_string()))?;
+        let projection = self
+            .store
+            .rebuild_projections(input.logbook_id)
+            .await
+            .map_err(|error| ApiError::Store(error.to_string()))?;
+        let final_chain_head = self
+            .store
+            .get_head(input.logbook_id)
+            .await
+            .map_err(|error| ApiError::Store(error.to_string()))?;
+
+        let mut state = self.state.write().await;
+        let restored_support_sections = restore_backup_support_metadata(
+            &mut state,
+            auth.session.account_id,
+            input.logbook_id,
+            &input.backup,
+        )?;
+        self.persist_metadata(&state)?;
+        Ok(json!({
+            "ok": true,
+            "imported_official_events_count": imported_official_events_count,
+            "skipped_duplicate_count": skipped_duplicate_count,
+            "restored_support_sections": restored_support_sections,
+            "missing_credential_references": plan.missing_credential_references,
+            "warnings": plan.warnings,
+            "final_chain_head": final_chain_head,
+            "projection_rebuild": {
+                "ok": true,
+                "qso_count": projection.list(false).len()
+            },
+            "manual_review_needed": false
+        }))
     }
 
     async fn divergence_review(&self, request: &ApiRequest) -> Result<Value, ApiError> {
@@ -4180,31 +4329,82 @@ fn build_backup_record(
     })
 }
 
-fn validate_backup_dry_run(logbook_id: Uuid, backup: &Value) -> Value {
+#[derive(Debug, Clone)]
+struct BackupValidationPlan {
+    ok: bool,
+    errors: Vec<String>,
+    warnings: Vec<String>,
+    events: Vec<CoreEventEnvelope>,
+    head_hash: Option<String>,
+    missing_credential_references: Vec<String>,
+    support_sections: Vec<String>,
+}
+
+impl BackupValidationPlan {
+    fn to_dry_run_response(&self) -> Value {
+        json!({
+            "ok": self.ok,
+            "errors": self.errors,
+            "warnings": self.warnings,
+            "event_count": self.events.len(),
+            "head_hash": self.head_hash,
+            "support_sections": self.support_sections,
+            "missing_credential_references": self.missing_credential_references,
+            "would_import": self.ok,
+            "requires_manual_review": !self.ok
+        })
+    }
+}
+
+fn validate_backup_plan(logbook_id: Uuid, backup: &Value) -> BackupValidationPlan {
+    let mut errors = Vec::new();
+    let mut warnings = Vec::new();
     let Some(manifest) = backup.get("manifest") else {
-        return json!({"ok": false, "errors": ["backup manifest is required"], "warnings": []});
+        return BackupValidationPlan {
+            ok: false,
+            errors: vec!["backup manifest is required".to_owned()],
+            warnings,
+            events: Vec::new(),
+            head_hash: None,
+            missing_credential_references: Vec::new(),
+            support_sections: Vec::new(),
+        };
     };
     if manifest.get("format_version").and_then(Value::as_u64) != Some(1) {
-        return json!({"ok": false, "errors": ["unsupported backup format_version"], "warnings": []});
+        errors.push("unsupported backup format_version".to_owned());
     }
     let manifest_logbook = manifest
         .get("logbook_id")
         .and_then(Value::as_str)
         .and_then(|value| Uuid::parse_str(value).ok());
     if manifest_logbook != Some(logbook_id) {
-        return json!({"ok": false, "errors": ["backup logbook_id does not match target"], "warnings": []});
+        errors.push("backup logbook_id does not match target".to_owned());
     }
     let events = backup
         .get("official_events")
         .cloned()
         .unwrap_or_else(|| json!([]));
     let parsed = serde_json::from_value::<Vec<CoreEventEnvelope>>(events);
-    let Ok(events) = parsed else {
-        return json!({"ok": false, "errors": ["official_events could not deserialize"], "warnings": []});
+    let events = match parsed {
+        Ok(events) => events,
+        Err(_) => {
+            return BackupValidationPlan {
+                ok: false,
+                errors: vec!["official_events could not deserialize".to_owned()],
+                warnings,
+                events: Vec::new(),
+                head_hash: None,
+                missing_credential_references: Vec::new(),
+                support_sections: backup_support_sections(backup),
+            }
+        }
     };
     let mut previous_hash = None;
-    let mut errors = Vec::new();
+    let mut seen_event_ids = HashSet::new();
     for event in &events {
+        if !seen_event_ids.insert(event.event_id) {
+            errors.push(format!("event {} appears more than once", event.event_id));
+        }
         if event.logbook_id != logbook_id {
             errors.push(format!(
                 "event {} belongs to another logbook",
@@ -4222,29 +4422,150 @@ fn validate_backup_dry_run(logbook_id: Uuid, backup: &Value) -> Value {
         }
         previous_hash = Some(event.event_hash.clone());
     }
-    let missing_credentials = backup
+
+    let missing_credential_references = backup
         .get("provider_settings")
         .and_then(Value::as_array)
         .map(|settings| {
             settings
                 .iter()
-                .filter(|setting| {
-                    setting
+                .filter_map(|setting| {
+                    let provider_id = setting
+                        .get("provider_id")
+                        .and_then(Value::as_str)
+                        .unwrap_or("unknown-provider");
+                    if setting
                         .get("credential_id")
                         .is_none_or(|value| value.is_null())
+                    {
+                        Some(provider_id.to_owned())
+                    } else {
+                        None
+                    }
                 })
-                .count()
+                .collect::<Vec<_>>()
         })
-        .unwrap_or(0);
-    json!({
-        "ok": errors.is_empty(),
-        "errors": errors,
-        "warnings": if missing_credentials > 0 { vec![format!("{missing_credentials} provider settings are missing credential references")] } else { Vec::<String>::new() },
-        "event_count": events.len(),
-        "head_hash": previous_hash,
-        "would_import": false,
-        "requires_manual_review": true
-    })
+        .unwrap_or_default();
+    if !missing_credential_references.is_empty() {
+        warnings.push(format!(
+            "{} provider settings will require credentials after restore",
+            missing_credential_references.len()
+        ));
+    }
+
+    BackupValidationPlan {
+        ok: errors.is_empty(),
+        errors,
+        warnings,
+        events,
+        head_hash: previous_hash,
+        missing_credential_references,
+        support_sections: backup_support_sections(backup),
+    }
+}
+
+fn backup_support_sections(backup: &Value) -> Vec<String> {
+    [
+        "station_profiles",
+        "equipment_profiles",
+        "provider_settings",
+        "upload_queue_history",
+        "map_settings",
+    ]
+    .into_iter()
+    .filter(|section| !backup.get(section).unwrap_or(&Value::Null).is_null())
+    .map(str::to_owned)
+    .collect()
+}
+
+fn restore_backup_support_metadata(
+    state: &mut ServerState,
+    account_id: Uuid,
+    logbook_id: Uuid,
+    backup: &Value,
+) -> Result<Vec<String>, ApiError> {
+    let mut restored = Vec::new();
+
+    if let Some(station_profiles) = backup.get("station_profiles").and_then(Value::as_array) {
+        for value in station_profiles {
+            let mut profile: HostedStationProfile =
+                serde_json::from_value(value.clone()).map_err(|error| {
+                    ApiError::BadRequest(format!("invalid station profile backup record: {error}"))
+                })?;
+            profile.account_id = account_id;
+            profile.logbook_id = logbook_id;
+            state
+                .station_profiles
+                .insert(profile.profile.station_profile_id, profile);
+        }
+        restored.push("station_profiles".to_owned());
+    }
+
+    if let Some(equipment_profiles) = backup.get("equipment_profiles").and_then(Value::as_array) {
+        for value in equipment_profiles {
+            let mut equipment: HostedEquipmentProfile = serde_json::from_value(value.clone())
+                .map_err(|error| {
+                    ApiError::BadRequest(format!("invalid equipment backup record: {error}"))
+                })?;
+            equipment.account_id = account_id;
+            equipment.logbook_id = logbook_id;
+            state
+                .equipment_profiles
+                .insert(equipment.equipment.equipment_id, equipment);
+        }
+        restored.push("equipment_profiles".to_owned());
+    }
+
+    if let Some(provider_settings) = backup.get("provider_settings").and_then(Value::as_array) {
+        for value in provider_settings {
+            let mut setting: HostedProviderSetting = serde_json::from_value(value.clone())
+                .map_err(|error| {
+                    ApiError::BadRequest(format!("invalid provider setting backup record: {error}"))
+                })?;
+            validate_secret_free_config(&setting.config)?;
+            setting.account_id = account_id;
+            setting.logbook_id = logbook_id;
+            setting.credential_id = None;
+            setting.updated_at = Utc::now();
+            state.provider_settings.insert(
+                provider_setting_key(logbook_id, &setting.provider_id),
+                setting,
+            );
+        }
+        restored.push("provider_settings_without_secrets".to_owned());
+    }
+
+    if let Some(upload_jobs) = backup.get("upload_queue_history").and_then(Value::as_array) {
+        for value in upload_jobs {
+            let mut job: HostedUploadJob =
+                serde_json::from_value(value.clone()).map_err(|error| {
+                    ApiError::BadRequest(format!("invalid upload history backup record: {error}"))
+                })?;
+            job.account_id = account_id;
+            job.logbook_id = logbook_id;
+            if job.status == HostedUploadStatus::Running {
+                job.status = HostedUploadStatus::Retryable;
+                job.failure_reason =
+                    Some("restored from backup while job state was running".to_owned());
+            }
+            state.upload_jobs.insert(job.upload_id, job);
+        }
+        restored.push("upload_queue_history".to_owned());
+    }
+
+    if let Some(value) = backup.get("map_settings").filter(|value| !value.is_null()) {
+        let mut settings: HostedMapSettings =
+            serde_json::from_value(value.clone()).map_err(|error| {
+                ApiError::BadRequest(format!("invalid map settings backup record: {error}"))
+            })?;
+        settings.account_id = account_id;
+        settings.logbook_id = logbook_id;
+        settings.updated_at = Utc::now();
+        state.map_settings.insert(logbook_id, settings);
+        restored.push("map_preferences".to_owned());
+    }
+
+    Ok(restored)
 }
 
 fn route_catalog() -> RouteCatalogResponse {
@@ -4304,6 +4625,7 @@ fn route_catalog() -> RouteCatalogResponse {
             "GET /api/v1/backups/:id".to_owned(),
             "GET /api/v1/backups/:id/download".to_owned(),
             "POST /api/v1/backups/import/dry-run".to_owned(),
+            "POST /api/v1/backups/import".to_owned(),
             "GET /api/v1/providers".to_owned(),
             "GET /api/v1/providers/:id".to_owned(),
             "PATCH /api/v1/providers/:id".to_owned(),
@@ -4443,7 +4765,8 @@ mod tests {
     fn open_surreal_test_server(path: &PathBuf) -> HostedServer {
         let mut last_error = None;
         for _ in 0..20 {
-            match HostedServer::with_surreal_metadata(path) {
+            let event_path = path.with_extension("events.jsonl");
+            match HostedServer::with_surreal_paths(path, event_path) {
                 Ok(server) => return server,
                 Err(error) => {
                     last_error = Some(error);
@@ -5704,6 +6027,202 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
+    }
+
+    #[tokio::test]
+    async fn backup_import_restores_events_support_metadata_and_blocks_unsafe_cases() {
+        let path = surreal_test_path("backup-import");
+        let server = open_surreal_test_server(&path);
+        let (owner_token, logbook_id, _) = login(&server, "owner@example.test").await;
+        let (viewer_token, _, _) = login(&server, "viewer@example.test").await;
+        let (other_token, _, _) = login(&server, "other@example.test").await;
+        server
+            .add_membership_for_email("viewer@example.test", logbook_id, LogbookRole::Viewer)
+            .await
+            .unwrap();
+
+        create_qso(&server, &owner_token, logbook_id).await;
+        let station = server
+            .handle(
+                ApiRequest::json(
+                    "POST",
+                    "/api/v1/station-profiles",
+                    &StationProfileRequest {
+                        logbook_id,
+                        display_name: Some("Restore Station".to_owned()),
+                        station_callsign: Some("KE8YGW".to_owned()),
+                        operator_callsign: None,
+                        default_grid: Some("EN80".to_owned()),
+                        default_qth: None,
+                        default_power_watts: Some(100),
+                        notes: None,
+                        tags: vec![],
+                        active: Some(true),
+                    },
+                )
+                .with_bearer(&owner_token),
+            )
+            .await;
+        assert_eq!(station.status, 200);
+        let provider = server
+            .handle(
+                ApiRequest::json(
+                    "PATCH",
+                    "/api/v1/providers/lotw-stub",
+                    &ProviderPatchRequest {
+                        logbook_id,
+                        enabled: Some(true),
+                        credential_id: Some("cred-lotw".to_owned()),
+                        config: Map::from_iter([("mock_mode".to_owned(), Value::Bool(true))]),
+                    },
+                )
+                .with_bearer(&owner_token),
+            )
+            .await;
+        assert_eq!(provider.status, 200);
+
+        let backup = server
+            .handle(
+                ApiRequest::json(
+                    "POST",
+                    "/api/v1/backups/export",
+                    &BackupExportRequest {
+                        logbook_id,
+                        include_runtime_logs: None,
+                    },
+                )
+                .with_bearer(&owner_token),
+            )
+            .await;
+        assert_eq!(backup.status, 200);
+        let payload = backup.json::<Value>()["backup"]["payload"].clone();
+
+        let viewer_import = server
+            .handle(
+                ApiRequest::json(
+                    "POST",
+                    "/api/v1/backups/import",
+                    &BackupImportRequest {
+                        logbook_id,
+                        backup: payload.clone(),
+                        confirm_dry_run: true,
+                    },
+                )
+                .with_bearer(&viewer_token),
+            )
+            .await;
+        assert_eq!(viewer_import.status, 403);
+
+        let cross_scope = server
+            .handle(
+                ApiRequest::json(
+                    "POST",
+                    "/api/v1/backups/import",
+                    &BackupImportRequest {
+                        logbook_id,
+                        backup: payload.clone(),
+                        confirm_dry_run: true,
+                    },
+                )
+                .with_bearer(&other_token),
+            )
+            .await;
+        assert_eq!(cross_scope.status, 403);
+
+        let import = server
+            .handle(
+                ApiRequest::json(
+                    "POST",
+                    "/api/v1/backups/import",
+                    &BackupImportRequest {
+                        logbook_id,
+                        backup: payload.clone(),
+                        confirm_dry_run: true,
+                    },
+                )
+                .with_bearer(&owner_token),
+            )
+            .await;
+        assert_eq!(import.status, 200);
+        let import: Value = import.json();
+        assert_eq!(import["imported_official_events_count"], 0);
+        assert_eq!(import["skipped_duplicate_count"], 1);
+        assert_eq!(import["projection_rebuild"]["qso_count"], 1);
+        assert!(import["restored_support_sections"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|section| section == "provider_settings_without_secrets"));
+
+        let provider_after_restore = server
+            .handle(
+                ApiRequest::get(format!(
+                    "/api/v1/providers/lotw-stub?logbook_id={logbook_id}"
+                ))
+                .with_bearer(&owner_token),
+            )
+            .await;
+        assert_eq!(provider_after_restore.status, 200);
+        assert!(provider_after_restore.json::<Value>()["setting"]["credential_id"].is_null());
+
+        server.reload_metadata_from_store().await.unwrap();
+        let qsos = server
+            .handle(
+                ApiRequest::get(format!("/api/v1/qsos?logbook_id={logbook_id}"))
+                    .with_bearer(&owner_token),
+            )
+            .await;
+        assert_eq!(qsos.status, 200);
+        assert_eq!(qsos.json::<Value>()["qsos"].as_array().unwrap().len(), 1);
+        let profiles = server
+            .handle(
+                ApiRequest::get(format!("/api/v1/station-profiles?logbook_id={logbook_id}"))
+                    .with_bearer(&owner_token),
+            )
+            .await;
+        assert_eq!(profiles.status, 200);
+        assert_eq!(
+            profiles.json::<Value>()["station_profiles"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+
+        let mut invalid_payload = payload.clone();
+        invalid_payload["official_events"][0]["event_hash"] = json!("bad-hash");
+        let invalid = server
+            .handle(
+                ApiRequest::json(
+                    "POST",
+                    "/api/v1/backups/import",
+                    &BackupImportRequest {
+                        logbook_id,
+                        backup: invalid_payload,
+                        confirm_dry_run: true,
+                    },
+                )
+                .with_bearer(&owner_token),
+            )
+            .await;
+        assert_eq!(invalid.status, 400);
+
+        create_qso(&server, &owner_token, logbook_id).await;
+        let divergent = server
+            .handle(
+                ApiRequest::json(
+                    "POST",
+                    "/api/v1/backups/import",
+                    &BackupImportRequest {
+                        logbook_id,
+                        backup: payload,
+                        confirm_dry_run: true,
+                    },
+                )
+                .with_bearer(&owner_token),
+            )
+            .await;
+        assert_eq!(divergent.status, 400);
     }
 
     #[tokio::test]

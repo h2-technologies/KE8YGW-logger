@@ -4,7 +4,7 @@ Current milestone: v0.2 almost-v1 beta
 
 Current version: 0.2.0
 
-Last update timestamp: 2026-07-08T04:22:00-04:00
+Last update timestamp: 2026-07-08T05:18:00-04:00
 
 Repository health status: Healthy for this v0.2 slice. Formatting, Rust check, Clippy with warnings denied, full workspace tests, GUI JavaScript syntax check, and targeted hosted server build passed during this session. Browser-level tests, Tauri packaging checks, docs link checks, and release artifact builds are not yet configured.
 
@@ -364,7 +364,7 @@ Diagnostics include runtime event logs, redaction helpers, report ZIP generation
 - Core event hashing, chain verification, QSO proposals, projections, ADIF, lookup, rig, diagnostics, permissions, service framework, credential store, Net Control, station profiles, awards, search, upload queue, sync models, GIS models, grid conversion, great-circle math, map layers, marker serialization, provider metadata, grayline calculations, online provider metadata, retry logic, confirmation parsing, spot parsing, cache stats, and notification models have unit coverage.
 - GUI model serialization and command/panel foundations have partial coverage.
 - JavaScript UI behavior is mostly manually verified and should gain browser-level tests.
-- Current test run: `cargo test --workspace` passed with 189 total Rust tests across crates.
+- Current test run: `cargo test --workspace` passed with 192 total Rust tests across crates.
 
 ---
 
@@ -395,8 +395,13 @@ Completed work:
 - Added hosted activation routes for list/create/get/update/end and linked-QSO reads. Activation writes use core proposal validation and official activation events.
 - Added hosted Net Control routes for session list/create/get/end, check-ins, check-in update, and traffic records. Net Control writes use core proposal validation and official Net Control events.
 - Added hosted map QSO/station/path/settings routes. QSO and path data are projection-derived; map settings persist in SurrealDB support metadata.
-- Added hosted backup export/list/get/download and import dry-run routes. Backup export includes official events and support metadata without secrets; dry-run validates manifest scope and event-chain integrity without importing.
+- Added hosted backup export/list/get/download, import dry-run, and safe import routes. Backup export includes official events and support metadata without secrets; dry-run validates manifest scope and event-chain integrity; import appends only verified missing official events, skips exact duplicates, restores scoped support metadata, strips provider credential references, and blocks divergent targets.
 - Added hosted sync divergence review/get/export routes. Reviews report safe pull/push/diverged states and persist report metadata without automatic merge.
+- Added backup/restore GUI screens with export, dry-run review, import result, and sensitive-section disclosure.
+- Added divergence review GUI screens with local/remote heads, safe pull/push flags, recommended action, and report export.
+- Added `ham-desktop` desktop foundation crate and root `src-tauri` packaging configuration.
+- Added desktop-native dialog bridge detection in the web UI for ADIF import/export, backup import/export, diagnostic bundle export, and divergence report export.
+- Updated Surreal-backed `ham-server` mode to use a JSONL official event store path while preserving in-memory stores for focused tests.
 - Added `docs/V0_2_RELEASE_PLAN.md`, `docs/DESKTOP_RELEASE.md`, and `docs/HOSTED_WEB_RELEASE.md`.
 - Updated `README.md`, `ROADMAP.md`, `docs/ROADMAP.md`, `docs/V1_RELEASE_PLAN.md`, `docs/V1_1_IOS_NATIVE_PLAN.md`, and `docs/API_CLIENT_CONTRACT.md`.
 - Bumped workspace package version to 0.2.0.
@@ -410,9 +415,9 @@ Completed work:
 
 Remaining work:
 
-- Complete full backup restore/import after dry-run approval.
-- Add Tauri desktop packaging and native desktop file dialogs.
-- Add backup/restore and divergence review GUI/desktop UX.
+- Wire the real Tauri runtime dependency/commands and package validation.
+- Harden backup restore UX and add browser-level coverage.
+- Add native desktop app data directory selection implementation.
 - Add LAN peer-to-peer transport and trust pairing.
 - Enforce permission scopes across all older GUI/local routes, not only the new hosted QSO slice.
 - Add browser-level GUI tests.
@@ -433,23 +438,24 @@ Quality gates from this v0.2 slice:
 - `cargo fmt --all -- --check`: passed.
 - `cargo check --workspace --all-targets`: passed.
 - `cargo clippy --workspace --all-targets -- -D warnings`: passed.
-- `cargo test --workspace`: passed, 189 Rust tests total.
+- `cargo test --workspace`: passed, 192 Rust tests total.
 - `node --check crates/ham-gui/web/app.js`: passed.
 - `cargo build -p ham-server`: passed.
 - `cargo build -p ham-sync-server`: passed.
 - Browser-level tests: not run; no Playwright/equivalent suite is configured yet.
-- Tauri/desktop build checks: not run; no Tauri desktop package exists yet.
+- `cargo build -p ham-desktop`: passed.
+- Tauri CLI/package build: not run; full Tauri runtime dependency is not wired yet.
 - Docs link checker: not run; not configured.
 
 ---
 
 # Recommended Next Milestone
 
-Restore, Desktop Packaging, and Beta UX:
+Live Provider Adapters, Credentials, and Desktop Runtime:
 
-- Full backup restore/import after dry-run approval.
-- User-facing divergence review/export UX.
-- Tauri desktop packaging and native file dialogs.
+- Real Tauri runtime commands and package validation.
+- Production OS credential backends.
+- Live Tier 1 provider adapters.
 - Browser-level GUI tests and CI wiring.
 
 Then continue Live Provider Adapters and Production Credential Backends:
@@ -468,6 +474,50 @@ This milestone should come next because the provider metadata, credential refere
 # Changelog
 
 ## 2026-07-08
+
+Summary: Added safe backup import, backup/restore GUI, divergence review GUI,
+desktop packaging foundation, and native dialog bridge contract.
+
+Major files changed:
+
+- `crates/ham-core/src/adif.rs`
+- `crates/ham-core/src/proposal.rs`
+- `crates/ham-server/src/lib.rs`
+- `crates/ham-gui/src/main.rs`
+- `crates/ham-gui/src/shell.rs`
+- `crates/ham-gui/src/commands.rs`
+- `crates/ham-gui/web/app.js`
+- `crates/ham-gui/web/index.html`
+- `crates/ham-desktop/*`
+- `src-tauri/*`
+- `README.md`
+- `ROADMAP.md`
+- `PROJECT_STATE.md`
+- `docs/ROADMAP.md`
+- `docs/V0_2_RELEASE_PLAN.md`
+- `docs/HOSTED_WEB_RELEASE.md`
+- `docs/DESKTOP_RELEASE.md`
+- `docs/API_CLIENT_CONTRACT.md`
+
+Quality gates:
+
+- `cargo fmt --all -- --check`: passed.
+- `cargo check --workspace --all-targets`: passed.
+- `cargo clippy --workspace --all-targets -- -D warnings`: passed.
+- `cargo test --workspace`: passed, 192 Rust tests total.
+- `node --check crates/ham-gui/web/app.js`: passed.
+- `cargo build -p ham-server`: passed.
+- `cargo build -p ham-sync-server`: passed.
+- `cargo build -p ham-desktop`: passed.
+- `git diff --check`: passed.
+
+Remaining gaps:
+
+- Real Tauri runtime commands and package build validation remain.
+- Production OS credential backends remain.
+- Live provider adapters and real upload execution remain.
+- Browser-level GUI tests and release artifact hardening remain.
+- LAN peer-to-peer trust pairing remains.
 
 Summary: Added hosted workflow API slices for activations, Net Control, maps,
 backup export/import dry-run, and sync divergence review.
