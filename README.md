@@ -11,6 +11,14 @@ passes should start with these documents:
 
 - [Master Blueprint](docs/MASTER_BLUEPRINT.md): locked architecture decisions,
   system model, MVP scope, and crate migration notes.
+- [v1.0 Release Plan](docs/V1_RELEASE_PLAN.md): hosted web, desktop,
+  shared core/API, sync, providers, and credential storage scope.
+- [v1.1 Native iOS Plan](docs/V1_1_IOS_NATIVE_PLAN.md): SwiftUI iOS app
+  scope, offline queue, native ADIF flows, Maps, and TestFlight target.
+- [API Client Contract](docs/API_CLIENT_CONTRACT.md): hosted/self-hosted API
+  rules and future native-client contract requirements.
+- [iOS App Store Readiness](docs/IOS_APPSTORE_READINESS.md): v1.1 native iOS
+  App Store, privacy, entitlement, and review checklist.
 - [Roadmap](docs/ROADMAP.md): compressed vertical implementation passes and
   current pass status.
 - [Event Catalog](docs/EVENT_CATALOG.md): official event, proposal, and runtime

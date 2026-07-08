@@ -25,6 +25,12 @@ This root roadmap summarizes the current implementation plan. Detailed architect
 
 Online Services Ecosystem is implemented at foundation level. The app can inspect connected provider metadata, credential requirements, upload queue stats, confirmation download models, spot feeds, provider health, automation tasks, notifications, weather, and propagation from a dedicated workspace.
 
+## Release Scope Correction
+
+v1.0 targets hosted web, installable desktop, shared Rust core, shared hosted/self-hosted API, cloud/self-hosted sync, production provider integrations, and production credential storage. iOS is not part of v1.0, and PWA installability is not a release target.
+
+v1.1 is the first native iOS target: SwiftUI, App Store-ready Xcode project, native offline queue, Keychain, native ADIF document flows, native Maps, iPhone/iPad layouts, and TestFlight. See `docs/V1_RELEASE_PLAN.md`, `docs/V1_1_IOS_NATIVE_PLAN.md`, `docs/API_CLIENT_CONTRACT.md`, and `docs/IOS_APPSTORE_READINESS.md`.
+
 ## Recommended Next Milestone
 
 Live Provider Adapters and Production Credential Backends:

@@ -2,6 +2,13 @@
 
 Each pass should ship a vertical slice across core, GUI or client models, tests, documentation, and CI health. Future prompts should reference `docs/MASTER_BLUEPRINT.md` and preserve the locked decisions.
 
+Release scope correction: v1.0 is hosted web plus installable desktop with a
+shared Rust core, shared hosted/self-hosted API, sync, production providers, and
+production credential storage. v1.0 must not ship or document a PWA as the iOS
+client. v1.1 is the native SwiftUI iOS release. See `V1_RELEASE_PLAN.md`,
+`V1_1_IOS_NATIVE_PLAN.md`, `API_CLIENT_CONTRACT.md`, and
+`IOS_APPSTORE_READINESS.md`.
+
 ## Passes
 
 1. **Core Platform + CI**
