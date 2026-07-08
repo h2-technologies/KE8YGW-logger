@@ -82,23 +82,26 @@ passes should start with these documents:
 - `ham-sync`: local-first discovery, handshake, head comparison, and safe pull replication models.
 - `ham-sync-server`: self-hostable cloud relay/sync service binary using the shared safe replication protocol.
 - `ham-server`: hosted web/server API boundary with beta account, session,
-  device, logbook, QSO, provider, sync, and device routes.
+  device, logbook, QSO, station/equipment, ADIF, provider, upload, sync, and
+  device routes.
 - `ham-cli`: placeholder command-line entry point.
 - `ham-gui`: initial GUI shell, workspace model, panel registry, command registry,
   and static web shell served by a small Rust binary.
 
 ## v0.2 Almost-v1 Beta Status
 
-The current v0.2 pass adds a dedicated hosted API/server crate and release
-planning docs. The new `ham-server` crate introduces `/api/v1` hosted routes,
-bearer login/session handling, device identity/revocation, logbook membership
-roles, and proposal-backed QSO create/edit/delete/restore/note flows.
+The current v0.2 line has a dedicated hosted API/server crate and release
+planning docs. The `ham-server` crate exposes `/api/v1` hosted routes, bearer
+login/session handling, device identity/revocation, logbook membership roles,
+proposal-backed QSO create/edit/delete/restore/note flows, hosted
+station/equipment support metadata, ADIF import/export, provider settings/test
+routes, upload queue execution foundation, and sync preview/push/pull.
 
 This is not yet a production hosted release. Server account/session/device
 metadata is now durable SurrealDB beta storage and sync/report storage is durable,
 but production credential backends are pending, live provider adapters remain
-provider-framework work, and desktop packaging/native dialogs are still v0.2
-gaps.
+provider-framework work, upload execution is still fake/stub-provider based,
+and desktop packaging/native dialogs are still v0.2 gaps.
 
 ## Architecture
 

@@ -13,8 +13,8 @@ iOS client in v1.1.
 
 - [x] Release-scope docs split v0.2, v1.0, and v1.1.
 - [x] Dedicated `ham-server` hosted API crate scaffold.
-- [x] Hosted API status, auth, session, logbook, QSO, provider, sync, and device
-  route boundary.
+- [x] Hosted API status, auth, session, logbook, QSO, station/equipment, ADIF,
+  provider, upload, sync, and device route boundary.
 - [x] Account, session, device, logbook membership, logbook role, invite, and
   token models.
 - [x] Proposal-backed QSO create/edit/delete/restore/note API routes.
@@ -22,9 +22,15 @@ iOS client in v1.1.
   QSO lifecycle.
 - [x] Durable hosted server account/session/device/logbook metadata storage.
 - [x] Durable self-hosted sync/report metadata and payload storage.
+- [x] Hosted station/equipment support metadata routes.
+- [x] Hosted ADIF import/export routes using official projections/proposals.
+- [x] Hosted provider settings/test routes with credential-reference-only
+  storage.
+- [x] Hosted upload queue execution foundation using fake/stub provider mode.
+- [x] Hosted sync pull route with scoped missing-event responses.
 - [ ] Production OS credential backend wiring.
 - [ ] Live Tier 1 provider adapters.
-- [ ] Upload queue execution against live/fake providers.
+- [ ] Upload queue execution against live providers.
 - [ ] Confirmation download/reconciliation UI.
 - [ ] Tauri desktop packaging.
 - [ ] Native desktop file dialogs.
@@ -47,6 +53,11 @@ iOS client in v1.1.
 - Logout invalidates sessions.
 - Revoked device sessions cannot sync.
 - Hosted account/session/device/logbook metadata survives server restart.
+- Hosted station/equipment/provider/upload support metadata survives metadata
+  store reload.
+- ADIF import appends official QSO events through the proposal pipeline and
+  export reads official projections.
+- Sync pull returns only allowed missing events and revoked devices cannot pull.
 - Sync events, heads, device revocation, and diagnostic reports survive sync
   server restart.
 - Existing app architecture remains intact.
@@ -74,16 +85,17 @@ iOS client in v1.1.
   migration policy hardening before v1.0.
 - Session expiry/refresh policy is still beta-level.
 - Native credential backends are still placeholders.
-- Live provider adapters are still mostly metadata/stub-backed.
+- Live provider adapters are still mostly metadata/stub-backed; hosted provider
+  tests and uploads use fake/stub behavior for deterministic CI.
 - GUI browser tests are not yet present.
 - Desktop packaging has not been added yet.
-- Permission scopes are enforced in the new hosted QSO slice but not yet
+- Permission scopes are enforced in the implemented hosted slices but not yet
   consistently across every older GUI/local route.
 
 ## v1.0 Delta After v0.2
 
 - Finish production credential backends.
-- Complete provider adapters and provider error handling.
+- Complete live provider adapters and provider error handling.
 - Finish desktop packaging/signing/notarization decisions.
 - Add browser-level GUI tests and release artifact checks.
 - Tighten documentation and operator-facing setup guides.

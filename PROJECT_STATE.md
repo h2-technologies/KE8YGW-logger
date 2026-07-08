@@ -4,7 +4,7 @@ Current milestone: v0.2 almost-v1 beta
 
 Current version: 0.2.0
 
-Last update timestamp: 2026-07-08T02:17:07.2791287-04:00
+Last update timestamp: 2026-07-08T03:26:00-04:00
 
 Repository health status: Healthy for this v0.2 slice. Formatting, Rust check, Clippy with warnings denied, full workspace tests, GUI JavaScript syntax check, and targeted hosted server build passed during this session. Browser-level tests, Tauri packaging checks, docs link checks, and release artifact builds are not yet configured.
 
@@ -203,7 +203,7 @@ Diagnostics include runtime event logs, redaction helpers, report ZIP generation
 - `crates/ham-plugin-sdk`: plugin manifest, capabilities, service types, proposal envelope, public event constants.
 - `crates/ham-sync`: LAN discovery/handshake models, peer registry, safe replication, cloud API/client/server models, durable sync/report storage, and report upload models.
 - `crates/ham-sync-server`: self-hosted sync/report HTTP-like server binary using durable local storage by default.
-- `crates/ham-server`: hosted web/server API boundary with durable SurrealDB account, session, device, logbook, role, provider, sync, and QSO lifecycle metadata routes.
+- `crates/ham-server`: hosted web/server API boundary with durable SurrealDB account, session, device, logbook, role, station/equipment, provider, upload, sync, and QSO lifecycle metadata/API routes.
 - `crates/ham-gui`: Rust bridge/server, GUI shell models, command registry, static web UI.
 - `crates/ham-cli`: CLI commands for ADIF and chain/projection operations.
 - `docs/architecture`: service framework, online services, station profiles, award engine, search, and upload queue architecture notes.
@@ -364,7 +364,7 @@ Diagnostics include runtime event logs, redaction helpers, report ZIP generation
 - Core event hashing, chain verification, QSO proposals, projections, ADIF, lookup, rig, diagnostics, permissions, service framework, credential store, Net Control, station profiles, awards, search, upload queue, sync models, GIS models, grid conversion, great-circle math, map layers, marker serialization, provider metadata, grayline calculations, online provider metadata, retry logic, confirmation parsing, spot parsing, cache stats, and notification models have unit coverage.
 - GUI model serialization and command/panel foundations have partial coverage.
 - JavaScript UI behavior is mostly manually verified and should gain browser-level tests.
-- Current test run: `cargo test --workspace` passed with 171 total Rust tests across crates.
+- Current test run: `cargo test --workspace` passed with 184 total Rust tests across crates.
 
 ---
 
@@ -376,9 +376,9 @@ Completed work:
 
 - Added `ham-server` as a dedicated hosted API crate and binary.
 - Added hosted API models for `UserAccount`, `LoginSession`, `DeviceIdentity`, `LogbookMembership`, `LogbookRole`, `ServerInvite`, and `ApiToken`.
-- Added `/api/v1` hosted API boundary for health/status, login/logout/session, logbooks, QSO lifecycle, providers, sync status/preview/push, devices, and route catalog.
-- Added scaffolded reserved responses for ADIF, station/equipment, activations, Net Control, maps, uploads, provider detail/test/update, and sync pull routes.
-- Enforced account/logbook/device scoping in the hosted QSO slice.
+- Added `/api/v1` hosted API boundary for health/status, login/logout/session, logbooks, QSO lifecycle, station/equipment profiles, ADIF import/export, providers, upload queue, sync status/preview/push/pull, devices, and route catalog.
+- Kept scaffolded reserved responses for remaining activation, Net Control, and map routes.
+- Enforced account/logbook/device scoping and role checks in the implemented hosted QSO, station/equipment, ADIF, provider, upload, and sync slices.
 - Kept QSO create/edit/delete/restore/note writes on the existing proposal pipeline.
 - Added route-level tests for cross-logbook rejection, role behavior, logout invalidation, revoked device sync rejection, route catalog coverage, and QSO create/list/edit/delete/restore/note lifecycle.
 - Replaced SQLite-backed hosted metadata persistence with SurrealDB-backed persistence for users, login sessions, devices, logbooks, memberships, API tokens, server invites, and schema migrations.
@@ -386,6 +386,12 @@ Completed work:
 - Added durable sync/report/support storage using SurrealDB metadata, append-only JSONL official event storage, filesystem diagnostic report payloads, provider settings without secrets, and upload queue/history metadata.
 - Updated `ham-sync-server` to start with durable local storage by default.
 - Added restart tests for hosted metadata persistence, sync state persistence, device revocation persistence, invalid chain rejection after restart, and diagnostic report metadata/payload persistence.
+- Added hosted station profile routes for list/create/get/update/archive/set-default with durable SurrealDB support metadata.
+- Added hosted equipment routes for list/create/get/update/archive and assignment to station profiles when scoped correctly.
+- Added hosted ADIF import/export routes. Import parses ADIF and appends proposal-backed official QSO events; export reads official projections.
+- Added hosted provider list/detail/update/test routes. Provider settings persist credential references only, reject secret-looking config fields, and support fake/mock provider tests.
+- Added hosted upload list/run/retry routes. Upload jobs select QSOs from official projections, generate ADIF snapshots, persist queue/history metadata in SurrealDB, prevent duplicate successful jobs, and expose retryable failure details.
+- Added hosted sync pull route returning scoped missing official events; duplicate push replay remains ignored safely.
 - Added `docs/V0_2_RELEASE_PLAN.md`, `docs/DESKTOP_RELEASE.md`, and `docs/HOSTED_WEB_RELEASE.md`.
 - Updated `README.md`, `ROADMAP.md`, `docs/ROADMAP.md`, `docs/V1_RELEASE_PLAN.md`, `docs/V1_1_IOS_NATIVE_PLAN.md`, and `docs/API_CLIENT_CONTRACT.md`.
 - Bumped workspace package version to 0.2.0.
@@ -399,7 +405,7 @@ Completed work:
 
 Remaining work:
 
-- Add hosted route implementations for ADIF, station/equipment, activations, Net Control, maps, uploads, provider mutation/test, and sync pull.
+- Add hosted route implementations for activations, Net Control, maps, backup/restore, and divergence review.
 - Add Tauri desktop packaging and native desktop file dialogs.
 - Add backup/restore and divergence review UX.
 - Add LAN peer-to-peer transport and trust pairing.
@@ -407,22 +413,22 @@ Remaining work:
 - Add browser-level GUI tests.
 - Implement live network adapters and credential validation for the registered providers.
 - Implement production OS credential backends.
-- Execute queued uploads against real providers and append provider-specific upload/confirmation events.
-- Add durable upload history, account settings, scheduler state, and notification read state.
+- Execute queued uploads against real providers and append provider-specific upload/confirmation events where core supports them.
+- Add account settings, scheduler state, and notification read state.
 - Add browser-level GUI tests for online service interactions.
 
 Expected completion criteria:
 
 - All required quality gates pass.
 - Documentation and project state are updated.
-- Online services use the Unified Service Framework, CredentialStore, permissions, runtime events, and official append-only confirmation events.
+- Hosted API route slices use the existing proposal pipeline, official projections, SurrealDB support metadata, role/scope checks, and redaction rules.
 
 Quality gates from this v0.2 slice:
 
 - `cargo fmt --all -- --check`: passed.
 - `cargo check --workspace --all-targets`: passed.
 - `cargo clippy --workspace --all-targets -- -D warnings`: passed.
-- `cargo test --workspace`: passed, 180 Rust tests total.
+- `cargo test --workspace`: passed, 184 Rust tests total.
 - `node --check crates/ham-gui/web/app.js`: passed.
 - `cargo build -p ham-server`: passed.
 - `cargo build -p ham-sync-server`: passed.
@@ -436,7 +442,7 @@ Quality gates from this v0.2 slice:
 
 Hosted Route Completion and Desktop Packaging:
 
-- Hosted route implementations beyond the QSO slice.
+- Hosted route implementations for activations, Net Control, maps, backup/restore, and divergence review.
 - Tauri desktop packaging and native file dialogs.
 - Browser-level GUI tests and CI wiring.
 
@@ -456,6 +462,40 @@ This milestone should come next because the provider metadata, credential refere
 # Changelog
 
 ## 2026-07-08
+
+Summary: Added hosted v0.2 route slices for station profiles, equipment
+profiles, ADIF import/export, provider settings/test, upload queue execution
+foundation, and sync pull.
+
+Major files changed:
+
+- `crates/ham-server/src/lib.rs`
+- `README.md`
+- `ROADMAP.md`
+- `PROJECT_STATE.md`
+- `docs/ROADMAP.md`
+- `docs/V0_2_RELEASE_PLAN.md`
+- `docs/HOSTED_WEB_RELEASE.md`
+- `docs/API_CLIENT_CONTRACT.md`
+
+Quality gates:
+
+- `cargo fmt --all -- --check`: passed.
+- `cargo check --workspace --all-targets`: passed.
+- `cargo clippy --workspace --all-targets -- -D warnings`: passed.
+- `cargo test --workspace`: passed, 184 Rust tests total.
+- `node --check crates/ham-gui/web/app.js`: passed.
+- `cargo build -p ham-server`: passed.
+- `cargo build -p ham-sync-server`: passed.
+
+Remaining gaps:
+
+- Hosted activation, Net Control, maps, backup/restore, and divergence review
+  routes remain.
+- Live provider adapters and production credential backends remain.
+- Upload execution is still fake/stub-provider based.
+- Tauri desktop packaging, native file dialogs, browser-level GUI tests, and
+  release artifact hardening remain.
 
 Summary: Added durable hosted metadata storage and durable sync/report storage
 for the v0.2 beta server path.

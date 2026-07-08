@@ -18,9 +18,11 @@ desktop and future native iOS clients.
 
 The new `ham-server` crate introduces the hosted API boundary, account/session
 models, device registration/revocation, logbook membership roles, and
-proposal-backed QSO routes. Hosted metadata now has a SurrealDB-backed durable
-store for beta server use, with the in-memory store retained only for focused
-unit tests and development fixtures.
+proposal-backed QSO routes. It now also exposes hosted station/equipment
+support metadata routes, ADIF import/export, provider settings/test routes,
+upload queue execution foundation, and sync pull. Hosted metadata now has a
+SurrealDB-backed durable store for beta server use, with the in-memory store
+retained only for focused unit tests and development fixtures.
 
 The self-hosted sync/report service now uses durable local storage by default:
 SurrealDB for sync/support metadata, append-only JSONL for official replicated
@@ -44,16 +46,42 @@ events, and filesystem-backed diagnostic report payloads.
 - `POST /api/v1/qsos/:id/delete`
 - `POST /api/v1/qsos/:id/restore`
 - `POST /api/v1/qsos/:id/notes`
+- `GET /api/v1/station-profiles`
+- `POST /api/v1/station-profiles`
+- `GET /api/v1/station-profiles/:id`
+- `PATCH /api/v1/station-profiles/:id`
+- `POST /api/v1/station-profiles/:id/archive`
+- `POST /api/v1/station-profiles/:id/set-default`
+- `GET /api/v1/equipment`
+- `POST /api/v1/equipment`
+- `GET /api/v1/equipment/:id`
+- `PATCH /api/v1/equipment/:id`
+- `POST /api/v1/equipment/:id/archive`
+- `POST /api/v1/adif/import`
+- `GET /api/v1/adif/export`
 - `GET /api/v1/providers`
+- `GET /api/v1/providers/:id`
+- `PATCH /api/v1/providers/:id`
+- `POST /api/v1/providers/:id/test`
+- `GET /api/v1/uploads`
+- `POST /api/v1/uploads/run`
+- `POST /api/v1/uploads/:id/retry`
 - `GET /api/v1/sync/status`
 - `POST /api/v1/sync/preview`
 - `POST /api/v1/sync/push`
+- `POST /api/v1/sync/pull`
 - `GET /api/v1/devices`
 - `POST /api/v1/devices`
 - `POST /api/v1/devices/:id/revoke`
 
 Additional v0.2 routes are reserved and return scaffolded JSON until their
 domain implementation lands.
+
+Provider settings store credential IDs/references only. The provider test route
+is deterministic in CI through fake/mock mode and reports missing credential
+references without returning secret values. Upload queue execution currently
+generates ADIF from official projections and stores queue/history metadata in
+SurrealDB, but it does not yet call live external provider APIs.
 
 ## Required Before Production Hosted Use
 
@@ -90,8 +118,9 @@ the path.
 
 - `HAM_SERVER_BIND`: hosted API bind address, default `127.0.0.1:9750`.
 - `HAM_SERVER_SURREAL_PATH`: embedded local SurrealDB path. Stores users,
-  login sessions, devices, logbooks, memberships, API tokens, invites, and
-  schema migrations.
+  login sessions, devices, logbooks, memberships, API tokens, invites, station
+  profiles, equipment profiles, provider settings without secrets, upload
+  queue/history metadata, and schema migrations.
 - `HAM_SERVER_SURREAL_ENDPOINT`: optional remote SurrealDB WebSocket endpoint
   for hosted deployments.
 - `HAM_SERVER_SURREAL_USER`, `HAM_SERVER_SURREAL_PASS`,
@@ -133,7 +162,7 @@ handled through the selected credential backend.
 
 SurrealDB schema initialization is automatic at startup through checked
 `DEFINE TABLE` and `DEFINE INDEX` statements. The first migration is recorded in
-`schema_migrations` with version `1`. Future migrations should be additive and
+`schema_migrations` with version `2` for the hosted API metadata schema. Future migrations should be additive and
 must preserve append-only official event history.
 
 The embedded local backend uses SurrealKV. On Windows, SurrealKV holds an
@@ -145,6 +174,8 @@ embedded lock.
 ## Current Limitations
 
 - Session expiry/refresh policy is still beta-level and not production hardened.
-- The hosted API still has reserved scaffold routes for several v0.2 workflows.
-- Provider adapters, upload execution, backup/restore UX, and desktop packaging
-  remain separate v0.2 work.
+- The hosted API still has reserved scaffold routes for activations, Net
+  Control, maps, and related v0.2 workflows.
+- Provider adapters are still fake/stub-backed through the hosted upload/test
+  routes; live network execution remains separate v0.2 work.
+- Backup/restore UX and desktop packaging remain separate v0.2 work.

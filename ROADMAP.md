@@ -23,7 +23,11 @@ This root roadmap summarizes the current implementation plan. Detailed architect
 
 ## Current Milestone
 
-v0.2 almost-v1 beta is underway. The first v0.2 slice adds release planning docs and a dedicated `ham-server` hosted API boundary with beta account/session/device/logbook scaffolding, role-scoped logbook access, proposal-backed QSO lifecycle routes, provider/sync/device route scaffolding, and route tests.
+v0.2 almost-v1 beta is underway. The hosted API now has durable SurrealDB
+metadata/support storage plus beta routes for account/session/device/logbook
+scaffolding, role-scoped logbook access, proposal-backed QSO lifecycle,
+station/equipment profiles, ADIF import/export, provider settings/test, upload
+queue execution foundation, sync preview/push/pull, and route tests.
 
 ## Release Scope Correction
 
@@ -33,11 +37,10 @@ v1.1 is the first native iOS target: SwiftUI, App Store-ready Xcode project, nat
 
 ## Recommended Next Milestone
 
-Durable Hosted Storage and Desktop Packaging:
+Hosted API Completion and Desktop Packaging:
 
-- Durable account/session/device/logbook storage for `ham-server`.
-- Durable sync/report storage for hosted/self-hosted server use.
-- Route coverage for ADIF, station/equipment, activation, Net Control, maps, uploads, and provider config.
+- Finish hosted route coverage for activations, Net Control, maps, backup/restore,
+  and divergence review.
 - Tauri desktop packaging and native file dialogs.
 - Browser-level GUI tests.
 

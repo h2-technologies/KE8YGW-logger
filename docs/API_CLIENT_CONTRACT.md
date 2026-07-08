@@ -27,8 +27,9 @@ server, and the future native iOS client. Backward-compatible fields may be
 added under `/api/v1`; breaking changes require a new API version.
 
 Current `ham-server` routes reserve the broader v0.2 surface while implementing
-auth, sessions, devices, logbooks, QSO lifecycle, provider listing, and sync
-preview/push status slices first.
+auth, sessions, devices, logbooks, QSO lifecycle, station/equipment support
+metadata, ADIF import/export, provider settings/test, upload queue foundation,
+and sync preview/push/pull slices first.
 
 ## Authentication
 
@@ -86,6 +87,16 @@ for that device must remain unusable after restart.
 Hosted QSO create, edit, delete, restore, and note routes submit
 `ProposalEnvelope` values to `ham-core::submit_proposal`. The hosted API must
 not directly create or modify official QSO records.
+
+Hosted ADIF import also submits proposal-backed QSO create events through the
+same pipeline. Hosted ADIF export reads official projections rebuilt from the
+append-only event stream. Station profiles, equipment profiles, provider
+settings, and upload queue/history records are support metadata in SurrealDB and
+must not be treated as official log history.
+
+Provider settings must contain credential IDs/references only. API clients must
+not send raw password, token, API key, or secret fields in provider config; the
+server rejects secret-looking keys and never returns credential secret values.
 
 ## Error Shape
 
@@ -277,6 +288,28 @@ in SurrealDB.
 Official replicated event envelopes are stored append-only in JSONL. Clients
 should expect preview, push, pull, and status responses to survive server
 restart without requiring re-pairing, unless the device or token was revoked.
+
+## Hosted Beta Client Routes
+
+The hosted `/api/v1` beta surface uses bearer sessions and currently implements:
+
+- Account/session/device/logbook routes for login, logout, session discovery,
+  logbook membership scoping, and device revocation.
+- QSO create, list, get, edit, delete, restore, and note routes backed by
+  proposals and official projections.
+- Station profile and equipment profile support routes scoped by
+  `account_id` and `logbook_id`.
+- `POST /api/v1/adif/import`, which parses ADIF and appends official QSO create
+  events through the proposal pipeline.
+- `GET /api/v1/adif/export`, which returns ADIF generated from official
+  projections and includes filename/content metadata.
+- Provider list/detail/update/test routes. Provider updates persist settings
+  without secrets; tests can run in fake/mock mode for CI.
+- Upload list/run/retry routes. Upload jobs select QSOs from official
+  projections, generate ADIF, persist queue/history metadata, expose retry
+  state, and currently execute against fake/stub provider behavior.
+- Sync status/preview/push/pull routes. Pull returns only events missing after
+  the requested local head for logbooks the bearer session may read.
 
 ### Diagnostic Reports
 
