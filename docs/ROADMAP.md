@@ -80,7 +80,7 @@ client. v1.1 is the native SwiftUI iOS release. See `V1_RELEASE_PLAN.md`,
 The next high-impact work should minimize future rewrites:
 
 1. Extract shared plugin/UI manifests only when static plugin definitions become a blocker.
-2. Finish hosted activation, Net Control, maps, backup/restore, and divergence review routes before public tester use.
+2. Finish full backup restore/import, desktop packaging, native file dialogs, browser tests, and user-facing divergence review before public tester use.
 3. Add real peer-to-peer LAN transport and trust pairing before unattended sync.
 4. Add role/account/session models before broad multi-operator workflows.
 5. Build live network adapters on top of the Online Services foundation: QRZ XML API, HamQTH, LoTW, eQSL, Club Log, QRZ Logbook, DX Cluster, POTA spots, SOTAWatch, real propagation/weather providers, automatic upload processing, and OS keychain/secret-store credentials.

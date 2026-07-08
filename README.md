@@ -95,7 +95,9 @@ planning docs. The `ham-server` crate exposes `/api/v1` hosted routes, bearer
 login/session handling, device identity/revocation, logbook membership roles,
 proposal-backed QSO create/edit/delete/restore/note flows, hosted
 station/equipment support metadata, ADIF import/export, provider settings/test
-routes, upload queue execution foundation, and sync preview/push/pull.
+routes, upload queue execution foundation, activation and Net Control workflow
+routes, map summaries/settings, backup export/dry-run, divergence review, and
+sync preview/push/pull.
 
 This is not yet a production hosted release. Server account/session/device
 metadata is now durable SurrealDB beta storage and sync/report storage is durable,

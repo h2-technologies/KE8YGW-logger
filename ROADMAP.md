@@ -27,7 +27,9 @@ v0.2 almost-v1 beta is underway. The hosted API now has durable SurrealDB
 metadata/support storage plus beta routes for account/session/device/logbook
 scaffolding, role-scoped logbook access, proposal-backed QSO lifecycle,
 station/equipment profiles, ADIF import/export, provider settings/test, upload
-queue execution foundation, sync preview/push/pull, and route tests.
+queue execution foundation, activation/Net Control routes, map summaries,
+backup export/dry-run, divergence review, sync preview/push/pull, and route
+tests.
 
 ## Release Scope Correction
 
@@ -37,10 +39,10 @@ v1.1 is the first native iOS target: SwiftUI, App Store-ready Xcode project, nat
 
 ## Recommended Next Milestone
 
-Hosted API Completion and Desktop Packaging:
+Restore, Desktop Packaging, and Beta UX:
 
-- Finish hosted route coverage for activations, Net Control, maps, backup/restore,
-  and divergence review.
+- Complete full backup restore/import after dry-run approval.
+- Add user-facing divergence review/export UX.
 - Tauri desktop packaging and native file dialogs.
 - Browser-level GUI tests.
 

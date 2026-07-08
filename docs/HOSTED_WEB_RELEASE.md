@@ -20,9 +20,11 @@ The new `ham-server` crate introduces the hosted API boundary, account/session
 models, device registration/revocation, logbook membership roles, and
 proposal-backed QSO routes. It now also exposes hosted station/equipment
 support metadata routes, ADIF import/export, provider settings/test routes,
-upload queue execution foundation, and sync pull. Hosted metadata now has a
-SurrealDB-backed durable store for beta server use, with the in-memory store
-retained only for focused unit tests and development fixtures.
+upload queue execution foundation, activation routes, Net Control routes, map
+summary/settings routes, backup export/dry-run routes, sync pull, and
+divergence review. Hosted metadata now has a SurrealDB-backed durable store for
+beta server use, with the in-memory store retained only for focused unit tests
+and development fixtures.
 
 The self-hosted sync/report service now uses durable local storage by default:
 SurrealDB for sync/support metadata, append-only JSONL for official replicated
@@ -59,6 +61,31 @@ events, and filesystem-backed diagnostic report payloads.
 - `POST /api/v1/equipment/:id/archive`
 - `POST /api/v1/adif/import`
 - `GET /api/v1/adif/export`
+- `GET /api/v1/activations`
+- `POST /api/v1/activations`
+- `GET /api/v1/activations/:id`
+- `PATCH /api/v1/activations/:id`
+- `POST /api/v1/activations/:id/end`
+- `GET /api/v1/activations/:id/qsos`
+- `GET /api/v1/net-control/sessions`
+- `POST /api/v1/net-control/sessions`
+- `GET /api/v1/net-control/sessions/:id`
+- `PATCH /api/v1/net-control/sessions/:id`
+- `POST /api/v1/net-control/sessions/:id/start`
+- `POST /api/v1/net-control/sessions/:id/end`
+- `POST /api/v1/net-control/sessions/:id/checkins`
+- `PATCH /api/v1/net-control/sessions/:id/checkins/:checkin_id`
+- `POST /api/v1/net-control/sessions/:id/traffic`
+- `GET /api/v1/maps/qsos`
+- `GET /api/v1/maps/stations`
+- `GET /api/v1/maps/paths`
+- `GET /api/v1/maps/settings`
+- `PATCH /api/v1/maps/settings`
+- `POST /api/v1/backups/export`
+- `GET /api/v1/backups`
+- `GET /api/v1/backups/:id`
+- `GET /api/v1/backups/:id/download`
+- `POST /api/v1/backups/import/dry-run`
 - `GET /api/v1/providers`
 - `GET /api/v1/providers/:id`
 - `PATCH /api/v1/providers/:id`
@@ -70,18 +97,30 @@ events, and filesystem-backed diagnostic report payloads.
 - `POST /api/v1/sync/preview`
 - `POST /api/v1/sync/push`
 - `POST /api/v1/sync/pull`
+- `POST /api/v1/sync/divergence/review`
+- `GET /api/v1/sync/divergence/:id`
+- `POST /api/v1/sync/divergence/:id/export`
 - `GET /api/v1/devices`
 - `POST /api/v1/devices`
 - `POST /api/v1/devices/:id/revoke`
 
-Additional v0.2 routes are reserved and return scaffolded JSON until their
-domain implementation lands.
+The previous scaffolded workflow routes now have beta implementations. Future
+routes should be added explicitly rather than treated as hidden mutable state.
 
 Provider settings store credential IDs/references only. The provider test route
 is deterministic in CI through fake/mock mode and reports missing credential
 references without returning secret values. Upload queue execution currently
 generates ADIF from official projections and stores queue/history metadata in
 SurrealDB, but it does not yet call live external provider APIs.
+
+Activation and Net Control writes go through core proposal validation and append
+official events. Current core role policy requires Admin/Owner for those
+workflow mutations; Viewer can read only. Map QSO/station/path responses are
+derived from official projections and station profile support metadata. Map
+settings, backup records, and divergence reports are support metadata in
+SurrealDB. Backup export includes official events and support state without
+credential secrets; import is dry-run only in this slice. Divergence review
+reports safe pull/push states and never performs automatic merge.
 
 ## Required Before Production Hosted Use
 
@@ -120,7 +159,8 @@ the path.
 - `HAM_SERVER_SURREAL_PATH`: embedded local SurrealDB path. Stores users,
   login sessions, devices, logbooks, memberships, API tokens, invites, station
   profiles, equipment profiles, provider settings without secrets, upload
-  queue/history metadata, and schema migrations.
+  queue/history metadata, map settings, backup records, divergence reports,
+  and schema migrations.
 - `HAM_SERVER_SURREAL_ENDPOINT`: optional remote SurrealDB WebSocket endpoint
   for hosted deployments.
 - `HAM_SERVER_SURREAL_USER`, `HAM_SERVER_SURREAL_PASS`,
@@ -162,8 +202,9 @@ handled through the selected credential backend.
 
 SurrealDB schema initialization is automatic at startup through checked
 `DEFINE TABLE` and `DEFINE INDEX` statements. The first migration is recorded in
-`schema_migrations` with version `2` for the hosted API metadata schema. Future migrations should be additive and
-must preserve append-only official event history.
+`schema_migrations` with version `3` for the hosted API metadata schema. Future
+migrations should be additive and must preserve append-only official event
+history.
 
 The embedded local backend uses SurrealKV. On Windows, SurrealKV holds an
 exclusive in-process file lock, so unit tests verify durable store reloads
@@ -174,8 +215,7 @@ embedded lock.
 ## Current Limitations
 
 - Session expiry/refresh policy is still beta-level and not production hardened.
-- The hosted API still has reserved scaffold routes for activations, Net
-  Control, maps, and related v0.2 workflows.
 - Provider adapters are still fake/stub-backed through the hosted upload/test
   routes; live network execution remains separate v0.2 work.
-- Backup/restore UX and desktop packaging remain separate v0.2 work.
+- Backup import is dry-run only. Full restore/import, backup UX, and desktop
+  packaging remain separate v0.2 work.

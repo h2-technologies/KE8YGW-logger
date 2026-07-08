@@ -94,6 +94,11 @@ append-only event stream. Station profiles, equipment profiles, provider
 settings, and upload queue/history records are support metadata in SurrealDB and
 must not be treated as official log history.
 
+Hosted activation and Net Control mutations also submit `ProposalEnvelope`
+values to `ham-core::submit_proposal`. Current core role policy requires
+Admin/Owner for those workflow mutations. Operator remains allowed for QSO
+logging; Viewer remains read-only.
+
 Provider settings must contain credential IDs/references only. API clients must
 not send raw password, token, API key, or secret fields in provider config; the
 server rejects secret-looking keys and never returns credential secret values.
@@ -308,8 +313,22 @@ The hosted `/api/v1` beta surface uses bearer sessions and currently implements:
 - Upload list/run/retry routes. Upload jobs select QSOs from official
   projections, generate ADIF, persist queue/history metadata, expose retry
   state, and currently execute against fake/stub provider behavior.
+- Activation list/create/get/update/end routes. Writes are proposal-backed
+  official activation events; reads are projection-derived.
+- Net Control session/check-in/traffic routes. Writes are proposal-backed
+  official Net Control events; reads are projection-derived.
+- Map QSO/station/path/settings routes. QSO and path data are derived from
+  official projections; map settings are SurrealDB support metadata.
+- Backup export and import dry-run routes. Export includes official events and
+  support metadata without credential secrets. Dry-run validates manifest,
+  target scope, event hash integrity, event-chain continuity, and missing
+  credential references. Full restore/import is intentionally not automatic in
+  this slice.
 - Sync status/preview/push/pull routes. Pull returns only events missing after
   the requested local head for logbooks the bearer session may read.
+- Sync divergence review routes. Reviews report local/client head,
+  remote/server head, missing local/remote events, safe pull/push booleans, and
+  recommended action. The server does not auto-merge divergent histories.
 
 ### Diagnostic Reports
 
@@ -365,12 +384,11 @@ define and test endpoints or equivalent proposal APIs for:
 - List, create, and select logbooks.
 - Read QSO projections with pagination and filters.
 - Submit QSO create, edit, delete, restore, and note proposals.
-- Read POTA/SOTA activation state and submit activation proposals.
-- Read Net Control sessions and submit Net Control proposals.
-- ADIF import job upload, validation, status, and result retrieval.
-- ADIF export job creation and download.
-- Provider metadata, credential reference configuration, and health checks.
-- Sync divergence reporting suitable for native UI.
+- Pagination/filter hardening for QSO, activation, Net Control, map, backup, and
+  provider history endpoints.
+- Full backup restore/import after dry-run approval.
+- Provider-specific credential setup flows and health checks.
+- Native-client divergence report presentation.
 
 Those endpoints must use the same semantics as the Rust proposal pipeline and
 official event model. They must not bypass append-only official history.

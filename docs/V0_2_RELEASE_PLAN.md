@@ -28,14 +28,19 @@ iOS client in v1.1.
   storage.
 - [x] Hosted upload queue execution foundation using fake/stub provider mode.
 - [x] Hosted sync pull route with scoped missing-event responses.
+- [x] Hosted activation routes using proposal-backed official events.
+- [x] Hosted Net Control routes using proposal-backed official events.
+- [x] Hosted map summary and settings routes.
+- [x] Hosted backup export and restore dry-run foundation.
+- [x] Hosted divergence review API with no automatic merge.
 - [ ] Production OS credential backend wiring.
 - [ ] Live Tier 1 provider adapters.
 - [ ] Upload queue execution against live providers.
 - [ ] Confirmation download/reconciliation UI.
 - [ ] Tauri desktop packaging.
 - [ ] Native desktop file dialogs.
-- [ ] Backup/restore.
-- [ ] Conflict/divergence review UX.
+- [ ] Full backup restore/import.
+- [x] Conflict/divergence review API foundation.
 - [ ] LAN peer-to-peer transport and trust pairing.
 - [ ] Full permission scope enforcement across all workflows.
 - [ ] Station/equipment GUI completion.
@@ -58,6 +63,13 @@ iOS client in v1.1.
 - ADIF import appends official QSO events through the proposal pipeline and
   export reads official projections.
 - Sync pull returns only allowed missing events and revoked devices cannot pull.
+- Activation and Net Control hosted writes append official events through core
+  proposal validation.
+- Map hosted reads are derived from official projections and support metadata.
+- Backup export includes official events and support metadata without secrets.
+- Backup import dry-run validates manifests and event-chain integrity.
+- Divergence review reports safe pull/push/diverged states without automatic
+  merge.
 - Sync events, heads, device revocation, and diagnostic reports survive sync
   server restart.
 - Existing app architecture remains intact.
@@ -87,6 +99,7 @@ iOS client in v1.1.
 - Native credential backends are still placeholders.
 - Live provider adapters are still mostly metadata/stub-backed; hosted provider
   tests and uploads use fake/stub behavior for deterministic CI.
+- Backup import is dry-run only; full restore remains a v0.2 gap.
 - GUI browser tests are not yet present.
 - Desktop packaging has not been added yet.
 - Permission scopes are enforced in the implemented hosted slices but not yet
@@ -96,6 +109,7 @@ iOS client in v1.1.
 
 - Finish production credential backends.
 - Complete live provider adapters and provider error handling.
+- Complete full backup restore/import and user-facing divergence review UX.
 - Finish desktop packaging/signing/notarization decisions.
 - Add browser-level GUI tests and release artifact checks.
 - Tighten documentation and operator-facing setup guides.

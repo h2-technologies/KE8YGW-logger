@@ -9,17 +9,21 @@ use std::{
 use chrono::{DateTime, Utc};
 use ham_core::{
     adif_for_upload_job, default_log_directory, default_service_registry, export_adif, import_adif,
-    submit_proposal, AdifImportOptions, EquipmentItem, EquipmentStatus, EquipmentType,
-    InMemoryEventBus, InMemoryLogbookEventStore, LogbookEventStore, OperatorRole, ProposalContext,
-    RegisteredServiceProvider, StationProfile,
+    qso_map_objects, station_markers_from_profiles, submit_proposal, AdifImportOptions, Coordinate,
+    CoreEventEnvelope, EquipmentItem, EquipmentStatus, EquipmentType, InMemoryEventBus,
+    InMemoryLogbookEventStore, LogbookEventStore, MapLayerStack, NetControlProjection,
+    OperatorRole, Projection, ProposalContext, RegisteredServiceProvider, StationProfile,
 };
 use ham_plugin_sdk::{
-    PluginCapability, PluginManifest, ProposalEnvelope, PROPOSAL_QSO_CORRECT, PROPOSAL_QSO_CREATE,
-    PROPOSAL_QSO_DELETE, PROPOSAL_QSO_NOTE_ADD, PROPOSAL_QSO_RESTORE,
+    PluginCapability, PluginManifest, ProposalEnvelope, PROPOSAL_ACTIVATION_CREATE,
+    PROPOSAL_ACTIVATION_END, PROPOSAL_ACTIVATION_START, PROPOSAL_ACTIVATION_UPDATE,
+    PROPOSAL_NET_CHECKIN_CREATE, PROPOSAL_NET_CHECKIN_UPDATE, PROPOSAL_NET_SESSION_END,
+    PROPOSAL_NET_SESSION_START, PROPOSAL_NET_TRAFFIC_CREATE, PROPOSAL_QSO_CORRECT,
+    PROPOSAL_QSO_CREATE, PROPOSAL_QSO_DELETE, PROPOSAL_QSO_NOTE_ADD, PROPOSAL_QSO_RESTORE,
 };
 use ham_sync::{
-    preview_pull_from_events, CloudPullEventsResponse, CloudPushEventsRequest, LogbookHeadSummary,
-    PreviewPullRequest,
+    metadata_for_event, preview_pull_from_events, CloudPullEventsResponse, CloudPushEventsRequest,
+    LogbookHeadSummary, PreviewPullRequest, ReplicationStatus,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value as JsonValue};
@@ -361,6 +365,92 @@ pub struct UploadRunRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ActivationWriteRequest {
+    pub logbook_id: Uuid,
+    pub activation_type: String,
+    pub station_callsign: Option<String>,
+    pub operator_callsign: Option<String>,
+    pub started_at: Option<String>,
+    pub ended_at: Option<String>,
+    pub park_id: Option<String>,
+    pub summit_id: Option<String>,
+    pub reference: Option<String>,
+    pub name: Option<String>,
+    pub notes: Option<String>,
+    #[serde(default)]
+    pub fields: Map<String, Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NetSessionWriteRequest {
+    pub logbook_id: Uuid,
+    pub station_callsign: Option<String>,
+    pub net_control_operator_id: Option<String>,
+    pub net_name: Option<String>,
+    pub started_at: Option<String>,
+    pub ended_at: Option<String>,
+    pub frequency_hz: Option<u64>,
+    pub band: Option<String>,
+    pub mode: Option<String>,
+    pub notes: Option<String>,
+    #[serde(default)]
+    pub fields: Map<String, Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NetCheckInWriteRequest {
+    pub logbook_id: Uuid,
+    pub callsign: Option<String>,
+    pub tactical_callsign: Option<String>,
+    pub tactical_only: Option<bool>,
+    pub checkin_time: Option<String>,
+    pub status: Option<String>,
+    pub traffic: Option<String>,
+    pub notes: Option<String>,
+    #[serde(default)]
+    pub fields: Map<String, Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NetTrafficWriteRequest {
+    pub logbook_id: Uuid,
+    pub summary: Option<String>,
+    pub precedence: Option<String>,
+    pub status: Option<String>,
+    pub handling_notes: Option<String>,
+    #[serde(default)]
+    pub fields: Map<String, Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MapSettingsPatchRequest {
+    pub logbook_id: Uuid,
+    pub layer_id: Option<String>,
+    pub enabled: Option<bool>,
+    pub order: Option<i32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BackupExportRequest {
+    pub logbook_id: Uuid,
+    pub include_runtime_logs: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BackupDryRunRequest {
+    pub logbook_id: Uuid,
+    pub backup: Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DivergenceReviewRequest {
+    pub logbook_id: Uuid,
+    pub local_head_hash: Option<String>,
+    #[serde(default)]
+    pub client_events: Vec<CoreEventEnvelope>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QsoRecordResponse {
     pub qso_id: Uuid,
     pub payload: Value,
@@ -429,6 +519,33 @@ pub struct HostedUploadJob {
     pub updated_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct HostedMapSettings {
+    pub account_id: Uuid,
+    pub logbook_id: Uuid,
+    pub layers: MapLayerStack,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct HostedBackupRecord {
+    pub backup_id: Uuid,
+    pub account_id: Uuid,
+    pub logbook_id: Uuid,
+    pub created_at: DateTime<Utc>,
+    pub manifest: Value,
+    pub payload: Value,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct HostedDivergenceReport {
+    pub report_id: Uuid,
+    pub account_id: Uuid,
+    pub logbook_id: Uuid,
+    pub created_at: DateTime<Utc>,
+    pub review: Value,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RouteCatalogResponse {
     pub implemented: Vec<String>,
@@ -449,6 +566,9 @@ struct ServerState {
     equipment_profiles: HashMap<Uuid, HostedEquipmentProfile>,
     provider_settings: HashMap<String, HostedProviderSetting>,
     upload_jobs: HashMap<Uuid, HostedUploadJob>,
+    map_settings: HashMap<Uuid, HostedMapSettings>,
+    backups: HashMap<Uuid, HostedBackupRecord>,
+    divergence_reports: HashMap<Uuid, HostedDivergenceReport>,
 }
 
 trait HostedMetadataStore: Send + Sync + std::fmt::Debug {
@@ -747,6 +867,17 @@ impl HostedMetadataStore for SurrealHostedMetadataStore {
             for job in select_payloads::<HostedUploadJob>(&client, "upload_queue_history").await? {
                 state.upload_jobs.insert(job.upload_id, job);
             }
+            for settings in select_payloads::<HostedMapSettings>(&client, "map_settings").await? {
+                state.map_settings.insert(settings.logbook_id, settings);
+            }
+            for backup in select_payloads::<HostedBackupRecord>(&client, "backup_records").await? {
+                state.backups.insert(backup.backup_id, backup);
+            }
+            for report in
+                select_payloads::<HostedDivergenceReport>(&client, "divergence_reports").await?
+            {
+                state.divergence_reports.insert(report.report_id, report);
+            }
 
             Ok(state)
         })
@@ -767,6 +898,9 @@ impl HostedMetadataStore for SurrealHostedMetadataStore {
                 "equipment_profiles",
                 "provider_settings",
                 "upload_queue_history",
+                "map_settings",
+                "backup_records",
+                "divergence_reports",
             ] {
                 delete_table(&client, table).await?;
             }
@@ -934,6 +1068,47 @@ impl HostedMetadataStore for SurrealHostedMetadataStore {
                 )
                 .await?;
             }
+            for settings in state.map_settings.values() {
+                create_record(
+                    &client,
+                    "map_settings",
+                    settings.logbook_id.to_string(),
+                    json!({
+                        "account_id": settings.account_id,
+                        "logbook_id": settings.logbook_id,
+                        "payload": settings,
+                    }),
+                )
+                .await?;
+            }
+            for backup in state.backups.values() {
+                create_record(
+                    &client,
+                    "backup_records",
+                    backup.backup_id.to_string(),
+                    json!({
+                        "account_id": backup.account_id,
+                        "logbook_id": backup.logbook_id,
+                        "backup_id": backup.backup_id,
+                        "payload": backup,
+                    }),
+                )
+                .await?;
+            }
+            for report in state.divergence_reports.values() {
+                create_record(
+                    &client,
+                    "divergence_reports",
+                    report.report_id.to_string(),
+                    json!({
+                        "account_id": report.account_id,
+                        "logbook_id": report.logbook_id,
+                        "report_id": report.report_id,
+                        "payload": report,
+                    }),
+                )
+                .await?;
+            }
             Ok(())
         })
     }
@@ -961,6 +1136,9 @@ async fn initialize_hosted_schema(client: &SurrealHostedClient) -> Result<(), Me
         DEFINE TABLE IF NOT EXISTS equipment_profiles SCHEMALESS;
         DEFINE TABLE IF NOT EXISTS provider_settings SCHEMALESS;
         DEFINE TABLE IF NOT EXISTS upload_queue_history SCHEMALESS;
+        DEFINE TABLE IF NOT EXISTS map_settings SCHEMALESS;
+        DEFINE TABLE IF NOT EXISTS backup_records SCHEMALESS;
+        DEFINE TABLE IF NOT EXISTS divergence_reports SCHEMALESS;
         DEFINE INDEX IF NOT EXISTS users_email_idx ON TABLE users COLUMNS email UNIQUE;
         DEFINE INDEX IF NOT EXISTS users_account_idx ON TABLE users COLUMNS account_id;
         DEFINE INDEX IF NOT EXISTS sessions_token_hash_idx ON TABLE login_sessions COLUMNS token_hash UNIQUE;
@@ -983,7 +1161,13 @@ async fn initialize_hosted_schema(client: &SurrealHostedClient) -> Result<(), Me
         DEFINE INDEX IF NOT EXISTS upload_queue_account_idx ON TABLE upload_queue_history COLUMNS account_id;
         DEFINE INDEX IF NOT EXISTS upload_queue_logbook_idx ON TABLE upload_queue_history COLUMNS logbook_id;
         DEFINE INDEX IF NOT EXISTS upload_queue_provider_idx ON TABLE upload_queue_history COLUMNS provider_id;
-        UPSERT schema_migrations:hosted_v2 SET version = 2, component = 'ham-server', applied_at = time::now();
+        DEFINE INDEX IF NOT EXISTS map_settings_account_idx ON TABLE map_settings COLUMNS account_id;
+        DEFINE INDEX IF NOT EXISTS map_settings_logbook_idx ON TABLE map_settings COLUMNS logbook_id;
+        DEFINE INDEX IF NOT EXISTS backup_records_account_idx ON TABLE backup_records COLUMNS account_id;
+        DEFINE INDEX IF NOT EXISTS backup_records_logbook_idx ON TABLE backup_records COLUMNS logbook_id;
+        DEFINE INDEX IF NOT EXISTS divergence_reports_account_idx ON TABLE divergence_reports COLUMNS account_id;
+        DEFINE INDEX IF NOT EXISTS divergence_reports_logbook_idx ON TABLE divergence_reports COLUMNS logbook_id;
+        UPSERT schema_migrations:hosted_v3 SET version = 3, component = 'ham-server', applied_at = time::now();
     "#;
     query_checked(client, schema).await
 }
@@ -1197,6 +1381,68 @@ impl HostedServer {
             }
             ("POST", ["api", "v1", "adif", "import"]) => self.import_adif_route(&request).await,
             ("GET", ["api", "v1", "adif", "export"]) => self.export_adif_route(&request).await,
+            ("GET", ["api", "v1", "activations"]) => self.list_activations(&request).await,
+            ("POST", ["api", "v1", "activations"]) => self.create_activation(&request).await,
+            ("GET", ["api", "v1", "activations", activation_id]) => {
+                self.get_activation(&request, activation_id).await
+            }
+            ("PATCH", ["api", "v1", "activations", activation_id]) => {
+                self.patch_activation(&request, activation_id).await
+            }
+            ("POST", ["api", "v1", "activations", activation_id, "end"]) => {
+                self.end_activation(&request, activation_id).await
+            }
+            ("GET", ["api", "v1", "activations", activation_id, "qsos"]) => {
+                self.activation_qsos(&request, activation_id).await
+            }
+            ("GET", ["api", "v1", "net-control", "sessions"]) => {
+                self.list_net_sessions(&request).await
+            }
+            ("POST", ["api", "v1", "net-control", "sessions"]) => {
+                self.create_net_session(&request).await
+            }
+            ("GET", ["api", "v1", "net-control", "sessions", session_id]) => {
+                self.get_net_session(&request, session_id).await
+            }
+            ("PATCH", ["api", "v1", "net-control", "sessions", session_id]) => {
+                self.patch_net_session(&request, session_id).await
+            }
+            ("POST", ["api", "v1", "net-control", "sessions", session_id, "start"]) => {
+                self.create_net_session_with_path(&request, Some(session_id))
+                    .await
+            }
+            ("POST", ["api", "v1", "net-control", "sessions", session_id, "end"]) => {
+                self.end_net_session(&request, session_id).await
+            }
+            ("POST", ["api", "v1", "net-control", "sessions", session_id, "checkins"]) => {
+                self.create_net_checkin(&request, session_id).await
+            }
+            (
+                "PATCH",
+                ["api", "v1", "net-control", "sessions", session_id, "checkins", checkin_id],
+            ) => {
+                self.patch_net_checkin(&request, session_id, checkin_id)
+                    .await
+            }
+            ("POST", ["api", "v1", "net-control", "sessions", session_id, "traffic"]) => {
+                self.create_net_traffic(&request, session_id).await
+            }
+            ("GET", ["api", "v1", "maps", "qsos"]) => self.map_qsos(&request).await,
+            ("GET", ["api", "v1", "maps", "stations"]) => self.map_stations(&request).await,
+            ("GET", ["api", "v1", "maps", "paths"]) => self.map_paths(&request).await,
+            ("GET", ["api", "v1", "maps", "settings"]) => self.map_settings(&request).await,
+            ("PATCH", ["api", "v1", "maps", "settings"]) => self.patch_map_settings(&request).await,
+            ("POST", ["api", "v1", "backups", "export"]) => self.export_backup(&request).await,
+            ("GET", ["api", "v1", "backups"]) => self.list_backups(&request).await,
+            ("GET", ["api", "v1", "backups", backup_id]) => {
+                self.get_backup(&request, backup_id).await
+            }
+            ("GET", ["api", "v1", "backups", backup_id, "download"]) => {
+                self.download_backup(&request, backup_id).await
+            }
+            ("POST", ["api", "v1", "backups", "import", "dry-run"]) => {
+                self.backup_import_dry_run(&request).await
+            }
             ("GET", ["api", "v1", "providers"]) => self.providers(&request).await,
             ("GET", ["api", "v1", "providers", provider_id]) => {
                 self.provider_detail(&request, provider_id).await
@@ -1216,6 +1462,15 @@ impl HostedServer {
             ("POST", ["api", "v1", "sync", "preview"]) => self.sync_preview(&request).await,
             ("POST", ["api", "v1", "sync", "push"]) => self.sync_push(&request).await,
             ("POST", ["api", "v1", "sync", "pull"]) => self.sync_pull(&request).await,
+            ("POST", ["api", "v1", "sync", "divergence", "review"]) => {
+                self.divergence_review(&request).await
+            }
+            ("GET", ["api", "v1", "sync", "divergence", report_id]) => {
+                self.get_divergence_report(&request, report_id).await
+            }
+            ("POST", ["api", "v1", "sync", "divergence", report_id, "export"]) => {
+                self.export_divergence_report(&request, report_id).await
+            }
             ("GET", ["api", "v1", "devices"]) => self.devices(&request).await,
             ("POST", ["api", "v1", "devices"]) => self.register_device(&request).await,
             ("POST", ["api", "v1", "devices", device_id, "revoke"]) => {
@@ -1936,6 +2191,587 @@ impl HostedServer {
         }))
     }
 
+    async fn list_activations(&self, request: &ApiRequest) -> Result<Value, ApiError> {
+        let logbook_id = logbook_id_from_query(request)?;
+        self.require_logbook_role(request, logbook_id, LogbookAccess::Read)
+            .await?;
+        let include_ended = request
+            .query
+            .get("include_ended")
+            .is_some_and(|value| value == "true");
+        let projection = self
+            .store
+            .rebuild_activation_projections(logbook_id)
+            .await
+            .map_err(|error| ApiError::Store(error.to_string()))?;
+        let activations = projection
+            .list(include_ended)
+            .into_iter()
+            .map(activation_response)
+            .collect::<Vec<_>>();
+        Ok(json!({"logbook_id": logbook_id, "activations": activations}))
+    }
+
+    async fn create_activation(&self, request: &ApiRequest) -> Result<Value, ApiError> {
+        let input: ActivationWriteRequest = parse_json(&request.body)?;
+        let auth = self
+            .require_logbook_role(request, input.logbook_id, LogbookAccess::Admin)
+            .await?;
+        let started = input.started_at.is_some();
+        let payload = activation_payload(input, started)?;
+        self.submit_workflow_proposal(
+            auth,
+            if started {
+                PROPOSAL_ACTIVATION_START
+            } else {
+                PROPOSAL_ACTIVATION_CREATE
+            },
+            None,
+            payload,
+        )
+        .await
+    }
+
+    async fn get_activation(
+        &self,
+        request: &ApiRequest,
+        activation_id: &str,
+    ) -> Result<Value, ApiError> {
+        let activation_id = parse_uuid(activation_id)?;
+        let logbook_id = logbook_id_from_query(request)?;
+        self.require_logbook_role(request, logbook_id, LogbookAccess::Read)
+            .await?;
+        let projection = self
+            .store
+            .rebuild_activation_projections(logbook_id)
+            .await
+            .map_err(|error| ApiError::Store(error.to_string()))?;
+        let activation = projection
+            .get(activation_id)
+            .map(activation_response)
+            .ok_or(ApiError::NotFound)?;
+        Ok(json!({"activation": activation}))
+    }
+
+    async fn patch_activation(
+        &self,
+        request: &ApiRequest,
+        activation_id: &str,
+    ) -> Result<Value, ApiError> {
+        let activation_id = parse_uuid(activation_id)?;
+        let input: ActivationWriteRequest = parse_json(&request.body)?;
+        let auth = self
+            .require_logbook_role(request, input.logbook_id, LogbookAccess::Admin)
+            .await?;
+        let payload = activation_patch_payload(input)?;
+        self.submit_workflow_proposal(
+            auth,
+            PROPOSAL_ACTIVATION_UPDATE,
+            Some(activation_id),
+            payload,
+        )
+        .await
+    }
+
+    async fn end_activation(
+        &self,
+        request: &ApiRequest,
+        activation_id: &str,
+    ) -> Result<Value, ApiError> {
+        let activation_id = parse_uuid(activation_id)?;
+        let input: ActivationWriteRequest = parse_json(&request.body)?;
+        let auth = self
+            .require_logbook_role(request, input.logbook_id, LogbookAccess::Admin)
+            .await?;
+        let ended_at = input.ended_at.unwrap_or_else(|| Utc::now().to_rfc3339());
+        self.submit_workflow_proposal(
+            auth,
+            PROPOSAL_ACTIVATION_END,
+            Some(activation_id),
+            json!({"ended_at": ended_at}),
+        )
+        .await
+    }
+
+    async fn activation_qsos(
+        &self,
+        request: &ApiRequest,
+        activation_id: &str,
+    ) -> Result<Value, ApiError> {
+        let activation_id = parse_uuid(activation_id)?;
+        let logbook_id = logbook_id_from_query(request)?;
+        self.require_logbook_role(request, logbook_id, LogbookAccess::Read)
+            .await?;
+        let activation_projection = self
+            .store
+            .rebuild_activation_projections(logbook_id)
+            .await
+            .map_err(|error| ApiError::Store(error.to_string()))?;
+        let qso_projection = self
+            .store
+            .rebuild_projections(logbook_id)
+            .await
+            .map_err(|error| ApiError::Store(error.to_string()))?;
+        let activation = activation_projection
+            .get(activation_id)
+            .ok_or(ApiError::NotFound)?;
+        let qsos = activation
+            .linked_qsos
+            .iter()
+            .filter_map(|qso_id| qso_projection.get(*qso_id).map(qso_response))
+            .collect::<Vec<_>>();
+        Ok(json!({"activation_id": activation_id, "qsos": qsos}))
+    }
+
+    async fn list_net_sessions(&self, request: &ApiRequest) -> Result<Value, ApiError> {
+        let logbook_id = logbook_id_from_query(request)?;
+        self.require_logbook_role(request, logbook_id, LogbookAccess::Read)
+            .await?;
+        let include_ended = request
+            .query
+            .get("include_ended")
+            .is_some_and(|value| value == "true");
+        let projection = self.net_projection(logbook_id).await?;
+        let sessions = projection
+            .sessions(include_ended)
+            .into_iter()
+            .cloned()
+            .collect::<Vec<_>>();
+        Ok(json!({"logbook_id": logbook_id, "sessions": sessions}))
+    }
+
+    async fn create_net_session(&self, request: &ApiRequest) -> Result<Value, ApiError> {
+        self.create_net_session_with_path(request, None).await
+    }
+
+    async fn create_net_session_with_path(
+        &self,
+        request: &ApiRequest,
+        path_session_id: Option<&str>,
+    ) -> Result<Value, ApiError> {
+        let input: NetSessionWriteRequest = parse_json(&request.body)?;
+        let auth = self
+            .require_logbook_role(request, input.logbook_id, LogbookAccess::Admin)
+            .await?;
+        let payload = net_session_start_payload(input)?;
+        let path_session_id = path_session_id.map(parse_uuid).transpose()?;
+        self.submit_workflow_proposal(auth, PROPOSAL_NET_SESSION_START, path_session_id, payload)
+            .await
+    }
+
+    async fn get_net_session(
+        &self,
+        request: &ApiRequest,
+        session_id: &str,
+    ) -> Result<Value, ApiError> {
+        let session_id = parse_uuid(session_id)?;
+        let logbook_id = logbook_id_from_query(request)?;
+        self.require_logbook_role(request, logbook_id, LogbookAccess::Read)
+            .await?;
+        let projection = self.net_projection(logbook_id).await?;
+        let session = projection
+            .get_session(session_id)
+            .cloned()
+            .ok_or(ApiError::NotFound)?;
+        let checkins = projection
+            .checkins_for_session(session_id, true)
+            .into_iter()
+            .cloned()
+            .collect::<Vec<_>>();
+        let traffic = projection
+            .traffic_for_session(session_id)
+            .into_iter()
+            .cloned()
+            .collect::<Vec<_>>();
+        Ok(json!({"session": session, "checkins": checkins, "traffic": traffic}))
+    }
+
+    async fn patch_net_session(
+        &self,
+        request: &ApiRequest,
+        session_id: &str,
+    ) -> Result<Value, ApiError> {
+        let session_id = parse_uuid(session_id)?;
+        let input: NetSessionWriteRequest = parse_json(&request.body)?;
+        let auth = self
+            .require_logbook_role(request, input.logbook_id, LogbookAccess::Admin)
+            .await?;
+        if input.ended_at.is_some() {
+            return self
+                .submit_workflow_proposal(
+                    auth,
+                    PROPOSAL_NET_SESSION_END,
+                    Some(session_id),
+                    net_session_end_payload(input),
+                )
+                .await;
+        }
+        Err(ApiError::BadRequest(
+            "net session patch currently supports ended_at; mutable session metadata remains append-only event work"
+                .to_owned(),
+        ))
+    }
+
+    async fn end_net_session(
+        &self,
+        request: &ApiRequest,
+        session_id: &str,
+    ) -> Result<Value, ApiError> {
+        let session_id = parse_uuid(session_id)?;
+        let input: NetSessionWriteRequest = parse_json(&request.body)?;
+        let auth = self
+            .require_logbook_role(request, input.logbook_id, LogbookAccess::Admin)
+            .await?;
+        self.submit_workflow_proposal(
+            auth,
+            PROPOSAL_NET_SESSION_END,
+            Some(session_id),
+            net_session_end_payload(input),
+        )
+        .await
+    }
+
+    async fn create_net_checkin(
+        &self,
+        request: &ApiRequest,
+        session_id: &str,
+    ) -> Result<Value, ApiError> {
+        let session_id = parse_uuid(session_id)?;
+        let input: NetCheckInWriteRequest = parse_json(&request.body)?;
+        let auth = self
+            .require_logbook_role(request, input.logbook_id, LogbookAccess::Admin)
+            .await?;
+        self.submit_workflow_proposal(
+            auth,
+            PROPOSAL_NET_CHECKIN_CREATE,
+            None,
+            net_checkin_payload(session_id, input)?,
+        )
+        .await
+    }
+
+    async fn patch_net_checkin(
+        &self,
+        request: &ApiRequest,
+        session_id: &str,
+        checkin_id: &str,
+    ) -> Result<Value, ApiError> {
+        let session_id = parse_uuid(session_id)?;
+        let checkin_id = parse_uuid(checkin_id)?;
+        let input: NetCheckInWriteRequest = parse_json(&request.body)?;
+        let auth = self
+            .require_logbook_role(request, input.logbook_id, LogbookAccess::Admin)
+            .await?;
+        self.submit_workflow_proposal(
+            auth,
+            PROPOSAL_NET_CHECKIN_UPDATE,
+            Some(checkin_id),
+            net_checkin_patch_payload(session_id, input)?,
+        )
+        .await
+    }
+
+    async fn create_net_traffic(
+        &self,
+        request: &ApiRequest,
+        session_id: &str,
+    ) -> Result<Value, ApiError> {
+        let session_id = parse_uuid(session_id)?;
+        let input: NetTrafficWriteRequest = parse_json(&request.body)?;
+        let auth = self
+            .require_logbook_role(request, input.logbook_id, LogbookAccess::Admin)
+            .await?;
+        self.submit_workflow_proposal(
+            auth,
+            PROPOSAL_NET_TRAFFIC_CREATE,
+            None,
+            net_traffic_payload(session_id, input)?,
+        )
+        .await
+    }
+
+    async fn map_qsos(&self, request: &ApiRequest) -> Result<Value, ApiError> {
+        let logbook_id = logbook_id_from_query(request)?;
+        let auth = self
+            .require_logbook_role(request, logbook_id, LogbookAccess::Read)
+            .await?;
+        let projection = self
+            .store
+            .rebuild_projections(logbook_id)
+            .await
+            .map_err(|error| ApiError::Store(error.to_string()))?;
+        let station_coordinate = self
+            .default_station_coordinate(auth.session.account_id, logbook_id)
+            .await;
+        let objects = qso_map_objects(&projection, station_coordinate, None);
+        Ok(json!({"logbook_id": logbook_id, "markers": objects}))
+    }
+
+    async fn map_stations(&self, request: &ApiRequest) -> Result<Value, ApiError> {
+        let logbook_id = logbook_id_from_query(request)?;
+        let auth = self
+            .require_logbook_role(request, logbook_id, LogbookAccess::Read)
+            .await?;
+        let state = self.state.read().await;
+        let profiles = state
+            .station_profiles
+            .values()
+            .filter(|profile| {
+                profile.account_id == auth.session.account_id && profile.logbook_id == logbook_id
+            })
+            .filter_map(|profile| serde_json::to_value(&profile.profile).ok())
+            .collect::<Vec<_>>();
+        let markers = station_markers_from_profiles(&profiles);
+        Ok(json!({"logbook_id": logbook_id, "markers": markers}))
+    }
+
+    async fn map_paths(&self, request: &ApiRequest) -> Result<Value, ApiError> {
+        let logbook_id = logbook_id_from_query(request)?;
+        let auth = self
+            .require_logbook_role(request, logbook_id, LogbookAccess::Read)
+            .await?;
+        let projection = self
+            .store
+            .rebuild_projections(logbook_id)
+            .await
+            .map_err(|error| ApiError::Store(error.to_string()))?;
+        let station_coordinate = self
+            .default_station_coordinate(auth.session.account_id, logbook_id)
+            .await;
+        let paths = qso_map_objects(&projection, station_coordinate, None)
+            .into_iter()
+            .filter_map(|object| {
+                object.path.map(|path| {
+                    json!({
+                        "qso_id": object.marker.metadata.get("qso_id").cloned(),
+                        "marker_id": object.marker.marker_id,
+                        "path": path,
+                        "distance": object.distance,
+                        "bearing": object.bearing
+                    })
+                })
+            })
+            .collect::<Vec<_>>();
+        Ok(json!({"logbook_id": logbook_id, "paths": paths}))
+    }
+
+    async fn map_settings(&self, request: &ApiRequest) -> Result<Value, ApiError> {
+        let logbook_id = logbook_id_from_query(request)?;
+        let auth = self
+            .require_logbook_role(request, logbook_id, LogbookAccess::Read)
+            .await?;
+        let state = self.state.read().await;
+        let settings = state
+            .map_settings
+            .get(&logbook_id)
+            .filter(|settings| settings.account_id == auth.session.account_id)
+            .cloned()
+            .unwrap_or_else(|| HostedMapSettings {
+                account_id: auth.session.account_id,
+                logbook_id,
+                layers: MapLayerStack::default_layers(),
+                updated_at: Utc::now(),
+            });
+        Ok(json!({"map_settings": settings}))
+    }
+
+    async fn patch_map_settings(&self, request: &ApiRequest) -> Result<Value, ApiError> {
+        let input: MapSettingsPatchRequest = parse_json(&request.body)?;
+        let auth = self
+            .require_logbook_role(request, input.logbook_id, LogbookAccess::Admin)
+            .await?;
+        let mut state = self.state.write().await;
+        let settings = state
+            .map_settings
+            .entry(input.logbook_id)
+            .or_insert_with(|| HostedMapSettings {
+                account_id: auth.session.account_id,
+                logbook_id: input.logbook_id,
+                layers: MapLayerStack::default_layers(),
+                updated_at: Utc::now(),
+            });
+        settings.account_id = auth.session.account_id;
+        if let Some(layer_id) = input.layer_id {
+            if let Some(enabled) = input.enabled {
+                settings
+                    .layers
+                    .set_enabled(&layer_id, enabled)
+                    .map_err(|error| ApiError::BadRequest(error.to_string()))?;
+            }
+            if let Some(order) = input.order {
+                settings
+                    .layers
+                    .set_order(&layer_id, order)
+                    .map_err(|error| ApiError::BadRequest(error.to_string()))?;
+            }
+        }
+        settings.updated_at = Utc::now();
+        let settings = settings.clone();
+        self.persist_metadata(&state)?;
+        Ok(json!({"map_settings": settings}))
+    }
+
+    async fn export_backup(&self, request: &ApiRequest) -> Result<Value, ApiError> {
+        let input: BackupExportRequest = parse_json(&request.body)?;
+        let auth = self
+            .require_logbook_role(request, input.logbook_id, LogbookAccess::Read)
+            .await?;
+        self.store
+            .verify_chain(input.logbook_id)
+            .await
+            .map_err(|error| ApiError::Store(error.to_string()))?;
+        let events = self
+            .store
+            .list_events(input.logbook_id)
+            .await
+            .map_err(|error| ApiError::Store(error.to_string()))?;
+        let state = self.state.read().await;
+        let backup =
+            build_backup_record(&state, auth.session.account_id, input.logbook_id, events)?;
+        drop(state);
+        let mut state = self.state.write().await;
+        state.backups.insert(backup.backup_id, backup.clone());
+        self.persist_metadata(&state)?;
+        Ok(json!({"backup": backup}))
+    }
+
+    async fn list_backups(&self, request: &ApiRequest) -> Result<Value, ApiError> {
+        let logbook_id = logbook_id_from_query(request)?;
+        let auth = self
+            .require_logbook_role(request, logbook_id, LogbookAccess::Read)
+            .await?;
+        let state = self.state.read().await;
+        let mut backups = state
+            .backups
+            .values()
+            .filter(|backup| {
+                backup.account_id == auth.session.account_id && backup.logbook_id == logbook_id
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        backups.sort_by_key(|backup| std::cmp::Reverse(backup.created_at));
+        Ok(json!({"backups": backups}))
+    }
+
+    async fn get_backup(&self, request: &ApiRequest, backup_id: &str) -> Result<Value, ApiError> {
+        let backup_id = parse_uuid(backup_id)?;
+        let logbook_id = logbook_id_from_query(request)?;
+        let auth = self
+            .require_logbook_role(request, logbook_id, LogbookAccess::Read)
+            .await?;
+        let state = self.state.read().await;
+        let backup = state
+            .backups
+            .get(&backup_id)
+            .filter(|backup| {
+                backup.account_id == auth.session.account_id && backup.logbook_id == logbook_id
+            })
+            .cloned()
+            .ok_or(ApiError::NotFound)?;
+        Ok(json!({"backup": backup}))
+    }
+
+    async fn download_backup(
+        &self,
+        request: &ApiRequest,
+        backup_id: &str,
+    ) -> Result<Value, ApiError> {
+        self.get_backup(request, backup_id).await
+    }
+
+    async fn backup_import_dry_run(&self, request: &ApiRequest) -> Result<Value, ApiError> {
+        let input: BackupDryRunRequest = parse_json(&request.body)?;
+        self.require_logbook_role(request, input.logbook_id, LogbookAccess::Admin)
+            .await?;
+        let result = validate_backup_dry_run(input.logbook_id, &input.backup);
+        Ok(json!(result))
+    }
+
+    async fn divergence_review(&self, request: &ApiRequest) -> Result<Value, ApiError> {
+        let input: DivergenceReviewRequest = parse_json(&request.body)?;
+        let auth = self
+            .require_logbook_role(request, input.logbook_id, LogbookAccess::Read)
+            .await?;
+        let events = self
+            .store
+            .list_events(input.logbook_id)
+            .await
+            .map_err(|error| ApiError::Store(error.to_string()))?;
+        let preview = preview_pull_from_events(
+            PreviewPullRequest {
+                peer_id: "hosted-server".to_owned(),
+                logbook_id: input.logbook_id,
+                local_head_hash: input.local_head_hash.clone(),
+            },
+            &events,
+        );
+        let server_head = events.last().map(|event| event.event_hash.clone());
+        let client_events = input.client_events;
+        let can_push = client_events
+            .first()
+            .is_some_and(|event| event.previous_hash == server_head)
+            || (client_events.is_empty() && input.local_head_hash == server_head);
+        let divergent = preview.status == ReplicationStatus::Diverged
+            || client_events
+                .first()
+                .is_some_and(|event| event.previous_hash != server_head);
+        let report_id = Uuid::new_v4();
+        let review = json!({
+            "report_id": report_id,
+            "logbook_id": input.logbook_id,
+            "local_head_hash": input.local_head_hash,
+            "remote_head_hash": server_head,
+            "common_ancestor": if divergent { Value::Null } else { json!(preview.local_head_hash) },
+            "missing_local_events": client_events.iter().map(metadata_for_event).collect::<Vec<_>>(),
+            "missing_remote_events": preview.events,
+            "can_safely_pull": preview.status == ReplicationStatus::RemoteAhead || preview.status == ReplicationStatus::InSync,
+            "can_safely_push": can_push && !divergent,
+            "divergence_detected": divergent,
+            "recommended_action": if divergent { "export divergence report; do not auto-merge" } else if can_push { "safe to push" } else if preview.status == ReplicationStatus::RemoteAhead { "safe to pull" } else { "in sync" }
+        });
+        let report = HostedDivergenceReport {
+            report_id,
+            account_id: auth.session.account_id,
+            logbook_id: input.logbook_id,
+            created_at: Utc::now(),
+            review,
+        };
+        let mut state = self.state.write().await;
+        state.divergence_reports.insert(report_id, report.clone());
+        self.persist_metadata(&state)?;
+        Ok(json!({"review": report.review, "report_id": report_id}))
+    }
+
+    async fn get_divergence_report(
+        &self,
+        request: &ApiRequest,
+        report_id: &str,
+    ) -> Result<Value, ApiError> {
+        let report_id = parse_uuid(report_id)?;
+        let logbook_id = logbook_id_from_query(request)?;
+        let auth = self
+            .require_logbook_role(request, logbook_id, LogbookAccess::Read)
+            .await?;
+        let state = self.state.read().await;
+        let report = state
+            .divergence_reports
+            .get(&report_id)
+            .filter(|report| {
+                report.account_id == auth.session.account_id && report.logbook_id == logbook_id
+            })
+            .cloned()
+            .ok_or(ApiError::NotFound)?;
+        Ok(json!({"divergence_report": report}))
+    }
+
+    async fn export_divergence_report(
+        &self,
+        request: &ApiRequest,
+        report_id: &str,
+    ) -> Result<Value, ApiError> {
+        self.get_divergence_report(request, report_id).await
+    }
+
     async fn providers(&self, request: &ApiRequest) -> Result<Value, ApiError> {
         let auth = self.authorize(request).await?;
         let logbook_id = request
@@ -2462,6 +3298,71 @@ impl HostedServer {
         }))
     }
 
+    async fn submit_workflow_proposal(
+        &self,
+        auth: AuthorizedLogbook,
+        proposal_type: &str,
+        entity_id: Option<Uuid>,
+        payload: Value,
+    ) -> Result<Value, ApiError> {
+        let proposal = ProposalEnvelope::new(
+            proposal_type,
+            auth.logbook_id,
+            entity_id,
+            Some(auth.session.user_id),
+            auth.session.device_id,
+            "core.gui",
+            1,
+            payload,
+        );
+        let context = ProposalContext::local_admin(core_gui_manifest(), auth.role.proposal_role());
+        let outcome = submit_proposal(self.store.as_ref(), self.bus.as_ref(), &context, proposal)
+            .await
+            .map_err(|error| ApiError::Proposal(error.to_string()))?;
+        let head = self.logbook_head(auth.logbook_id).await?;
+        Ok(json!({
+            "ok": true,
+            "event": outcome.official_event,
+            "head": head
+        }))
+    }
+
+    async fn net_projection(&self, logbook_id: Uuid) -> Result<NetControlProjection, ApiError> {
+        let events = self
+            .store
+            .list_events(logbook_id)
+            .await
+            .map_err(|error| ApiError::Store(error.to_string()))?;
+        let mut projection = NetControlProjection::new();
+        projection
+            .rebuild(events.iter())
+            .map_err(|error| ApiError::Store(error.to_string()))?;
+        Ok(projection)
+    }
+
+    async fn default_station_coordinate(
+        &self,
+        account_id: Uuid,
+        logbook_id: Uuid,
+    ) -> Option<Coordinate> {
+        let state = self.state.read().await;
+        state
+            .station_profiles
+            .values()
+            .find(|profile| {
+                profile.account_id == account_id
+                    && profile.logbook_id == logbook_id
+                    && profile.is_default
+            })
+            .or_else(|| {
+                state.station_profiles.values().find(|profile| {
+                    profile.account_id == account_id && profile.logbook_id == logbook_id
+                })
+            })
+            .and_then(|profile| profile.profile.default_grid.as_deref())
+            .and_then(|grid| ham_core::maidenhead_to_coordinate(grid).ok())
+    }
+
     async fn logbook_head(&self, logbook_id: Uuid) -> Result<LogbookHeadSummary, ApiError> {
         let events = self
             .store
@@ -2666,6 +3567,21 @@ fn qso_response(record: &ham_core::QsoRecord) -> QsoRecordResponse {
     }
 }
 
+fn activation_response(record: &ham_core::ActivationRecord) -> Value {
+    json!({
+        "activation_id": record.activation_id,
+        "payload": record.payload,
+        "status": record.status,
+        "note_history": record.note_history,
+        "linked_qsos": record.linked_qsos,
+        "qso_count": record.qso_count,
+        "unique_callsign_count": record.unique_callsign_count,
+        "band_summary": record.band_summary,
+        "mode_summary": record.mode_summary,
+        "last_event_hash": record.last_event_hash,
+    })
+}
+
 fn core_gui_manifest() -> PluginManifest {
     PluginManifest::new(
         "core.gui",
@@ -2678,6 +3594,14 @@ fn core_gui_manifest() -> PluginManifest {
             PluginCapability::QsoDelete,
             PluginCapability::QsoRestore,
             PluginCapability::QsoNoteAdd,
+            PluginCapability::ActivationCreate,
+            PluginCapability::ActivationUpdate,
+            PluginCapability::ActivationEnd,
+            PluginCapability::NetSessionStart,
+            PluginCapability::NetSessionEnd,
+            PluginCapability::NetCheckinCreate,
+            PluginCapability::NetCheckinUpdate,
+            PluginCapability::NetTrafficManage,
         ],
     )
 }
@@ -2956,6 +3880,373 @@ fn upload_summary(uploads: &[HostedUploadJob]) -> Value {
     })
 }
 
+fn activation_payload(
+    input: ActivationWriteRequest,
+    require_started: bool,
+) -> Result<Value, ApiError> {
+    let station_callsign = input
+        .station_callsign
+        .clone()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "KE8YGW".to_owned());
+    let operator_callsign = input
+        .operator_callsign
+        .clone()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| station_callsign.clone());
+    let mut payload = json!({
+        "activation_type": input.activation_type.trim().to_ascii_lowercase(),
+        "station_callsign": station_callsign,
+        "operator_callsign": operator_callsign,
+    });
+    if require_started {
+        payload["started_at"] = json!(input
+            .started_at
+            .clone()
+            .unwrap_or_else(|| Utc::now().to_rfc3339()));
+    } else if let Some(started_at) = input.started_at.clone() {
+        payload["started_at"] = json!(started_at);
+    }
+    merge_activation_optional_fields(&mut payload, &input);
+    merge_extra_fields(&mut payload, input.fields);
+    Ok(payload)
+}
+
+fn activation_patch_payload(input: ActivationWriteRequest) -> Result<Value, ApiError> {
+    let mut payload = Value::Object(Map::new());
+    if !input.activation_type.trim().is_empty() {
+        payload["activation_type"] = json!(input.activation_type.trim().to_ascii_lowercase());
+    }
+    if let Some(value) = input
+        .station_callsign
+        .clone()
+        .filter(|value| !value.trim().is_empty())
+    {
+        payload["station_callsign"] = json!(value);
+    }
+    if let Some(value) = input
+        .operator_callsign
+        .clone()
+        .filter(|value| !value.trim().is_empty())
+    {
+        payload["operator_callsign"] = json!(value);
+    }
+    if let Some(value) = input.started_at.clone() {
+        payload["started_at"] = json!(value);
+    }
+    if let Some(value) = input.ended_at.clone() {
+        payload["ended_at"] = json!(value);
+    }
+    merge_activation_optional_fields(&mut payload, &input);
+    merge_extra_fields(&mut payload, input.fields);
+    if payload.as_object().is_some_and(Map::is_empty) {
+        return Err(ApiError::BadRequest(
+            "activation patch payload must not be empty".to_owned(),
+        ));
+    }
+    Ok(payload)
+}
+
+fn merge_activation_optional_fields(payload: &mut Value, input: &ActivationWriteRequest) {
+    if let Some(value) = &input.park_id {
+        payload["park_id"] = json!(value);
+    }
+    if let Some(value) = &input.summit_id {
+        payload["summit_id"] = json!(value);
+    }
+    if let Some(value) = &input.reference {
+        payload["reference"] = json!(value);
+    }
+    if let Some(value) = &input.name {
+        payload["name"] = json!(value);
+    }
+    if let Some(value) = &input.notes {
+        payload["notes"] = json!(value);
+    }
+}
+
+fn net_session_start_payload(input: NetSessionWriteRequest) -> Result<Value, ApiError> {
+    let station_callsign = input
+        .station_callsign
+        .clone()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "KE8YGW".to_owned());
+    let net_control_operator_id = input
+        .net_control_operator_id
+        .clone()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| Uuid::new_v4().to_string());
+    let net_name = input
+        .net_name
+        .clone()
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| ApiError::BadRequest("net_name is required".to_owned()))?;
+    let mut payload = json!({
+        "station_callsign": station_callsign,
+        "net_control_operator_id": net_control_operator_id,
+        "net_name": net_name,
+        "started_at": input.started_at.clone().unwrap_or_else(|| Utc::now().to_rfc3339()),
+    });
+    merge_net_session_optional_fields(&mut payload, &input);
+    merge_extra_fields(&mut payload, input.fields);
+    Ok(payload)
+}
+
+fn net_session_end_payload(input: NetSessionWriteRequest) -> Value {
+    let mut payload = json!({
+        "ended_at": input.ended_at.unwrap_or_else(|| Utc::now().to_rfc3339()),
+    });
+    if let Some(notes) = input.notes {
+        payload["notes"] = json!(notes);
+    }
+    merge_extra_fields(&mut payload, input.fields);
+    payload
+}
+
+fn merge_net_session_optional_fields(payload: &mut Value, input: &NetSessionWriteRequest) {
+    if let Some(value) = input.frequency_hz {
+        payload["frequency_hz"] = json!(value);
+    }
+    if let Some(value) = &input.band {
+        payload["band"] = json!(value);
+    }
+    if let Some(value) = &input.mode {
+        payload["mode"] = json!(value);
+    }
+    if let Some(value) = &input.notes {
+        payload["notes"] = json!(value);
+    }
+}
+
+fn net_checkin_payload(session_id: Uuid, input: NetCheckInWriteRequest) -> Result<Value, ApiError> {
+    let tactical_only = input.tactical_only.unwrap_or(false);
+    let mut payload = json!({
+        "net_session_id": session_id,
+        "checkin_time": input.checkin_time.unwrap_or_else(|| Utc::now().to_rfc3339()),
+        "tactical_only": tactical_only,
+    });
+    if !tactical_only {
+        let callsign = input
+            .callsign
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| ApiError::BadRequest("callsign is required".to_owned()))?;
+        payload["callsign"] = json!(callsign.trim().to_ascii_uppercase());
+    }
+    if let Some(value) = input.tactical_callsign {
+        payload["tactical_callsign"] = json!(value);
+    }
+    if let Some(value) = input.status {
+        payload["status"] = json!(value);
+    }
+    if let Some(value) = input.traffic {
+        payload["traffic"] = json!(value);
+    }
+    if let Some(value) = input.notes {
+        payload["notes"] = json!(value);
+    }
+    merge_extra_fields(&mut payload, input.fields);
+    Ok(payload)
+}
+
+fn net_checkin_patch_payload(
+    session_id: Uuid,
+    input: NetCheckInWriteRequest,
+) -> Result<Value, ApiError> {
+    let mut payload = json!({"net_session_id": session_id});
+    if let Some(value) = input.callsign.filter(|value| !value.trim().is_empty()) {
+        payload["callsign"] = json!(value.trim().to_ascii_uppercase());
+    }
+    if let Some(value) = input.tactical_callsign {
+        payload["tactical_callsign"] = json!(value);
+    }
+    if let Some(value) = input.tactical_only {
+        payload["tactical_only"] = json!(value);
+    }
+    if let Some(value) = input.checkin_time {
+        payload["checkin_time"] = json!(value);
+    }
+    if let Some(value) = input.status {
+        payload["status"] = json!(value);
+    }
+    if let Some(value) = input.traffic {
+        payload["traffic"] = json!(value);
+    }
+    if let Some(value) = input.notes {
+        payload["notes"] = json!(value);
+    }
+    merge_extra_fields(&mut payload, input.fields);
+    Ok(payload)
+}
+
+fn net_traffic_payload(session_id: Uuid, input: NetTrafficWriteRequest) -> Result<Value, ApiError> {
+    let summary = input
+        .summary
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| ApiError::BadRequest("summary is required".to_owned()))?;
+    let mut payload = json!({
+        "net_session_id": session_id,
+        "summary": summary,
+    });
+    if let Some(value) = input.precedence {
+        payload["precedence"] = json!(value);
+    }
+    if let Some(value) = input.status {
+        payload["status"] = json!(value);
+    }
+    if let Some(value) = input.handling_notes {
+        payload["handling_notes"] = json!(value);
+    }
+    merge_extra_fields(&mut payload, input.fields);
+    Ok(payload)
+}
+
+fn build_backup_record(
+    state: &ServerState,
+    account_id: Uuid,
+    logbook_id: Uuid,
+    events: Vec<CoreEventEnvelope>,
+) -> Result<HostedBackupRecord, ApiError> {
+    let station_profiles = state
+        .station_profiles
+        .values()
+        .filter(|profile| profile.account_id == account_id && profile.logbook_id == logbook_id)
+        .cloned()
+        .collect::<Vec<_>>();
+    let equipment = state
+        .equipment_profiles
+        .values()
+        .filter(|equipment| {
+            equipment.account_id == account_id && equipment.logbook_id == logbook_id
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    let provider_settings = state
+        .provider_settings
+        .values()
+        .filter(|setting| setting.account_id == account_id && setting.logbook_id == logbook_id)
+        .cloned()
+        .collect::<Vec<_>>();
+    let uploads = state
+        .upload_jobs
+        .values()
+        .filter(|job| job.account_id == account_id && job.logbook_id == logbook_id)
+        .cloned()
+        .collect::<Vec<_>>();
+    let map_settings = state.map_settings.get(&logbook_id).cloned();
+    let head_hash = events.last().map(|event| event.event_hash.clone());
+    let manifest = json!({
+        "format_version": 1,
+        "created_at": Utc::now(),
+        "app_version": env!("CARGO_PKG_VERSION"),
+        "account_id": account_id,
+        "logbook_id": logbook_id,
+        "head_hash": head_hash,
+        "event_count": events.len(),
+        "included_sections": [
+            "official_events",
+            "station_profiles",
+            "equipment_profiles",
+            "provider_settings_without_secrets",
+            "upload_queue_history",
+            "map_preferences"
+        ],
+        "excluded_sections": ["credential_secret_values", "raw_session_tokens", "device_tokens", "runtime_logs"]
+    });
+    let payload = json!({
+        "manifest": manifest,
+        "official_events": events,
+        "station_profiles": station_profiles,
+        "equipment_profiles": equipment,
+        "provider_settings": provider_settings,
+        "upload_queue_history": uploads,
+        "map_settings": map_settings,
+    });
+    if payload
+        .to_string()
+        .to_ascii_lowercase()
+        .contains("test-secret")
+    {
+        return Err(ApiError::Store(
+            "backup payload contains a test secret".to_owned(),
+        ));
+    }
+    Ok(HostedBackupRecord {
+        backup_id: Uuid::new_v4(),
+        account_id,
+        logbook_id,
+        created_at: Utc::now(),
+        manifest,
+        payload,
+    })
+}
+
+fn validate_backup_dry_run(logbook_id: Uuid, backup: &Value) -> Value {
+    let Some(manifest) = backup.get("manifest") else {
+        return json!({"ok": false, "errors": ["backup manifest is required"], "warnings": []});
+    };
+    if manifest.get("format_version").and_then(Value::as_u64) != Some(1) {
+        return json!({"ok": false, "errors": ["unsupported backup format_version"], "warnings": []});
+    }
+    let manifest_logbook = manifest
+        .get("logbook_id")
+        .and_then(Value::as_str)
+        .and_then(|value| Uuid::parse_str(value).ok());
+    if manifest_logbook != Some(logbook_id) {
+        return json!({"ok": false, "errors": ["backup logbook_id does not match target"], "warnings": []});
+    }
+    let events = backup
+        .get("official_events")
+        .cloned()
+        .unwrap_or_else(|| json!([]));
+    let parsed = serde_json::from_value::<Vec<CoreEventEnvelope>>(events);
+    let Ok(events) = parsed else {
+        return json!({"ok": false, "errors": ["official_events could not deserialize"], "warnings": []});
+    };
+    let mut previous_hash = None;
+    let mut errors = Vec::new();
+    for event in &events {
+        if event.logbook_id != logbook_id {
+            errors.push(format!(
+                "event {} belongs to another logbook",
+                event.event_id
+            ));
+        }
+        if !event.hash_is_valid() {
+            errors.push(format!("event {} has an invalid hash", event.event_id));
+        }
+        if event.previous_hash != previous_hash {
+            errors.push(format!(
+                "event {} breaks previous_hash continuity",
+                event.event_id
+            ));
+        }
+        previous_hash = Some(event.event_hash.clone());
+    }
+    let missing_credentials = backup
+        .get("provider_settings")
+        .and_then(Value::as_array)
+        .map(|settings| {
+            settings
+                .iter()
+                .filter(|setting| {
+                    setting
+                        .get("credential_id")
+                        .is_none_or(|value| value.is_null())
+                })
+                .count()
+        })
+        .unwrap_or(0);
+    json!({
+        "ok": errors.is_empty(),
+        "errors": errors,
+        "warnings": if missing_credentials > 0 { vec![format!("{missing_credentials} provider settings are missing credential references")] } else { Vec::<String>::new() },
+        "event_count": events.len(),
+        "head_hash": previous_hash,
+        "would_import": false,
+        "requires_manual_review": true
+    })
+}
+
 fn route_catalog() -> RouteCatalogResponse {
     RouteCatalogResponse {
         implemented: vec![
@@ -2988,6 +4279,31 @@ fn route_catalog() -> RouteCatalogResponse {
             "POST /api/v1/equipment/:id/archive".to_owned(),
             "POST /api/v1/adif/import".to_owned(),
             "GET /api/v1/adif/export".to_owned(),
+            "GET /api/v1/activations".to_owned(),
+            "POST /api/v1/activations".to_owned(),
+            "GET /api/v1/activations/:id".to_owned(),
+            "PATCH /api/v1/activations/:id".to_owned(),
+            "POST /api/v1/activations/:id/end".to_owned(),
+            "GET /api/v1/activations/:id/qsos".to_owned(),
+            "GET /api/v1/net-control/sessions".to_owned(),
+            "POST /api/v1/net-control/sessions".to_owned(),
+            "GET /api/v1/net-control/sessions/:id".to_owned(),
+            "PATCH /api/v1/net-control/sessions/:id".to_owned(),
+            "POST /api/v1/net-control/sessions/:id/start".to_owned(),
+            "POST /api/v1/net-control/sessions/:id/end".to_owned(),
+            "POST /api/v1/net-control/sessions/:id/checkins".to_owned(),
+            "PATCH /api/v1/net-control/sessions/:id/checkins/:id".to_owned(),
+            "POST /api/v1/net-control/sessions/:id/traffic".to_owned(),
+            "GET /api/v1/maps/qsos".to_owned(),
+            "GET /api/v1/maps/stations".to_owned(),
+            "GET /api/v1/maps/paths".to_owned(),
+            "GET /api/v1/maps/settings".to_owned(),
+            "PATCH /api/v1/maps/settings".to_owned(),
+            "POST /api/v1/backups/export".to_owned(),
+            "GET /api/v1/backups".to_owned(),
+            "GET /api/v1/backups/:id".to_owned(),
+            "GET /api/v1/backups/:id/download".to_owned(),
+            "POST /api/v1/backups/import/dry-run".to_owned(),
             "GET /api/v1/providers".to_owned(),
             "GET /api/v1/providers/:id".to_owned(),
             "PATCH /api/v1/providers/:id".to_owned(),
@@ -2999,6 +4315,9 @@ fn route_catalog() -> RouteCatalogResponse {
             "POST /api/v1/sync/preview".to_owned(),
             "POST /api/v1/sync/push".to_owned(),
             "POST /api/v1/sync/pull".to_owned(),
+            "POST /api/v1/sync/divergence/review".to_owned(),
+            "GET /api/v1/sync/divergence/:id".to_owned(),
+            "POST /api/v1/sync/divergence/:id/export".to_owned(),
             "GET /api/v1/devices".to_owned(),
             "POST /api/v1/devices".to_owned(),
             "POST /api/v1/devices/:id/revoke".to_owned(),
@@ -3010,18 +4329,7 @@ fn route_catalog() -> RouteCatalogResponse {
     }
 }
 
-const SCAFFOLDED_ROUTES: &[&str] = &[
-    "GET /api/v1/activations",
-    "POST /api/v1/activations",
-    "PATCH /api/v1/activations/:id",
-    "GET /api/v1/net-control/sessions",
-    "POST /api/v1/net-control/sessions",
-    "PATCH /api/v1/net-control/sessions/:id",
-    "POST /api/v1/net-control/sessions/:id/checkins",
-    "GET /api/v1/maps/qsos",
-    "GET /api/v1/maps/settings",
-    "PATCH /api/v1/maps/settings",
-];
+const SCAFFOLDED_ROUTES: &[&str] = &[];
 
 fn is_scaffolded_route(method: &str, segments: &[&str]) -> bool {
     let route = format!("{method} {}", route_pattern(segments));
@@ -3040,8 +4348,11 @@ fn route_pattern(segments: &[&str]) -> String {
                             | "equipment"
                             | "activations"
                             | "sessions"
+                            | "checkins"
                             | "providers"
                             | "uploads"
+                            | "backups"
+                            | "divergence"
                             | "devices"
                     )
                 }))
@@ -3435,20 +4746,19 @@ mod tests {
             .implemented
             .contains(&"POST /api/v1/adif/import".to_owned()));
         assert!(catalog
-            .scaffolded
+            .implemented
             .contains(&"GET /api/v1/activations".to_owned()));
+        assert!(catalog
+            .implemented
+            .contains(&"POST /api/v1/sync/divergence/review".to_owned()));
+        assert!(catalog.scaffolded.is_empty());
     }
 
     #[tokio::test]
-    async fn remaining_scaffolded_routes_are_reserved() {
+    async fn unknown_routes_return_not_found() {
         let server = HostedServer::new();
-        let (token, _, _) = login(&server, "owner@example.test").await;
-        let response = server
-            .handle(ApiRequest::get("/api/v1/maps/qsos").with_bearer(token))
-            .await;
-        assert_eq!(response.status, 200);
-        let payload: Value = response.json();
-        assert_eq!(payload["implemented"], false);
+        let response = server.handle(ApiRequest::get("/api/v1/not-a-route")).await;
+        assert_eq!(response.status, 404);
     }
 
     #[tokio::test]
@@ -3617,6 +4927,301 @@ mod tests {
             )
             .await;
         assert_eq!(equipment_after_reload.status, 200);
+    }
+
+    #[tokio::test]
+    async fn activation_routes_use_official_proposals_and_roles() {
+        let server = HostedServer::new();
+        let (owner_token, logbook_id, _) = login(&server, "owner@example.test").await;
+        let (operator_token, _, _) = login(&server, "operator@example.test").await;
+        let (viewer_token, _, _) = login(&server, "viewer@example.test").await;
+        let (other_token, other_logbook, _) = login(&server, "other@example.test").await;
+        server
+            .add_membership_for_email("operator@example.test", logbook_id, LogbookRole::Operator)
+            .await
+            .unwrap();
+        server
+            .add_membership_for_email("viewer@example.test", logbook_id, LogbookRole::Viewer)
+            .await
+            .unwrap();
+
+        let operator_write = server
+            .handle(
+                ApiRequest::json(
+                    "POST",
+                    "/api/v1/activations",
+                    &ActivationWriteRequest {
+                        logbook_id,
+                        activation_type: "pota".to_owned(),
+                        station_callsign: Some("KE8YGW".to_owned()),
+                        operator_callsign: Some("KE8YGW".to_owned()),
+                        started_at: Some("2026-07-08T12:00:00Z".to_owned()),
+                        ended_at: None,
+                        park_id: Some("US-1234".to_owned()),
+                        summit_id: None,
+                        reference: None,
+                        name: Some("Park".to_owned()),
+                        notes: None,
+                        fields: Map::new(),
+                    },
+                )
+                .with_bearer(&operator_token),
+            )
+            .await;
+        assert_eq!(operator_write.status, 403);
+
+        let created = server
+            .handle(
+                ApiRequest::json(
+                    "POST",
+                    "/api/v1/activations",
+                    &ActivationWriteRequest {
+                        logbook_id,
+                        activation_type: "pota".to_owned(),
+                        station_callsign: Some("KE8YGW".to_owned()),
+                        operator_callsign: Some("KE8YGW".to_owned()),
+                        started_at: Some("2026-07-08T12:00:00Z".to_owned()),
+                        ended_at: None,
+                        park_id: Some("US-1234".to_owned()),
+                        summit_id: None,
+                        reference: None,
+                        name: Some("Park".to_owned()),
+                        notes: None,
+                        fields: Map::new(),
+                    },
+                )
+                .with_bearer(&owner_token),
+            )
+            .await;
+        assert_eq!(created.status, 200);
+        let created: Value = created.json();
+        let activation_id = created["event"]["entity_id"]
+            .as_str()
+            .and_then(|value| Uuid::parse_str(value).ok())
+            .unwrap();
+        assert_eq!(
+            created["event"]["event_type"],
+            "official.log.activation.started"
+        );
+
+        let viewer_write = server
+            .handle(
+                ApiRequest::json(
+                    "POST",
+                    "/api/v1/activations",
+                    &ActivationWriteRequest {
+                        logbook_id,
+                        activation_type: "pota".to_owned(),
+                        station_callsign: Some("KE8YGW".to_owned()),
+                        operator_callsign: Some("KE8YGW".to_owned()),
+                        started_at: Some("2026-07-08T12:00:00Z".to_owned()),
+                        ended_at: None,
+                        park_id: Some("US-0001".to_owned()),
+                        summit_id: None,
+                        reference: None,
+                        name: None,
+                        notes: None,
+                        fields: Map::new(),
+                    },
+                )
+                .with_bearer(&viewer_token),
+            )
+            .await;
+        assert_eq!(viewer_write.status, 403);
+
+        let list = server
+            .handle(
+                ApiRequest::get(format!("/api/v1/activations?logbook_id={logbook_id}"))
+                    .with_bearer(&owner_token),
+            )
+            .await;
+        assert_eq!(list.status, 200);
+        assert_eq!(
+            list.json::<Value>()["activations"][0]["status"],
+            Value::String("active".to_owned())
+        );
+
+        let end = server
+            .handle(
+                ApiRequest::json(
+                    "POST",
+                    format!("/api/v1/activations/{activation_id}/end"),
+                    &ActivationWriteRequest {
+                        logbook_id,
+                        activation_type: "pota".to_owned(),
+                        station_callsign: None,
+                        operator_callsign: None,
+                        started_at: None,
+                        ended_at: Some("2026-07-08T13:00:00Z".to_owned()),
+                        park_id: None,
+                        summit_id: None,
+                        reference: None,
+                        name: None,
+                        notes: None,
+                        fields: Map::new(),
+                    },
+                )
+                .with_bearer(&owner_token),
+            )
+            .await;
+        assert_eq!(end.status, 200);
+        assert_eq!(
+            end.json::<Value>()["event"]["event_type"],
+            "official.log.activation.ended"
+        );
+
+        let cross = server
+            .handle(
+                ApiRequest::get(format!(
+                    "/api/v1/activations/{activation_id}?logbook_id={other_logbook}"
+                ))
+                .with_bearer(&other_token),
+            )
+            .await;
+        assert_eq!(cross.status, 404);
+    }
+
+    #[tokio::test]
+    async fn net_control_routes_use_official_proposals_and_roles() {
+        let server = HostedServer::new();
+        let (owner_token, logbook_id, _) = login(&server, "owner@example.test").await;
+        let (viewer_token, _, _) = login(&server, "viewer@example.test").await;
+        server
+            .add_membership_for_email("viewer@example.test", logbook_id, LogbookRole::Viewer)
+            .await
+            .unwrap();
+
+        let created = server
+            .handle(
+                ApiRequest::json(
+                    "POST",
+                    "/api/v1/net-control/sessions",
+                    &NetSessionWriteRequest {
+                        logbook_id,
+                        station_callsign: Some("KE8YGW".to_owned()),
+                        net_control_operator_id: Some(Uuid::new_v4().to_string()),
+                        net_name: Some("Weekly Net".to_owned()),
+                        started_at: Some("2026-07-08T00:00:00Z".to_owned()),
+                        ended_at: None,
+                        frequency_hz: Some(146_520_000),
+                        band: Some("2m".to_owned()),
+                        mode: Some("FM".to_owned()),
+                        notes: None,
+                        fields: Map::new(),
+                    },
+                )
+                .with_bearer(&owner_token),
+            )
+            .await;
+        assert_eq!(created.status, 200);
+        let session_id = created.json::<Value>()["event"]["entity_id"]
+            .as_str()
+            .and_then(|value| Uuid::parse_str(value).ok())
+            .unwrap();
+
+        let checkin = server
+            .handle(
+                ApiRequest::json(
+                    "POST",
+                    format!("/api/v1/net-control/sessions/{session_id}/checkins"),
+                    &NetCheckInWriteRequest {
+                        logbook_id,
+                        callsign: Some("K1ABC".to_owned()),
+                        tactical_callsign: None,
+                        tactical_only: None,
+                        checkin_time: Some("2026-07-08T00:01:00Z".to_owned()),
+                        status: None,
+                        traffic: Some("listed".to_owned()),
+                        notes: None,
+                        fields: Map::new(),
+                    },
+                )
+                .with_bearer(&owner_token),
+            )
+            .await;
+        assert_eq!(checkin.status, 200);
+        let checkin_id = checkin.json::<Value>()["event"]["entity_id"]
+            .as_str()
+            .and_then(|value| Uuid::parse_str(value).ok())
+            .unwrap();
+
+        let updated = server
+            .handle(
+                ApiRequest::json(
+                    "PATCH",
+                    format!("/api/v1/net-control/sessions/{session_id}/checkins/{checkin_id}"),
+                    &NetCheckInWriteRequest {
+                        logbook_id,
+                        callsign: Some("K1ABC".to_owned()),
+                        tactical_callsign: Some("Alpha".to_owned()),
+                        tactical_only: None,
+                        checkin_time: None,
+                        status: Some("late".to_owned()),
+                        traffic: None,
+                        notes: None,
+                        fields: Map::new(),
+                    },
+                )
+                .with_bearer(&owner_token),
+            )
+            .await;
+        assert_eq!(updated.status, 200);
+
+        let traffic = server
+            .handle(
+                ApiRequest::json(
+                    "POST",
+                    format!("/api/v1/net-control/sessions/{session_id}/traffic"),
+                    &NetTrafficWriteRequest {
+                        logbook_id,
+                        summary: Some("Need relay".to_owned()),
+                        precedence: Some("routine".to_owned()),
+                        status: None,
+                        handling_notes: None,
+                        fields: Map::new(),
+                    },
+                )
+                .with_bearer(&owner_token),
+            )
+            .await;
+        assert_eq!(traffic.status, 200);
+
+        let viewer_end = server
+            .handle(
+                ApiRequest::json(
+                    "POST",
+                    format!("/api/v1/net-control/sessions/{session_id}/end"),
+                    &NetSessionWriteRequest {
+                        logbook_id,
+                        station_callsign: None,
+                        net_control_operator_id: None,
+                        net_name: None,
+                        started_at: None,
+                        ended_at: Some("2026-07-08T01:00:00Z".to_owned()),
+                        frequency_hz: None,
+                        band: None,
+                        mode: None,
+                        notes: None,
+                        fields: Map::new(),
+                    },
+                )
+                .with_bearer(&viewer_token),
+            )
+            .await;
+        assert_eq!(viewer_end.status, 403);
+
+        let detail = server
+            .handle(
+                ApiRequest::get(format!(
+                    "/api/v1/net-control/sessions/{session_id}?logbook_id={logbook_id}"
+                ))
+                .with_bearer(&owner_token),
+            )
+            .await;
+        assert_eq!(detail.status, 200);
+        let detail: Value = detail.json();
+        assert_eq!(detail["session"]["checkin_count"], 1);
+        assert_eq!(detail["traffic"].as_array().unwrap().len(), 1);
     }
 
     #[tokio::test]
@@ -3842,6 +5447,352 @@ mod tests {
         let uploads: Value = uploads.json();
         assert_eq!(uploads["uploads"].as_array().unwrap().len(), 1);
         assert_eq!(uploads["uploads"][0]["status"], "succeeded");
+    }
+
+    #[tokio::test]
+    async fn map_routes_derive_from_projection_and_persist_settings() {
+        let path = surreal_test_path("maps");
+        let server = open_surreal_test_server(&path);
+        let (owner_token, logbook_id, _) = login(&server, "owner@example.test").await;
+        let (viewer_token, _, _) = login(&server, "viewer@example.test").await;
+        let (other_token, other_logbook, _) = login(&server, "other@example.test").await;
+        server
+            .add_membership_for_email("viewer@example.test", logbook_id, LogbookRole::Viewer)
+            .await
+            .unwrap();
+
+        let station = server
+            .handle(
+                ApiRequest::json(
+                    "POST",
+                    "/api/v1/station-profiles",
+                    &StationProfileRequest {
+                        logbook_id,
+                        display_name: Some("Home".to_owned()),
+                        station_callsign: Some("KE8YGW".to_owned()),
+                        operator_callsign: None,
+                        default_grid: Some("EN80".to_owned()),
+                        default_qth: None,
+                        default_power_watts: None,
+                        notes: None,
+                        tags: vec![],
+                        active: Some(true),
+                    },
+                )
+                .with_bearer(&owner_token),
+            )
+            .await;
+        assert_eq!(station.status, 200);
+
+        let mut fields = Map::new();
+        fields.insert("grid".to_owned(), Value::String("FN31".to_owned()));
+        create_qso(&server, &owner_token, logbook_id).await;
+        let mapped_qso = server
+            .handle(
+                ApiRequest::json(
+                    "POST",
+                    "/api/v1/qsos",
+                    &QsoWriteRequest {
+                        logbook_id,
+                        contacted_callsign: Some("W1AW".to_owned()),
+                        station_callsign: Some("KE8YGW".to_owned()),
+                        operator_callsign: Some("KE8YGW".to_owned()),
+                        started_at: Some("2026-07-08T00:10:00Z".to_owned()),
+                        mode: Some("SSB".to_owned()),
+                        band: Some("20m".to_owned()),
+                        frequency_hz: None,
+                        notes: None,
+                        fields,
+                    },
+                )
+                .with_bearer(&owner_token),
+            )
+            .await;
+        assert_eq!(mapped_qso.status, 200);
+
+        let markers = server
+            .handle(
+                ApiRequest::get(format!("/api/v1/maps/qsos?logbook_id={logbook_id}"))
+                    .with_bearer(&owner_token),
+            )
+            .await;
+        assert_eq!(markers.status, 200);
+        let markers: Value = markers.json();
+        assert_eq!(markers["markers"].as_array().unwrap().len(), 1);
+        assert_eq!(markers["markers"][0]["marker"]["title"], "W1AW");
+
+        let other_markers = server
+            .handle(
+                ApiRequest::get(format!("/api/v1/maps/qsos?logbook_id={other_logbook}"))
+                    .with_bearer(&other_token),
+            )
+            .await;
+        assert_eq!(other_markers.status, 200);
+        assert!(other_markers.json::<Value>()["markers"]
+            .as_array()
+            .unwrap()
+            .is_empty());
+
+        let viewer_patch = server
+            .handle(
+                ApiRequest::json(
+                    "PATCH",
+                    "/api/v1/maps/settings",
+                    &MapSettingsPatchRequest {
+                        logbook_id,
+                        layer_id: Some("grid".to_owned()),
+                        enabled: Some(false),
+                        order: None,
+                    },
+                )
+                .with_bearer(&viewer_token),
+            )
+            .await;
+        assert_eq!(viewer_patch.status, 403);
+
+        let settings = server
+            .handle(
+                ApiRequest::json(
+                    "PATCH",
+                    "/api/v1/maps/settings",
+                    &MapSettingsPatchRequest {
+                        logbook_id,
+                        layer_id: Some("grid".to_owned()),
+                        enabled: Some(false),
+                        order: Some(5),
+                    },
+                )
+                .with_bearer(&owner_token),
+            )
+            .await;
+        assert_eq!(settings.status, 200);
+        server.reload_metadata_from_store().await.unwrap();
+        let settings = server
+            .handle(
+                ApiRequest::get(format!("/api/v1/maps/settings?logbook_id={logbook_id}"))
+                    .with_bearer(&owner_token),
+            )
+            .await;
+        assert_eq!(settings.status, 200);
+        let settings: Value = settings.json();
+        let grid = settings["map_settings"]["layers"]["layers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|layer| layer["layer_id"] == "grid")
+            .unwrap();
+        assert_eq!(grid["enabled"], false);
+        assert_eq!(grid["order"], 5);
+    }
+
+    #[tokio::test]
+    async fn backup_export_and_dry_run_are_scoped_and_redacted() {
+        let path = surreal_test_path("backups");
+        let server = open_surreal_test_server(&path);
+        let (owner_token, logbook_id, _) = login(&server, "owner@example.test").await;
+        let (other_token, other_logbook, _) = login(&server, "other@example.test").await;
+        create_qso(&server, &owner_token, logbook_id).await;
+        let patched = server
+            .handle(
+                ApiRequest::json(
+                    "PATCH",
+                    "/api/v1/providers/lotw-stub",
+                    &ProviderPatchRequest {
+                        logbook_id,
+                        enabled: Some(true),
+                        credential_id: Some("cred-lotw".to_owned()),
+                        config: Map::from_iter([("mock_mode".to_owned(), Value::Bool(true))]),
+                    },
+                )
+                .with_bearer(&owner_token),
+            )
+            .await;
+        assert_eq!(patched.status, 200);
+
+        let backup = server
+            .handle(
+                ApiRequest::json(
+                    "POST",
+                    "/api/v1/backups/export",
+                    &BackupExportRequest {
+                        logbook_id,
+                        include_runtime_logs: None,
+                    },
+                )
+                .with_bearer(&owner_token),
+            )
+            .await;
+        assert_eq!(backup.status, 200);
+        let backup: Value = backup.json();
+        assert_eq!(
+            backup["backup"]["manifest"]["format_version"],
+            Value::Number(1.into())
+        );
+        assert_eq!(
+            backup["backup"]["payload"]["official_events"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(!backup.to_string().contains("test-secret"));
+
+        let dry_run = server
+            .handle(
+                ApiRequest::json(
+                    "POST",
+                    "/api/v1/backups/import/dry-run",
+                    &BackupDryRunRequest {
+                        logbook_id,
+                        backup: backup["backup"]["payload"].clone(),
+                    },
+                )
+                .with_bearer(&owner_token),
+            )
+            .await;
+        assert_eq!(dry_run.status, 200);
+        assert_eq!(dry_run.json::<Value>()["ok"], true);
+
+        let invalid = server
+            .handle(
+                ApiRequest::json(
+                    "POST",
+                    "/api/v1/backups/import/dry-run",
+                    &BackupDryRunRequest {
+                        logbook_id,
+                        backup: json!({"manifest": {"format_version": 99, "logbook_id": logbook_id}}),
+                    },
+                )
+                .with_bearer(&owner_token),
+            )
+            .await;
+        assert_eq!(invalid.status, 200);
+        assert_eq!(invalid.json::<Value>()["ok"], false);
+
+        let cross = server
+            .handle(
+                ApiRequest::json(
+                    "POST",
+                    "/api/v1/backups/export",
+                    &BackupExportRequest {
+                        logbook_id,
+                        include_runtime_logs: None,
+                    },
+                )
+                .with_bearer(&other_token),
+            )
+            .await;
+        assert_eq!(cross.status, 403);
+
+        let other_backup = server
+            .handle(
+                ApiRequest::json(
+                    "POST",
+                    "/api/v1/backups/export",
+                    &BackupExportRequest {
+                        logbook_id: other_logbook,
+                        include_runtime_logs: None,
+                    },
+                )
+                .with_bearer(&other_token),
+            )
+            .await;
+        assert_eq!(other_backup.status, 200);
+        assert!(
+            other_backup.json::<Value>()["backup"]["payload"]["official_events"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn divergence_review_reports_safe_and_divergent_states() {
+        let path = surreal_test_path("divergence");
+        let server = open_surreal_test_server(&path);
+        let (owner_token, logbook_id, device_id) = login(&server, "owner@example.test").await;
+        create_qso(&server, &owner_token, logbook_id).await;
+
+        let review = server
+            .handle(
+                ApiRequest::json(
+                    "POST",
+                    "/api/v1/sync/divergence/review",
+                    &DivergenceReviewRequest {
+                        logbook_id,
+                        local_head_hash: None,
+                        client_events: vec![],
+                    },
+                )
+                .with_bearer(&owner_token),
+            )
+            .await;
+        assert_eq!(review.status, 200);
+        let review: Value = review.json();
+        assert_eq!(review["review"]["can_safely_pull"], true);
+        assert_eq!(review["review"]["divergence_detected"], false);
+        let report_id = review["report_id"]
+            .as_str()
+            .and_then(|value| Uuid::parse_str(value).ok())
+            .unwrap();
+
+        let divergent = server
+            .handle(
+                ApiRequest::json(
+                    "POST",
+                    "/api/v1/sync/divergence/review",
+                    &DivergenceReviewRequest {
+                        logbook_id,
+                        local_head_hash: Some("not-on-server".to_owned()),
+                        client_events: vec![],
+                    },
+                )
+                .with_bearer(&owner_token),
+            )
+            .await;
+        assert_eq!(divergent.status, 200);
+        assert_eq!(
+            divergent.json::<Value>()["review"]["divergence_detected"],
+            true
+        );
+
+        server.reload_metadata_from_store().await.unwrap();
+        let report = server
+            .handle(
+                ApiRequest::get(format!(
+                    "/api/v1/sync/divergence/{report_id}?logbook_id={logbook_id}"
+                ))
+                .with_bearer(&owner_token),
+            )
+            .await;
+        assert_eq!(report.status, 200);
+
+        let revoke = server
+            .handle(
+                ApiRequest::json(
+                    "POST",
+                    format!("/api/v1/devices/{device_id}/revoke"),
+                    &json!({}),
+                )
+                .with_bearer(&owner_token),
+            )
+            .await;
+        assert_eq!(revoke.status, 200);
+        let denied = server
+            .handle(
+                ApiRequest::json(
+                    "POST",
+                    "/api/v1/sync/divergence/review",
+                    &DivergenceReviewRequest {
+                        logbook_id,
+                        local_head_hash: None,
+                        client_events: vec![],
+                    },
+                )
+                .with_bearer(&owner_token),
+            )
+            .await;
+        assert_eq!(denied.status, 401);
     }
 
     #[tokio::test]
