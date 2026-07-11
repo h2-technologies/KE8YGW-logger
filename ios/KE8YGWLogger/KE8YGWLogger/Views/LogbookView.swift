@@ -3,13 +3,16 @@ import SwiftUI
 
 struct LogbookView: View {
     @Environment(\.modelContext) private var modelContext
+    @EnvironmentObject private var bridge: RustBridgeStore
     @Query(sort: \QSO.contactDate, order: .reverse) private var qsos: [QSO]
     @State private var searchText = ""
+    @State private var deletionMessage: String?
 
     private var filteredQSOs: [QSO] {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
-        guard !query.isEmpty else { return qsos }
-        return qsos.filter { $0.callsign.uppercased().contains(query) }
+        let visible = qsos.filter { !$0.isTombstoned }
+        guard !query.isEmpty else { return visible }
+        return visible.filter { $0.callsign.uppercased().contains(query) }
     }
 
     var body: some View {
@@ -22,15 +25,25 @@ struct LogbookView: View {
                         VStack(alignment: .leading, spacing: 4) {
                             Text(qso.callsign)
                                 .font(.headline)
-                            Text("\(qso.band) \(qso.mode) \(String(format: "%.3f", qso.frequencyMHz)) MHz")
+                            Text("\(qso.qsoKind.capitalized) \(qso.band) \(qso.mode) \(String(format: "%.3f", qso.frequencyMHz)) MHz")
                                 .foregroundStyle(.secondary)
-                            Text(qso.contactDate, style: .date)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+                            HStack {
+                                Text(qso.contactDate, style: .date)
+                                Text(qso.syncStatus.capitalized)
+                                Text(qso.uploadStatus.capitalized)
+                            }
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                         }
                     }
                 }
                 .onDelete(perform: delete)
+            }
+            if let deletionMessage {
+                Section {
+                    Text(deletionMessage)
+                        .foregroundStyle(.secondary)
+                }
             }
         }
         .searchable(text: $searchText, prompt: "Search callsign")
@@ -41,9 +54,44 @@ struct LogbookView: View {
     }
 
     private func delete(at offsets: IndexSet) {
-        for index in offsets {
-            modelContext.delete(filteredQSOs[index])
+        let targets = offsets.map { filteredQSOs[$0] }
+        Task {
+            for qso in targets {
+                await delete(qso)
+            }
         }
-        try? modelContext.save()
+    }
+
+    private func delete(_ qso: QSO) async {
+        do {
+            guard !qso.canonicalID.isEmpty else {
+                qso.isTombstoned = true
+                qso.syncStatus = "legacy_cache_removed"
+                qso.lastProjectionRefreshAt = Date()
+                try modelContext.save()
+                deletionMessage = "Legacy cache row hidden locally; no Rust canonical ID was available."
+                return
+            }
+            let supportURL = try RustBridgePaths.applicationSupportDirectory()
+            let result = try await bridge.deleteQSO(DeleteQSOBridgeRequest(
+                appSupportDir: supportURL.path,
+                qsoId: qso.canonicalID,
+                operationId: UUID().uuidString,
+                deviceId: nil
+            ))
+            guard let record = result.qso else {
+                throw RustBridgeError.invalidResponse
+            }
+            _ = try ProjectionRefreshService.upsertQSO(
+                from: record,
+                event: result.officialEvent,
+                operationID: record.payload.clientOperationId ?? UUID().uuidString,
+                existing: qsos,
+                modelContext: modelContext
+            )
+            deletionMessage = nil
+        } catch {
+            deletionMessage = error.localizedDescription
+        }
     }
 }

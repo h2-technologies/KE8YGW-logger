@@ -7,6 +7,6 @@ struct KE8YGWLoggerApp: App {
         WindowGroup {
             RootView()
         }
-        .modelContainer(for: [QSO.self, StationProfile.self, AppSettings.self])
+        .modelContainer(for: [QSO.self, StationProfile.self, StationEquipment.self, AppSettings.self])
     }
 }

@@ -21,7 +21,7 @@ struct HomeView: View {
                 NavigationLink("Settings", destination: SettingsView())
             }
 
-            Section("Future Modes") {
+            Section("Modes") {
                 Label("POTA/SOTA activation workflow", systemImage: "antenna.radiowaves.left.and.right")
                 Label("Net control mode", systemImage: "person.3.sequence")
                 Label("Local network event sync", systemImage: "network")

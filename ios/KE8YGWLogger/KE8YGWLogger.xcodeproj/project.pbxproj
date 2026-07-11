@@ -21,8 +21,25 @@
 		10000000000000000000010C /* Views/StationProfileView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 10000000000000000000000C /* Views/StationProfileView.swift */; };
 		10000000000000000000010D /* Views/ExportView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 10000000000000000000000D /* Views/ExportView.swift */; };
 		10000000000000000000010E /* Views/SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 10000000000000000000000E /* Views/SettingsView.swift */; };
+		200000000000000000000101 /* Models/StationEquipment.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000001 /* Models/StationEquipment.swift */; };
+		200000000000000000000102 /* Shared/RustBridge/RustBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000002 /* Shared/RustBridge/RustBridge.swift */; };
+		200000000000000000000103 /* Shared/Services/PlatformServices.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000003 /* Shared/Services/PlatformServices.swift */; };
+		200000000000000000000104 /* Shared/Theme/AppTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000004 /* Shared/Theme/AppTheme.swift */; };
+		200000000000000000000105 /* Features/Dashboard/DashboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000005 /* Features/Dashboard/DashboardView.swift */; };
+		200000000000000000000106 /* Features/Logging/LoggingWorkspaceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000006 /* Features/Logging/LoggingWorkspaceView.swift */; };
+		200000000000000000000107 /* Features/Stations/StationManagementView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000007 /* Features/Stations/StationManagementView.swift */; };
+		200000000000000000000108 /* Features/Providers/ProviderStatusView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000008 /* Features/Providers/ProviderStatusView.swift */; };
+		200000000000000000000109 /* Features/Maps/MapWorkspaceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000009 /* Features/Maps/MapWorkspaceView.swift */; };
+		20000000000000000000010A /* Features/Sync/SyncWorkspaceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 20000000000000000000000A /* Features/Sync/SyncWorkspaceView.swift */; };
+		20000000000000000000010B /* Features/POTA/POTAView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 20000000000000000000000B /* Features/POTA/POTAView.swift */; };
+		20000000000000000000010C /* Features/SOTA/SOTAView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 20000000000000000000000C /* Features/SOTA/SOTAView.swift */; };
+		20000000000000000000010D /* Features/NetControl/NetControlView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 20000000000000000000000D /* Features/NetControl/NetControlView.swift */; };
+		20000000000000000000010E /* Features/Diagnostics/DiagnosticsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 20000000000000000000000E /* Features/Diagnostics/DiagnosticsView.swift */; };
+		300000000000000000000101 /* HamIOSFFI.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = 300000000000000000000001 /* HamIOSFFI.xcframework */; };
+		300000000000000000000102 /* Shared/Services/ProjectionRefreshService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 300000000000000000000002 /* Shared/Services/ProjectionRefreshService.swift */; };
 		100000000000000000000201 /* HamRadioUtilitiesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000021 /* HamRadioUtilitiesTests.swift */; };
 		100000000000000000000202 /* ExportServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000022 /* ExportServiceTests.swift */; };
+		200000000000000000000201 /* RustBridgeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000021 /* RustBridgeTests.swift */; };
 		FAAEDEAD2FFCAE2E007249F1 /* appicon.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = FAAEDEAC2FFCAE2E007249F1 /* appicon.xcassets */; };
 /* End PBXBuildFile section */
 
@@ -52,8 +69,25 @@
 		10000000000000000000000D /* Views/ExportView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/ExportView.swift; sourceTree = "<group>"; };
 		10000000000000000000000E /* Views/SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/SettingsView.swift; sourceTree = "<group>"; };
 		10000000000000000000000F /* Resources/Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Resources/Info.plist; sourceTree = "<group>"; };
+		200000000000000000000001 /* Models/StationEquipment.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models/StationEquipment.swift; sourceTree = "<group>"; };
+		200000000000000000000002 /* Shared/RustBridge/RustBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Shared/RustBridge/RustBridge.swift; sourceTree = "<group>"; };
+		200000000000000000000003 /* Shared/Services/PlatformServices.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Shared/Services/PlatformServices.swift; sourceTree = "<group>"; };
+		200000000000000000000004 /* Shared/Theme/AppTheme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Shared/Theme/AppTheme.swift; sourceTree = "<group>"; };
+		200000000000000000000005 /* Features/Dashboard/DashboardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Features/Dashboard/DashboardView.swift; sourceTree = "<group>"; };
+		200000000000000000000006 /* Features/Logging/LoggingWorkspaceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Features/Logging/LoggingWorkspaceView.swift; sourceTree = "<group>"; };
+		200000000000000000000007 /* Features/Stations/StationManagementView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Features/Stations/StationManagementView.swift; sourceTree = "<group>"; };
+		200000000000000000000008 /* Features/Providers/ProviderStatusView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Features/Providers/ProviderStatusView.swift; sourceTree = "<group>"; };
+		200000000000000000000009 /* Features/Maps/MapWorkspaceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Features/Maps/MapWorkspaceView.swift; sourceTree = "<group>"; };
+		20000000000000000000000A /* Features/Sync/SyncWorkspaceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Features/Sync/SyncWorkspaceView.swift; sourceTree = "<group>"; };
+		20000000000000000000000B /* Features/POTA/POTAView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Features/POTA/POTAView.swift; sourceTree = "<group>"; };
+		20000000000000000000000C /* Features/SOTA/SOTAView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Features/SOTA/SOTAView.swift; sourceTree = "<group>"; };
+		20000000000000000000000D /* Features/NetControl/NetControlView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Features/NetControl/NetControlView.swift; sourceTree = "<group>"; };
+		20000000000000000000000E /* Features/Diagnostics/DiagnosticsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Features/Diagnostics/DiagnosticsView.swift; sourceTree = "<group>"; };
+		300000000000000000000001 /* HamIOSFFI.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = HamIOSFFI.xcframework; path = ../../artifacts/HamIOSFFI.xcframework; sourceTree = SOURCE_ROOT; };
+		300000000000000000000002 /* Shared/Services/ProjectionRefreshService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Shared/Services/ProjectionRefreshService.swift; sourceTree = "<group>"; };
 		100000000000000000000021 /* HamRadioUtilitiesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HamRadioUtilitiesTests.swift; sourceTree = "<group>"; };
 		100000000000000000000022 /* ExportServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExportServiceTests.swift; sourceTree = "<group>"; };
+		200000000000000000000021 /* RustBridgeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RustBridgeTests.swift; sourceTree = "<group>"; };
 		100000000000000000000030 /* KE8YGW Logger.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "KE8YGW Logger.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		100000000000000000000031 /* KE8YGWLoggerTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = KE8YGWLoggerTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		FAAEDEAC2FFCAE2E007249F1 /* appicon.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = appicon.xcassets; sourceTree = "<group>"; };
@@ -64,6 +98,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				300000000000000000000101 /* HamIOSFFI.xcframework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -84,8 +119,23 @@
 				100000000000000000000002 /* Models/QSO.swift */,
 				100000000000000000000003 /* Models/StationProfile.swift */,
 				100000000000000000000004 /* Models/AppSettings.swift */,
+				200000000000000000000001 /* Models/StationEquipment.swift */,
 				100000000000000000000005 /* Services/HamRadioUtilities.swift */,
 				100000000000000000000006 /* Services/LogExportService.swift */,
+				200000000000000000000002 /* Shared/RustBridge/RustBridge.swift */,
+				200000000000000000000003 /* Shared/Services/PlatformServices.swift */,
+				300000000000000000000002 /* Shared/Services/ProjectionRefreshService.swift */,
+				200000000000000000000004 /* Shared/Theme/AppTheme.swift */,
+				200000000000000000000005 /* Features/Dashboard/DashboardView.swift */,
+				200000000000000000000006 /* Features/Logging/LoggingWorkspaceView.swift */,
+				200000000000000000000007 /* Features/Stations/StationManagementView.swift */,
+				200000000000000000000008 /* Features/Providers/ProviderStatusView.swift */,
+				200000000000000000000009 /* Features/Maps/MapWorkspaceView.swift */,
+				20000000000000000000000A /* Features/Sync/SyncWorkspaceView.swift */,
+				20000000000000000000000B /* Features/POTA/POTAView.swift */,
+				20000000000000000000000C /* Features/SOTA/SOTAView.swift */,
+				20000000000000000000000D /* Features/NetControl/NetControlView.swift */,
+				20000000000000000000000E /* Features/Diagnostics/DiagnosticsView.swift */,
 				100000000000000000000007 /* Views/RootView.swift */,
 				100000000000000000000008 /* Views/HomeView.swift */,
 				100000000000000000000009 /* Views/NewQSOView.swift */,
@@ -123,6 +173,7 @@
 			children = (
 				100000000000000000000010 /* KE8YGWLogger */,
 				100000000000000000000020 /* KE8YGWLoggerTests */,
+				300000000000000000000001 /* HamIOSFFI.xcframework */,
 				100000000000000000000032 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -134,6 +185,7 @@
 			isa = PBXNativeTarget;
 			buildConfigurationList = 100000000000000000000700 /* Build configuration list for PBXNativeTarget "KE8YGWLogger" */;
 			buildPhases = (
+				300000000000000000000201 /* Build HamIOSFFI XCFramework */,
 				100000000000000000000402 /* Sources */,
 				100000000000000000000401 /* Frameworks */,
 				100000000000000000000403 /* Resources */,
@@ -221,6 +273,25 @@
 		};
 /* End PBXResourcesBuildPhase section */
 
+/* Begin PBXShellScriptBuildPhase section */
+		300000000000000000000201 /* Build HamIOSFFI XCFramework */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = ();
+			inputFileListPaths = ();
+			inputPaths = ();
+			name = "Build HamIOSFFI XCFramework";
+			outputFileListPaths = ();
+			outputPaths = (
+				"$(SRCROOT)/../../artifacts/HamIOSFFI.xcframework",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "set -euo pipefail\nif [ \"${SKIP_RUST_XCFRAMEWORK_BUILD:-}\" = \"1\" ]; then\n  echo \"Skipping Rust XCFramework build because SKIP_RUST_XCFRAMEWORK_BUILD=1\"\n  exit 0\nfi\nbash \"$SRCROOT/../../scripts/ios/build-xcframework.sh\"\n";
+		};
+/* End PBXShellScriptBuildPhase section */
+
 /* Begin PBXSourcesBuildPhase section */
 		100000000000000000000402 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
@@ -230,8 +301,23 @@
 				100000000000000000000102 /* Models/QSO.swift in Sources */,
 				100000000000000000000103 /* Models/StationProfile.swift in Sources */,
 				100000000000000000000104 /* Models/AppSettings.swift in Sources */,
+				200000000000000000000101 /* Models/StationEquipment.swift in Sources */,
 				100000000000000000000105 /* Services/HamRadioUtilities.swift in Sources */,
 				100000000000000000000106 /* Services/LogExportService.swift in Sources */,
+				200000000000000000000102 /* Shared/RustBridge/RustBridge.swift in Sources */,
+				200000000000000000000103 /* Shared/Services/PlatformServices.swift in Sources */,
+				300000000000000000000102 /* Shared/Services/ProjectionRefreshService.swift in Sources */,
+				200000000000000000000104 /* Shared/Theme/AppTheme.swift in Sources */,
+				200000000000000000000105 /* Features/Dashboard/DashboardView.swift in Sources */,
+				200000000000000000000106 /* Features/Logging/LoggingWorkspaceView.swift in Sources */,
+				200000000000000000000107 /* Features/Stations/StationManagementView.swift in Sources */,
+				200000000000000000000108 /* Features/Providers/ProviderStatusView.swift in Sources */,
+				200000000000000000000109 /* Features/Maps/MapWorkspaceView.swift in Sources */,
+				20000000000000000000010A /* Features/Sync/SyncWorkspaceView.swift in Sources */,
+				20000000000000000000010B /* Features/POTA/POTAView.swift in Sources */,
+				20000000000000000000010C /* Features/SOTA/SOTAView.swift in Sources */,
+				20000000000000000000010D /* Features/NetControl/NetControlView.swift in Sources */,
+				20000000000000000000010E /* Features/Diagnostics/DiagnosticsView.swift in Sources */,
 				100000000000000000000107 /* Views/RootView.swift in Sources */,
 				100000000000000000000108 /* Views/HomeView.swift in Sources */,
 				100000000000000000000109 /* Views/NewQSOView.swift in Sources */,
@@ -249,6 +335,7 @@
 			files = (
 				100000000000000000000201 /* HamRadioUtilitiesTests.swift in Sources */,
 				100000000000000000000202 /* ExportServiceTests.swift in Sources */,
+				200000000000000000000201 /* RustBridgeTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

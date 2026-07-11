@@ -36,7 +36,7 @@ final class ExportServiceTests: XCTestCase {
     func testCSVExportFormatting() {
         let csv = LogExportService.csv(for: [sampleQSO()])
 
-        XCTAssertTrue(csv.hasPrefix("Callsign,DateTimeUTC,Band,Mode"))
+        XCTAssertTrue(csv.hasPrefix("Callsign,DateTimeUTC,Type,Band,Mode"))
         XCTAssertTrue(csv.contains("K1ABC"))
         XCTAssertTrue(csv.contains("\"Cleveland, OH\""))
         XCTAssertTrue(csv.contains("\"Portable, clean signal\""))

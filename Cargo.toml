@@ -10,6 +10,7 @@ members = [
     "crates/ham-gui",
     "crates/ham-desktop",
     "src-tauri",
+    "crates/ham-ios-ffi",
 ]
 resolver = "2"
 

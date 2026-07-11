@@ -2,50 +2,55 @@ import SwiftData
 import SwiftUI
 
 struct StationProfileView: View {
-    @Environment(\.modelContext) private var modelContext
     @Query private var profiles: [StationProfile]
+
+    private var activeProfile: StationProfile? {
+        profiles.first { $0.isActive && !$0.isTombstoned } ?? profiles.first { !$0.isTombstoned }
+    }
 
     var body: some View {
         Form {
-            if let profile = profiles.first {
+            if let profile = activeProfile {
+                Section("Profile") {
+                    detail("Display Name", profile.displayName)
+                    detail("Type", profile.profileType)
+                    detail("Authority", profile.projectionSource)
+                    detail("Canonical ID", profile.canonicalID)
+                }
+
                 Section("Operator") {
-                    TextField("Operator Callsign", text: bind(profile, \.operatorCallsign))
-                        .textInputAutocapitalization(.characters)
-                    TextField("Station Callsign", text: bind(profile, \.stationCallsign))
-                        .textInputAutocapitalization(.characters)
+                    detail("Operator Callsign", profile.operatorCallsign)
+                    detail("Station Callsign", profile.stationCallsign)
                 }
 
                 Section("Default Location") {
-                    TextField("Grid Square", text: bind(profile, \.defaultGridSquare))
-                        .textInputAutocapitalization(.characters)
-                    TextField("QTH", text: bind(profile, \.defaultQTH))
-                    TextField("State", text: bind(profile, \.defaultState))
-                        .textInputAutocapitalization(.characters)
-                    TextField("Country", text: bind(profile, \.defaultCountry))
+                    detail("Grid Square", profile.defaultGridSquare)
+                    detail("QTH", profile.defaultQTH)
+                    detail("State", profile.defaultState)
+                    detail("Country", profile.defaultCountry)
+                    detail("Power Watts", "\(String(format: "%.0f", profile.defaultPowerWatts))")
                 }
 
-                Section("Future") {
-                    Text("TODO: Maidenhead grid calculation from GPS.")
-                    Text("TODO: Station equipment profiles and portable station presets.")
+                Section("Management") {
+                    NavigationLink("All Stations and Equipment", destination: StationManagementView())
                 }
-                .foregroundStyle(.secondary)
             } else {
-                Button("Create Default Profile") {
-                    modelContext.insert(StationProfile())
-                    try? modelContext.save()
+                ContentUnavailableView("No station projection", systemImage: "antenna.radiowaves.left.and.right")
+                Section("Management") {
+                    NavigationLink("Create Station", destination: StationManagementView())
                 }
             }
         }
         .navigationTitle("Station Profile")
     }
 
-    private func bind(_ profile: StationProfile, _ keyPath: ReferenceWritableKeyPath<StationProfile, String>) -> Binding<String> {
-        Binding {
-            profile[keyPath: keyPath]
-        } set: { value in
-            profile[keyPath: keyPath] = value
-            profile.updatedAt = Date()
-            try? modelContext.save()
+    private func detail(_ title: String, _ value: String) -> some View {
+        HStack(alignment: .top) {
+            Text(title)
+            Spacer()
+            Text(value.isEmpty ? "Not set" : value)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.trailing)
         }
     }
 }
