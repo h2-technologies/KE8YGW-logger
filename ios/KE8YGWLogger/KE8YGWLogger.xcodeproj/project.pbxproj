@@ -190,7 +190,6 @@
 			isa = PBXNativeTarget;
 			buildConfigurationList = 100000000000000000000700 /* Build configuration list for PBXNativeTarget "KE8YGWLogger" */;
 			buildPhases = (
-				FAB52E0A3004596B009BB3AD /* Run Script */,
 				300000000000000000000201 /* Build HamIOSFFI Rust Library */,
 				100000000000000000000402 /* Sources */,
 				100000000000000000000401 /* Frameworks */,
@@ -297,6 +296,7 @@
 				"$(SRCROOT)/../../scripts/ios/build-rust.sh",
 				"$(SRCROOT)/../../scripts/ios/build-xcframework.sh",
 				"$(SRCROOT)/../../scripts/ios/install-targets.sh",
+				"$(SRCROOT)/../../scripts/ios/rust-env.sh",
 			);
 			name = "Build HamIOSFFI Rust Library";
 			outputFileListPaths = (
@@ -307,24 +307,6 @@
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
 			shellScript = "set -euo pipefail\nif [ \"${SKIP_RUST_XCFRAMEWORK_BUILD:-}\" = \"1\" ]; then\n  echo \"Skipping Rust XCFramework build because SKIP_RUST_XCFRAMEWORK_BUILD=1\"\n  exit 0\nfi\nbash \"$SRCROOT/../../scripts/ios/build-xcframework.sh\"\n";
-		};
-		FAB52E0A3004596B009BB3AD /* Run Script */ = {
-			isa = PBXShellScriptBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			inputFileListPaths = (
-			);
-			inputPaths = (
-			);
-			name = "Run Script";
-			outputFileListPaths = (
-			);
-			outputPaths = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-			shellPath = /bin/sh;
-			shellScript = "# Type a script or drag a script file from your workspace to insert its path.\nexport PATH=\"$PATH:/Users/user946929/.cargo/bin\"\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 

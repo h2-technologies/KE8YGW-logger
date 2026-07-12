@@ -21,6 +21,10 @@ Rust through the `ham-ios-ffi` bridge and `ham-core`.
 - iOS 17 simulator or device
 - Rust stable with `rustup`
 
+The Rust build scripts automatically load `~/.cargo/env` and common
+Rust/Homebrew binary locations for Xcode archive builds. Do not add local
+`/Users/.../.cargo/bin` paths to the Xcode project.
+
 No GitHub Actions, Fastlane, TestFlight upload, iCloud, Push Notifications,
 Associated Domains, App Groups, Sign in with Apple, or paid Apple capabilities
 are configured yet. Local notifications use user authorization only.

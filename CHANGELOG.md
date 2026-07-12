@@ -8,7 +8,7 @@
 - Added `ham-ios-ffi`, a Rust FFI crate for iOS JSON bridge calls backed by `ham-core` and `ham-sync`.
 - Added a hardened byte-buffer Rust FFI command ABI with structured envelopes, ABI/schema versions, correlation IDs, panic containment, bounded input checks, and explicit deallocation.
 - Added public iOS FFI header/module map and macOS scripts for Apple Rust targets, static libraries, XCFramework assembly, and linkage verification.
-- Added Xcode `HamIOSFFI.xcframework` reference and pre-link build phase for reproducible Rust linkage.
+- Added Xcode pre-link Rust build phase and relative static-library linkage for reproducible iOS Rust linking.
 - Added iOS bridge client, bridge fallback contract, and bridge fallback tests.
 - Added Swift typed bridge DTOs for QSO, station, activation, Net Control, diagnostics, and bridge self-test operations.
 - Added SwiftData projection metadata and `ProjectionRefreshService`.
@@ -25,6 +25,7 @@
 - Reclassified SwiftData QSO/station/equipment state as cache/projection data for Rust-accepted state.
 - iOS ADIF export now prefers the Rust bridge and falls back to Swift export if the bridge is unavailable.
 - Updated `PROJECT_STATE.md`, `ROADMAP.md`, and iOS documentation for the parity pass.
+- Hardened iOS Rust build scripts to load Rust/Homebrew paths in Xcode archive shells and removed a developer-specific Xcode run script path.
 
 ### Testing
 

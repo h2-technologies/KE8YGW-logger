@@ -4,6 +4,10 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
+# Xcode archive shells do not reliably inherit shell profile PATH changes.
+# shellcheck source=rust-env.sh
+. "$SCRIPT_DIR/rust-env.sh"
+
 if [[ "$(uname -s)" != "Darwin" ]]; then
   echo "error: HamIOSFFI.xcframework can only be assembled on macOS with Xcode." >&2
   exit 1

@@ -14,8 +14,9 @@ Last updated: 2026-07-10T21:15:00-04:00
 - Added macOS scripts to install Apple Rust targets, build Rust static
   libraries, assemble `artifacts/HamIOSFFI.xcframework`, and verify exported
   symbols/architectures.
-- Integrated `HamIOSFFI.xcframework` into the Xcode project with a reproducible
-  pre-link build phase and relative framework reference.
+- Integrated the Rust static library into the Xcode project with a reproducible
+  pre-link build phase and relative linker search paths; the generated
+  `HamIOSFFI.xcframework` remains the packaging/verification artifact.
 - Reworked Swift bridge calls through a centralized typed bridge client using
   the Rust byte-buffer ABI off the main actor.
 - Routed iOS QSO create/delete, station profile/equipment create/select,
@@ -61,6 +62,9 @@ Last updated: 2026-07-10T21:15:00-04:00
 - Legacy SwiftData cache rows created before Rust authority may not have
   canonical IDs; delete hides them locally and should be replaced by a migration.
 - Xcode project validation could not be run in this Windows workspace.
+- Xcode archive logs from 2026-07-12 showed `rustup` missing from the archive
+  shell `PATH`; the iOS build scripts now bootstrap Rust/Homebrew paths before
+  invoking `rustup`, `cargo`, or `rustc`.
 - No screenshots were captured because no iOS simulator is available here.
 
 ## Verification Performed

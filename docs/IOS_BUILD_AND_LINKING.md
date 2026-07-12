@@ -1,6 +1,6 @@
 # iOS Build And Rust Linking
 
-Last updated: 2026-07-10
+Last updated: 2026-07-12
 
 This document describes the reproducible macOS workflow for building the Rust
 FFI library and linking it into the native iOS app.
@@ -9,6 +9,9 @@ FFI library and linking it into the native iOS app.
 
 - macOS with Xcode 15 or newer selected by `xcode-select`.
 - Rust stable with `rustup`.
+- The scripts source `~/.cargo/env` when present and prepend common Rust/Homebrew
+  locations (`~/.cargo/bin`, `/opt/homebrew/bin`, `/usr/local/bin`) because
+  Xcode archive shells do not load normal interactive shell profiles.
 - iOS deployment target: 17.0, matching `KE8YGWLogger.xcodeproj`.
 - Supported Rust Apple targets:
   - `aarch64-apple-ios`
@@ -126,6 +129,10 @@ for every XCFramework slice.
 - `xcode-select` points at command line tools only: run
   `sudo xcode-select -s /Applications/Xcode.app/Contents/Developer`.
 - Missing Rust target: run `bash scripts/ios/install-targets.sh`.
+- `required tool 'rustup' was not found on PATH`: install Rust from
+  `https://rustup.rs`, then rerun the build. The build scripts load
+  `~/.cargo/env` automatically for Xcode, so do not add developer-specific
+  `/Users/.../.cargo/bin` paths to the Xcode project.
 - `No XCFramework found at artifacts/hamiosffi.xcframework`: pull the latest
   project file or remove any stale local `HamIOSFFI.xcframework` reference from
   Link Binary With Libraries. The app now links the generated static library

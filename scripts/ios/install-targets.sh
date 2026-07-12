@@ -1,17 +1,23 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Xcode archive shells often start with a minimal PATH and do not load a login
+# profile, so bootstrap the normal Rust install locations before checking tools.
+# shellcheck source=rust-env.sh
+. "$SCRIPT_DIR/rust-env.sh"
+
 if [[ "$(uname -s)" != "Darwin" ]]; then
   echo "error: iOS Rust targets can only be installed from macOS." >&2
   exit 1
 fi
 
-for tool in xcodebuild xcrun rustup cargo rustc; do
-  if ! command -v "$tool" >/dev/null 2>&1; then
-    echo "error: required tool '$tool' was not found on PATH." >&2
-    exit 1
-  fi
-done
+require_tool xcodebuild "Install Xcode and select it with xcode-select."
+require_tool xcrun "Install Xcode command-line tools and select Xcode with xcode-select."
+require_tool rustup "Install Rust from https://rustup.rs or ensure ~/.cargo/bin is visible to Xcode."
+require_tool cargo "Install Rust from https://rustup.rs or ensure ~/.cargo/bin is visible to Xcode."
+require_tool rustc "Install Rust from https://rustup.rs or ensure ~/.cargo/bin is visible to Xcode."
 
 if ! xcode-select -p >/dev/null 2>&1; then
   echo "error: Xcode command-line tools are not selected. Run: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer" >&2

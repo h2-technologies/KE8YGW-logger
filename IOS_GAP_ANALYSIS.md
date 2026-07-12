@@ -105,7 +105,7 @@ Evidence reviewed in this follow-up pass:
 |------|---------------------|------------|---------------|
 | Apple target compilation | Scripts install/build `aarch64-apple-ios`, `aarch64-apple-ios-sim`, and optional `x86_64-apple-ios` | Tooling added | Not executed in this Windows environment |
 | XCFramework packaging | `scripts/ios/build-xcframework.sh` outputs `artifacts/HamIOSFFI.xcframework` | Tooling added | Artifact not generated here |
-| Xcode linkage | Project references `../../artifacts/HamIOSFFI.xcframework` and has a build phase invoking the script | Reproducible linkage path added | Xcode link not validated here |
+| Xcode linkage | Project has a pre-link Rust build phase and links `-lham_ios_ffi` from `artifacts/ios/link/$(CONFIGURATION)$(EFFECTIVE_PLATFORM_NAME)` | Reproducible static-library linkage path added; generated XCFramework remains for packaging/verification | Xcode link not validated here |
 | ABI safety | FFI now uses byte-buffer command entry, response envelope, deallocator, panic containment, UTF-8/null/size checks | Improved | Legacy C-string snapshot functions remain for compatibility |
 | Native tests | `RustBridgeTests.swift` covers fallback envelope/mutation/self-test/error mapping | Expanded | Swift/Xcode tests not run here |
 | Mutation authority | QSO create/delete, station profile/equipment/select, POTA/SOTA activation start/end, and Net Control start/check-in/traffic/end route through Rust bridge commands | Partially Rust-authoritative | Emergency assignments, spotting posts, provider queue actions, and some settings remain Swift-local |
