@@ -39,7 +39,7 @@ output unless the repository intentionally changes that policy.
 ## Xcode Integration
 
 The `KE8YGWLogger` target has a pre-link build phase named
-`Build HamIOSFFI XCFramework`. It runs:
+`Build HamIOSFFI Rust Library`. It runs:
 
 ```bash
 bash "$SRCROOT/../../scripts/ios/build-xcframework.sh"
@@ -57,7 +57,8 @@ $(SRCROOT)/../../artifacts/ios/link/$(CONFIGURATION)$(EFFECTIVE_PLATFORM_NAME)
 The build script copies the correct device or simulator static library to that
 path before the link step. It still assembles
 `artifacts/HamIOSFFI.xcframework/` for CI, packaging, and architecture
-inspection.
+inspection, but the `.xcframework` directory is not declared as an Xcode build
+phase output.
 
 Set `SKIP_RUST_XCFRAMEWORK_BUILD=1` only when the generated static library and
 framework already exist and you are intentionally testing Xcode without
@@ -129,7 +130,9 @@ for every XCFramework slice.
   project file or remove any stale local `HamIOSFFI.xcframework` reference from
   Link Binary With Libraries. The app now links the generated static library
   under `artifacts/ios/link/...`; the XCFramework is still generated but is not
-  a direct Xcode file reference.
+  a direct Xcode file reference or build phase output. If Xcode keeps reporting
+  the old path, close Xcode, clean DerivedData for `KE8YGWLogger`, and reopen
+  the project.
 - Missing symbol at link: rebuild with
   `CONFIGURATION=Release bash scripts/ios/build-xcframework.sh`, then rerun
   `bash scripts/ios/verify-linkage.sh`.

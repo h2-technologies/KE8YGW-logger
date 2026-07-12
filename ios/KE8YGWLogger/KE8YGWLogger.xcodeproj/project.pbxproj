@@ -181,7 +181,7 @@
 			isa = PBXNativeTarget;
 			buildConfigurationList = 100000000000000000000700 /* Build configuration list for PBXNativeTarget "KE8YGWLogger" */;
 			buildPhases = (
-				300000000000000000000201 /* Build HamIOSFFI XCFramework */,
+				300000000000000000000201 /* Build HamIOSFFI Rust Library */,
 				100000000000000000000402 /* Sources */,
 				100000000000000000000401 /* Frameworks */,
 				100000000000000000000403 /* Resources */,
@@ -270,17 +270,25 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXShellScriptBuildPhase section */
-		300000000000000000000201 /* Build HamIOSFFI XCFramework */ = {
+		300000000000000000000201 /* Build HamIOSFFI Rust Library */ = {
 			isa = PBXShellScriptBuildPhase;
-			alwaysOutOfDate = 1;
 			buildActionMask = 2147483647;
 			files = ();
 			inputFileListPaths = ();
-			inputPaths = ();
-			name = "Build HamIOSFFI XCFramework";
+			inputPaths = (
+				"$(SRCROOT)/../../Cargo.lock",
+				"$(SRCROOT)/../../Cargo.toml",
+				"$(SRCROOT)/../../crates/ham-ios-ffi/Cargo.toml",
+				"$(SRCROOT)/../../crates/ham-ios-ffi/include/ham_ios_ffi.h",
+				"$(SRCROOT)/../../crates/ham-ios-ffi/include/module.modulemap",
+				"$(SRCROOT)/../../crates/ham-ios-ffi/src/lib.rs",
+				"$(SRCROOT)/../../scripts/ios/build-rust.sh",
+				"$(SRCROOT)/../../scripts/ios/build-xcframework.sh",
+				"$(SRCROOT)/../../scripts/ios/install-targets.sh",
+			);
+			name = "Build HamIOSFFI Rust Library";
 			outputFileListPaths = ();
 			outputPaths = (
-				"$(SRCROOT)/../../artifacts/HamIOSFFI.xcframework",
 				"$(SRCROOT)/../../artifacts/ios/link/$(CONFIGURATION)$(EFFECTIVE_PLATFORM_NAME)/libham_ios_ffi.a",
 			);
 			runOnlyForDeploymentPostprocessing = 0;
