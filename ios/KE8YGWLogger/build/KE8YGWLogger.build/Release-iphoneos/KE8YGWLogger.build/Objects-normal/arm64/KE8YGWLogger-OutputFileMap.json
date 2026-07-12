@@ -1,0 +1,161 @@
+{
+  "" : {
+    "const-values" : "/Volumes/Macintosh_HD/Users/user946929/ke8ygw-logger/ios/KE8YGWLogger/build/KE8YGWLogger.build/Release-iphoneos/KE8YGWLogger.build/Objects-normal/arm64/KE8YGWLogger-primary.swiftconstvalues",
+    "dependencies" : "/Volumes/Macintosh_HD/Users/user946929/ke8ygw-logger/ios/KE8YGWLogger/build/KE8YGWLogger.build/Release-iphoneos/KE8YGWLogger.build/Objects-normal/arm64/KE8YGWLogger-primary.d",
+    "diagnostics" : "/Volumes/Macintosh_HD/Users/user946929/ke8ygw-logger/ios/KE8YGWLogger/build/KE8YGWLogger.build/Release-iphoneos/KE8YGWLogger.build/Objects-normal/arm64/KE8YGWLogger-primary.dia",
+    "emit-module-dependencies" : "/Volumes/Macintosh_HD/Users/user946929/ke8ygw-logger/ios/KE8YGWLogger/build/KE8YGWLogger.build/Release-iphoneos/KE8YGWLogger.build/Objects-normal/arm64/KE8YGWLogger-primary-emit-module.d",
+    "emit-module-diagnostics" : "/Volumes/Macintosh_HD/Users/user946929/ke8ygw-logger/ios/KE8YGWLogger/build/KE8YGWLogger.build/Release-iphoneos/KE8YGWLogger.build/Objects-normal/arm64/KE8YGWLogger-primary-emit-module.dia",
+    "pch" : "/Volumes/Macintosh_HD/Users/user946929/ke8ygw-logger/ios/KE8YGWLogger/build/KE8YGWLogger.build/Release-iphoneos/KE8YGWLogger.build/Objects-normal/arm64/KE8YGWLogger-primary-Bridging-header.pch",
+    "swift-dependencies" : "/Volumes/Macintosh_HD/Users/user946929/ke8ygw-logger/ios/KE8YGWLogger/build/KE8YGWLogger.build/Release-iphoneos/KE8YGWLogger.build/Objects-normal/arm64/KE8YGWLogger-primary.swiftdeps"
+  },
+  "/Volumes/Macintosh_HD/Users/user946929/ke8ygw-logger/ios/KE8YGWLogger/KE8YGWLogger/App/KE8YGWLoggerApp.swift" : {
+    "index-unit-output-path" : "/KE8YGWLogger.build/Release-iphoneos/KE8YGWLogger.build/Objects-normal/arm64/KE8YGWLoggerApp.o",
+    "llvm-bc" : "/Volumes/Macintosh_HD/Users/user946929/ke8ygw-logger/ios/KE8YGWLogger/build/KE8YGWLogger.build/Release-iphoneos/KE8YGWLogger.build/Objects-normal/arm64/KE8YGWLoggerApp.bc",
+    "object" : "/Volumes/Macintosh_HD/Users/user946929/ke8ygw-logger/ios/KE8YGWLogger/build/KE8YGWLogger.build/Release-iphoneos/KE8YGWLogger.build/Objects-normal/arm64/KE8YGWLoggerApp.o"
+  },
+  "/Volumes/Macintosh_HD/Users/user946929/ke8ygw-logger/ios/KE8YGWLogger/KE8YGWLogger/Features/Dashboard/DashboardView.swift" : {
+    "index-unit-output-path" : "/KE8YGWLogger.build/Release-iphoneos/KE8YGWLogger.build/Objects-normal/arm64/DashboardView.o",
+    "llvm-bc" : "/Volumes/Macintosh_HD/Users/user946929/ke8ygw-logger/ios/KE8YGWLogger/build/KE8YGWLogger.build/Release-iphoneos/KE8YGWLogger.build/Objects-normal/arm64/DashboardView.bc",
+    "object" : "/Volumes/Macintosh_HD/Users/user946929/ke8ygw-logger/ios/KE8YGWLogger/build/KE8YGWLogger.build/Release-iphoneos/KE8YGWLogger.build/Objects-normal/arm64/DashboardView.o"
+  },
+  "/Volumes/Macintosh_HD/Users/user946929/ke8ygw-logger/ios/KE8YGWLogger/KE8YGWLogger/Features/Diagnostics/DiagnosticsView.swift" : {
+    "index-unit-output-path" : "/KE8YGWLogger.build/Release-iphoneos/KE8YGWLogger.build/Objects-normal/arm64/DiagnosticsView.o",
+    "llvm-bc" : "/Volumes/Macintosh_HD/Users/user946929/ke8ygw-logger/ios/KE8YGWLogger/build/KE8YGWLogger.build/Release-iphoneos/KE8YGWLogger.build/Objects-normal/arm64/DiagnosticsView.bc",
+    "object" : "/Volumes/Macintosh_HD/Users/user946929/ke8ygw-logger/ios/KE8YGWLogger/build/KE8YGWLogger.build/Release-iphoneos/KE8YGWLogger.build/Objects-normal/arm64/DiagnosticsView.o"
+  },
+  "/Volumes/Macintosh_HD/Users/user946929/ke8ygw-logger/ios/KE8YGWLogger/KE8YGWLogger/Features/Logging/LoggingWorkspaceView.swift" : {
+    "index-unit-output-path" : "/KE8YGWLogger.build/Release-iphoneos/KE8YGWLogger.build/Objects-normal/arm64/LoggingWorkspaceView.o",
+    "llvm-bc" : "/Volumes/Macintosh_HD/Users/user946929/ke8ygw-logger/ios/KE8YGWLogger/build/KE8YGWLogger.build/Release-iphoneos/KE8YGWLogger.build/Objects-normal/arm64/LoggingWorkspaceView.bc",
+    "object" : "/Volumes/Macintosh_HD/Users/user946929/ke8ygw-logger/ios/KE8YGWLogger/build/KE8YGWLogger.build/Release-iphoneos/KE8YGWLogger.build/Objects-normal/arm64/LoggingWorkspaceView.o"
+  },
+  "/Volumes/Macintosh_HD/Users/user946929/ke8ygw-logger/ios/KE8YGWLogger/KE8YGWLogger/Features/Maps/MapWorkspaceView.swift" : {
+    "index-unit-output-path" : "/KE8YGWLogger.build/Release-iphoneos/KE8YGWLogger.build/Objects-normal/arm64/MapWorkspaceView.o",
+    "llvm-bc" : "/Volumes/Macintosh_HD/Users/user946929/ke8ygw-logger/ios/KE8YGWLogger/build/KE8YGWLogger.build/Release-iphoneos/KE8YGWLogger.build/Objects-normal/arm64/MapWorkspaceView.bc",
+    "object" : "/Volumes/Macintosh_HD/Users/user946929/ke8ygw-logger/ios/KE8YGWLogger/build/KE8YGWLogger.build/Release-iphoneos/KE8YGWLogger.build/Objects-normal/arm64/MapWorkspaceView.o"
+  },
+  "/Volumes/Macintosh_HD/Users/user946929/ke8ygw-logger/ios/KE8YGWLogger/KE8YGWLogger/Features/NetControl/NetControlView.swift" : {
+    "index-unit-output-path" : "/KE8YGWLogger.build/Release-iphoneos/KE8YGWLogger.build/Objects-normal/arm64/NetControlView.o",
+    "llvm-bc" : "/Volumes/Macintosh_HD/Users/user946929/ke8ygw-logger/ios/KE8YGWLogger/build/KE8YGWLogger.build/Release-iphoneos/KE8YGWLogger.build/Objects-normal/arm64/NetControlView.bc",
+    "object" : "/Volumes/Macintosh_HD/Users/user946929/ke8ygw-logger/ios/KE8YGWLogger/build/KE8YGWLogger.build/Release-iphoneos/KE8YGWLogger.build/Objects-normal/arm64/NetControlView.o"
+  },
+  "/Volumes/Macintosh_HD/Users/user946929/ke8ygw-logger/ios/KE8YGWLogger/KE8YGWLogger/Features/POTA/POTAView.swift" : {
+    "index-unit-output-path" : "/KE8YGWLogger.build/Release-iphoneos/KE8YGWLogger.build/Objects-normal/arm64/POTAView.o",
+    "llvm-bc" : "/Volumes/Macintosh_HD/Users/user946929/ke8ygw-logger/ios/KE8YGWLogger/build/KE8YGWLogger.build/Release-iphoneos/KE8YGWLogger.build/Objects-normal/arm64/POTAView.bc",
+    "object" : "/Volumes/Macintosh_HD/Users/user946929/ke8ygw-logger/ios/KE8YGWLogger/build/KE8YGWLogger.build/Release-iphoneos/KE8YGWLogger.build/Objects-normal/arm64/POTAView.o"
+  },
+  "/Volumes/Macintosh_HD/Users/user946929/ke8ygw-logger/ios/KE8YGWLogger/KE8YGWLogger/Features/Providers/ProviderStatusView.swift" : {
+    "index-unit-output-path" : "/KE8YGWLogger.build/Release-iphoneos/KE8YGWLogger.build/Objects-normal/arm64/ProviderStatusView.o",
+    "llvm-bc" : "/Volumes/Macintosh_HD/Users/user946929/ke8ygw-logger/ios/KE8YGWLogger/build/KE8YGWLogger.build/Release-iphoneos/KE8YGWLogger.build/Objects-normal/arm64/ProviderStatusView.bc",
+    "object" : "/Volumes/Macintosh_HD/Users/user946929/ke8ygw-logger/ios/KE8YGWLogger/build/KE8YGWLogger.build/Release-iphoneos/KE8YGWLogger.build/Objects-normal/arm64/ProviderStatusView.o"
+  },
+  "/Volumes/Macintosh_HD/Users/user946929/ke8ygw-logger/ios/KE8YGWLogger/KE8YGWLogger/Features/SOTA/SOTAView.swift" : {
+    "index-unit-output-path" : "/KE8YGWLogger.build/Release-iphoneos/KE8YGWLogger.build/Objects-normal/arm64/SOTAView.o",
+    "llvm-bc" : "/Volumes/Macintosh_HD/Users/user946929/ke8ygw-logger/ios/KE8YGWLogger/build/KE8YGWLogger.build/Release-iphoneos/KE8YGWLogger.build/Objects-normal/arm64/SOTAView.bc",
+    "object" : "/Volumes/Macintosh_HD/Users/user946929/ke8ygw-logger/ios/KE8YGWLogger/build/KE8YGWLogger.build/Release-iphoneos/KE8YGWLogger.build/Objects-normal/arm64/SOTAView.o"
+  },
+  "/Volumes/Macintosh_HD/Users/user946929/ke8ygw-logger/ios/KE8YGWLogger/KE8YGWLogger/Features/Stations/StationManagementView.swift" : {
+    "index-unit-output-path" : "/KE8YGWLogger.build/Release-iphoneos/KE8YGWLogger.build/Objects-normal/arm64/StationManagementView.o",
+    "llvm-bc" : "/Volumes/Macintosh_HD/Users/user946929/ke8ygw-logger/ios/KE8YGWLogger/build/KE8YGWLogger.build/Release-iphoneos/KE8YGWLogger.build/Objects-normal/arm64/StationManagementView.bc",
+    "object" : "/Volumes/Macintosh_HD/Users/user946929/ke8ygw-logger/ios/KE8YGWLogger/build/KE8YGWLogger.build/Release-iphoneos/KE8YGWLogger.build/Objects-normal/arm64/StationManagementView.o"
+  },
+  "/Volumes/Macintosh_HD/Users/user946929/ke8ygw-logger/ios/KE8YGWLogger/KE8YGWLogger/Features/Sync/SyncWorkspaceView.swift" : {
+    "index-unit-output-path" : "/KE8YGWLogger.build/Release-iphoneos/KE8YGWLogger.build/Objects-normal/arm64/SyncWorkspaceView.o",
+    "llvm-bc" : "/Volumes/Macintosh_HD/Users/user946929/ke8ygw-logger/ios/KE8YGWLogger/build/KE8YGWLogger.build/Release-iphoneos/KE8YGWLogger.build/Objects-normal/arm64/SyncWorkspaceView.bc",
+    "object" : "/Volumes/Macintosh_HD/Users/user946929/ke8ygw-logger/ios/KE8YGWLogger/build/KE8YGWLogger.build/Release-iphoneos/KE8YGWLogger.build/Objects-normal/arm64/SyncWorkspaceView.o"
+  },
+  "/Volumes/Macintosh_HD/Users/user946929/ke8ygw-logger/ios/KE8YGWLogger/KE8YGWLogger/Models/AppSettings.swift" : {
+    "index-unit-output-path" : "/KE8YGWLogger.build/Release-iphoneos/KE8YGWLogger.build/Objects-normal/arm64/AppSettings.o",
+    "llvm-bc" : "/Volumes/Macintosh_HD/Users/user946929/ke8ygw-logger/ios/KE8YGWLogger/build/KE8YGWLogger.build/Release-iphoneos/KE8YGWLogger.build/Objects-normal/arm64/AppSettings.bc",
+    "object" : "/Volumes/Macintosh_HD/Users/user946929/ke8ygw-logger/ios/KE8YGWLogger/build/KE8YGWLogger.build/Release-iphoneos/KE8YGWLogger.build/Objects-normal/arm64/AppSettings.o"
+  },
+  "/Volumes/Macintosh_HD/Users/user946929/ke8ygw-logger/ios/KE8YGWLogger/KE8YGWLogger/Models/QSO.swift" : {
+    "index-unit-output-path" : "/KE8YGWLogger.build/Release-iphoneos/KE8YGWLogger.build/Objects-normal/arm64/QSO.o",
+    "llvm-bc" : "/Volumes/Macintosh_HD/Users/user946929/ke8ygw-logger/ios/KE8YGWLogger/build/KE8YGWLogger.build/Release-iphoneos/KE8YGWLogger.build/Objects-normal/arm64/QSO.bc",
+    "object" : "/Volumes/Macintosh_HD/Users/user946929/ke8ygw-logger/ios/KE8YGWLogger/build/KE8YGWLogger.build/Release-iphoneos/KE8YGWLogger.build/Objects-normal/arm64/QSO.o"
+  },
+  "/Volumes/Macintosh_HD/Users/user946929/ke8ygw-logger/ios/KE8YGWLogger/KE8YGWLogger/Models/StationEquipment.swift" : {
+    "index-unit-output-path" : "/KE8YGWLogger.build/Release-iphoneos/KE8YGWLogger.build/Objects-normal/arm64/StationEquipment.o",
+    "llvm-bc" : "/Volumes/Macintosh_HD/Users/user946929/ke8ygw-logger/ios/KE8YGWLogger/build/KE8YGWLogger.build/Release-iphoneos/KE8YGWLogger.build/Objects-normal/arm64/StationEquipment.bc",
+    "object" : "/Volumes/Macintosh_HD/Users/user946929/ke8ygw-logger/ios/KE8YGWLogger/build/KE8YGWLogger.build/Release-iphoneos/KE8YGWLogger.build/Objects-normal/arm64/StationEquipment.o"
+  },
+  "/Volumes/Macintosh_HD/Users/user946929/ke8ygw-logger/ios/KE8YGWLogger/KE8YGWLogger/Models/StationProfile.swift" : {
+    "index-unit-output-path" : "/KE8YGWLogger.build/Release-iphoneos/KE8YGWLogger.build/Objects-normal/arm64/StationProfile.o",
+    "llvm-bc" : "/Volumes/Macintosh_HD/Users/user946929/ke8ygw-logger/ios/KE8YGWLogger/build/KE8YGWLogger.build/Release-iphoneos/KE8YGWLogger.build/Objects-normal/arm64/StationProfile.bc",
+    "object" : "/Volumes/Macintosh_HD/Users/user946929/ke8ygw-logger/ios/KE8YGWLogger/build/KE8YGWLogger.build/Release-iphoneos/KE8YGWLogger.build/Objects-normal/arm64/StationProfile.o"
+  },
+  "/Volumes/Macintosh_HD/Users/user946929/ke8ygw-logger/ios/KE8YGWLogger/KE8YGWLogger/Services/HamRadioUtilities.swift" : {
+    "index-unit-output-path" : "/KE8YGWLogger.build/Release-iphoneos/KE8YGWLogger.build/Objects-normal/arm64/HamRadioUtilities.o",
+    "llvm-bc" : "/Volumes/Macintosh_HD/Users/user946929/ke8ygw-logger/ios/KE8YGWLogger/build/KE8YGWLogger.build/Release-iphoneos/KE8YGWLogger.build/Objects-normal/arm64/HamRadioUtilities.bc",
+    "object" : "/Volumes/Macintosh_HD/Users/user946929/ke8ygw-logger/ios/KE8YGWLogger/build/KE8YGWLogger.build/Release-iphoneos/KE8YGWLogger.build/Objects-normal/arm64/HamRadioUtilities.o"
+  },
+  "/Volumes/Macintosh_HD/Users/user946929/ke8ygw-logger/ios/KE8YGWLogger/KE8YGWLogger/Services/LogExportService.swift" : {
+    "index-unit-output-path" : "/KE8YGWLogger.build/Release-iphoneos/KE8YGWLogger.build/Objects-normal/arm64/LogExportService.o",
+    "llvm-bc" : "/Volumes/Macintosh_HD/Users/user946929/ke8ygw-logger/ios/KE8YGWLogger/build/KE8YGWLogger.build/Release-iphoneos/KE8YGWLogger.build/Objects-normal/arm64/LogExportService.bc",
+    "object" : "/Volumes/Macintosh_HD/Users/user946929/ke8ygw-logger/ios/KE8YGWLogger/build/KE8YGWLogger.build/Release-iphoneos/KE8YGWLogger.build/Objects-normal/arm64/LogExportService.o"
+  },
+  "/Volumes/Macintosh_HD/Users/user946929/ke8ygw-logger/ios/KE8YGWLogger/KE8YGWLogger/Shared/RustBridge/RustBridge.swift" : {
+    "index-unit-output-path" : "/KE8YGWLogger.build/Release-iphoneos/KE8YGWLogger.build/Objects-normal/arm64/RustBridge.o",
+    "llvm-bc" : "/Volumes/Macintosh_HD/Users/user946929/ke8ygw-logger/ios/KE8YGWLogger/build/KE8YGWLogger.build/Release-iphoneos/KE8YGWLogger.build/Objects-normal/arm64/RustBridge.bc",
+    "object" : "/Volumes/Macintosh_HD/Users/user946929/ke8ygw-logger/ios/KE8YGWLogger/build/KE8YGWLogger.build/Release-iphoneos/KE8YGWLogger.build/Objects-normal/arm64/RustBridge.o"
+  },
+  "/Volumes/Macintosh_HD/Users/user946929/ke8ygw-logger/ios/KE8YGWLogger/KE8YGWLogger/Shared/Services/PlatformServices.swift" : {
+    "index-unit-output-path" : "/KE8YGWLogger.build/Release-iphoneos/KE8YGWLogger.build/Objects-normal/arm64/PlatformServices.o",
+    "llvm-bc" : "/Volumes/Macintosh_HD/Users/user946929/ke8ygw-logger/ios/KE8YGWLogger/build/KE8YGWLogger.build/Release-iphoneos/KE8YGWLogger.build/Objects-normal/arm64/PlatformServices.bc",
+    "object" : "/Volumes/Macintosh_HD/Users/user946929/ke8ygw-logger/ios/KE8YGWLogger/build/KE8YGWLogger.build/Release-iphoneos/KE8YGWLogger.build/Objects-normal/arm64/PlatformServices.o"
+  },
+  "/Volumes/Macintosh_HD/Users/user946929/ke8ygw-logger/ios/KE8YGWLogger/KE8YGWLogger/Shared/Services/ProjectionRefreshService.swift" : {
+    "index-unit-output-path" : "/KE8YGWLogger.build/Release-iphoneos/KE8YGWLogger.build/Objects-normal/arm64/ProjectionRefreshService.o",
+    "llvm-bc" : "/Volumes/Macintosh_HD/Users/user946929/ke8ygw-logger/ios/KE8YGWLogger/build/KE8YGWLogger.build/Release-iphoneos/KE8YGWLogger.build/Objects-normal/arm64/ProjectionRefreshService.bc",
+    "object" : "/Volumes/Macintosh_HD/Users/user946929/ke8ygw-logger/ios/KE8YGWLogger/build/KE8YGWLogger.build/Release-iphoneos/KE8YGWLogger.build/Objects-normal/arm64/ProjectionRefreshService.o"
+  },
+  "/Volumes/Macintosh_HD/Users/user946929/ke8ygw-logger/ios/KE8YGWLogger/KE8YGWLogger/Shared/Theme/AppTheme.swift" : {
+    "index-unit-output-path" : "/KE8YGWLogger.build/Release-iphoneos/KE8YGWLogger.build/Objects-normal/arm64/AppTheme.o",
+    "llvm-bc" : "/Volumes/Macintosh_HD/Users/user946929/ke8ygw-logger/ios/KE8YGWLogger/build/KE8YGWLogger.build/Release-iphoneos/KE8YGWLogger.build/Objects-normal/arm64/AppTheme.bc",
+    "object" : "/Volumes/Macintosh_HD/Users/user946929/ke8ygw-logger/ios/KE8YGWLogger/build/KE8YGWLogger.build/Release-iphoneos/KE8YGWLogger.build/Objects-normal/arm64/AppTheme.o"
+  },
+  "/Volumes/Macintosh_HD/Users/user946929/ke8ygw-logger/ios/KE8YGWLogger/KE8YGWLogger/Views/ExportView.swift" : {
+    "index-unit-output-path" : "/KE8YGWLogger.build/Release-iphoneos/KE8YGWLogger.build/Objects-normal/arm64/ExportView.o",
+    "llvm-bc" : "/Volumes/Macintosh_HD/Users/user946929/ke8ygw-logger/ios/KE8YGWLogger/build/KE8YGWLogger.build/Release-iphoneos/KE8YGWLogger.build/Objects-normal/arm64/ExportView.bc",
+    "object" : "/Volumes/Macintosh_HD/Users/user946929/ke8ygw-logger/ios/KE8YGWLogger/build/KE8YGWLogger.build/Release-iphoneos/KE8YGWLogger.build/Objects-normal/arm64/ExportView.o"
+  },
+  "/Volumes/Macintosh_HD/Users/user946929/ke8ygw-logger/ios/KE8YGWLogger/KE8YGWLogger/Views/HomeView.swift" : {
+    "index-unit-output-path" : "/KE8YGWLogger.build/Release-iphoneos/KE8YGWLogger.build/Objects-normal/arm64/HomeView.o",
+    "llvm-bc" : "/Volumes/Macintosh_HD/Users/user946929/ke8ygw-logger/ios/KE8YGWLogger/build/KE8YGWLogger.build/Release-iphoneos/KE8YGWLogger.build/Objects-normal/arm64/HomeView.bc",
+    "object" : "/Volumes/Macintosh_HD/Users/user946929/ke8ygw-logger/ios/KE8YGWLogger/build/KE8YGWLogger.build/Release-iphoneos/KE8YGWLogger.build/Objects-normal/arm64/HomeView.o"
+  },
+  "/Volumes/Macintosh_HD/Users/user946929/ke8ygw-logger/ios/KE8YGWLogger/KE8YGWLogger/Views/LogbookView.swift" : {
+    "index-unit-output-path" : "/KE8YGWLogger.build/Release-iphoneos/KE8YGWLogger.build/Objects-normal/arm64/LogbookView.o",
+    "llvm-bc" : "/Volumes/Macintosh_HD/Users/user946929/ke8ygw-logger/ios/KE8YGWLogger/build/KE8YGWLogger.build/Release-iphoneos/KE8YGWLogger.build/Objects-normal/arm64/LogbookView.bc",
+    "object" : "/Volumes/Macintosh_HD/Users/user946929/ke8ygw-logger/ios/KE8YGWLogger/build/KE8YGWLogger.build/Release-iphoneos/KE8YGWLogger.build/Objects-normal/arm64/LogbookView.o"
+  },
+  "/Volumes/Macintosh_HD/Users/user946929/ke8ygw-logger/ios/KE8YGWLogger/KE8YGWLogger/Views/NewQSOView.swift" : {
+    "index-unit-output-path" : "/KE8YGWLogger.build/Release-iphoneos/KE8YGWLogger.build/Objects-normal/arm64/NewQSOView.o",
+    "llvm-bc" : "/Volumes/Macintosh_HD/Users/user946929/ke8ygw-logger/ios/KE8YGWLogger/build/KE8YGWLogger.build/Release-iphoneos/KE8YGWLogger.build/Objects-normal/arm64/NewQSOView.bc",
+    "object" : "/Volumes/Macintosh_HD/Users/user946929/ke8ygw-logger/ios/KE8YGWLogger/build/KE8YGWLogger.build/Release-iphoneos/KE8YGWLogger.build/Objects-normal/arm64/NewQSOView.o"
+  },
+  "/Volumes/Macintosh_HD/Users/user946929/ke8ygw-logger/ios/KE8YGWLogger/KE8YGWLogger/Views/QSODetailView.swift" : {
+    "index-unit-output-path" : "/KE8YGWLogger.build/Release-iphoneos/KE8YGWLogger.build/Objects-normal/arm64/QSODetailView.o",
+    "llvm-bc" : "/Volumes/Macintosh_HD/Users/user946929/ke8ygw-logger/ios/KE8YGWLogger/build/KE8YGWLogger.build/Release-iphoneos/KE8YGWLogger.build/Objects-normal/arm64/QSODetailView.bc",
+    "object" : "/Volumes/Macintosh_HD/Users/user946929/ke8ygw-logger/ios/KE8YGWLogger/build/KE8YGWLogger.build/Release-iphoneos/KE8YGWLogger.build/Objects-normal/arm64/QSODetailView.o"
+  },
+  "/Volumes/Macintosh_HD/Users/user946929/ke8ygw-logger/ios/KE8YGWLogger/KE8YGWLogger/Views/RootView.swift" : {
+    "index-unit-output-path" : "/KE8YGWLogger.build/Release-iphoneos/KE8YGWLogger.build/Objects-normal/arm64/RootView.o",
+    "llvm-bc" : "/Volumes/Macintosh_HD/Users/user946929/ke8ygw-logger/ios/KE8YGWLogger/build/KE8YGWLogger.build/Release-iphoneos/KE8YGWLogger.build/Objects-normal/arm64/RootView.bc",
+    "object" : "/Volumes/Macintosh_HD/Users/user946929/ke8ygw-logger/ios/KE8YGWLogger/build/KE8YGWLogger.build/Release-iphoneos/KE8YGWLogger.build/Objects-normal/arm64/RootView.o"
+  },
+  "/Volumes/Macintosh_HD/Users/user946929/ke8ygw-logger/ios/KE8YGWLogger/KE8YGWLogger/Views/SettingsView.swift" : {
+    "index-unit-output-path" : "/KE8YGWLogger.build/Release-iphoneos/KE8YGWLogger.build/Objects-normal/arm64/SettingsView.o",
+    "llvm-bc" : "/Volumes/Macintosh_HD/Users/user946929/ke8ygw-logger/ios/KE8YGWLogger/build/KE8YGWLogger.build/Release-iphoneos/KE8YGWLogger.build/Objects-normal/arm64/SettingsView.bc",
+    "object" : "/Volumes/Macintosh_HD/Users/user946929/ke8ygw-logger/ios/KE8YGWLogger/build/KE8YGWLogger.build/Release-iphoneos/KE8YGWLogger.build/Objects-normal/arm64/SettingsView.o"
+  },
+  "/Volumes/Macintosh_HD/Users/user946929/ke8ygw-logger/ios/KE8YGWLogger/KE8YGWLogger/Views/StationProfileView.swift" : {
+    "index-unit-output-path" : "/KE8YGWLogger.build/Release-iphoneos/KE8YGWLogger.build/Objects-normal/arm64/StationProfileView.o",
+    "llvm-bc" : "/Volumes/Macintosh_HD/Users/user946929/ke8ygw-logger/ios/KE8YGWLogger/build/KE8YGWLogger.build/Release-iphoneos/KE8YGWLogger.build/Objects-normal/arm64/StationProfileView.bc",
+    "object" : "/Volumes/Macintosh_HD/Users/user946929/ke8ygw-logger/ios/KE8YGWLogger/build/KE8YGWLogger.build/Release-iphoneos/KE8YGWLogger.build/Objects-normal/arm64/StationProfileView.o"
+  },
+  "/Volumes/Macintosh_HD/Users/user946929/ke8ygw-logger/ios/KE8YGWLogger/build/KE8YGWLogger.build/Release-iphoneos/KE8YGWLogger.build/DerivedSources/GeneratedAssetSymbols.swift" : {
+    "index-unit-output-path" : "/KE8YGWLogger.build/Release-iphoneos/KE8YGWLogger.build/Objects-normal/arm64/GeneratedAssetSymbols.o",
+    "llvm-bc" : "/Volumes/Macintosh_HD/Users/user946929/ke8ygw-logger/ios/KE8YGWLogger/build/KE8YGWLogger.build/Release-iphoneos/KE8YGWLogger.build/Objects-normal/arm64/GeneratedAssetSymbols.bc",
+    "object" : "/Volumes/Macintosh_HD/Users/user946929/ke8ygw-logger/ios/KE8YGWLogger/build/KE8YGWLogger.build/Release-iphoneos/KE8YGWLogger.build/Objects-normal/arm64/GeneratedAssetSymbols.o"
+  }
+}
