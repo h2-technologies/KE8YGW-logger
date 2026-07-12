@@ -14,6 +14,8 @@ enum ProjectionRefreshService {
         } ?? QSO(
             id: UUID(uuidString: record.qsoId) ?? UUID(),
             callsign: record.payload.contactedCallsign ?? "",
+            band: record.payload.band ?? "",
+            mode: record.payload.mode ?? "",
             frequencyMHz: frequencyMHz(from: record.payload),
             rstSent: record.payload.rstSent ?? "",
             rstReceived: record.payload.rstReceived ?? "",
