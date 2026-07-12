@@ -35,7 +35,6 @@
 		20000000000000000000010C /* Features/SOTA/SOTAView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 20000000000000000000000C /* Features/SOTA/SOTAView.swift */; };
 		20000000000000000000010D /* Features/NetControl/NetControlView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 20000000000000000000000D /* Features/NetControl/NetControlView.swift */; };
 		20000000000000000000010E /* Features/Diagnostics/DiagnosticsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 20000000000000000000000E /* Features/Diagnostics/DiagnosticsView.swift */; };
-		300000000000000000000101 /* HamIOSFFI.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = 300000000000000000000001 /* HamIOSFFI.xcframework */; };
 		300000000000000000000102 /* Shared/Services/ProjectionRefreshService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 300000000000000000000002 /* Shared/Services/ProjectionRefreshService.swift */; };
 		100000000000000000000201 /* HamRadioUtilitiesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000021 /* HamRadioUtilitiesTests.swift */; };
 		100000000000000000000202 /* ExportServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000022 /* ExportServiceTests.swift */; };
@@ -83,7 +82,6 @@
 		20000000000000000000000C /* Features/SOTA/SOTAView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Features/SOTA/SOTAView.swift; sourceTree = "<group>"; };
 		20000000000000000000000D /* Features/NetControl/NetControlView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Features/NetControl/NetControlView.swift; sourceTree = "<group>"; };
 		20000000000000000000000E /* Features/Diagnostics/DiagnosticsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Features/Diagnostics/DiagnosticsView.swift; sourceTree = "<group>"; };
-		300000000000000000000001 /* HamIOSFFI.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = HamIOSFFI.xcframework; path = ../../artifacts/HamIOSFFI.xcframework; sourceTree = SOURCE_ROOT; };
 		300000000000000000000002 /* Shared/Services/ProjectionRefreshService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Shared/Services/ProjectionRefreshService.swift; sourceTree = "<group>"; };
 		100000000000000000000021 /* HamRadioUtilitiesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HamRadioUtilitiesTests.swift; sourceTree = "<group>"; };
 		100000000000000000000022 /* ExportServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExportServiceTests.swift; sourceTree = "<group>"; };
@@ -98,7 +96,6 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				300000000000000000000101 /* HamIOSFFI.xcframework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -173,7 +170,6 @@
 			children = (
 				100000000000000000000010 /* KE8YGWLogger */,
 				100000000000000000000020 /* KE8YGWLoggerTests */,
-				300000000000000000000001 /* HamIOSFFI.xcframework */,
 				100000000000000000000032 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -285,6 +281,7 @@
 			outputFileListPaths = ();
 			outputPaths = (
 				"$(SRCROOT)/../../artifacts/HamIOSFFI.xcframework",
+				"$(SRCROOT)/../../artifacts/ios/link/$(CONFIGURATION)$(EFFECTIVE_PLATFORM_NAME)/libham_ios_ffi.a",
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
@@ -479,6 +476,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = R4B2HA4TUA;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = KE8YGWLogger/Resources/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
@@ -486,7 +484,15 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
+				LIBRARY_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(SRCROOT)/../../artifacts/ios/link/$(CONFIGURATION)$(EFFECTIVE_PLATFORM_NAME)",
+				);
 				MARKETING_VERSION = 0.1.0;
+				OTHER_LDFLAGS = (
+					"$(inherited)",
+					"-lham_ios_ffi",
+				);
 				PRODUCT_BUNDLE_IDENTIFIER = "com.h2technologiesllc.ke8ygw-logger";
 				PRODUCT_MODULE_NAME = KE8YGWLogger;
 				PRODUCT_NAME = "KE8YGW Logger";
@@ -504,6 +510,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = R4B2HA4TUA;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = KE8YGWLogger/Resources/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
@@ -511,7 +518,15 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
+				LIBRARY_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(SRCROOT)/../../artifacts/ios/link/$(CONFIGURATION)$(EFFECTIVE_PLATFORM_NAME)",
+				);
 				MARKETING_VERSION = 0.1.0;
+				OTHER_LDFLAGS = (
+					"$(inherited)",
+					"-lham_ios_ffi",
+				);
 				PRODUCT_BUNDLE_IDENTIFIER = "com.h2technologiesllc.ke8ygw-logger";
 				PRODUCT_MODULE_NAME = KE8YGWLogger;
 				PRODUCT_NAME = "KE8YGW Logger";

@@ -25,11 +25,12 @@ No GitHub Actions, Fastlane, TestFlight upload, iCloud, Push Notifications,
 Associated Domains, App Groups, Sign in with Apple, or paid Apple capabilities
 are configured yet. Local notifications use user authorization only.
 
-## Rust XCFramework
+## Rust Linkage
 
-The iOS target links `ham-ios-ffi` through
-`artifacts/HamIOSFFI.xcframework`. The Xcode target has a build phase that
-generates the framework on macOS.
+The iOS target links `ham-ios-ffi` through a generated static library under
+`artifacts/ios/link/<Configuration><platform>/libham_ios_ffi.a`. The Xcode
+target has a build phase that generates the Rust libraries and assembles
+`artifacts/HamIOSFFI.xcframework` for packaging and verification.
 
 Manual build from the repository root:
 

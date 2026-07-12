@@ -14,10 +14,8 @@ bash "$SCRIPT_DIR/install-targets.sh"
 CONFIGURATION="${CONFIGURATION:-Release}"
 CONFIGURATION_LOWER="$(printf '%s' "$CONFIGURATION" | tr '[:upper:]' '[:lower:]')"
 PROFILE_DIR="release"
-CARGO_PROFILE_ARGS=(--release)
 if [[ "$CONFIGURATION_LOWER" == "debug" ]]; then
   PROFILE_DIR="debug"
-  CARGO_PROFILE_ARGS=()
 fi
 
 TARGETS=(aarch64-apple-ios aarch64-apple-ios-sim)
@@ -28,7 +26,11 @@ fi
 cd "$REPO_ROOT"
 for target in "${TARGETS[@]}"; do
   echo "Building ham-ios-ffi for $target ($CONFIGURATION)"
-  cargo build -p ham-ios-ffi --target "$target" "${CARGO_PROFILE_ARGS[@]}"
+  if [[ "$PROFILE_DIR" == "debug" ]]; then
+    cargo build -p ham-ios-ffi --target "$target"
+  else
+    cargo build -p ham-ios-ffi --target "$target" --release
+  fi
 done
 
 INCLUDE_DIR="$REPO_ROOT/artifacts/ios/include"
@@ -56,6 +58,29 @@ if [[ ! -f "$DEVICE_LIB" ]]; then
   echo "error: device library was not produced at $DEVICE_LIB" >&2
   exit 1
 fi
+
+LINK_ROOT="$REPO_ROOT/artifacts/ios/link"
+copy_link_library() {
+  local platform_suffix="$1"
+  local source_lib="$2"
+  local destination_dir="$LINK_ROOT/${CONFIGURATION}${platform_suffix}"
+  mkdir -p "$destination_dir"
+  cp "$source_lib" "$destination_dir/libham_ios_ffi.a"
+  echo "  link:      $destination_dir/libham_ios_ffi.a"
+}
+
+case "${EFFECTIVE_PLATFORM_NAME:-}" in
+  -iphoneos)
+    copy_link_library "-iphoneos" "$DEVICE_LIB"
+    ;;
+  -iphonesimulator)
+    copy_link_library "-iphonesimulator" "$SIM_LIB_OUT"
+    ;;
+  *)
+    copy_link_library "-iphoneos" "$DEVICE_LIB"
+    copy_link_library "-iphonesimulator" "$SIM_LIB_OUT"
+    ;;
+esac
 
 echo "Rust iOS libraries ready:"
 echo "  device:    $DEVICE_LIB"

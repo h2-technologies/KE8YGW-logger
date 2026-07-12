@@ -29,15 +29,14 @@ The deterministic output path is:
 
 ```text
 artifacts/HamIOSFFI.xcframework/
+artifacts/ios/link/Release-iphoneos/libham_ios_ffi.a
+artifacts/ios/link/Release-iphonesimulator/libham_ios_ffi.a
 ```
 
 `artifacts/` is ignored by Git. Do not commit machine-generated framework
 output unless the repository intentionally changes that policy.
 
 ## Xcode Integration
-
-The app target references `../../artifacts/HamIOSFFI.xcframework` from
-`ios/KE8YGWLogger/KE8YGWLogger.xcodeproj`.
 
 The `KE8YGWLogger` target has a pre-link build phase named
 `Build HamIOSFFI XCFramework`. It runs:
@@ -46,9 +45,23 @@ The `KE8YGWLogger` target has a pre-link build phase named
 bash "$SRCROOT/../../scripts/ios/build-xcframework.sh"
 ```
 
-This keeps the framework generation documented and reproducible. Set
-`SKIP_RUST_XCFRAMEWORK_BUILD=1` only when the framework already exists and you
-are intentionally testing Xcode without rebuilding Rust.
+This keeps the framework generation documented and reproducible. Xcode does not
+directly link a generated `HamIOSFFI.xcframework` file reference, because a
+clean checkout has no `artifacts/` directory yet and Xcode can fail before the
+build phase creates it. Instead, the app target links `-lham_ios_ffi` from:
+
+```text
+$(SRCROOT)/../../artifacts/ios/link/$(CONFIGURATION)$(EFFECTIVE_PLATFORM_NAME)
+```
+
+The build script copies the correct device or simulator static library to that
+path before the link step. It still assembles
+`artifacts/HamIOSFFI.xcframework/` for CI, packaging, and architecture
+inspection.
+
+Set `SKIP_RUST_XCFRAMEWORK_BUILD=1` only when the generated static library and
+framework already exist and you are intentionally testing Xcode without
+rebuilding Rust.
 
 ## Build And Test Locally
 
@@ -112,6 +125,11 @@ for every XCFramework slice.
 - `xcode-select` points at command line tools only: run
   `sudo xcode-select -s /Applications/Xcode.app/Contents/Developer`.
 - Missing Rust target: run `bash scripts/ios/install-targets.sh`.
+- `No XCFramework found at artifacts/hamiosffi.xcframework`: pull the latest
+  project file or remove any stale local `HamIOSFFI.xcframework` reference from
+  Link Binary With Libraries. The app now links the generated static library
+  under `artifacts/ios/link/...`; the XCFramework is still generated but is not
+  a direct Xcode file reference.
 - Missing symbol at link: rebuild with
   `CONFIGURATION=Release bash scripts/ios/build-xcframework.sh`, then rerun
   `bash scripts/ios/verify-linkage.sh`.
