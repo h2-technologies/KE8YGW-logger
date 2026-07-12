@@ -133,6 +133,11 @@ for every XCFramework slice.
 - Missing symbol at link: rebuild with
   `CONFIGURATION=Release bash scripts/ios/build-xcframework.sh`, then rerun
   `bash scripts/ios/verify-linkage.sh`.
+- `does not export ham_ios_call_json_bytes`: remove stale generated archives
+  with `rm -rf target/ios-universal-sim artifacts/HamIOSFFI.xcframework
+  artifacts/ios/link`, then rerun the XCFramework build script. The build
+  script refreshes static archive indexes with `ranlib`; the verifier checks
+  each simulator/device architecture independently.
 - Stale framework: remove `artifacts/HamIOSFFI.xcframework` and rerun the build
   script.
 - Simulator architecture mismatch: confirm the simulator slice contains

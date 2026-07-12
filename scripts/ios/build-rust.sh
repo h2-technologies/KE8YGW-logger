@@ -44,6 +44,7 @@ SIM_LIB_ARM="$REPO_ROOT/target/aarch64-apple-ios-sim/$PROFILE_DIR/libham_ios_ffi
 SIM_LIB_X86="$REPO_ROOT/target/x86_64-apple-ios/$PROFILE_DIR/libham_ios_ffi.a"
 SIM_LIB_OUT="$SIM_OUTPUT_DIR/libham_ios_ffi.a"
 
+rm -f "$SIM_LIB_OUT"
 if [[ -f "$SIM_LIB_ARM" && -f "$SIM_LIB_X86" ]]; then
   xcrun lipo -create "$SIM_LIB_ARM" "$SIM_LIB_X86" -output "$SIM_LIB_OUT"
 elif [[ -f "$SIM_LIB_ARM" ]]; then
@@ -52,12 +53,14 @@ else
   echo "error: simulator library was not produced at $SIM_LIB_ARM" >&2
   exit 1
 fi
+xcrun ranlib "$SIM_LIB_OUT"
 
 DEVICE_LIB="$REPO_ROOT/target/aarch64-apple-ios/$PROFILE_DIR/libham_ios_ffi.a"
 if [[ ! -f "$DEVICE_LIB" ]]; then
   echo "error: device library was not produced at $DEVICE_LIB" >&2
   exit 1
 fi
+xcrun ranlib "$DEVICE_LIB"
 
 LINK_ROOT="$REPO_ROOT/artifacts/ios/link"
 copy_link_library() {
@@ -66,6 +69,7 @@ copy_link_library() {
   local destination_dir="$LINK_ROOT/${CONFIGURATION}${platform_suffix}"
   mkdir -p "$destination_dir"
   cp "$source_lib" "$destination_dir/libham_ios_ffi.a"
+  xcrun ranlib "$destination_dir/libham_ios_ffi.a"
   echo "  link:      $destination_dir/libham_ios_ffi.a"
 }
 
