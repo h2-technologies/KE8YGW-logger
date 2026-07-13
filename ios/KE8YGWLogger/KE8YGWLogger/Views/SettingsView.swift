@@ -175,7 +175,7 @@ struct SettingsView: View {
 
                 Section("About") {
                     DetailRow(title: "App", value: "KE8YGW Logger")
-                    DetailRow(title: "Version", value: "0.1.0")
+                    DetailRow(title: "Version", value: "0.2.0")
                 }
             } else {
                 Button("Create Default Settings") {

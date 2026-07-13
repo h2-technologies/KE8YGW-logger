@@ -6,7 +6,7 @@ enum LogExportService {
         KE8YGW Logger ADIF Export
         <ADIF_VER:5>3.1.4
         <PROGRAMID:12>KE8YGWLogger
-        <PROGRAMVERSION:5>0.1.0
+        <PROGRAMVERSION:5>0.2.0
         <EOH>
 
         """
