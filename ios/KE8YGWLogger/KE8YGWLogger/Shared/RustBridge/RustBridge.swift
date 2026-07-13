@@ -610,7 +610,7 @@ struct FallbackRustBridgeClient: RustBridgeClient {
                 ]
             ]
         default:
-            return try call(endpointForCommand(command), argument: nil)
+            return try await call(endpointForCommand(command), argument: nil)
         }
 
         let envelope: [String: Any] = [

@@ -426,7 +426,7 @@ struct ActivationEligibility: Equatable {
             return ActivationEligibility(state: .providerDisabled, canStart: false, message: "The provider is disabled.", offlineOnly: false)
         }
         if !networkAvailable {
-            return ActivationEligibility(state: .offlineLocalOnly, canStart: settings.allowOfflineActivations, message: "No usable internet connection. Activation will be local-only.", offlineOnly: true)
+            return ActivationEligibility(state: .offlineLocalOnly, canStart: settings.effectiveAllowOfflineActivations, message: "No usable internet connection. Activation will be local-only.", offlineOnly: true)
         }
         let validation = settings.providerValidationRecord(providerID)
         guard validation.configured else {

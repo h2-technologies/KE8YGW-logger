@@ -88,6 +88,14 @@ final class HamRadioUtilitiesTests: XCTestCase {
         XCTAssertEqual(eligibility.state, .offlineLocalOnly)
     }
 
+    func testActivationEligibilityUsesEffectiveOfflineActivationSetting() {
+        let settings = AppSettings()
+        settings.allowOfflineActivations = nil
+        let eligibility = ActivationEligibility.evaluate(providerID: "pota", settings: settings, networkAvailable: false, validationTTLHours: 24)
+        XCTAssertTrue(eligibility.canStart)
+        XCTAssertEqual(eligibility.state, .offlineLocalOnly)
+    }
+
     func testNetClassificationOrdering() {
         let values: [NetTrafficClassification] = [.noTraffic, .routine, .emergency, .healthAndWelfare, .priority]
         XCTAssertEqual(values.sorted { $0.sortRank < $1.sortRank }, [.emergency, .priority, .routine, .healthAndWelfare, .noTraffic])

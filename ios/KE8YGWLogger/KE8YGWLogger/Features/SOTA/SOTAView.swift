@@ -29,81 +29,137 @@ struct SOTAView: View {
             validationTTLHours: appSettings?.validationTTLHours ?? 24
         )
     }
+    private var eligibilityIconName: String {
+        if eligibility.offlineOnly { return "wifi.slash" }
+        return eligibility.canStart ? "checkmark.seal" : "exclamationmark.triangle"
+    }
+    private var eligibilityTint: Color {
+        eligibility.canStart ? .secondary : .orange
+    }
+    private var activationButtonTitle: String {
+        activationStartedAt == nil ? "Start Activation" : "End Activation"
+    }
+    private var activationTypeText: String {
+        offlineActivation ? "Offline local-only" : "Online provider-gated"
+    }
+    private var uniqueCallsText: String {
+        "\(Set(activationQSOs.map(\.callsign)).count)"
+    }
+    private var bandsText: String {
+        Set(activationQSOs.map(\.band)).sorted().joined(separator: ", ")
+    }
 
     var body: some View {
+        sotaContent
+            .navigationTitle("SOTA")
+            .task {
+                connectivity.start()
+                restoreDraft()
+            }
+            .onChange(of: summitReference) { _, _ in persistDraft() }
+            .onChange(of: spotFrequency) { _, _ in persistDraft() }
+            .onChange(of: mode) { _, _ in persistDraft() }
+            .confirmationDialog("End this SOTA activation?", isPresented: $confirmEndActivation, titleVisibility: .visible) {
+                Button("End Activation", role: .destructive) {
+                    Task { await toggleActivation() }
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("The activation will be ended through the Rust event path and the local draft will be cleared.")
+            }
+    }
+
+    private var sotaContent: some View {
         List {
-            Section("Summit") {
-                TextField("Summit Reference", text: $summitReference)
-                    .textInputAutocapitalization(.characters)
-                TextField("Spot Frequency MHz", text: $spotFrequency)
-                    .keyboardType(.decimalPad)
-                TextField("Mode", text: $mode)
-                    .textInputAutocapitalization(.characters)
-                if let activationStartedAt {
-                    DetailRow(title: "Started", value: activationStartedAt.formatted(date: .omitted, time: .standard))
-                    DetailRow(title: "Elapsed", value: elapsedText(since: activationStartedAt))
-                    DetailRow(title: "Activation Type", value: offlineActivation ? "Offline local-only" : "Online provider-gated")
-                }
-                DetailRow(title: "Network", value: connectivity.state.label)
-                Label(eligibility.message, systemImage: eligibility.offlineOnly ? "wifi.slash" : eligibility.canStart ? "checkmark.seal" : "exclamationmark.triangle")
-                    .font(.caption)
-                    .foregroundStyle(eligibility.canStart ? .secondary : .orange)
-                    .accessibilityLabel("SOTA activation eligibility: \(eligibility.message)")
-                Button(activationStartedAt == nil ? "Start Activation" : "End Activation") {
-                    if activationStartedAt == nil {
-                        Task { await toggleActivation() }
-                    } else {
-                        confirmEndActivation = true
-                    }
-                }
-                .disabled(startDisabled)
-                if let activationMessage {
-                    Text(activationMessage)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            }
+            summitSection
+            statisticsSection
+            spottingSection
+            exportSection
+        }
+    }
 
-            Section("Statistics") {
-                DetailRow(title: "QSOs", value: "\(activationQSOs.count)")
-                DetailRow(title: "Unique Calls", value: "\(Set(activationQSOs.map { $0.callsign }).count)")
-                DetailRow(title: "Bands", value: Set(activationQSOs.map { $0.band }).sorted().joined(separator: ", "))
-            }
+    @ViewBuilder
+    private var summitSection: some View {
+        Section("Summit") {
+            TextField("Summit Reference", text: $summitReference)
+                .textInputAutocapitalization(.characters)
+            TextField("Spot Frequency MHz", text: $spotFrequency)
+                .keyboardType(.decimalPad)
+            TextField("Mode", text: $mode)
+                .textInputAutocapitalization(.characters)
+            activeActivationRows
+            DetailRow(title: "Network", value: connectivity.state.label)
+            activationEligibilityLabel
+            activationToggleButton
+            activationMessageRow
+        }
+    }
 
-            Section("Spotting") {
-                Button("Post SOTAWatch Spot") {
-                    spotMessage = "SOTAWatch spot queued for \(summitReference) on \(spotFrequency) MHz \(mode)."
-                }
-                    .disabled(summitReference.isEmpty)
-                if let spotMessage {
-                    Text(spotMessage)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                Label("SOTAWatch provider status is supplied by the Rust provider bridge.", systemImage: "point.3.connected.trianglepath.dotted")
+    @ViewBuilder
+    private var activeActivationRows: some View {
+        if let activationStartedAt {
+            DetailRow(title: "Started", value: activationStartedAt.formatted(date: .omitted, time: .standard))
+            DetailRow(title: "Elapsed", value: elapsedText(since: activationStartedAt))
+            DetailRow(title: "Activation Type", value: activationTypeText)
+        }
+    }
+
+    private var activationEligibilityLabel: some View {
+        Label(eligibility.message, systemImage: eligibilityIconName)
+            .font(.caption)
+            .foregroundStyle(eligibilityTint)
+            .accessibilityLabel("SOTA activation eligibility: \(eligibility.message)")
+    }
+
+    private var activationToggleButton: some View {
+        Button(activationButtonTitle) {
+            if activationStartedAt == nil {
+                Task { await toggleActivation() }
+            } else {
+                confirmEndActivation = true
+            }
+        }
+        .disabled(startDisabled)
+    }
+
+    @ViewBuilder
+    private var activationMessageRow: some View {
+        if let activationMessage {
+            Text(activationMessage)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private var statisticsSection: some View {
+        Section("Statistics") {
+            DetailRow(title: "QSOs", value: "\(activationQSOs.count)")
+            DetailRow(title: "Unique Calls", value: uniqueCallsText)
+            DetailRow(title: "Bands", value: bandsText)
+        }
+    }
+
+    @ViewBuilder
+    private var spottingSection: some View {
+        Section("Spotting") {
+            Button("Post SOTAWatch Spot") {
+                spotMessage = "SOTAWatch spot queued for \(summitReference) on \(spotFrequency) MHz \(mode)."
+            }
+            .disabled(summitReference.isEmpty)
+            if let spotMessage {
+                Text(spotMessage)
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+            Label("SOTAWatch provider status is supplied by the Rust provider bridge.", systemImage: "point.3.connected.trianglepath.dotted")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
 
-            Section("Export") {
-                NavigationLink("Export Logs", destination: ExportView())
-            }
-        }
-        .navigationTitle("SOTA")
-        .task {
-            connectivity.start()
-            restoreDraft()
-        }
-        .onChange(of: summitReference) { _, _ in persistDraft() }
-        .onChange(of: spotFrequency) { _, _ in persistDraft() }
-        .onChange(of: mode) { _, _ in persistDraft() }
-        .confirmationDialog("End this SOTA activation?", isPresented: $confirmEndActivation, titleVisibility: .visible) {
-            Button("End Activation", role: .destructive) {
-                Task { await toggleActivation() }
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("The activation will be ended through the Rust event path and the local draft will be cleared.")
+    private var exportSection: some View {
+        Section("Export") {
+            NavigationLink("Export Logs", destination: ExportView())
         }
     }
 
