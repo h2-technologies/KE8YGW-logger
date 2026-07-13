@@ -974,8 +974,11 @@ struct ProviderMetadataSnapshot: Decodable, Identifiable {
     var displayName: String
     var serviceType: String?
     var requiredCredentials: [String]?
+    var requiredConfigKeys: [String]?
     var supportsOffline: Bool?
     var requiresNetworkAccess: Bool?
+    var status: String?
+    var enabled: Bool?
 }
 
 struct MapSnapshot: Decodable {

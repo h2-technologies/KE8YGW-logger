@@ -1,71 +1,56 @@
+import SwiftData
 import SwiftUI
 
 struct ProviderStatusView: View {
+    @Environment(\.modelContext) private var modelContext
     @EnvironmentObject private var bridge: RustBridgeStore
-    @State private var credentialProvider = "qrz"
-    @State private var credentialAccount = ""
-    @State private var credentialSecret = ""
-    @State private var credentialMessage: String?
+    @Query private var settings: [AppSettings]
 
-    private let vault = KeychainCredentialVault()
-    private let providerOrder = ["qrz", "hamqth", "pota", "sotawatch", "dx_cluster", "club_log", "qrz_logbook", "eqsl", "lotw"]
+    private var appSettings: AppSettings? { settings.first }
+    private var providers: [ProviderMetadataSnapshot] {
+        if bridge.providers.onlineProviders.isEmpty {
+            return ProviderCredentialCatalog.definitions.map {
+                ProviderMetadataSnapshot(
+                    providerId: $0.id,
+                    displayName: $0.displayName,
+                    serviceType: "online",
+                    requiredCredentials: $0.secureFields.map(\.id),
+                    requiredConfigKeys: $0.fields.map(\.id),
+                    supportsOffline: $0.id == "dx-cluster",
+                    requiresNetworkAccess: $0.id != "dx-cluster",
+                    status: "pending",
+                    enabled: true
+                )
+            }
+        }
+        return bridge.providers.onlineProviders
+    }
 
     var body: some View {
         List {
-            Section("Provider Health") {
-                if bridge.providers.onlineProviders.isEmpty {
+            Section("Provider Status") {
+                if providers.isEmpty {
                     ContentUnavailableView("Provider snapshot unavailable", systemImage: "point.3.connected.trianglepath.dotted")
                 } else {
-                    ForEach(bridge.providers.onlineProviders) { provider in
-                        VStack(alignment: .leading, spacing: 4) {
-                            HStack {
-                                Text(provider.displayName)
-                                    .font(.headline)
-                                Spacer()
-                                Text(provider.requiredCredentials?.isEmpty == false ? "Credentials" : "Ready")
-                                    .foregroundStyle(provider.requiredCredentials?.isEmpty == false ? .orange : .green)
+                    ForEach(providers) { provider in
+                        ProviderStatusRow(
+                            provider: provider,
+                            settings: appSettings,
+                            toggle: { enabled in
+                                guard let appSettings else { return }
+                                appSettings.setProviderEnabled(canonicalProviderID(provider), enabled: enabled)
+                                try? modelContext.save()
                             }
-                            Text(provider.providerId)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                            if provider.requiresNetworkAccess == true {
-                                Label("Network provider", systemImage: "network")
-                                    .font(.caption)
-                            }
-                        }
+                        )
                     }
                 }
             }
 
-            Section("Known Integrations") {
-                ForEach(providerOrder, id: \.self) { provider in
-                    HStack {
-                        Text(provider.replacingOccurrences(of: "_", with: " ").uppercased())
-                        Spacer()
-                        Text(bridge.providers.apiStatus?[provider] ?? "pending")
-                            .font(.caption)
-                            .foregroundStyle(AppTheme.statusColor(bridge.providers.apiStatus?[provider]))
-                    }
-                }
-            }
-
-            Section("Credentials") {
-                Picker("Provider", selection: $credentialProvider) {
-                    ForEach(providerOrder, id: \.self) { provider in
-                        Text(provider.replacingOccurrences(of: "_", with: " ").uppercased()).tag(provider)
-                    }
-                }
-                TextField("Account", text: $credentialAccount)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                SecureField("Secret / Token", text: $credentialSecret)
-                Button("Save to Keychain", action: saveCredential)
-                    .disabled(credentialAccount.isEmpty || credentialSecret.isEmpty)
-                if let credentialMessage {
-                    Text(credentialMessage)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
+            Section("Credential Management") {
+                NavigationLink("Open Provider Credentials in Settings", destination: SettingsView())
+                Text("Disabling a provider pauses automatic use and keeps saved Keychain credentials and history until credentials are explicitly removed in Settings.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
         }
         .navigationTitle("Providers")
@@ -79,14 +64,89 @@ struct ProviderStatusView: View {
         }
     }
 
-    private func saveCredential() {
-        do {
-            try vault.save(secret: credentialSecret, account: credentialAccount, providerId: credentialProvider)
-            credentialSecret = ""
-            credentialMessage = "Saved \(credentialProvider) credential metadata in Keychain."
-        } catch {
-            credentialMessage = error.localizedDescription
+    private func canonicalProviderID(_ provider: ProviderMetadataSnapshot) -> String {
+        ProviderCredentialCatalog.definition(for: provider.providerId)?.id ?? provider.providerId
+    }
+}
+
+private struct ProviderStatusRow: View {
+    var provider: ProviderMetadataSnapshot
+    var settings: AppSettings?
+    var toggle: (Bool) -> Void
+
+    private var providerID: String {
+        ProviderCredentialCatalog.definition(for: provider.providerId)?.id ?? provider.providerId
+    }
+
+    private var validation: ProviderValidationRecord {
+        settings?.providerValidationRecord(providerID) ?? ProviderValidationRecord(
+            configured: provider.requiredCredentials?.isEmpty == true,
+            validated: false,
+            validatedAt: nil,
+            message: "No Settings record"
+        )
+    }
+
+    private var enabled: Bool {
+        settings?.isProviderEnabled(providerID) ?? provider.enabled ?? true
+    }
+
+    private var stateText: String {
+        if !enabled {
+            return validation.configured ? "Disabled but configured" : "Disabled and unconfigured"
         }
+        if !validation.configured {
+            return "Enabled but not configured"
+        }
+        if validation.validated {
+            return "Enabled and validated"
+        }
+        return "Enabled but validation required"
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(provider.displayName)
+                        .font(.headline)
+                    Text(provider.providerId)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Toggle("Enabled", isOn: Binding {
+                    enabled
+                } set: { value in
+                    toggle(value)
+                })
+                .labelsHidden()
+                .accessibilityLabel("\(provider.displayName) enabled")
+            }
+
+            Label(stateText, systemImage: enabled ? "checkmark.circle" : "pause.circle")
+                .font(.caption)
+                .foregroundStyle(enabled ? .primary : .secondary)
+                .accessibilityLabel("\(provider.displayName) \(stateText)")
+
+            HStack {
+                Label(validation.configured ? "Configured" : "Unconfigured", systemImage: validation.configured ? "key.fill" : "key.slash")
+                Label(validation.validated ? "Validated" : "Unvalidated", systemImage: validation.validated ? "checkmark.seal.fill" : "exclamationmark.triangle")
+                if provider.requiresNetworkAccess == true {
+                    Label("Network", systemImage: "network")
+                }
+                if provider.supportsOffline == true {
+                    Label("Offline", systemImage: "wifi.slash")
+                }
+            }
+            .font(.caption2)
+            .foregroundStyle(.secondary)
+
+            Text(validation.message)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .padding(.vertical, 4)
     }
 }
 

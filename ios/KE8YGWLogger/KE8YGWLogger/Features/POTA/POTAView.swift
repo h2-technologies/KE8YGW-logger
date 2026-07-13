@@ -2,8 +2,11 @@ import SwiftData
 import SwiftUI
 
 struct POTAView: View {
+    @Environment(\.modelContext) private var modelContext
     @EnvironmentObject private var bridge: RustBridgeStore
     @Query private var qsos: [QSO]
+    @Query private var settings: [AppSettings]
+    @StateObject private var connectivity = ConnectivityMonitor()
     @State private var parkReference = ""
     @State private var activationStartedAt: Date?
     @State private var activationID: String?
@@ -11,9 +14,20 @@ struct POTAView: View {
     @State private var mode = "SSB"
     @State private var spotMessage: String?
     @State private var activationMessage: String?
+    @State private var offlineActivation = false
+    @State private var confirmEndActivation = false
 
     private var activationQSOs: [QSO] {
         qsos.filter { !$0.potaReferences.isEmpty || $0.qsoKind == "pota" }
+    }
+    private var appSettings: AppSettings? { settings.first }
+    private var eligibility: ActivationEligibility {
+        ActivationEligibility.evaluate(
+            providerID: "pota",
+            settings: appSettings,
+            networkAvailable: connectivity.state.hasUsableInternet,
+            validationTTLHours: appSettings?.validationTTLHours ?? 24
+        )
     }
 
     var body: some View {
@@ -28,11 +42,21 @@ struct POTAView: View {
                 if let activationStartedAt {
                     DetailRow(title: "Started", value: activationStartedAt.formatted(date: .omitted, time: .standard))
                     DetailRow(title: "Elapsed", value: elapsedText(since: activationStartedAt))
+                    DetailRow(title: "Activation Type", value: offlineActivation ? "Offline local-only" : "Online provider-gated")
                 }
+                DetailRow(title: "Network", value: connectivity.state.label)
+                Label(eligibility.message, systemImage: eligibility.offlineOnly ? "wifi.slash" : eligibility.canStart ? "checkmark.seal" : "exclamationmark.triangle")
+                    .font(.caption)
+                    .foregroundStyle(eligibility.canStart ? .secondary : .orange)
+                    .accessibilityLabel("POTA activation eligibility: \(eligibility.message)")
                 Button(activationStartedAt == nil ? "Start Activation" : "End Activation") {
-                    Task { await toggleActivation() }
+                    if activationStartedAt == nil {
+                        Task { await toggleActivation() }
+                    } else {
+                        confirmEndActivation = true
+                    }
                 }
-                .disabled(parkReference.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .disabled(startDisabled)
                 if let activationMessage {
                     Text(activationMessage)
                         .font(.caption)
@@ -66,6 +90,26 @@ struct POTAView: View {
             }
         }
         .navigationTitle("POTA")
+        .task {
+            connectivity.start()
+            restoreDraft()
+        }
+        .onChange(of: parkReference) { _, _ in persistDraft() }
+        .onChange(of: spotFrequency) { _, _ in persistDraft() }
+        .onChange(of: mode) { _, _ in persistDraft() }
+        .confirmationDialog("End this POTA activation?", isPresented: $confirmEndActivation, titleVisibility: .visible) {
+            Button("End Activation", role: .destructive) {
+                Task { await toggleActivation() }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("The activation will be ended through the Rust event path and the local draft will be cleared.")
+        }
+    }
+
+    private var startDisabled: Bool {
+        if activationStartedAt != nil { return false }
+        return parkReference.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !eligibility.canStart
     }
 
     private func elapsedText(since start: Date) -> String {
@@ -84,9 +128,15 @@ struct POTAView: View {
                 ))
                 self.activationID = nil
                 activationStartedAt = nil
+                offlineActivation = false
                 activationMessage = "Activation ended through Rust."
+                appSettings?.potaDraftJSON = ""
+                appSettings?.updatedAt = Date()
+                try? modelContext.save()
+                return
             } else {
                 let startedAt = Date()
+                let startingOffline = eligibility.offlineOnly
                 let result = try await bridge.startActivation(ActivationBridgeRequest(
                     appSupportDir: supportURL.path,
                     activationType: "pota",
@@ -97,14 +147,47 @@ struct POTAView: View {
                     summitId: nil,
                     grid: bridge.dashboard.gps?.grid,
                     locationName: nil,
-                    notes: nil
+                    notes: startingOffline ? "iOS offline local-only start; provider validation skipped because NWPathMonitor reported no usable internet." : appSettings?.activationNotesTemplate
                 ))
                 activationID = result.officialEvent.entityId
                 activationStartedAt = startedAt
-                activationMessage = "Activation started through Rust."
+                offlineActivation = startingOffline
+                activationMessage = startingOffline ? "Offline local-only activation started through Rust." : "Activation started through Rust after provider validation gate."
             }
+            persistDraft()
         } catch {
             activationMessage = error.localizedDescription
+            persistDraft()
+        }
+    }
+
+    private func restoreDraft() {
+        guard let data = appSettings?.potaDraftJSON?.data(using: .utf8),
+              let draft = try? JSONDecoder().decode(ActivationDraft.self, from: data) else { return }
+        parkReference = draft.reference
+        activationStartedAt = draft.startedAt
+        activationID = draft.activationID
+        spotFrequency = draft.spotFrequency.isEmpty ? spotFrequency : draft.spotFrequency
+        mode = draft.mode
+        activationMessage = draft.message
+        offlineActivation = draft.offlineOnly
+    }
+
+    private func persistDraft() {
+        guard let appSettings else { return }
+        let draft = ActivationDraft(
+            reference: parkReference,
+            startedAt: activationStartedAt,
+            activationID: activationID,
+            spotFrequency: spotFrequency,
+            mode: mode,
+            message: activationMessage,
+            offlineOnly: offlineActivation
+        )
+        if let data = try? JSONEncoder().encode(draft) {
+            appSettings.potaDraftJSON = String(data: data, encoding: .utf8)
+            appSettings.updatedAt = Date()
+            try? modelContext.save()
         }
     }
 

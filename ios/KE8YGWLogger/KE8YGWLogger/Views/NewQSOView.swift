@@ -35,9 +35,17 @@ struct NewQSOView: View {
     @State private var notes = ""
     @State private var validationMessage: String?
     @State private var isSaving = false
+    @State private var restoredDraft = false
 
     private var profile: StationProfile? { profiles.first { $0.isActive } ?? profiles.first }
     private var appSettings: AppSettings? { settings.first }
+    private var draftSignature: String {
+        [
+            callsign, qsoKind, band, mode, submode, frequencyMHz, rstSent, rstReceived,
+            powerWatts, gridSquare, county, name, qth, state, country, contestExchange,
+            satelliteName, potaReferences, sotaReferences, notes
+        ].joined(separator: "\u{1f}")
+    }
 
     var body: some View {
         Form {
@@ -134,21 +142,30 @@ struct NewQSOView: View {
                 .disabled(isSaving)
             }
         }
-        .onAppear(perform: applyDefaults)
+        .onAppear {
+            restoreDraft()
+            applyDefaults()
+        }
+        .onChange(of: draftSignature) { _, _ in
+            persistDraft()
+        }
+        .onChange(of: contactDate) { _, _ in
+            persistDraft()
+        }
     }
 
     private func applyDefaults() {
-        guard frequencyMHz.isEmpty else { return }
+        guard !restoredDraft, frequencyMHz.isEmpty else { return }
         band = appSettings?.defaultBand ?? "20m"
         mode = appSettings?.defaultMode ?? "SSB"
         let rst = HamRadioUtilities.defaultRST(for: mode)
         rstSent = rst
         rstReceived = rst
         powerWatts = String(format: "%.0f", profile?.defaultPowerWatts ?? 100)
-        gridSquare = profile?.defaultGridSquare ?? ""
-        qth = profile?.defaultQTH ?? ""
-        state = profile?.defaultState ?? ""
-        country = profile?.defaultCountry ?? "United States"
+        gridSquare = defaultGrid()
+        qth = appSettings?.manualLocationName?.isEmpty == false ? appSettings?.manualLocationName ?? "" : profile?.defaultQTH ?? ""
+        state = appSettings?.manualState?.isEmpty == false ? appSettings?.manualState ?? "" : profile?.defaultState ?? ""
+        country = appSettings?.manualCountry?.isEmpty == false ? appSettings?.manualCountry ?? "" : profile?.defaultCountry ?? "United States"
     }
 
     private func saveQSO() async {
@@ -213,10 +230,90 @@ struct NewQSOView: View {
                 existing: qsos,
                 modelContext: modelContext
             )
+            appSettings?.qsoDraftJSON = ""
+            appSettings?.updatedAt = Date()
+            try? modelContext.save()
             validationMessage = nil
             dismiss()
         } catch {
             validationMessage = error.localizedDescription
+        }
+    }
+
+    private func defaultGrid() -> String {
+        guard let appSettings else {
+            return profile?.defaultGridSquare ?? ""
+        }
+        if appSettings.effectiveManualGridOverride,
+           let manual = HamRadioUtilities.normalizedMaidenhead(appSettings.maidenheadGrid ?? "") {
+            return manual
+        }
+        if appSettings.effectiveUseDeviceLocation,
+           let gps = HamRadioUtilities.normalizedMaidenhead(appSettings.lastGPSGrid ?? "") {
+            return gps
+        }
+        if let manual = HamRadioUtilities.normalizedMaidenhead(appSettings.maidenheadGrid ?? "") {
+            return manual
+        }
+        return profile?.defaultGridSquare ?? ""
+    }
+
+    private func restoreDraft() {
+        guard let data = appSettings?.qsoDraftJSON?.data(using: .utf8),
+              let draft = try? JSONDecoder().decode(QSOFormDraft.self, from: data) else { return }
+        callsign = draft.callsign
+        contactDate = draft.contactDate
+        qsoKind = draft.qsoKind
+        band = draft.band
+        mode = draft.mode
+        submode = draft.submode
+        frequencyMHz = draft.frequencyMHz
+        rstSent = draft.rstSent
+        rstReceived = draft.rstReceived
+        powerWatts = draft.powerWatts
+        gridSquare = draft.gridSquare
+        county = draft.county
+        name = draft.name
+        qth = draft.qth
+        state = draft.state
+        country = draft.country
+        contestExchange = draft.contestExchange
+        satelliteName = draft.satelliteName
+        potaReferences = draft.potaReferences
+        sotaReferences = draft.sotaReferences
+        notes = draft.notes
+        restoredDraft = true
+    }
+
+    private func persistDraft() {
+        guard let appSettings else { return }
+        let draft = QSOFormDraft(
+            callsign: callsign,
+            contactDate: contactDate,
+            qsoKind: qsoKind,
+            band: band,
+            mode: mode,
+            submode: submode,
+            frequencyMHz: frequencyMHz,
+            rstSent: rstSent,
+            rstReceived: rstReceived,
+            powerWatts: powerWatts,
+            gridSquare: gridSquare,
+            county: county,
+            name: name,
+            qth: qth,
+            state: state,
+            country: country,
+            contestExchange: contestExchange,
+            satelliteName: satelliteName,
+            potaReferences: potaReferences,
+            sotaReferences: sotaReferences,
+            notes: notes
+        )
+        if let data = try? JSONEncoder().encode(draft) {
+            appSettings.qsoDraftJSON = String(data: data, encoding: .utf8)
+            appSettings.updatedAt = Date()
+            try? modelContext.save()
         }
     }
 

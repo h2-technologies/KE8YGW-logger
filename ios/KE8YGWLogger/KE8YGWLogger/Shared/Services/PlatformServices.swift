@@ -1,4 +1,6 @@
 import Foundation
+import CoreLocation
+import Network
 import UserNotifications
 
 #if os(iOS)
@@ -105,6 +107,177 @@ struct KeychainCredentialVault: CredentialVault {
 
     private func key(account: String, providerId: String) -> String {
         "\(providerId):\(account)"
+    }
+}
+
+enum LocationPermissionState: String {
+    case notDetermined
+    case allowedWhenInUse
+    case allowedAlways
+    case denied
+    case restricted
+    case unknown
+
+    var label: String {
+        switch self {
+        case .notDetermined: return "Not Requested"
+        case .allowedWhenInUse: return "Allowed While Using"
+        case .allowedAlways: return "Allowed"
+        case .denied: return "Denied"
+        case .restricted: return "Restricted"
+        case .unknown: return "Unknown"
+        }
+    }
+
+    static func from(_ status: CLAuthorizationStatus) -> LocationPermissionState {
+        switch status {
+        case .notDetermined: return .notDetermined
+        case .authorizedWhenInUse: return .allowedWhenInUse
+        case .authorizedAlways: return .allowedAlways
+        case .denied: return .denied
+        case .restricted: return .restricted
+        @unknown default: return .unknown
+        }
+    }
+}
+
+final class LocationCoordinator: NSObject, ObservableObject, CLLocationManagerDelegate {
+    @Published var permissionState: LocationPermissionState = .unknown
+    @Published var currentGrid: String?
+    @Published var statusMessage = "Location has not been requested."
+    @Published var locationSource: MaidenheadLocationSource = .unknown
+
+    private let manager = CLLocationManager()
+
+    override init() {
+        super.init()
+        manager.delegate = self
+        manager.desiredAccuracy = kCLLocationAccuracyThreeKilometers
+        permissionState = LocationPermissionState.from(manager.authorizationStatus)
+    }
+
+    func requestCurrentGrid(useDeviceLocation: Bool) {
+        guard useDeviceLocation else {
+            manager.stopUpdatingLocation()
+            locationSource = .unknown
+            statusMessage = "Device location use is disabled in app settings."
+            return
+        }
+
+        let status = manager.authorizationStatus
+        permissionState = LocationPermissionState.from(status)
+        switch status {
+        case .notDetermined:
+            statusMessage = "Requesting location permission."
+            manager.requestWhenInUseAuthorization()
+        case .authorizedWhenInUse, .authorizedAlways:
+            statusMessage = "Requesting current location."
+            manager.requestLocation()
+        case .denied:
+            locationSource = .unknown
+            statusMessage = "Location permission is denied. Change it in iOS Settings or use a manual grid."
+        case .restricted:
+            locationSource = .unknown
+            statusMessage = "Location permission is restricted. Use a manual grid."
+        @unknown default:
+            locationSource = .unknown
+            statusMessage = "Location permission status is unknown."
+        }
+    }
+
+    func stopUsingLocation() {
+        manager.stopUpdatingLocation()
+        locationSource = .unknown
+        statusMessage = "Device location use is disabled in app settings."
+    }
+
+    func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
+        let status = manager.authorizationStatus
+        DispatchQueue.main.async {
+            self.permissionState = LocationPermissionState.from(status)
+            if status == .authorizedWhenInUse || status == .authorizedAlways {
+                manager.requestLocation()
+            } else if status == .denied {
+                self.statusMessage = "Location permission is denied. Manual grid entry remains available."
+            } else if status == .restricted {
+                self.statusMessage = "Location permission is restricted. Manual grid entry remains available."
+            }
+        }
+    }
+
+    func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
+        guard let location = locations.last else { return }
+        let coordinate = location.coordinate
+        let grid = HamRadioUtilities.maidenheadGrid(latitude: coordinate.latitude, longitude: coordinate.longitude)
+        DispatchQueue.main.async {
+            self.currentGrid = grid
+            self.locationSource = grid == nil ? .unknown : .gps
+            self.statusMessage = grid.map { "Current GPS grid: \($0)" } ?? "Could not calculate a Maidenhead grid."
+        }
+    }
+
+    func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
+        DispatchQueue.main.async {
+            self.locationSource = .unknown
+            self.statusMessage = "Location unavailable: \(error.localizedDescription)"
+        }
+    }
+}
+
+enum ConnectivityState: String {
+    case online
+    case offline
+    case requiresConnection
+    case unknown
+
+    var label: String {
+        switch self {
+        case .online: return "Online"
+        case .offline: return "Offline"
+        case .requiresConnection: return "Requires Connection"
+        case .unknown: return "Unknown"
+        }
+    }
+
+    var hasUsableInternet: Bool {
+        self == .online
+    }
+}
+
+@MainActor
+final class ConnectivityMonitor: ObservableObject {
+    @Published var state: ConnectivityState = .unknown
+
+    private let monitor = NWPathMonitor()
+    private let queue = DispatchQueue(label: "KE8YGWLogger.ConnectivityMonitor")
+    private var started = false
+
+    func start() {
+        guard !started else { return }
+        started = true
+        monitor.pathUpdateHandler = { [weak self] path in
+            let state: ConnectivityState
+            switch path.status {
+            case .satisfied:
+                state = .online
+            case .requiresConnection:
+                state = .requiresConnection
+            case .unsatisfied:
+                state = .offline
+            @unknown default:
+                state = .unknown
+            }
+            Task { @MainActor in
+                self?.state = state
+            }
+        }
+        monitor.start(queue: queue)
+    }
+
+    func stop() {
+        guard started else { return }
+        monitor.cancel()
+        started = false
     }
 }
 

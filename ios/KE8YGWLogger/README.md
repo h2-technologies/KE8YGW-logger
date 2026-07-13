@@ -74,8 +74,32 @@ device, select your local development team manually in Xcode.
 - Net Control and Emergency screens
 - Hosted sync status screen
 - Backup/Restore and Diagnostics screens
-- Settings for appearance, operator/station defaults, providers, sync, privacy,
-  diagnostics, about, and developer toggles
+- Editable Settings for appearance, operator identity, station/equipment
+  defaults, manual/GPS Maidenhead behavior, provider credentials, provider
+  behavior, sync/server configuration, logging defaults, activation
+  preferences, Net Control defaults, privacy, diagnostics, about, and developer
+  toggles
+- Core Location "When In Use" permission request for GPS-derived Maidenhead
+  grid calculation, plus a Use Device Location opt-out and manual grid override
+- Provider credential forms under Settings for QRZ XML, QRZ Logbook, HamQTH,
+  POTA, SOTAWatch, Club Log, eQSL, LoTW, HRDLog, and DX Cluster. Secrets are
+  stored in iOS Keychain; Settings stores only non-secret metadata and
+  validation status.
+- Provider enable/disable controls in the Providers view. Disabling a provider
+  preserves credentials and pauses new automatic use by iOS workflows.
+- POTA/SOTA activation start gating based on provider enablement, credential
+  validation metadata, and `NWPathMonitor` connectivity. When the device has no
+  usable network path, the app allows an explicitly labeled local-only
+  activation and records that provider validation was skipped.
+- Dedicated station profile and equipment creation sheets that submit through
+  the Rust station-book bridge and refresh SwiftData projections.
+- Net Control roster classifications: Emergency, Priority, Routine, Health and
+  Welfare, and No Traffic. Roster and traffic lists sort by classification with
+  stable timestamp/callsign fallbacks, and traffic rows render immediately after
+  creation.
+- Durable SwiftData-backed UI drafts for QSO entry, POTA/SOTA activation state,
+  and Net Control session/check-in/traffic fields. Drafts are cleared after
+  successful canonical submission or explicit workflow end.
 - ADIF export through Rust bridge when linked, with Swift fallback
 - CSV export generation
 - ShareLink-based export sharing
@@ -94,13 +118,41 @@ operations. SwiftData rows are projection/cache records with canonical IDs,
 Rust revision metadata, tombstone state, projection source, schema version, and
 last refresh timestamp.
 
+Settings and draft state are local iOS support state. They are not a substitute
+for Rust official events. Net Control accepted check-ins and traffic still go
+through Rust proposals, but the current iOS ABI does not expose check-in update
+or Net Control projection-list commands. Classification edits after check-in are
+therefore persisted as iOS draft/support state until a Rust update command is
+available.
+
+Provider credential validation currently verifies that the required iOS
+Keychain-backed fields are configured and records a timestamp used by iOS
+activation gating. Live provider authentication remains pending because the
+current Rust provider adapters are still stubs and the iOS ABI does not expose a
+provider validation command. Online POTA/SOTA activation is blocked unless the
+provider is enabled and the local validation record is fresh; genuine no-network
+state is detected with `NWPathMonitor` and allows local-only activation.
+
+Location precedence on iOS is:
+
+1. Manual grid override.
+2. Current GPS-derived grid when Use Device Location is enabled and permission
+   allows it.
+3. Last GPS-derived grid cached in Settings.
+4. Active/default station grid.
+5. Unknown.
+
+Manual grid entry supports 4- and 6-character Maidenhead locators and preserves
+the user's manual value when GPS updates arrive.
+
 ## Remaining Roadmap
 
 - Build/link `ham-ios-ffi` for iOS.
 - Run macOS/Xcode validation for simulator, device, archive, and unit tests.
-- Route QSO correct/update, provider queue actions, emergency assignments,
-  sync push/pull/merge/conflict resolution, and JSON/ZIP restore through Rust
-  FFI.
+- Route QSO correct/update, provider queue actions, live provider credential
+  validation, Net Control check-in classification updates, Net Control snapshot
+  recovery, emergency assignments, sync push/pull/merge/conflict resolution,
+  and JSON/ZIP restore through Rust FFI.
 - Add hosted sync transport on iOS.
 - Add real provider adapters as they become available in Rust.
 - Add UI, snapshot, offline, provider mock, sync, and map tests in Xcode.

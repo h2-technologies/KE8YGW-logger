@@ -119,12 +119,14 @@ struct DashboardView: View {
     @EnvironmentObject private var bridge: RustBridgeStore
     @Query(sort: \QSO.contactDate, order: .reverse) private var qsos: [QSO]
     @Query private var profiles: [StationProfile]
+    @Query private var settings: [AppSettings]
     @StateObject private var deviceStatus = DeviceStatusViewModel()
     @Binding var selection: FeatureDestination?
 
     private var activeProfile: StationProfile? {
         profiles.first { $0.isActive } ?? profiles.first
     }
+    private var appSettings: AppSettings? { settings.first }
 
     var body: some View {
         ScrollView {
@@ -139,7 +141,8 @@ struct DashboardView: View {
                 SectionHeader("Operating Context")
                 VStack(spacing: 0) {
                     DetailRow(title: "Profile", value: activeProfile?.displayName ?? bridge.dashboard.currentProfile)
-                    DetailRow(title: "GPS", value: bridge.dashboard.gps?.grid ?? activeProfile?.defaultGridSquare ?? "Pending")
+                    DetailRow(title: "Grid", value: dashboardGrid)
+                        .accessibilityLabel("Location source \(dashboardGrid)")
                     DetailRow(title: "Location", value: activeProfile?.defaultQTH ?? bridge.dashboard.activeStation?.defaultQth ?? "Unknown")
                     DetailRow(title: "Sync", value: bridge.sync.cloudConnectionState ?? bridge.dashboard.syncStatus?.mode ?? "offline-first")
                     DetailRow(title: "Battery", value: deviceStatus.batteryStatus)
@@ -205,6 +208,24 @@ struct DashboardView: View {
     private var pendingUploads: Int {
         let localPending = qsos.filter { $0.uploadStatus != "uploaded" }.count
         return max(localPending, bridge.dashboard.pendingUploads)
+    }
+
+    private var dashboardGrid: String {
+        if appSettings?.effectiveManualGridOverride == true,
+           let manual = HamRadioUtilities.normalizedMaidenhead(appSettings?.maidenheadGrid ?? "") {
+            return "\(manual) Manual"
+        }
+        if appSettings?.effectiveUseDeviceLocation == true,
+           let gps = HamRadioUtilities.normalizedMaidenhead(appSettings?.lastGPSGrid ?? "") {
+            return "\(gps) GPS"
+        }
+        if let bridgeGrid = bridge.dashboard.gps?.grid {
+            return "\(bridgeGrid) Cached"
+        }
+        if let stationGrid = activeProfile?.defaultGridSquare, !stationGrid.isEmpty {
+            return "\(stationGrid) Station"
+        }
+        return "Pending"
     }
 }
 
