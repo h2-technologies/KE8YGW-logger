@@ -235,6 +235,22 @@ final class RustBridgeStore: ObservableObject {
         try await command("net.traffic.create", payload: request, as: DomainMutationResult.self)
     }
 
+    func loadSettings() async throws -> ApplicationSettingsBridgeResult {
+        let supportURL = try RustBridgePaths.applicationSupportDirectory()
+        return try await command("settings.get", payload: AppSupportBridgeRequest(appSupportDir: supportURL.path), as: ApplicationSettingsBridgeResult.self)
+    }
+
+    func createDefaultSettings() async throws -> ApplicationSettingsBridgeResult {
+        let supportURL = try RustBridgePaths.applicationSupportDirectory()
+        return try await command("settings.create_default", payload: AppSupportBridgeRequest(appSupportDir: supportURL.path), as: ApplicationSettingsBridgeResult.self)
+    }
+
+    func saveSettings(_ settings: RustApplicationSettings) async throws -> ApplicationSettingsBridgeResult {
+        let supportURL = try RustBridgePaths.applicationSupportDirectory()
+        let request = ApplicationSettingsUpdateBridgeRequest(appSupportDir: supportURL.path, settings: settings)
+        return try await command("settings.update", payload: request, as: ApplicationSettingsBridgeResult.self)
+    }
+
     private func assign<T: Decodable>(
         endpoint: RustBridgeEndpoint,
         to keyPath: ReferenceWritableKeyPath<RustBridgeStore, T>,
@@ -455,6 +471,16 @@ struct FallbackRustBridgeClient: RustBridgeClient {
         let data: [String: Any]
 
         switch command {
+        case "settings.get":
+            let appSupportDir = payload["app_support_dir"] as? String ?? "fallback"
+            data = FallbackSettingsMemory.result(appSupportDir: appSupportDir, createIfMissing: false)
+        case "settings.create_default":
+            let appSupportDir = payload["app_support_dir"] as? String ?? "fallback"
+            data = FallbackSettingsMemory.result(appSupportDir: appSupportDir, createIfMissing: true)
+        case "settings.update":
+            let appSupportDir = payload["app_support_dir"] as? String ?? "fallback"
+            let settings = payload["settings"] as? [String: Any] ?? FallbackSettingsMemory.defaultSettings()
+            data = FallbackSettingsMemory.save(appSupportDir: appSupportDir, settings: settings)
         case "qso.create":
             let qso = payload["qso"] as? [String: Any] ?? [:]
             let qsoID = UUID().uuidString
@@ -636,6 +662,127 @@ struct FallbackRustBridgeClient: RustBridgeClient {
         case RustBridgeEndpoint.diagnostics.command: return .diagnostics
         default: return .version
         }
+    }
+}
+
+private enum FallbackSettingsMemory {
+    private static let lock = NSLock()
+    private static var records: [String: [String: Any]] = [:]
+
+    static func result(appSupportDir: String, createIfMissing: Bool) -> [String: Any] {
+        lock.lock()
+        defer { lock.unlock() }
+        if let settings = records[appSupportDir] {
+            return ["exists": true, "created": false, "settings": settings, "record_count": 1]
+        }
+        guard createIfMissing else {
+            return ["exists": false, "created": false, "settings": NSNull(), "record_count": 0]
+        }
+        let settings = defaultSettings()
+        records[appSupportDir] = settings
+        return ["exists": true, "created": true, "settings": settings, "record_count": 1]
+    }
+
+    static func save(appSupportDir: String, settings: [String: Any]) -> [String: Any] {
+        lock.lock()
+        defer { lock.unlock() }
+        let normalized = normalizedSettings(settings)
+        records[appSupportDir] = normalized
+        return ["exists": true, "created": false, "settings": normalized, "record_count": 1]
+    }
+
+    static func defaultSettings() -> [String: Any] {
+        let now = ISO8601DateFormatter().string(from: Date())
+        return [
+            "schema_version": 1,
+            "operator": [
+                "primary_callsign": "KE8YGW",
+                "additional_callsigns": [],
+                "operator_name": "",
+                "operator_email": "",
+                "station_callsign": "KE8YGW",
+                "default_station_profile_id": "",
+                "default_equipment_profile_id": ""
+            ],
+            "location": [
+                "use_device_location": true,
+                "manual_grid_override_enabled": false,
+                "manual_maidenhead_grid": "EN91",
+                "last_gps_grid": "",
+                "last_location_source": MaidenheadLocationSource.stationDefault.rawValue,
+                "manual_location_name": "",
+                "manual_county": "",
+                "manual_state": "",
+                "manual_country": "United States"
+            ],
+            "providers": [
+                "enabled": [:],
+                "credential_metadata": [:],
+                "validation": [:]
+            ],
+            "sync": [
+                "sync_server_url": "http://127.0.0.1:9740",
+                "device_name": "KE8YGW Logger iOS",
+                "prefer_lan_sync": true,
+                "auto_push_enabled": false,
+                "auto_pull_enabled": false,
+                "sync_interval_minutes": 15,
+                "background_sync_enabled": true,
+                "account_label": ""
+            ],
+            "logging": [
+                "default_band": "20m",
+                "default_mode": "SSB",
+                "auto_uppercase_callsigns": true,
+                "ask_for_location_later": false,
+                "callsign_lookup_preference": "automatic"
+            ],
+            "activation": [
+                "allow_offline_activations": true,
+                "validation_ttl_hours": 24,
+                "notes_template": "",
+                "pota_upload_enabled": false,
+                "sota_upload_enabled": false
+            ],
+            "net_control": [
+                "default_name": "Weekly Emergency Net",
+                "default_frequency_mhz": "146.520",
+                "default_mode": "FM",
+                "sort_roster_by_traffic_priority": true
+            ],
+            "display": [
+                "appearance": "system",
+                "accent_color_name": "blue",
+                "map_default_layer": "Stations",
+                "show_qso_map_objects": true,
+                "show_station_map_markers": true
+            ],
+            "backup": ["include_diagnostics_by_default": false],
+            "privacy": ["provider_notifications_enabled": true],
+            "diagnostics": ["share_diagnostics_with_logs": true],
+            "developer": ["developer_mode_enabled": false],
+            "created_at": now,
+            "updated_at": now
+        ]
+    }
+
+    private static func normalizedSettings(_ settings: [String: Any]) -> [String: Any] {
+        var normalized = settings
+        if var op = normalized["operator"] as? [String: Any] {
+            op["primary_callsign"] = (op["primary_callsign"] as? String ?? "KE8YGW").trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+            op["station_callsign"] = (op["station_callsign"] as? String ?? "KE8YGW").trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+            normalized["operator"] = op
+        }
+        if var logging = normalized["logging"] as? [String: Any] {
+            logging["default_mode"] = (logging["default_mode"] as? String ?? "SSB").trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+            normalized["logging"] = logging
+        }
+        if var net = normalized["net_control"] as? [String: Any] {
+            net["default_mode"] = (net["default_mode"] as? String ?? "FM").trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+            normalized["net_control"] = net
+        }
+        normalized["updated_at"] = ISO8601DateFormatter().string(from: Date())
+        return normalized
     }
 }
 
@@ -1244,6 +1391,129 @@ struct DomainMutationResult: Decodable {
     var accepted: Bool
     var officialEvent: RustOfficialEvent
     var projection: RustProjectionStatus?
+}
+
+struct ApplicationSettingsBridgeResult: Decodable {
+    var exists: Bool
+    var created: Bool
+    var settings: RustApplicationSettings?
+    var recordCount: Int
+}
+
+struct ApplicationSettingsUpdateBridgeRequest: Encodable {
+    var appSupportDir: String
+    var settings: RustApplicationSettings
+}
+
+struct RustApplicationSettings: Codable, Equatable {
+    var schemaVersion: Int
+    var `operator`: RustOperatorIdentitySettings
+    var location: RustLocationSettings
+    var providers: RustProviderSettings
+    var sync: RustSyncSettings
+    var logging: RustLoggingSettings
+    var activation: RustActivationSettings
+    var netControl: RustNetControlSettings
+    var display: RustDisplaySettings
+    var backup: RustBackupSettings
+    var privacy: RustPrivacySettings
+    var diagnostics: RustDiagnosticsSettings
+    var developer: RustDeveloperSettings
+    var createdAt: String
+    var updatedAt: String
+}
+
+struct RustOperatorIdentitySettings: Codable, Equatable {
+    var primaryCallsign: String
+    var additionalCallsigns: [String]
+    var operatorName: String?
+    var operatorEmail: String?
+    var stationCallsign: String
+    var defaultStationProfileId: String?
+    var defaultEquipmentProfileId: String?
+}
+
+struct RustLocationSettings: Codable, Equatable {
+    var useDeviceLocation: Bool
+    var manualGridOverrideEnabled: Bool
+    var manualMaidenheadGrid: String?
+    var lastGpsGrid: String?
+    var lastLocationSource: String?
+    var manualLocationName: String?
+    var manualCounty: String?
+    var manualState: String?
+    var manualCountry: String?
+}
+
+struct RustProviderSettings: Codable, Equatable {
+    var enabled: [String: Bool]
+    var credentialMetadata: [String: [String: String]]
+    var validation: [String: RustProviderValidationSettings]
+}
+
+struct RustProviderValidationSettings: Codable, Equatable {
+    var configured: Bool
+    var validated: Bool
+    var validatedAt: String?
+    var message: String
+}
+
+struct RustSyncSettings: Codable, Equatable {
+    var syncServerUrl: String
+    var deviceName: String
+    var preferLanSync: Bool
+    var autoPushEnabled: Bool
+    var autoPullEnabled: Bool
+    var syncIntervalMinutes: Int
+    var backgroundSyncEnabled: Bool
+    var accountLabel: String?
+}
+
+struct RustLoggingSettings: Codable, Equatable {
+    var defaultBand: String
+    var defaultMode: String
+    var autoUppercaseCallsigns: Bool
+    var askForLocationLater: Bool
+    var callsignLookupPreference: String
+}
+
+struct RustActivationSettings: Codable, Equatable {
+    var allowOfflineActivations: Bool
+    var validationTtlHours: Int
+    var notesTemplate: String?
+    var potaUploadEnabled: Bool
+    var sotaUploadEnabled: Bool
+}
+
+struct RustNetControlSettings: Codable, Equatable {
+    var defaultName: String?
+    var defaultFrequencyMhz: String?
+    var defaultMode: String
+    var sortRosterByTrafficPriority: Bool
+}
+
+struct RustDisplaySettings: Codable, Equatable {
+    var appearance: String
+    var accentColorName: String
+    var mapDefaultLayer: String
+    var showQsoMapObjects: Bool
+    var showStationMapMarkers: Bool
+}
+
+struct RustBackupSettings: Codable, Equatable {
+    var includeDiagnosticsByDefault: Bool
+}
+
+struct RustPrivacySettings: Codable, Equatable {
+    var providerNotificationsEnabled: Bool
+}
+
+struct RustDiagnosticsSettings: Codable, Equatable {
+    var shareDiagnosticsWithLogs: Bool
+}
+
+struct RustDeveloperSettings: Codable, Equatable {
+    var developerModeEnabled: Bool
 }
 
 struct ActivationBridgeRequest: Codable {

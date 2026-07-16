@@ -78,13 +78,18 @@ device, select your local development team manually in Xcode.
   defaults, manual/GPS Maidenhead behavior, provider credentials, provider
   behavior, sync/server configuration, logging defaults, activation
   preferences, Net Control defaults, privacy, diagnostics, about, and developer
-  toggles
+  toggles. The Settings screen loads, creates, and saves the canonical
+  application settings record through the Rust bridge; SwiftData stores only a
+  UI cache of the latest bridge result.
 - Core Location "When In Use" permission request for GPS-derived Maidenhead
   grid calculation, plus a Use Device Location opt-out and manual grid override
 - Provider credential forms under Settings for QRZ XML, QRZ Logbook, HamQTH,
   POTA, SOTAWatch, Club Log, eQSL, LoTW, HRDLog, and DX Cluster. Secrets are
-  stored in iOS Keychain; Settings stores only non-secret metadata and
-  validation status.
+  stored in iOS Keychain; Rust-backed Settings stores only enablement,
+  non-secret metadata, and validation status.
+- Sync credentials are managed from Settings and stored in iOS Keychain.
+  Rust-backed Settings stores the sync server URL, device name, and non-secret
+  account label, but not the sync token.
 - Provider enable/disable controls in the Providers view. Disabling a provider
   preserves credentials and pauses new automatic use by iOS workflows.
 - POTA/SOTA activation start gating based on provider enablement, credential
@@ -113,17 +118,19 @@ providers, maps, sync, diagnostics, lookup, grid info, ADIF parsing/export,
 QSO create/delete, station profile/equipment/select, activation start/end, and
 Net Control session/check-in/traffic operations.
 
-Rust official events and station-book storage are authoritative for those
-operations. SwiftData rows are projection/cache records with canonical IDs,
-Rust revision metadata, tombstone state, projection source, schema version, and
-last refresh timestamp.
+Rust official events, station-book storage, and application settings support
+storage are authoritative for those operations. SwiftData rows are
+projection/cache records with canonical IDs, Rust revision metadata, tombstone
+state, projection source, schema version, and last refresh timestamp. The
+SwiftData `AppSettings` row is likewise a cache of the Rust
+`application-settings.json` support record.
 
-Settings and draft state are local iOS support state. They are not a substitute
-for Rust official events. Net Control accepted check-ins and traffic still go
-through Rust proposals, but the current iOS ABI does not expose check-in update
-or Net Control projection-list commands. Classification edits after check-in are
-therefore persisted as iOS draft/support state until a Rust update command is
-available.
+Draft state remains local iOS support state. It is not a substitute for Rust
+official events or Rust-backed application settings. Net Control accepted
+check-ins and traffic still go through Rust proposals, but the current iOS ABI
+does not expose check-in update or Net Control projection-list commands.
+Classification edits after check-in are therefore persisted as iOS
+draft/support state until a Rust update command is available.
 
 Provider credential validation currently verifies that the required iOS
 Keychain-backed fields are configured and records a timestamp used by iOS

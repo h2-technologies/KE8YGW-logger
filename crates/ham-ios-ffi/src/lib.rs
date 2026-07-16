@@ -18,10 +18,11 @@ use ham_core::{
     default_service_registry, encode_maidenhead, export_adif, grid_to_lat_lon, infer_band,
     maidenhead_to_coordinate, map_provider_metadata, mock_propagation_forecast, mock_weather,
     online_provider_metadata, parse_adif, qso_map_objects, station_markers_from_profiles,
-    submit_proposal, validate_grid, Coordinate, EquipmentItem, EquipmentType, InMemoryEventBus,
-    JsonStationBookStore, JsonlLogbookEventStore, LocalPrefixProvider, LogbookEventStore,
-    MapLayerStack, OperatorRole, ProposalContext, QsoCurrentStateProjection, QsoRecord,
-    StationBook, StationConfiguration, StationProfile, UploadQueue, UploadTarget,
+    submit_proposal, validate_grid, ApplicationSettings, Coordinate, EquipmentItem, EquipmentType,
+    InMemoryEventBus, JsonStationBookStore, JsonSupportStore, JsonlLogbookEventStore,
+    LocalPrefixProvider, LogbookEventStore, MapLayerStack, OperatorRole, ProposalContext,
+    QsoCurrentStateProjection, QsoRecord, StationBook, StationConfiguration, StationProfile,
+    UploadQueue, UploadTarget,
 };
 use ham_plugin_sdk::{
     PluginCapability, PluginManifest, ProposalEnvelope, OFFICIAL_LOG_QSO_CREATED,
@@ -207,6 +208,12 @@ struct StationEquipmentCreateRequest {
 struct StationSelectProfileRequest {
     app_support_dir: String,
     station_profile_id: Uuid,
+}
+
+#[derive(Debug, Deserialize)]
+struct ApplicationSettingsUpdateRequest {
+    app_support_dir: String,
+    settings: ApplicationSettings,
 }
 
 #[no_mangle]
@@ -400,6 +407,9 @@ fn dispatch_call(call: BridgeCall, correlation_id: Uuid) -> Result<Value, Bridge
         "map.snapshot" => map_snapshot_payload(),
         "sync.snapshot" => sync_snapshot_payload(),
         "diagnostics.snapshot" => diagnostics_command_payload(payload),
+        "settings.get" => settings_get_command(payload),
+        "settings.create_default" => settings_create_default_command(payload),
+        "settings.update" => settings_update_command(payload),
         "lookup.callsign" => {
             let callsign = string_field(&payload, "callsign")?;
             lookup_callsign_payload(&callsign)
@@ -600,6 +610,91 @@ fn station_book_command_payload(payload: Value) -> Result<Value, BridgeFault> {
     } else {
         Ok(json!(default_station_book()))
     }
+}
+
+fn settings_get_command(payload: Value) -> Result<Value, BridgeFault> {
+    let app_support_dir = string_field(&payload, "app_support_dir")?;
+    let store = settings_store(&app_support_dir)?;
+    if !store.path().exists() {
+        return Ok(json!({
+            "exists": false,
+            "created": false,
+            "settings": null,
+            "record_count": 0
+        }));
+    }
+    let settings = store
+        .load()
+        .map_err(|error| BridgeFault::storage(error.to_string()))?
+        .normalized()
+        .map_err(|error| BridgeFault::invalid_input(error.to_string()))?;
+    Ok(json!({
+        "exists": true,
+        "created": false,
+        "settings": settings,
+        "record_count": 1
+    }))
+}
+
+fn settings_create_default_command(payload: Value) -> Result<Value, BridgeFault> {
+    let app_support_dir = string_field(&payload, "app_support_dir")?;
+    let store = settings_store(&app_support_dir)?;
+    if store.path().exists() {
+        let settings = store
+            .load()
+            .map_err(|error| BridgeFault::storage(error.to_string()))?
+            .normalized()
+            .map_err(|error| BridgeFault::invalid_input(error.to_string()))?;
+        return Ok(json!({
+            "exists": true,
+            "created": false,
+            "settings": settings,
+            "record_count": 1
+        }));
+    }
+    let settings = ApplicationSettings::default()
+        .normalized()
+        .map_err(|error| BridgeFault::invalid_input(error.to_string()))?;
+    store
+        .save(&settings)
+        .map_err(|error| BridgeFault::storage(error.to_string()))?;
+    Ok(json!({
+        "exists": true,
+        "created": true,
+        "settings": settings,
+        "record_count": 1
+    }))
+}
+
+fn settings_update_command(payload: Value) -> Result<Value, BridgeFault> {
+    let request: ApplicationSettingsUpdateRequest = serde_json::from_value(payload)
+        .map_err(|error| BridgeFault::invalid_input(error.to_string()))?;
+    let store = settings_store(&request.app_support_dir)?;
+    let existing = if store.path().exists() {
+        Some(
+            store
+                .load()
+                .map_err(|error| BridgeFault::storage(error.to_string()))?,
+        )
+    } else {
+        None
+    };
+    let mut settings = request
+        .settings
+        .normalized()
+        .map_err(|error| BridgeFault::invalid_input(error.to_string()))?;
+    if let Some(existing) = existing {
+        settings.created_at = existing.created_at;
+    }
+    store
+        .save(&settings)
+        .map_err(|error| BridgeFault::storage(error.to_string()))?;
+    Ok(json!({
+        "exists": true,
+        "created": false,
+        "settings": settings,
+        "record_count": 1
+    }))
 }
 
 fn provider_status_payload() -> Result<Value, BridgeFault> {
@@ -1294,6 +1389,14 @@ fn station_store(app_support_dir: &str) -> Result<JsonStationBookStore, BridgeFa
     ))
 }
 
+fn settings_store(
+    app_support_dir: &str,
+) -> Result<JsonSupportStore<ApplicationSettings>, BridgeFault> {
+    Ok(JsonSupportStore::new(
+        rust_support_dir(app_support_dir)?.join("application-settings.json"),
+    ))
+}
+
 fn event_store(app_support_dir: &str) -> Result<JsonlLogbookEventStore, BridgeFault> {
     JsonlLogbookEventStore::open(rust_support_dir(app_support_dir)?.join("official-events.jsonl"))
         .map_err(|error| BridgeFault::storage(error.to_string()))
@@ -1720,6 +1823,135 @@ mod tests {
         assert_eq!(first["ok"], true);
         assert_eq!(first["data"]["profile"]["station_callsign"], "K1ABC/P");
         assert_eq!(second["data"]["idempotent"], true);
+        let _ = std::fs::remove_dir_all(app_support_dir);
+    }
+
+    #[test]
+    fn settings_get_reports_absent_without_creating_defaults() {
+        let app_support_dir = std::env::temp_dir().join(format!("ham-ios-{}", Uuid::new_v4()));
+        let response = call_json(json!({
+            "command": "settings.get",
+            "payload": {
+                "app_support_dir": app_support_dir.to_string_lossy()
+            }
+        }));
+
+        assert_eq!(response["ok"], true);
+        assert_eq!(response["data"]["exists"], false);
+        assert_eq!(response["data"]["record_count"], 0);
+        assert!(!app_support_dir
+            .join("Rust/application-settings.json")
+            .exists());
+        let _ = std::fs::remove_dir_all(app_support_dir);
+    }
+
+    #[test]
+    fn settings_default_creation_is_idempotent_and_reloads() {
+        let app_support_dir = std::env::temp_dir().join(format!("ham-ios-{}", Uuid::new_v4()));
+        let request = json!({
+            "command": "settings.create_default",
+            "payload": {
+                "app_support_dir": app_support_dir.to_string_lossy()
+            }
+        });
+        let first = call_json(request.clone());
+        let second = call_json(request);
+        let loaded = call_json(json!({
+            "command": "settings.get",
+            "payload": {
+                "app_support_dir": app_support_dir.to_string_lossy()
+            }
+        }));
+
+        assert_eq!(first["ok"], true);
+        assert_eq!(first["data"]["created"], true);
+        assert_eq!(second["ok"], true);
+        assert_eq!(second["data"]["created"], false);
+        assert_eq!(second["data"]["record_count"], 1);
+        assert_eq!(loaded["data"]["exists"], true);
+        assert_eq!(
+            loaded["data"]["settings"]["operator"]["primary_callsign"],
+            "KE8YGW"
+        );
+        let _ = std::fs::remove_dir_all(app_support_dir);
+    }
+
+    #[test]
+    fn settings_update_persists_valid_changes_and_rejects_invalid_url() {
+        let app_support_dir = std::env::temp_dir().join(format!("ham-ios-{}", Uuid::new_v4()));
+        let created = call_json(json!({
+            "command": "settings.create_default",
+            "payload": {
+                "app_support_dir": app_support_dir.to_string_lossy()
+            }
+        }));
+        let mut settings = created["data"]["settings"].clone();
+        settings["operator"]["primary_callsign"] = json!("k1abc");
+        settings["sync"]["sync_server_url"] = json!("https://sync.example.test");
+        let updated = call_json(json!({
+            "command": "settings.update",
+            "payload": {
+                "app_support_dir": app_support_dir.to_string_lossy(),
+                "settings": settings
+            }
+        }));
+        assert_eq!(updated["ok"], true);
+        assert_eq!(
+            updated["data"]["settings"]["operator"]["primary_callsign"],
+            "K1ABC"
+        );
+        let mut invalid = updated["data"]["settings"].clone();
+        invalid["sync"]["sync_server_url"] = json!("not-a-url");
+        let rejected = call_json(json!({
+            "command": "settings.update",
+            "payload": {
+                "app_support_dir": app_support_dir.to_string_lossy(),
+                "settings": invalid
+            }
+        }));
+        let loaded = call_json(json!({
+            "command": "settings.get",
+            "payload": {
+                "app_support_dir": app_support_dir.to_string_lossy()
+            }
+        }));
+
+        assert_eq!(rejected["ok"], false);
+        assert_eq!(
+            loaded["data"]["settings"]["sync"]["sync_server_url"],
+            "https://sync.example.test"
+        );
+        let _ = std::fs::remove_dir_all(app_support_dir);
+    }
+
+    #[test]
+    fn settings_storage_does_not_contain_plaintext_secret_values() {
+        let app_support_dir = std::env::temp_dir().join(format!("ham-ios-{}", Uuid::new_v4()));
+        let created = call_json(json!({
+            "command": "settings.create_default",
+            "payload": {
+                "app_support_dir": app_support_dir.to_string_lossy()
+            }
+        }));
+        let mut settings = created["data"]["settings"].clone();
+        settings["providers"]["credential_metadata"]["qrz-xml"] = json!({
+            "username": "KE8YGW",
+            "password_configured": "true"
+        });
+        let updated = call_json(json!({
+            "command": "settings.update",
+            "payload": {
+                "app_support_dir": app_support_dir.to_string_lossy(),
+                "settings": settings
+            }
+        }));
+        let serialized =
+            std::fs::read_to_string(app_support_dir.join("Rust/application-settings.json"))
+                .unwrap();
+
+        assert_eq!(updated["ok"], true);
+        assert!(!serialized.contains("super-secret"));
+        assert!(!serialized.contains("\"password\":\""));
         let _ = std::fs::remove_dir_all(app_support_dir);
     }
 

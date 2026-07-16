@@ -25,12 +25,23 @@ struct RootView: View {
             }
             appSettings.updatedAt = Date()
             try? modelContext.save()
+            Task {
+                do {
+                    let result = try await bridge.saveSettings(appSettings.rustSettingsPayload())
+                    if let persisted = result.settings {
+                        appSettings.apply(rust: persisted)
+                        try? modelContext.save()
+                    }
+                } catch {
+                    bridge.lastError = error.localizedDescription
+                }
+            }
         }
     }
 
     private func bootstrap() async {
-        seedLocalSettingsIfNeeded()
-            await bridge.refreshAll()
+        await cacheExistingRustSettingsIfAvailable()
+        await bridge.refreshAll()
         do {
             try ProjectionRefreshService.rebuildStationBook(
                 from: bridge.stationBook,
@@ -46,20 +57,21 @@ struct RootView: View {
         }
     }
 
-    private func seedLocalSettingsIfNeeded() {
-        if settings.isEmpty {
-            modelContext.insert(AppSettings())
+    private func cacheExistingRustSettingsIfAvailable() async {
+        do {
+            let result = try await bridge.loadSettings()
+            guard result.exists, let rustSettings = result.settings else { return }
+            let cache = settings.first ?? AppSettings()
+            if settings.first == nil {
+                modelContext.insert(cache)
+            }
+            cache.apply(rust: rustSettings)
+            for duplicate in settings.dropFirst() {
+                modelContext.delete(duplicate)
+            }
             try? modelContext.save()
-        } else {
-            var migrated = false
-            for item in settings {
-                let before = item.updatedAt
-                item.migrateIfNeeded()
-                migrated = migrated || item.updatedAt != before
-            }
-            if migrated {
-                try? modelContext.save()
-            }
+        } catch {
+            bridge.lastError = error.localizedDescription
         }
     }
 }

@@ -4,12 +4,30 @@ Current milestone: v0.2 almost-v1 beta
 
 Current version: 0.2.0
 
-Last update timestamp: 2026-07-16T00:00:00-04:00
+Last update timestamp: 2026-07-16T04:00:00-04:00
 
 Repository health status: Healthy for this v0.2 provider validation-hardening slice. Hosted QRZ XML/HamQTH lookup, POTA spot fetch, DX Cluster bounded runtime controls, and Club Log/QRZ Logbook/eQSL uploads remain fake/offline by default, with ignored live validation hooks gated by explicit environment variables and credentials. Runtime responses and persisted provider health now carry stable redacted error codes for common credential, auth, malformed-response, provider-rejection, rate-limit, timeout, and transport failures. SOTAWatch and LoTW remain explicitly deferred where provider/API safety requires it. Formatting, Rust check, Clippy with warnings denied, full workspace tests, GUI JavaScript syntax check, package builds, diff whitespace check, and Tauri package build passed after this slice. The Rust test suite currently reports 212 passed tests and 7 ignored live validation hooks.
 
 Current iOS Rust-authority pass:
 
+- Corrected the native iOS Settings flow so the create-defaults screen is shown
+  only when the Rust-backed application settings support record is absent.
+- Added `ham-core::ApplicationSettings` as versioned non-secret support state
+  with Rust validation for callsigns, Maidenhead grids, sync URLs, and bounded
+  intervals.
+- Exposed iOS bridge commands for `settings.get`, `settings.create_default`,
+  and `settings.update`; default creation is idempotent and reloads through the
+  normal bridge path.
+- Reworked the Swift Settings page so SwiftData `AppSettings` is a UI cache of
+  the Rust record, autosaves serialize through the bridge, provider enablement
+  and credential metadata persist through Rust, and secrets remain in iOS
+  Keychain only.
+- Validation on this Windows host: `cargo fmt --all -- --check`,
+  `cargo check --workspace --all-targets`, `cargo clippy --workspace
+  --all-targets -- -D warnings`, `cargo test --workspace`, `cargo build
+  --workspace`, `node --check crates\ham-gui\web\app.js`, and `git diff
+  --check` passed. `swift --version` and `xcodebuild -version` could not run
+  because Swift/Xcode tools are not installed on this host.
 - Hardened `ham-ios-ffi` with a byte-buffer JSON command ABI, structured error envelope, ABI/schema versioning, bounded input, UTF-8/null validation, panic containment, correlation IDs, and explicit Rust-owned response deallocation.
 - Added C header/module map and macOS scripts for Apple Rust targets and deterministic `artifacts/HamIOSFFI.xcframework` packaging.
 - Integrated the XCFramework into the Xcode project through a relative framework reference and a documented pre-link build phase.
