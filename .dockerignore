@@ -1,0 +1,17 @@
+.git
+.github
+target
+dist
+artifacts
+build
+ios/KE8YGWLogger/build
+**/xcuserdata
+**/*.xcuserstate
+**/*.xcresult
+.idea
+.vscode
+*.pdb
+*.log
+.env
+.env.*
+!/.env.example
