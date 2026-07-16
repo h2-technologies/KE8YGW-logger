@@ -51,6 +51,9 @@ passes should start with these documents:
 - [Online Services](docs/architecture/online-services.md): connected logbooks,
   lookups, spotting, propagation, weather, maps, upload/download, automation,
   and notifications.
+- [Provider Live Transports](docs/PROVIDER_LIVE_TRANSPORTS.md): Tier 1
+  provider API references, fake/live mode matrix, credential requirements,
+  redaction guarantees, and LoTW/SOTA limitations.
 - [Maps](docs/maps/README.md): GIS service framework, map layers, markers, and
   QSO/station visualization.
 - [Grid System](docs/grid-system/README.md): Maidenhead validation, conversion,
@@ -103,11 +106,23 @@ This is not yet a production hosted release. Server account/session/device
 metadata is now durable SurrealDB beta storage and sync/report storage is
 durable. Production OS credential backend wiring now exists for Windows
 Credential Manager, macOS Keychain, and Linux Secret Service/libsecret tooling,
-but release-runner validation is still pending. Live provider adapters remain
-provider-framework work, upload execution is still fake/stub-provider based,
-and the full Tauri runtime/package build remains v0.2 work. A `ham-desktop`
-crate, `src-tauri` packaging config, backup/restore GUI, divergence review GUI,
-and desktop-native dialog command helpers are now present.
+but release-runner validation is still pending. Tier 1 provider adapter
+contracts and hosted upload execution now exist for QRZ XML, HamQTH, POTA
+spots, SOTAWatch, Club Log, QRZ Logbook, eQSL, LoTW, and DX Cluster. Default
+tests use deterministic fake execution. Club Log, QRZ Logbook, and eQSL have
+gated live HTTP upload transports plus ignored release-runner validation hooks
+that skip safely unless explicit live/upload env vars and provider credentials
+are present.
+QRZ XML/HamQTH hosted lookup execution, POTA hosted spot fetching, and DX
+Cluster bounded connect/read/disconnect/status routes are wired through the
+provider runtime with fake mode as the default, live mode gated by settings and
+credential references, and redacted `error_code` mapping for common provider
+failures. SOTAWatch live access is deferred pending explicit
+API approval/terms handling, and LoTW live upload remains deferred until a
+safe TQSL/certificate-signing flow is modeled. A real `src-tauri`
+Tauri runtime now wraps the shared web UI, delegates native
+dialog flows to `ham-desktop`, and bundles static assets for release mode.
+Installer/package validation on clean release runners remains v0.2 work.
 
 ## Architecture
 
@@ -146,8 +161,12 @@ provider-agnostic services.
 Implemented service categories include callsign/entity/grid lookup, log upload,
 spotting, map tiles, geocoding, weather, propagation, award data, AI tools,
 authentication, storage, and notifications. The MVP includes local/mock lookup
-providers, QRZ/HamQTH lookup stubs, LoTW/eQSL/Club Log/QRZ Logbook upload
-stubs, mock spotting, and placeholder map/weather/propagation providers.
+providers, Tier 1 QRZ XML/HamQTH lookup adapter contracts, LoTW/eQSL/Club
+Log/QRZ Logbook upload adapter contracts with fake execution, gated live
+Club Log/QRZ Logbook/eQSL upload execution, hosted QRZ XML/HamQTH lookup
+execution, hosted POTA spot fetch execution, DX Cluster read-once lifecycle
+controls, POTA/SOTA spot normalization, and placeholder map/weather/propagation
+providers.
 
 Service requests are allowed only when plugin permission, operator role
 permission, provider permission/config requirements, enablement, and health all
@@ -193,9 +212,9 @@ Unified Service Framework:
 - Advanced Search reads QSO projections and supports filters such as
   `callsign:K1ABC`, `band:20m`, `mode:FT8`, `date:2026-07-01..2026-07-06`,
   `tag:portable`, and plain text terms.
-- Upload queue scaffolding selects projected, visible QSOs, generates ADIF, and
-  targets service-framework upload providers such as LoTW/eQSL/Club Log/QRZ
-  stubs.
+- Upload queue execution selects projected, visible QSOs, generates ADIF, and
+  runs through Tier 1 provider adapters such as LoTW/eQSL/Club Log/QRZ Logbook.
+  Fake mode is deterministic for CI; live transports are explicitly gated.
 - Service provider settings, service cache metadata, upload queue state, map
   layer preferences, lookup/rig UI config, and online automation/notification
   state are persisted as versioned support JSON files under the app data support
@@ -270,7 +289,8 @@ The implementation is credential-aware and offline-testable:
 - Provider metadata declares capabilities, required permissions, network access,
   config keys, and credential references.
 - Upload execution uses ADIF generated from projections, retry policy, provider
-  health, upload statistics, and notification models.
+  health, upload statistics, notification models, and a Tier 1 adapter boundary
+  for Club Log, QRZ Logbook, eQSL, and LoTW.
 - Confirmation downloads parse ADIF-style records and append official upload
   status events through the core event store.
 - DX Cluster lines and POTA/SOTA records are normalized into the common `Spot`
@@ -280,7 +300,11 @@ The implementation is credential-aware and offline-testable:
 - Credentials are referenced by ID and remain behind `CredentialStore`.
 
 Live network adapters are intentionally isolated behind provider boundaries so
-tests and CI do not require external credentials or internet access.
+tests and CI do not require external credentials or internet access. The v0.2
+Tier 1 layer provides fake/mock execution, credential validation, redacted
+diagnostics, upload retry/dedupe behavior, QRZ XML/HamQTH lookup scaffolding,
+POTA/SOTAWatch/DX spot scaffolding, and a documented LoTW TQSL/certificate
+limitation. Provider-specific live transports remain v1.0-hardening work.
 
 ## Official QSO Workflow
 
@@ -636,8 +660,8 @@ GUI workflow:
 2. Choose `Basic` or `Sync`.
 3. Add a short description and user notes.
 4. Click `Preview` to inspect included files and redaction summary.
-5. Click `Export ZIP` to save a local bundle. Native file dialogs are not wired
-   yet, so the MVP uses a typed output path.
+5. Click `Export ZIP` to save a local bundle. In Tauri desktop mode this uses a
+   native file dialog; in browser/server mode the MVP uses a typed output path.
 6. Click `Upload Report` to send the bundle to the support endpoint. Upload
    requires cloud sync pairing/authentication first.
 
@@ -723,6 +747,8 @@ desktop-native dialog bridge when the Tauri commands are available:
   a browser/server path prompt.
 - `Export ADIF` writes visible, non-deleted QSOs through native desktop dialogs
   or a browser/server path prompt.
+- Backup import/export, diagnostic bundle export, divergence report export, and
+  app data directory selection use the same desktop-native dialog bridge.
 
 CLI commands:
 
@@ -991,12 +1017,18 @@ JSON-serializable workspace layouts, panel registrations, command definitions,
 mock plugin data, and a small local web server. The web side renders the shell
 using static HTML, CSS, and JavaScript.
 
-This is a web-first foundation that is Tauri-ready: the current `ham-gui` binary
-serves the same assets the `src-tauri` desktop shell is configured to embed.
-The `ham-desktop` crate records the desktop runtime and native dialog command
-helpers, including cancellation handling and path redaction. The full Tauri
-Rust runtime wrapper and installer build are still deferred so CI stays
-lightweight while the project finishes beta functionality.
+This is a web-first foundation with a real Tauri desktop wrapper: the current
+`ham-gui` binary serves the same assets the `src-tauri` desktop shell embeds.
+The `ham-desktop` crate owns desktop runtime metadata and native dialog command
+helpers, including cancellation handling and path redaction. The desktop wrapper
+adds Tauri commands for dialogs plus a restricted `/api/*` proxy to the
+configured hosted/self-hosted API base.
+
+Desktop release mode bundles `crates/ham-gui/web` and does not require a
+frontend dev server. The local GUI HTTP backend is not embedded in-process yet;
+for local desktop development, run `cargo run -p ham-gui --bin ham-gui` and then
+`cargo tauri dev`. The desktop API base defaults to `http://127.0.0.1:9467` and
+can be set with `HAM_DESKTOP_SERVER_URL`.
 
 The default shell includes:
 
@@ -1088,6 +1120,8 @@ just release  # release build for all workspace crates
 just gui      # run the local GUI shell at http://127.0.0.1:9467
 just sync-server # run the self-hosted sync server at http://127.0.0.1:9740
 cargo run -p ham-server --bin ham-server # run hosted beta API at http://127.0.0.1:9750
+cargo tauri dev   # run the Tauri desktop wrapper
+cargo tauri build # package the Tauri desktop wrapper
 just ci       # formatting check, clippy, tests, and debug build
 ```
 

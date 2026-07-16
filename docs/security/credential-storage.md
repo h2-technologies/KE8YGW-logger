@@ -61,6 +61,20 @@ codes, and future weather/map tokens. Runtime events and diagnostics should
 only mention provider IDs and credential IDs; they must never include the secret
 material itself.
 
+Hosted provider tests and upload execution also use this boundary. Fake/mock
+mode is the default CI-safe path and does not require real external secrets.
+Live mode validates credential references through the configured
+`CredentialStore`; responses persist only redacted status such as
+`credential_reference_status`, `credential_resolved`, provider health, and
+diagnostic messages.
+
+For v0.2 live uploads, the hosted executor retrieves the secret only for the
+current operation and passes it in memory to the Tier 1 adapter. It is not
+written back to SurrealDB provider settings, upload queue history, diagnostics,
+official events, logs, backups, or API responses. The adapter accepts JSON
+object secrets or `key=value` pairs and redacts any provider HTTP error body
+before returning a result.
+
 ## Redaction
 
 Runtime events, diagnostic bundles, and safe metadata pass through the existing
@@ -71,6 +85,21 @@ redaction helpers. Secret-like fields such as `password`, `token`, `secret`,
 
 - OS credential access is implemented but still needs validation on clean
   Windows/macOS/Linux release runners and packaged desktop builds.
+- Club Log, QRZ Logbook, and eQSL have gated live HTTP upload transports and
+  ignored release-runner validation hooks. They require both
+  `HAM_LIVE_PROVIDER_TESTS=1` and `HAM_LIVE_PROVIDER_ALLOW_UPLOAD=1` before
+  any real upload validation can run. Missing provider-specific live variables
+  skip the ignored live hook rather than failing default CI.
+- QRZ XML/HamQTH lookup, POTA spot fetch, and DX Cluster read-once runtime are
+  wired through hosted provider routes. Fake mode remains the default; live
+  mode requires explicit provider settings and CredentialStore resolution where
+  credentials are required.
+- Live validation output prints provider name, mode, high-level status, and
+  redacted error code only. It must not print raw request bodies or raw
+  XML/HTML responses that may include account/session data.
+- SOTAWatch live access remains deferred pending explicit API approval/terms
+  handling. LoTW TQSL signing is not production-complete and must not be
+  replaced by a password-only shortcut.
 - The development fallback is plaintext and exists only to test UI and provider
   integration behavior.
 - Credential rotation is a placeholder.

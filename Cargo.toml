@@ -8,6 +8,7 @@ members = [
     "crates/ham-cli",
     "crates/ham-gui",
     "crates/ham-desktop",
+    "src-tauri",
 ]
 resolver = "2"
 

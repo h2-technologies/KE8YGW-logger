@@ -4,14 +4,12 @@
   "version": "0.2.0",
   "identifier": "com.h2technologies.ke8ygw-logger",
   "build": {
-    "beforeDevCommand": "",
-    "beforeBuildCommand": "",
-    "devUrl": "http://127.0.0.1:9467",
     "frontendDist": "../crates/ham-gui/web"
   },
   "app": {
     "windows": [
       {
+        "label": "main",
         "title": "KE8YGW Logger",
         "width": 1280,
         "height": 860,
@@ -26,6 +24,7 @@
   "bundle": {
     "active": true,
     "targets": ["msi", "nsis", "deb", "appimage", "dmg"],
+    "icon": ["icons/icon.ico", "icons/icon.png"],
     "category": "Productivity",
     "shortDescription": "Amateur radio logging, sync, and station operations.",
     "longDescription": "KE8YGW Logger desktop package for local logging, hosted sync, ADIF, backups, diagnostics, and divergence review."

@@ -104,10 +104,40 @@ not send raw password, token, API key, or secret fields in provider config; the
 server rejects secret-looking keys and never returns credential secret values.
 Provider test responses expose credential-reference status fields such as
 `credential_reference_present`, `credential_reference_status`, and
-`credential_reference_resolves`, but never include resolved secret material.
-Desktop/local clients resolve credential IDs through `CredentialStore`; hosted
-server provider settings remain reference-only unless a future explicit server
-secret vault is designed.
+`credential_reference_resolves`, plus `credential_required`,
+`credential_resolved`, `capability_tested`, `provider_health_state`,
+`redacted_diagnostics`, and `next_recommended_action`, but never include
+resolved secret material. Desktop/local clients resolve credential IDs through
+`CredentialStore`; hosted server provider settings remain reference-only unless
+a future explicit server secret vault is designed.
+
+Upload run responses may represent fake or live execution. Fake mode is the
+default and is deterministic for CI. Live mode is enabled only by provider
+settings and resolved credential references. Club Log, QRZ Logbook, and eQSL
+live uploads return redacted provider summaries/errors; clients must treat
+`retryable`, `status`, `failure_reason`, and `provider_error` as advisory
+support metadata and must not assume QSO rows were mutated.
+
+Hosted provider runtime routes are also support-metadata operations:
+
+- `POST /api/v1/providers/qrz-xml/lookup`
+- `POST /api/v1/providers/hamqth/lookup`
+- `GET /api/v1/providers/pota-spots/spots?logbook_id=<uuid>`
+- `POST /api/v1/providers/dx-cluster/connect`
+- `POST /api/v1/providers/dx-cluster/read`
+- `POST /api/v1/providers/dx-cluster/disconnect`
+- `GET /api/v1/providers/dx-cluster/status?logbook_id=<uuid>`
+
+Lookup routes accept `{ "logbook_id": "...", "callsign": "K1ABC" }`.
+Runtime responses expose structured `status`, `result_summary`,
+`failure_reason`, stable redacted `error_code`, `redacted_error`, result/spot
+payloads, and provider health metadata. Error codes include categories such as
+`missing_credential`, `invalid_credential_reference`, `auth_failure`,
+`session_failure`, `callsign_not_found`, `malformed_response`,
+`rate_limited`, `permission_issue`, `network_timeout`, `connection_failed`,
+`transport_failure`, `provider_disabled`, and `live_mode_not_configured`. They
+must not write provider results into official QSO rows; users or future
+proposal flows must explicitly apply any suggested fields.
 
 ## Error Shape
 
@@ -315,10 +345,19 @@ The hosted `/api/v1` beta surface uses bearer sessions and currently implements:
 - `GET /api/v1/adif/export`, which returns ADIF generated from official
   projections and includes filename/content metadata.
 - Provider list/detail/update/test routes. Provider updates persist settings
-  without secrets; tests can run in fake/mock mode for CI.
+  without secrets; tests can run in fake/mock mode for CI and return structured
+  credential/health diagnostics. Provider list/detail responses include health
+  summaries such as mode, enabled state, credential-reference status,
+  last success/failure, last redacted error, and next recommended action.
 - Upload list/run/retry routes. Upload jobs select QSOs from official
   projections, generate ADIF, persist queue/history metadata, expose retry
-  state, and currently execute against fake/stub provider behavior.
+  state, deduplicate queued/running/successful duplicates, and execute through
+  the Tier 1 provider adapter boundary. Fake mode is deterministic; Club Log,
+  QRZ Logbook, and eQSL live uploads are gated by explicit settings and
+  credentials. QRZ XML/HamQTH hosted lookup execution, POTA hosted spot fetch,
+  and DX Cluster bounded read-once lifecycle controls are implemented. SOTAWatch
+  live access remains deferred pending approved API/terms handling; LoTW live
+  upload remains deferred pending a TQSL/certificate-signing model.
 - Activation list/create/get/update/end routes. Writes are proposal-backed
   official activation events; reads are projection-derived.
 - Net Control session/check-in/traffic routes. Writes are proposal-backed

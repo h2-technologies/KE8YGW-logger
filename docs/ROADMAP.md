@@ -74,15 +74,27 @@ client. v1.1 is the native SwiftUI iOS release. See `V1_RELEASE_PLAN.md`,
 
 16. **Online Services Ecosystem**
     - LoTW/eQSL/Club Log/QRZ/HRDLog provider metadata, QRZ/HamQTH/FCC lookup metadata, DX Cluster/RBN/POTA/SOTA spot models, NOAA/Open-Meteo/OSM provider metadata, upload/download engine models, confirmation import events, automation, notifications, and Online Services workspace.
-    - Status: implemented at foundation level. Live network adapters and durable scheduler execution remain planned.
+    - Status: implemented at foundation level with Tier 1 adapter boundaries,
+      fake/mock execution, hosted upload execution, and credential-reference
+      validation. Club Log, QRZ Logbook, and eQSL have gated live HTTP upload
+      transports with ignored release-runner validation hooks. QRZ XML/HamQTH
+      hosted lookup execution, POTA hosted spot fetch, and DX Cluster bounded
+      connect/read/disconnect/status runtime controls are wired with redacted
+      error-code mapping. LoTW TQSL signing, SOTAWatch approval/terms handling,
+      and durable scheduler
+      execution remain planned.
 
 ## Dependency Order
 
 The next high-impact work should minimize future rewrites:
 
 1. Extract shared plugin/UI manifests only when static plugin definitions become a blocker.
-2. Add the actual Tauri runtime wrapper, package validation, browser tests, and
-   CI release checks before public tester use.
+2. Validate Tauri package builds, add browser tests, and add CI release checks
+   before public tester use.
 3. Add real peer-to-peer LAN transport and trust pairing before unattended sync.
 4. Add role/account/session models before broad multi-operator workflows.
-5. Build live network adapters on top of the Online Services foundation: QRZ XML API, HamQTH, LoTW, eQSL, Club Log, QRZ Logbook, DX Cluster, POTA spots, SOTAWatch, real propagation/weather providers, and automatic upload processing.
+5. Complete provider runtime hardening on top of the Online Services adapter
+   boundary: real-account validation for hosted QRZ XML/HamQTH lookup, POTA
+   spot fetch, DX Cluster read-once behavior, and Club Log/QRZ/eQSL uploads;
+   approved SOTAWatch access; LoTW/TQSL upload; real propagation/weather
+   providers; and automatic upload processing.

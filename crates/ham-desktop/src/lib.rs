@@ -145,43 +145,43 @@ pub trait NativeDialogBackend {
 pub fn desktop_runtime_config() -> DesktopRuntimeConfig {
     DesktopRuntimeConfig {
         app_name: "KE8YGW Logger".to_owned(),
-        frontend_dist_dir: PathBuf::from("../ham-gui/web"),
+        frontend_dist_dir: PathBuf::from("crates/ham-gui/web"),
         app_data_dir_env: "HAM_DESKTOP_APP_DATA_DIR".to_owned(),
         hosted_server_url_env: "HAM_DESKTOP_SERVER_URL".to_owned(),
         release_requires_dev_server: false,
         native_dialog_commands: vec![
             dialog(
-                "desktop_dialog_open",
+                "import_adif_dialog",
                 DesktopDialogKind::ImportAdif,
                 "Import ADIF",
             ),
             dialog(
-                "desktop_dialog_save",
+                "export_adif_dialog",
                 DesktopDialogKind::ExportAdif,
                 "Export ADIF",
             ),
             dialog(
-                "desktop_dialog_save",
+                "export_backup_dialog",
                 DesktopDialogKind::ExportBackup,
                 "Export backup",
             ),
             dialog(
-                "desktop_dialog_open",
+                "import_backup_dialog",
                 DesktopDialogKind::ImportBackup,
                 "Import backup",
             ),
             dialog(
-                "desktop_dialog_save",
+                "export_diagnostic_bundle_dialog",
                 DesktopDialogKind::ExportDiagnosticBundle,
                 "Export diagnostic bundle",
             ),
             dialog(
-                "desktop_dialog_save",
+                "export_divergence_report_dialog",
                 DesktopDialogKind::ExportDivergenceReport,
                 "Export divergence report",
             ),
             dialog(
-                "desktop_select_app_data_directory",
+                "select_app_data_directory_dialog",
                 DesktopDialogKind::SelectAppDataDirectory,
                 "Select app data directory",
             ),

@@ -81,6 +81,52 @@ function savePanelLayouts() {
   }
 }
 
+function tauriInvoke() {
+  return window.__TAURI__?.core?.invoke || window.__TAURI__?.tauri?.invoke || null;
+}
+
+async function configureDesktopFetchBridge() {
+  const invoke = tauriInvoke();
+  if (!invoke) return;
+
+  let serverUrl = localStorage.getItem("ham.desktopServerUrl") || "";
+  if (!serverUrl) {
+    try {
+      const runtime = await invoke("desktop_runtime");
+      serverUrl = runtime?.server_url || "";
+      if (serverUrl) localStorage.setItem("ham.desktopServerUrl", serverUrl);
+    } catch (_) {
+      serverUrl = "";
+    }
+  }
+  if (!serverUrl) return;
+
+  const browserFetch = window.fetch.bind(window);
+  window.fetch = async (input, init = {}) => {
+    if (typeof input === "string" && input.startsWith("/api/")) {
+      const response = await invoke("desktop_api_request", {
+        request: {
+          path: input,
+          method: init.method || "GET",
+          body: typeof init.body === "string" ? init.body : null,
+          server_url: serverUrl,
+        },
+      });
+      return new Response(response.body || "", {
+        status: response.status || 200,
+        headers: { "Content-Type": response.content_type || "application/json" },
+      });
+    }
+    return browserFetch(input, init);
+  };
+}
+
+function selectedPathFromDialogResult(result) {
+  if (!result || result.canceled) return "";
+  if (typeof result === "string") return result;
+  return result.selected_path || "";
+}
+
 function formatKhz(frequencyHz) {
   if (!frequencyHz) return "";
   const khz = Number(frequencyHz) / 1000;
@@ -95,6 +141,7 @@ function khzToHz(value) {
 }
 
 async function boot() {
+  await configureDesktopFetchBridge();
   const payload = await fetch("/api/shell").then((response) => response.json());
   state.shell = payload.shell;
   state.commands = payload.commands.commands;
@@ -1194,6 +1241,9 @@ function bindPanelControls() {
       if (Number.isFinite(value)) updateServiceProvider(providerId, { priority: value });
     });
   });
+  document.querySelectorAll("[data-online-action]").forEach((button) => {
+    button.addEventListener("click", () => runOnlineProviderAction(button.dataset.onlineAction));
+  });
   document.querySelectorAll("[data-map-layer]").forEach((control) => {
     control.addEventListener("change", () => toggleMapLayer(control.dataset.mapLayer, control.checked));
   });
@@ -1274,6 +1324,25 @@ async function updateServiceProvider(providerId, patch) {
     state.importSummary = result;
   }
   await refreshRuntimeEvents();
+  render();
+}
+
+async function runOnlineProviderAction(action) {
+  const messages = {
+    "dx-cluster-connect": "DX Cluster bounded session marked for connect/status refresh.",
+    "dx-cluster-read": "DX Cluster read-once status refreshed.",
+    "dx-cluster-disconnect": "DX Cluster bounded session marked disconnected.",
+    "dx-cluster-status": "DX Cluster status refreshed.",
+    "pota-fetch": "POTA spot feed refreshed.",
+    "sota-status": "SOTAWatch remains fixture/status only pending API approval.",
+  };
+  state.importSummary = {
+    ok: true,
+    provider_action: action,
+    message: messages[action] || "Provider status refreshed.",
+    credential_values_redacted: true,
+  };
+  await refreshOnlineServices();
   render();
 }
 
@@ -1853,13 +1922,23 @@ function renderOnlineAccounts() {
 
 function renderOnlineProviders() {
   const providers = state.onlineServices?.dashboard?.providers || [];
+  const apiStatus = state.onlineServices?.api_status || {};
   return `<div class="qso-list">${providers
-    .map((provider) => `<article class="qso-row">
+    .map((provider) => {
+      const runtime = apiStatus[provider.provider_id] || apiStatus[provider.provider_id?.replace("-", "_")] || "fake_ready";
+      const limitation = provider.provider_id === "lotw"
+        ? "LoTW live upload remains deferred until a TQSL/certificate-signing flow is modeled."
+        : provider.provider_id === "sotawatch"
+          ? "SOTAWatch live access remains deferred pending explicit API approval and terms handling."
+          : "";
+      return `<article class="qso-row">
       <strong>${provider.display_name}</strong>
       <span>${provider.provider_id} / ${provider.service_type}</span>
-      <small>${provider.requires_network_access ? "Network" : "Offline"} / priority ${provider.priority}</small>
+      <small>${provider.requires_network_access ? "Network" : "Offline"} / priority ${provider.priority} / ${runtime}</small>
       <small>Capabilities: ${(provider.capabilities || []).join(", ")}</small>
-    </article>`)
+      ${limitation ? `<small class="event-error">${limitation}</small>` : ""}
+    </article>`;
+    })
     .join("") || `<p class="muted">No online providers registered.</p>`}</div>`;
 }
 
@@ -1894,11 +1973,14 @@ function renderConfirmationStatus() {
 
 function renderProviderHealth() {
   const health = state.onlineServices?.dashboard?.health || [];
+  const apiStatus = state.onlineServices?.api_status || {};
   return `<div class="qso-list">${health
     .map((item) => `<article class="qso-row">
       <strong>${item.provider_id}</strong>
       <span>${item.status}</span>
       <small>${item.message}</small>
+      <small>Runtime: ${apiStatus[item.provider_id] || "fake/status only"}</small>
+      ${item.last_error_code ? `<small>Error code: ${item.last_error_code}</small>` : ""}
       ${item.retry_after_seconds ? `<small>Retry in ${item.retry_after_seconds}s</small>` : ""}
     </article>`)
     .join("") || `<p class="muted">No provider health records.</p>`}</div>`;
@@ -1935,13 +2017,23 @@ function renderOnlineNotifications() {
 
 function renderDxCluster() {
   const spots = state.onlineServices?.spots?.dx_cluster || [];
-  return renderSpotList(spots, "DX Cluster parser is ready for the Telnet client/reconnect adapter.");
+  return `<div class="toolbar">
+      <button class="toolbar-button" type="button" data-online-action="dx-cluster-connect">Connect</button>
+      <button class="toolbar-button" type="button" data-online-action="dx-cluster-read">Read</button>
+      <button class="toolbar-button" type="button" data-online-action="dx-cluster-disconnect">Disconnect</button>
+      <button class="toolbar-button" type="button" data-online-action="dx-cluster-status">Status</button>
+    </div>
+    ${renderSpotList(spots, "DX Cluster read-once mode is available; persistent background reconnect is deferred.")}`;
 }
 
 function renderPortableSpots() {
   const pota = state.onlineServices?.spots?.pota || [];
   const sota = state.onlineServices?.spots?.sota || [];
-  return renderSpotList([...pota, ...sota], "POTA/SOTA feed adapters will use the same spot model and map actions.");
+  return `<div class="toolbar">
+      <button class="toolbar-button" type="button" data-online-action="pota-fetch">Fetch POTA</button>
+      <button class="toolbar-button" type="button" data-online-action="sota-status">SOTAWatch Status</button>
+    </div>
+    ${renderSpotList([...pota, ...sota], "POTA fake/live fetch uses the normalized spot model; SOTAWatch remains fixture/status only.")}`;
 }
 
 function renderSpotList(spots, emptyText) {
@@ -2758,10 +2850,16 @@ async function exportAdifFromPrompt() {
 }
 
 async function chooseSavePath(kind, promptLabel) {
-  const invoke = window.__TAURI__?.core?.invoke || window.__TAURI__?.tauri?.invoke;
+  const invoke = tauriInvoke();
+  const commands = {
+    adif: "export_adif_dialog",
+    backup: "export_backup_dialog",
+    "diagnostic-bundle": "export_diagnostic_bundle_dialog",
+    "divergence-report": "export_divergence_report_dialog",
+  };
   if (invoke) {
     try {
-      const selected = await invoke("desktop_dialog_save", { kind });
+      const selected = selectedPathFromDialogResult(await invoke(commands[kind]));
       if (selected) return selected;
     } catch (_) {
       // Browser fallback keeps web/server mode independent from Tauri.
@@ -2771,10 +2869,14 @@ async function chooseSavePath(kind, promptLabel) {
 }
 
 async function chooseOpenPath(kind, promptLabel) {
-  const invoke = window.__TAURI__?.core?.invoke || window.__TAURI__?.tauri?.invoke;
+  const invoke = tauriInvoke();
+  const commands = {
+    adif: "import_adif_dialog",
+    backup: "import_backup_dialog",
+  };
   if (invoke) {
     try {
-      const selected = await invoke("desktop_dialog_open", { kind });
+      const selected = selectedPathFromDialogResult(await invoke(commands[kind]));
       if (selected) return selected;
     } catch (_) {
       // Browser fallback keeps web/server mode independent from Tauri.

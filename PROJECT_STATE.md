@@ -4,9 +4,9 @@ Current milestone: v0.2 almost-v1 beta
 
 Current version: 0.2.0
 
-Last update timestamp: 2026-07-08T12:01:06-04:00
+Last update timestamp: 2026-07-16T00:00:00-04:00
 
-Repository health status: Healthy for this v0.2 desktop/credential slice. Formatting, Rust check, Clippy with warnings denied, full workspace tests, GUI JavaScript syntax check, targeted server/sync/desktop builds, and `git diff --check` passed during this session. Tauri CLI/package validation was attempted and remains blocked by missing Tauri runtime crate/package prerequisites. Browser-level tests, docs link checks, and release artifact builds are not yet configured.
+Repository health status: Healthy for this v0.2 provider validation-hardening slice. Hosted QRZ XML/HamQTH lookup, POTA spot fetch, DX Cluster bounded runtime controls, and Club Log/QRZ Logbook/eQSL uploads remain fake/offline by default, with ignored live validation hooks gated by explicit environment variables and credentials. Runtime responses and persisted provider health now carry stable redacted error codes for common credential, auth, malformed-response, provider-rejection, rate-limit, timeout, and transport failures. SOTAWatch and LoTW remain explicitly deferred where provider/API safety requires it. Formatting, Rust check, Clippy with warnings denied, full workspace tests, GUI JavaScript syntax check, package builds, diff whitespace check, and Tauri package build passed after this slice. The Rust test suite currently reports 212 passed tests and 7 ignored live validation hooks.
 
 ---
 
@@ -52,6 +52,13 @@ Repository health status: Healthy for this v0.2 desktop/credential slice. Format
 - [x] Confirmation download model and official append-only confirmation status event path
 - [x] DX Cluster parser and POTA/SOTA spot normalization
 - [x] Online automation task and notification models
+- [x] Tier 1 provider adapter boundary with fake/mock execution and credential validation
+- [x] Gated live Club Log, QRZ Logbook, and eQSL upload transports
+- [x] QRZ XML/HamQTH lookup parsers, POTA fixture/request foundation, and DX Cluster read-once Telnet foundation
+- [x] Hosted QRZ XML and HamQTH lookup runtime routes with fake default, live gating, credential-reference resolution, structured errors, redaction, and provider health persistence
+- [x] Hosted POTA spot fetch runtime route with fake fixture default, live gating, normalized spot output, and provider health persistence
+- [x] DX Cluster bounded runtime controls for connect, read-once, disconnect, and status, with fake stream tests and support-metadata health/status recording
+- [x] Ignored release-runner live upload validation hooks for Club Log, QRZ Logbook, and eQSL gated by `HAM_LIVE_PROVIDER_TESTS=1` and `HAM_LIVE_PROVIDER_ALLOW_UPLOAD=1`
 - [x] Versioned durable support storage abstraction for non-official sidecar state
 - [x] Durable provider settings, service cache metadata, upload queue, map layer preferences, lookup/rig UI config, and online automation/notification state loading
 - [ ] Conflict resolution UI/model
@@ -95,11 +102,12 @@ Repository health status: Healthy for this v0.2 desktop/credential slice. Format
 - [x] Maps workspace panels
 - [x] Map status bar fields
 - [x] Online Services workspace panels
+- [x] Online Services provider panels now surface fake/live/deferred runtime status and lightweight lookup/spot/DX runtime controls
 - [x] Service provider enable/disable and priority controls persisted through support storage
 - [x] Keyboard-first logging command foundation
 - [ ] Interactive dockable panel movement
 - [x] Native file dialog command helpers and browser fallback bridge
-- [ ] Full Tauri packaging
+- [x] Tauri desktop runtime wrapper and Windows package validation
 
 ## Sync
 
@@ -117,7 +125,7 @@ Repository health status: Healthy for this v0.2 desktop/credential slice. Format
 - [x] Dockerfile for sync server
 - [ ] Real LAN peer-to-peer HTTP transport
 - [ ] Trust pairing UX
-- [ ] Durable sync server storage
+- [x] Durable sync server storage
 
 ## Plugins and Plugin-Like Features
 
@@ -131,7 +139,9 @@ Repository health status: Healthy for this v0.2 desktop/credential slice. Format
 - [x] Awards foundation
 - [x] Upload queue foundation
 - [x] Net Control MVP
-- [ ] Real LoTW/eQSL/Club Log/QRZ providers
+- [x] Tier 1 LoTW/eQSL/Club Log/QRZ provider adapter boundaries
+- [x] Gated live Club Log, QRZ Logbook, and eQSL upload transports
+- [ ] LoTW TQSL/certificate-signing upload flow
 - [x] Net Control MVP
 - [x] Maps/propagation framework
 - [x] Online Services ecosystem foundation
@@ -176,13 +186,13 @@ Net Control is a plugin-style workflow using the normal proposal pipeline. Net s
 
 The mapping framework is implemented as a core GIS/service layer. `ham-core::map` owns coordinate, grid, distance, bearing, layer, marker, grayline, weather, and propagation models. Maps consume QSO projections, station profiles, and service providers; they do not own official event writes or business workflows.
 
-The Online Services ecosystem is implemented as a provider-backed service layer. `ham-core::online` owns connected provider metadata, upload/download engine models, confirmation records, DX/POTA/SOTA spot normalization, provider health states, automation tasks, notifications, and safe cache helpers. Live network adapters remain behind provider boundaries and must use `CredentialStore`.
+The Online Services ecosystem is implemented as a provider-backed service layer. `ham-core::online` owns connected provider metadata, upload/download engine models, confirmation records, DX/POTA/SOTA spot normalization, provider health states, automation tasks, notifications, safe cache helpers, and Tier 1 adapter contracts. The Tier 1 layer covers QRZ XML, HamQTH, POTA spots, SOTAWatch, Club Log, QRZ Logbook, eQSL, LoTW, and DX Cluster with fake/mock test paths, credential-reference validation, redacted diagnostics, and fail-closed live limitations where provider-specific transports are not safe to enable. Club Log, QRZ Logbook, and eQSL have gated live HTTP upload transports. QRZ XML/HamQTH hosted lookup execution, POTA hosted spot fetching, and DX Cluster bounded read-once lifecycle controls are wired through provider adapters and hosted routes. Provider runtime state is support metadata in SurrealDB provider settings, not official QSO state. SOTAWatch live access is deferred pending explicit API approval/terms handling, and LoTW production upload is deferred until a safe TQSL/certificate-signing flow is modeled. Live network transports remain behind provider boundaries and must use `CredentialStore`.
 
 Sync is split between `ham-sync` for protocol, peer, LAN/cloud models, safe replication, in-memory test server logic, and durable sync/report server logic, plus `ham-sync-server` for the self-hosted HTTP-like server binary. LAN is preferred. Cloud/self-hosted sync is a fallback and uses the same verification rules.
 
 Storage uses append-only JSONL official events for the MVP. Hosted server metadata uses SurrealDB for users, sessions, devices, logbooks, memberships, API tokens, invites, and schema migrations. The sync/report server uses SurrealDB for sync/support metadata, append-only JSONL for replicated official events, and filesystem-backed diagnostic report payloads. Runtime logs are separate rotating JSONL files. Local GUI support/config state still uses lightweight versioned JSON files for map layer preferences, lookup/rig UI config, station profiles, saved searches, permission grants, and credential metadata. Secret values remain outside support storage behind `CredentialStore`.
 
-The GUI is `ham-gui`, a web-first shell served by Rust. It is Tauri-ready but not yet a packaged Tauri app. It consumes core bridge APIs, projections, runtime events, service framework state, and proposal endpoints. The shared web UI detects desktop native-dialog commands and falls back to browser/server file flows outside desktop mode.
+The GUI is `ham-gui`, a web-first shell served by Rust and embedded by the Tauri desktop wrapper. It consumes core bridge APIs, projections, runtime events, service framework state, and proposal endpoints. The shared web UI detects desktop native-dialog commands and falls back to browser/server file flows outside desktop mode. In packaged desktop mode, bundled assets call a restricted Tauri `/api/*` proxy pointed at `HAM_DESKTOP_SERVER_URL` or the default local GUI API at `http://127.0.0.1:9467`; the full local backend is not embedded in-process yet.
 
 The Maps workspace consumes `/api/maps/state` and `/api/maps/layer/toggle`. It displays derived QSO/station map objects, layer state, selected-object context, grayline, propagation, weather, and map status fields.
 
@@ -200,13 +210,14 @@ Diagnostics include runtime event logs, redaction helpers, report ZIP generation
 - `crates/ham-core::credential`: credential metadata, store abstraction, OS credential backends, explicit insecure development fallback.
 - `crates/ham-core::map`: GIS models, Maidenhead grid engine, great-circle engine, map layers, markers, provider metadata, grayline, propagation, and weather models.
 - `crates/ham-core::net`: Net Control projection, session/check-in/traffic models, and report export.
-- `crates/ham-core::online`: online provider metadata, upload/download engine models, confirmation records, spot parsing, automation, notification, and provider health helpers.
+- `crates/ham-core::online`: online provider metadata, Tier 1 adapter contracts, upload/download engine models, confirmation records, spot parsing, automation, notification, and provider health helpers.
 - `crates/ham-plugin-sdk`: plugin manifest, capabilities, service types, proposal envelope, public event constants.
 - `crates/ham-sync`: LAN discovery/handshake models, peer registry, safe replication, cloud API/client/server models, durable sync/report storage, and report upload models.
 - `crates/ham-sync-server`: self-hosted sync/report HTTP-like server binary using durable local storage by default.
 - `crates/ham-server`: hosted web/server API boundary with durable SurrealDB account, session, device, logbook, role, station/equipment, provider, upload, sync, and QSO lifecycle metadata/API routes.
 - `crates/ham-gui`: Rust bridge/server, GUI shell models, command registry, static web UI.
 - `crates/ham-desktop`: desktop runtime configuration and testable native-dialog command helpers for the Tauri wrapper.
+- `src-tauri`: Tauri v2 desktop runtime wrapper, capabilities, icons, bundled web UI config, native dialog command bridge, and restricted desktop API proxy.
 - `crates/ham-cli`: CLI commands for ADIF and chain/projection operations.
 - `docs/architecture`: service framework, online services, station profiles, award engine, search, and upload queue architecture notes.
 - `docs/plugins`: provider and online provider development guides.
@@ -228,15 +239,17 @@ Diagnostics include runtime event logs, redaction helpers, report ZIP generation
 
 ## High
 
-- [ ] Add real LoTW/eQSL/Club Log/QRZ upload providers through the service framework.
-- [ ] Add QRZ/HamQTH real lookup providers using secure credential storage.
+- [x] Add Tier 1 LoTW/eQSL/Club Log/QRZ upload adapter boundaries through the service framework.
+- [x] Add QRZ/HamQTH lookup adapter boundaries using secure credential storage.
+- [x] Add gated provider-specific live uploads for Club Log, QRZ Logbook, and eQSL.
+- [x] Add hosted live lookup execution for QRZ XML and HamQTH.
 - [ ] Enforce permission scopes consistently across account, logbook, and station boundaries.
 - [ ] Add role/account/session models and UI beyond the MVP local-admin assumption.
 - [ ] Implement real LAN peer-to-peer transport for replication endpoints.
 - [x] Add conflict/divergence review UX foundation.
 - [ ] Add real tile/geocoding/weather/propagation providers through the map service framework.
-- [ ] Implement live network adapters for LoTW/eQSL/Club Log/QRZ/HRDLog uploads and confirmations.
-- [ ] Implement live QRZ XML, HamQTH, FCC ULS, DX Cluster, RBN, POTA, SOTAWatch, NOAA, Open-Meteo, and OSM adapters.
+- [ ] Implement LoTW/TQSL, HRDLog, and confirmation download/reconciliation clients.
+- [ ] Implement hosted/runtime transports for remaining FCC ULS, RBN, approved SOTAWatch access, NOAA, Open-Meteo, and OSM adapters. QRZ XML, HamQTH, POTA, and DX Cluster bounded runtime wiring are complete for v0.2 validation.
 - [ ] Replace the map preview shell with a full interactive tile/vector renderer.
 
 ## Medium
@@ -245,7 +258,7 @@ Diagnostics include runtime event logs, redaction helpers, report ZIP generation
 - [ ] Add full award rule databases and needed-list computation.
 - [ ] Add saved-search GUI persistence flow.
 - [x] Add native file dialog command helpers for import/export/report bundles.
-- [ ] Add actual Tauri runtime wrapper and package validation.
+- [x] Add actual Tauri runtime wrapper and Windows package validation.
 - [ ] Add projection cache persistence and startup optimization.
 - [ ] Extend support storage to provider account state and notification read/unread state.
 
@@ -261,7 +274,7 @@ Diagnostics include runtime event logs, redaction helpers, report ZIP generation
 # Known Technical Debt
 
 - Several blueprint-recommended crates are currently implemented as modules inside `ham-core`; this is acceptable for MVP but should be revisited as APIs grow.
-- The GUI is a static web shell served by Rust rather than a packaged Tauri desktop app.
+- The GUI backend remains a local/hosted HTTP API; the Tauri wrapper bundles the web UI but does not yet embed or sidecar the local backend.
 - `ham-server` now defines the hosted API boundary and persists account/session/device/logbook metadata in SurrealDB.
 - Plugin loading is static; no sandbox, signature verification, or process isolation exists yet.
 - The sync server uses durable SurrealDB metadata/support storage, JSONL official event storage, and filesystem report payload storage; production migration/retention policy still needs hardening.
@@ -272,8 +285,8 @@ Diagnostics include runtime event logs, redaction helpers, report ZIP generation
 - LAN discovery/replication has strong models but needs real multi-instance transport wiring.
 - Permission scopes are mostly recorded rather than fully enforced.
 - Station profile editing exists in core models but not yet as full GUI forms.
-- External provider implementations are stubs until live integrations are added.
-- Online Services has production-shaped provider metadata and parsers, but live network clients are not enabled yet.
+- External provider implementations remain fake-first by default; live provider validation is gated behind explicit settings, credentials, and ignored tests.
+- Online Services has production-shaped provider metadata, hosted QRZ XML/HamQTH lookup execution, POTA spot fetching, DX Cluster bounded runtime controls, and gated upload transports. Real-account/provider validation remains before production use.
 - Automation tasks are modeled but not executed by a durable scheduler.
 - Confirmation downloads append official events, but provider-specific matching to historical QSOs needs deeper reconciliation.
 - OS credential backend wiring is implemented, but it still needs release-runner and packaged-app validation on Windows, macOS, and Linux.
@@ -321,7 +334,7 @@ Diagnostics include runtime event logs, redaction helpers, report ZIP generation
 - Provider config schemas reference credential IDs; raw credential values stay behind `CredentialStore`.
 - Online Services separates external network permissions by upload, lookup, spotting, map, weather, and propagation.
 - Downloaded confirmations append official status events instead of mutating QSO records.
-- Native credential storage needs Windows/macOS/Linux backend implementations before real external credentials are safe for production use.
+- Native credential storage has Windows/macOS/Linux backend implementations, but packaged release-runner validation is still required before real external credentials are safe for production use.
 
 ---
 
@@ -366,7 +379,7 @@ Diagnostics include runtime event logs, redaction helpers, report ZIP generation
 - Core event hashing, chain verification, QSO proposals, projections, ADIF, lookup, rig, diagnostics, permissions, service framework, credential store, Net Control, station profiles, awards, search, upload queue, sync models, GIS models, grid conversion, great-circle math, map layers, marker serialization, provider metadata, grayline calculations, online provider metadata, retry logic, confirmation parsing, spot parsing, cache stats, and notification models have unit coverage.
 - GUI model serialization and command/panel foundations have partial coverage.
 - JavaScript UI behavior is mostly manually verified and should gain browser-level tests.
-- Current test run: `cargo test --workspace` passed with 197 total Rust tests across crates.
+- Current test run: `cargo test --workspace` passed with 200 total Rust tests across crates.
 
 ---
 
@@ -404,6 +417,13 @@ Completed work:
 - Added `ham-desktop` desktop foundation crate and root `src-tauri` packaging configuration.
 - Added desktop-native dialog bridge detection in the web UI for ADIF import/export, backup import/export, diagnostic bundle export, and divergence report export.
 - Added testable `ham-desktop` native-dialog command helpers for ADIF import/export, backup import/export, diagnostic bundle export, divergence report export, and app data directory selection.
+- Added the real `src-tauri` Tauri v2 runtime crate as a workspace member.
+- Added Tauri command wrappers for `desktop_runtime`, `desktop_api_request`, `import_adif_dialog`, `export_adif_dialog`, `export_backup_dialog`, `import_backup_dialog`, `export_diagnostic_bundle_dialog`, `export_divergence_report_dialog`, and `select_app_data_directory_dialog`.
+- Wired Tauri native-dialog commands to the existing `ham-desktop` helper layer without duplicating domain logic.
+- Configured release bundling to embed `crates/ham-gui/web` directly without a frontend dev server.
+- Added relative web asset paths for Tauri asset-protocol compatibility.
+- Added a restricted Tauri `/api/*` proxy so bundled desktop assets can talk to a configured local/hosted API without broad browser CORS changes.
+- Added Tauri v2 capability metadata and deterministic placeholder icon assets required for Windows packaging.
 - Added Windows Credential Manager, macOS Keychain, and Linux Secret Service/libsecret credential backend wiring behind `OsCredentialStore`.
 - Updated GUI/local credential selection to use OS credential storage when available and keep the insecure file fallback explicit opt-in only.
 - Added credential safety tests covering the `TEST_SECRET_SHOULD_NOT_APPEAR` sentinel across metadata sidecars, diagnostics, provider responses, upload history, and backup export.
@@ -422,14 +442,21 @@ Completed work:
 
 Remaining work:
 
-- Add the actual Tauri runtime wrapper crate and package validation.
 - Harden backup restore UX and add browser-level coverage.
 - Add LAN peer-to-peer transport and trust pairing.
 - Enforce permission scopes across all older GUI/local routes, not only the new hosted QSO slice.
 - Add browser-level GUI tests.
-- Implement live network adapters for the registered providers.
+- Validate hosted QRZ XML/HamQTH lookup execution, hosted POTA spot fetch, DX
+  Cluster bounded runtime controls, and gated Club Log/QRZ Logbook/eQSL live
+  uploads with provider-approved accounts or controlled fixtures.
+- Add approved SOTAWatch live access and LoTW/TQSL upload only after their
+  provider/API safety models are documented.
 - Validate OS credential backends on clean Windows/macOS/Linux packaging runners.
-- Execute queued uploads against real providers and append provider-specific upload/confirmation events where core supports them.
+- Validate Tauri packaging on clean Linux/macOS runners and decide signing/notarization/updater policy.
+- Embed or sidecar the local GUI backend if v1.0 requires fully local packaged operation without a separately running local/hosted API.
+- Validate gated Club Log, QRZ Logbook, and eQSL live uploads on explicit
+  release-runner credentials, then add provider-specific confirmation clients
+  where core supports safe reconciliation.
 - Add account settings, scheduler state, and notification read state.
 - Add browser-level GUI tests for online service interactions.
 
@@ -444,14 +471,14 @@ Quality gates from this v0.2 slice:
 - `cargo fmt --all -- --check`: passed.
 - `cargo check --workspace --all-targets`: passed.
 - `cargo clippy --workspace --all-targets -- -D warnings`: passed.
-- `cargo test --workspace`: passed, 197 Rust tests total.
+- `cargo test --workspace`: passed, 200 Rust tests total.
 - `node --check crates/ham-gui/web/app.js`: passed.
 - `cargo build -p ham-server`: passed.
 - `cargo build -p ham-sync-server`: passed.
 - `cargo build -p ham-desktop`: passed.
 - `git diff --check`: passed.
-- `cargo tauri info`: completed; reported missing WebView2, missing Visual Studio/MSVC SDK detection, and no detected Tauri runtime packages.
-- `cargo tauri build`: failed before packaging with `Error Input watch path is neither a file nor a directory`; `src-tauri` still has config/README only and no real Tauri Rust runtime crate.
+- `cargo tauri info`: passed; detected WebView2 149.0.4022.98, Visual Studio Build Tools 2022/MSVC, Tauri 2.11.5, tauri-build 2.6.3, wry 0.55.1, tao 0.35.3, and tauri-cli 2.2.7.
+- `cargo tauri build`: passed; built `target/release/ke8ygw-logger-desktop.exe` and produced `target/release/bundle/msi/KE8YGW Logger_0.2.0_x64_en-US.msi` plus `target/release/bundle/nsis/KE8YGW Logger_0.2.0_x64-setup.exe`.
 - Browser-level tests: not run; no Playwright/equivalent suite is configured yet.
 - Docs link checker: not run; not configured.
 
@@ -459,28 +486,430 @@ Quality gates from this v0.2 slice:
 
 # Recommended Next Milestone
 
-Live Provider Adapters and Tauri Runtime:
+Provider Runtime Hardening, Desktop Release Hardening, and GUI Tests:
 
-- Actual Tauri runtime wrapper and package validation.
-- OS credential backend validation on release runners.
-- Live Tier 1 provider adapters.
-- Browser-level GUI tests and CI wiring.
+- Validate Tauri packaging and OS credential backends on clean Windows/Linux/macOS release runners.
+- Decide whether v1.0 desktop embeds/sidecars the local GUI backend or requires a configured hosted/self-hosted API.
+- Validate hosted lookup/spot/DX execution and the gated live upload adapters
+  against provider-approved accounts or controlled fixtures.
+- Add browser-level GUI tests and CI release artifact hardening.
 
-Then continue Live Provider Adapters:
+Then continue Provider Runtime Hardening:
 
-- Live QRZ XML and HamQTH lookup clients.
-- Live LoTW/eQSL/Club Log/QRZ/HRDLog upload and confirmation clients.
-- DX Cluster Telnet background client, POTA spots, SOTAWatch, and RBN adapters.
+- Hosted QRZ XML and HamQTH lookup execution real-account validation.
+- LoTW/TQSL and HRDLog upload clients; confirmation clients for providers with
+  safe matching semantics.
+- DX Cluster bounded runtime and hosted POTA spot fetch real-provider
+  validation; approved SOTAWatch live access and RBN adapters.
 - NOAA/Open-Meteo/space-weather live providers.
 - Durable scheduler execution for automatic uploads/downloads/refreshes.
 
-This milestone should come next because the provider metadata, credential references, upload/download models, and GUI surfaces are now ready for live authenticated adapters.
+This milestone should come next because the provider metadata, credential
+references, upload/download models, and GUI surfaces are now ready for
+provider-approved live validation and release-runner artifact hardening.
 
 ---
 
 # Changelog
 
+## 2026-07-08 Live Validation Hardening
+
+Summary: Hardened the provider live-validation model without changing the
+default offline/fake test behavior. Added ignored live hooks for QRZ XML,
+HamQTH, POTA, and DX Cluster, tightened the existing Club Log, QRZ Logbook, and
+eQSL upload hooks so they skip cleanly without credentials, and added stable
+redacted error codes to provider runtime responses and persisted health.
+
+Files/crates changed in this pass:
+
+- `crates/ham-core/src/online.rs`
+- `crates/ham-server/src/lib.rs`
+- `crates/ham-gui/web/app.js`
+- `README.md`
+- `ROADMAP.md`
+- `docs/API_CLIENT_CONTRACT.md`
+- `docs/HOSTED_WEB_RELEASE.md`
+- `docs/PROVIDER_LIVE_TRANSPORTS.md`
+- `docs/ROADMAP.md`
+- `docs/V0_2_RELEASE_PLAN.md`
+- `docs/security/credential-storage.md`
+- `PROJECT_STATE.md`
+
+Provider validation status:
+
+- Club Log: fake/default tests remain offline; ignored live upload hook now
+  requires `HAM_LIVE_PROVIDER_TESTS=1`,
+  `HAM_LIVE_PROVIDER_ALLOW_UPLOAD=1`, and provider-specific test credentials.
+  Real upload validation is still pending a provider-approved account.
+- QRZ Logbook: fake/default tests remain offline; ignored live upload hook uses
+  the same global live/upload gates plus `HAM_QRZ_LOGBOOK_TEST_KEY`. Real
+  upload validation is pending.
+- eQSL: fake/default tests remain offline; ignored live upload hook uses the
+  same global live/upload gates plus eQSL test credentials. Real response
+  variation validation is pending.
+- QRZ XML: ignored live lookup hook added for username/password/callsign
+  validation. Hosted runtime already persists health; real-account validation
+  is pending.
+- HamQTH: ignored live lookup hook added for username/password/callsign
+  validation. Hosted runtime already persists health; real-account validation
+  is pending.
+- POTA: ignored read-only live spot hook added behind the global live gate.
+  Fixture tests remain default; real endpoint shape validation is pending.
+- DX Cluster: ignored bounded live connect/read/disconnect hook added for
+  host/port/callsign/timeout validation. Fake stream tests remain default.
+- SOTAWatch: remains deferred pending approved API/terms handling.
+- LoTW: remains deferred pending a safe TQSL/certificate-signing model.
+
+Live validation gates:
+
+- All live hooks require `HAM_LIVE_PROVIDER_TESTS=1`.
+- Upload hooks additionally require `HAM_LIVE_PROVIDER_ALLOW_UPLOAD=1` because
+  provider-side records may be created.
+- Missing live credentials produce high-level skipped output rather than default
+  CI failures.
+- Live hook output is limited to provider name, mode, high-level status,
+  retryability, and redacted error codes/summaries.
+
+Provider error mapping:
+
+- Runtime lookup/spot/DX responses now include a stable redacted `error_code`
+  where applicable.
+- Common mapped categories include `missing_credential`,
+  `invalid_credential_reference`, `auth_failure`, `session_failure`,
+  `callsign_not_found`, `rate_limited`, `permission_issue`,
+  `network_timeout`, `connection_failed`, `transport_failure`,
+  `malformed_response`, `provider_rejection`, `provider_disabled`,
+  `live_mode_not_configured`, and `provider_error`.
+- Persisted provider health records now keep `last_error_code` alongside the
+  redacted failure summary.
+
+Credential/redaction safety:
+
+- Provider settings continue to store credential IDs/references only.
+- Live adapters and hosted runtime paths resolve secrets through
+  `CredentialStore` or explicit test-only environment injection.
+- No raw request bodies, credential values, session tokens, XML/HTML response
+  bodies, or account/session details are printed by live validation hooks or
+  returned in API diagnostics.
+- Provider lookup/spot/upload state remains support metadata and does not
+  mutate official QSO rows.
+
+Quality gate results for this pass:
+
+- `cargo fmt --all -- --check`: passed.
+- `cargo check --workspace --all-targets`: passed.
+- `cargo clippy --workspace --all-targets -- -D warnings`: passed.
+- `cargo test --workspace`: passed with 212 passed Rust tests and 7 ignored
+  live-validation hooks.
+- `node --check crates/ham-gui/web/app.js`: passed.
+- `cargo build -p ham-server`: passed.
+- `cargo build -p ham-sync-server`: passed.
+- `cargo build -p ham-desktop`: passed.
+- `git diff --check`: passed.
+- `cargo tauri info`: exited 0; environment probe reported missing
+  WebView2/MSVC/Rust metadata.
+- `cargo tauri build`: passed and produced Windows MSI/NSIS installers.
+
+Live validation run status:
+
+- Real live validation was not run in this workspace because the required
+  `HAM_LIVE_PROVIDER_TESTS` and provider credential environment variables were
+  not present.
+
+Remaining v0.2 gaps:
+
+- Real-account/provider validation for QRZ XML, HamQTH, POTA, DX Cluster, Club
+  Log, QRZ Logbook, and eQSL.
+- SOTAWatch live API approval/terms handling.
+- LoTW TQSL/certificate-signing design and implementation.
+- Confirmation reconciliation beyond documented planning and existing official
+  confirmation-status event support.
+- LAN peer pairing, browser-level GUI tests, clean release-runner credential
+  validation, and CI/release artifact hardening.
+
+Recommended next prompt:
+
+Run the ignored provider live validation hooks on a release runner with
+provider-approved credentials, capture redacted pass/fail/skip outcomes for QRZ
+XML, HamQTH, POTA, DX Cluster, Club Log, QRZ Logbook, and eQSL, and harden any
+provider-specific response mapping observed during that run. Keep SOTAWatch and
+LoTW deferred until their safety models are approved.
+
+## 2026-07-08 Provider Runtime Wiring
+
+Summary: Wired hosted provider runtime execution for QRZ XML lookup, HamQTH
+lookup, POTA spot fetching, and DX Cluster bounded read-once controls. Added
+provider health/status persistence in support metadata, release-runner-gated
+live upload validation hooks, modest GUI status surfacing, and provider docs.
+
+Files/crates changed in this pass:
+
+- `crates/ham-core/src/online.rs`
+- `crates/ham-core/src/lib.rs`
+- `crates/ham-server/src/lib.rs`
+- `crates/ham-gui/src/main.rs`
+- `crates/ham-gui/web/app.js`
+- `README.md`
+- `ROADMAP.md`
+- `docs/API_CLIENT_CONTRACT.md`
+- `docs/HOSTED_WEB_RELEASE.md`
+- `docs/PROVIDER_LIVE_TRANSPORTS.md`
+- `docs/ROADMAP.md`
+- `docs/V0_2_RELEASE_PLAN.md`
+- `docs/security/credential-storage.md`
+- `PROJECT_STATE.md`
+
+Hosted route/runtime behavior:
+
+- `POST /api/v1/providers/qrz-xml/lookup` and
+  `POST /api/v1/providers/hamqth/lookup` enforce logbook read scope, provider
+  enablement, fake/live mode, credential-reference resolution for live mode,
+  structured not-found/auth/malformed/missing-credential failures, and redacted
+  runtime diagnostics.
+- `GET /api/v1/providers/pota-spots/spots` enforces logbook read scope, keeps
+  fake fixture mode as default, supports live mode only when explicitly set,
+  returns normalized compact spot records, and records health.
+- `POST /api/v1/providers/dx-cluster/connect`,
+  `POST /api/v1/providers/dx-cluster/read`,
+  `POST /api/v1/providers/dx-cluster/disconnect`, and
+  `GET /api/v1/providers/dx-cluster/status` implement a bounded session model
+  suitable for v0.2. No always-on daemon is started.
+- `GET /api/v1/providers` and `GET /api/v1/providers/:id` include health
+  summaries with mode, enablement, credential-reference state, last run,
+  last success/failure, redacted last error, and next recommended action.
+
+Provider status:
+
+- Club Log: fake default plus gated live HTTP upload; ignored live validation
+  hook added; needs real-account validation.
+- QRZ Logbook: fake default plus gated live HTTP upload; ignored live
+  validation hook added; needs real-account validation.
+- eQSL: fake default plus gated live HTTP upload; ignored live validation hook
+  added; response variations still need real-account validation.
+- QRZ XML: hosted fake/live lookup execution wired; live uses CredentialStore
+  credential references; needs real-account validation.
+- HamQTH: hosted fake/live lookup execution wired; live uses CredentialStore
+  credential references; needs real-account validation.
+- POTA: hosted fake/live spot fetch wired; live uses the modeled request
+  builder; needs provider/live validation.
+- DX Cluster: bounded connect/read/disconnect/status runtime wired over the
+  read-once Telnet foundation; persistent reconnect/background lifecycle
+  remains deferred.
+- SOTAWatch: fixture/parser status remains; live access deferred pending
+  approved API/terms handling.
+- LoTW: fake/scaffold status remains; real upload deferred until a safe
+  TQSL/certificate-signing model exists.
+
+Credential/redaction safety:
+
+- Provider settings continue to store credential IDs/references only.
+- Credential secrets are resolved through `CredentialStore` only for live
+  operations that need them.
+- Lookup/spot/DX/upload runtime state is support metadata, not official QSO
+  state, and provider results do not mutate QSO records directly.
+- API responses, provider diagnostics, upload history, backups, and docs do not
+  include credential secret values. Live validation tests are ignored by default
+  and require both `HAM_LIVE_PROVIDER_TESTS=1` and
+  `HAM_LIVE_PROVIDER_ALLOW_UPLOAD=1`.
+
+Quality gate results for this pass:
+
+- `cargo fmt --all -- --check`: passed.
+- `cargo check --workspace --all-targets`: passed.
+- `cargo clippy --workspace --all-targets -- -D warnings`: passed after
+  approval-backed rerun because the actual checkout target directory is outside
+  the configured writable sandbox.
+- `cargo test --workspace`: passed with 211 passed Rust tests and 3 ignored
+  live-validation hooks.
+- `node --check crates/ham-gui/web/app.js`: passed.
+- `cargo build -p ham-server`: passed after approval-backed rerun because the
+  actual checkout target directory is outside the configured writable sandbox.
+- `cargo build -p ham-sync-server`: passed after approval-backed rerun because
+  the actual checkout target directory is outside the configured writable
+  sandbox.
+- `cargo build -p ham-desktop`: passed after approval-backed rerun because the
+  actual checkout target directory is outside the configured writable sandbox.
+- `git diff --check`: passed.
+- `cargo tauri info`: exited 0; environment probe still reported missing
+  WebView2/MSVC/rust metadata.
+- `cargo tauri build`: passed after approval-backed rerun and produced:
+  - `target/release/bundle/msi/KE8YGW Logger_0.2.0_x64_en-US.msi`
+  - `target/release/bundle/nsis/KE8YGW Logger_0.2.0_x64-setup.exe`
+
+Remaining v0.2 gaps:
+
+- Real-account/provider validation for QRZ XML, HamQTH, POTA, DX Cluster, Club
+  Log, QRZ Logbook, and eQSL.
+- SOTAWatch live API approval/terms handling.
+- LoTW TQSL/certificate-signing design and implementation.
+- Confirmation download/reconciliation beyond the current ADIF confirmation
+  foundation.
+- LAN peer-to-peer trust pairing, browser-level GUI tests, and CI/release
+  artifact hardening.
+
+Recommended next prompt:
+
+Validate the newly wired provider runtime routes against real provider-approved
+accounts or fixtures, run the ignored live upload hooks on a release runner with
+explicit credentials, and harden any response parsing or provider-specific
+error mapping found during validation. Keep SOTAWatch deferred until API/terms
+approval is documented and keep LoTW deferred until the TQSL signing model is
+designed.
+
 ## 2026-07-08
+
+Summary: Added gated Tier 1 live provider transports and provider documentation.
+Club Log, QRZ Logbook, and eQSL now have live HTTP upload paths behind explicit
+settings and credential references. QRZ XML/HamQTH lookup parsing, POTA spot
+request/fixture parsing, SOTA fixture parsing, and DX Cluster read-once Telnet
+foundation were added while keeping fake/mock mode as the CI default.
+
+Major files changed:
+
+- `crates/ham-core/Cargo.toml`
+- `crates/ham-core/src/online.rs`
+- `crates/ham-core/src/lib.rs`
+- `crates/ham-server/src/lib.rs`
+- `README.md`
+- `ROADMAP.md`
+- `docs/ROADMAP.md`
+- `docs/V0_2_RELEASE_PLAN.md`
+- `docs/HOSTED_WEB_RELEASE.md`
+- `docs/API_CLIENT_CONTRACT.md`
+- `docs/PROVIDER_LIVE_TRANSPORTS.md`
+- `docs/architecture/online-services.md`
+- `docs/plugins/online-provider-development.md`
+- `docs/security/credential-storage.md`
+- `PROJECT_STATE.md`
+
+Provider status:
+
+- Club Log: live ADIF upload implemented behind `CredentialStore`; fake mode
+  remains; live validation is gated by explicit environment/credential setup.
+- QRZ Logbook: live ADIF insert implemented behind `CredentialStore`; fake mode
+  remains; live validation is gated by explicit environment/credential setup.
+- eQSL: live ADIF upload implemented behind `CredentialStore`; fake mode
+  remains; provider response variation needs real-account validation.
+- QRZ XML: XML session/lookup response parser implemented; hosted lookup
+  execution remains.
+- HamQTH: XML session/search response parser implemented; hosted lookup
+  execution remains.
+- POTA: live activator-spots request builder and fixture parser implemented;
+  hosted fetch route remains.
+- SOTAWatch: fixture parser implemented; live access deferred pending explicit
+  API approval/terms handling.
+- DX Cluster: parser plus read-once Telnet connect/login/read foundation
+  implemented; no always-on background stream lifecycle yet.
+- LoTW: fake/scaffold mode retained; production upload deferred until a safe
+  TQSL/certificate-signing flow is modeled.
+
+Upload execution behavior:
+
+- Hosted upload jobs still select official projections, generate ADIF snapshots,
+  persist redacted upload history in SurrealDB support metadata, deduplicate
+  queued/running/succeeded duplicate jobs, and never mutate QSO records directly.
+- Live Club Log, QRZ Logbook, and eQSL uploads are retryable only for mapped
+  transport/timeout/5xx-style failures; provider auth/rejection failures are
+  returned as non-success redacted results.
+
+Credential and redaction safety:
+
+- Provider settings store credential IDs/references only.
+- Live provider adapters resolve secrets through `CredentialStore` and use the
+  secret only in memory for the current operation.
+- Secrets are not written to official events, SurrealDB provider settings,
+  backups, diagnostics, upload history, divergence reports, API responses, logs,
+  or test snapshots.
+- The insecure credential fallback remains explicit dev/test opt-in only.
+
+Quality gate results for this pass:
+
+- `cargo fmt --all -- --check`: passed.
+- `cargo check --workspace --all-targets`: passed.
+- `cargo clippy --workspace --all-targets -- -D warnings`: passed after rerun
+  outside the sandbox build-lock limitation.
+- `cargo test --workspace`: passed with 210 Rust tests.
+- `node --check crates/ham-gui/web/app.js`: passed.
+- `cargo build -p ham-server`: passed after rerun outside the sandbox
+  build-lock limitation.
+- `cargo build -p ham-sync-server`: passed after rerun outside the sandbox
+  build-lock limitation.
+- `cargo build -p ham-desktop`: passed after rerun outside the sandbox
+  build-lock limitation.
+- `git diff --check`: passed.
+- `cargo tauri info`: exited 0, but the sandboxed environment probe reported
+  missing WebView2/MSVC/rust toolchain metadata.
+- `cargo tauri build`: passed and produced:
+  - `target/release/bundle/msi/KE8YGW Logger_0.2.0_x64_en-US.msi`
+  - `target/release/bundle/nsis/KE8YGW Logger_0.2.0_x64-setup.exe`
+
+Remaining v0.2 gaps:
+
+- Hosted QRZ XML/HamQTH lookup execution.
+- Hosted POTA spot fetch and approved SOTAWatch live feed behavior.
+- DX Cluster stream lifecycle beyond read-once foundation.
+- LoTW TQSL/certificate-signing upload model.
+- Confirmation reconciliation/download clients beyond fixture/foundation work.
+- Live provider validation on release-runner credentials.
+- Browser-level GUI tests, CI release artifact hardening, LAN trust pairing, and
+  cross-OS package validation.
+
+Recommended next prompt:
+
+Wire hosted QRZ XML/HamQTH lookup routes, hosted POTA spot fetching, DX Cluster
+stream lifecycle controls, and release-runner-gated live validation for Club Log,
+QRZ Logbook, and eQSL while keeping LoTW deferred until a TQSL signing model is
+designed.
+
+## 2026-07-08
+
+Summary: Added the real Tauri v2 desktop runtime wrapper, wired native-dialog
+commands to `ham-desktop`, bundled the shared web UI for release mode, added a
+restricted desktop API proxy, and validated Windows packaging.
+
+Major files changed:
+
+- `Cargo.toml`
+- `Cargo.lock`
+- `crates/ham-desktop/src/lib.rs`
+- `crates/ham-gui/web/app.js`
+- `crates/ham-gui/web/index.html`
+- `src-tauri/Cargo.toml`
+- `src-tauri/build.rs`
+- `src-tauri/src/main.rs`
+- `src-tauri/tauri.conf.json`
+- `src-tauri/capabilities/default.json`
+- `src-tauri/icons/icon.ico`
+- `src-tauri/icons/icon.png`
+- `src-tauri/README.md`
+- `README.md`
+- `ROADMAP.md`
+- `PROJECT_STATE.md`
+- `docs/DESKTOP_RELEASE.md`
+- `docs/ROADMAP.md`
+- `docs/V0_2_RELEASE_PLAN.md`
+
+Quality gates:
+
+- `cargo fmt --all -- --check`: passed.
+- `cargo check --workspace --all-targets`: passed.
+- `cargo clippy --workspace --all-targets -- -D warnings`: passed.
+- `cargo test --workspace`: passed, 200 Rust tests total.
+- `node --check crates/ham-gui/web/app.js`: passed.
+- `cargo build -p ham-server`: passed.
+- `cargo build -p ham-sync-server`: passed.
+- `cargo build -p ham-desktop`: passed.
+- `git diff --check`: passed.
+- `cargo tauri info`: passed; WebView2, Visual Studio Build Tools/MSVC, and Tauri packages detected.
+- `cargo tauri build`: passed; produced Windows MSI and NSIS installer artifacts.
+
+Remaining gaps:
+
+- Cross-OS Tauri package validation and release artifact hardening remain.
+- OS credential backends need clean release-runner validation.
+- Live provider adapters and real upload execution remain.
+- Browser-level GUI tests remain.
+- LAN peer-to-peer trust pairing remains.
 
 Summary: Added desktop native-dialog command helpers, production OS credential
 backend wiring, provider credential validation response hooks, and expanded
@@ -510,21 +939,17 @@ Quality gates:
 - `cargo fmt --all -- --check`: passed.
 - `cargo check --workspace --all-targets`: passed.
 - `cargo clippy --workspace --all-targets -- -D warnings`: passed.
-- `cargo test --workspace`: passed, 197 Rust tests total.
+- `cargo test --workspace`: passed, 197 Rust tests total in that previous pass.
 - `node --check crates/ham-gui/web/app.js`: passed.
 - `cargo build -p ham-server`: passed.
 - `cargo build -p ham-sync-server`: passed.
 - `cargo build -p ham-desktop`: passed.
 - `git diff --check`: passed.
-- `cargo tauri info`: completed and reported missing WebView2, missing Visual
-  Studio/MSVC SDK detection, and no detected Tauri runtime packages.
-- `cargo tauri build`: failed before packaging with `Error Input watch path is
-  neither a file nor a directory`; `src-tauri` still lacks a full Tauri Rust
-  runtime crate.
+- Tauri package validation was not yet available in that previous pass.
 
 Remaining gaps:
 
-- Actual Tauri runtime wrapper and installer/package validation remain.
+- Cross-OS Tauri installer/package validation remains.
 - Live provider adapters and real upload execution remain.
 - OS credential backends need clean release-runner validation.
 - Browser-level GUI tests and release artifact hardening remain.
@@ -891,6 +1316,85 @@ New plugins:
 Breaking changes:
 
 - None.
+
+## 2026-07-08
+
+Summary: Added Tier 1 provider adapter boundaries and hosted upload execution
+through the adapter framework while preserving fake/mock testability and
+credential redaction.
+
+Major files changed:
+
+- `crates/ham-core/src/online.rs`
+- `crates/ham-core/src/lib.rs`
+- `crates/ham-server/src/lib.rs`
+- `README.md`
+- `ROADMAP.md`
+- `docs/API_CLIENT_CONTRACT.md`
+- `docs/HOSTED_WEB_RELEASE.md`
+- `docs/V0_2_RELEASE_PLAN.md`
+- `docs/ROADMAP.md`
+- `docs/security/credential-storage.md`
+- `PROJECT_STATE.md`
+
+Provider/upload status:
+
+- QRZ XML and HamQTH now have Tier 1 lookup adapter boundaries, credential
+  validation, fake provider tests, redacted diagnostics, and explicit
+  fail-closed live-transport limitations.
+- POTA spots, SOTAWatch, and DX Cluster have spot/parser/scaffold coverage and
+  fake/test-safe provider health paths; persistent live feed/telnet runtimes
+  remain.
+- Club Log, QRZ Logbook, eQSL, and LoTW uploads execute through the Tier 1
+  adapter boundary. Fake mode succeeds deterministically, forced fake failures
+  are retryable, missing/invalid credentials are retryable, and live transports
+  fail closed where provider-specific request/signing behavior is not modeled.
+- Hosted upload jobs select official projections, generate ADIF snapshots, store
+  redacted upload history in SurrealDB support metadata, deduplicate queued,
+  running, and successful duplicate jobs, and never mutate QSO records directly.
+
+Credential safety status:
+
+- Provider settings store credential IDs/references only.
+- Live-mode credential checks resolve references through `CredentialStore`.
+- API responses, upload history, provider diagnostics, backups, and docs remain
+  secret-free; tests continue to use the `TEST_SECRET_SHOULD_NOT_APPEAR`
+  sentinel.
+- The insecure credential backend remains explicit opt-in only through
+  `HAM_PLATFORM_ALLOW_INSECURE_DEV_CREDENTIALS=1`.
+
+Quality gate results:
+
+- `cargo fmt --all -- --check`: passed.
+- `cargo check --workspace --all-targets`: passed.
+- `cargo clippy --workspace --all-targets -- -D warnings`: passed after rerun outside the sandbox build-lock limitation.
+- `cargo test --workspace`: passed with 204 Rust tests.
+- `node --check crates/ham-gui/web/app.js`: passed.
+- `cargo build -p ham-server`: passed after rerun outside the sandbox build-lock limitation.
+- `cargo build -p ham-sync-server`: passed after rerun outside the sandbox build-lock limitation.
+- `cargo build -p ham-desktop`: passed after rerun outside the sandbox build-lock limitation.
+- `git diff --check`: passed.
+- `cargo tauri info`: passed; WebView2, MSVC Build Tools 2022, and Tauri packages were detected.
+- `cargo tauri build`: passed and produced:
+  - `target/release/bundle/msi/KE8YGW Logger_0.2.0_x64_en-US.msi`
+  - `target/release/bundle/nsis/KE8YGW Logger_0.2.0_x64-setup.exe`
+
+Remaining v0.2 gaps:
+
+- Provider-specific live HTTP/telnet/TQSL transports.
+- Confirmation reconciliation beyond the existing ADIF confirmation foundation.
+- LAN peer-to-peer trust pairing.
+- Browser-level GUI tests.
+- CI/release artifact hardening.
+- Clean OS credential backend validation on release runners.
+- Cross-OS Tauri package validation.
+
+Recommended next prompt:
+
+Complete provider-specific live transports for Club Log, QRZ Logbook, eQSL, QRZ
+XML, HamQTH, POTA spots, SOTAWatch, and DX Cluster using official provider API
+references, with real-network tests gated behind explicit credentials and
+release-runner secrets.
 
 ## 2026-07-07
 

@@ -59,3 +59,28 @@ Each provider should include offline tests for:
 - cache hit/miss/expiration
 - runtime event payload redaction
 - official confirmation event append path where applicable
+
+## v0.2 Tier 1 Live Transport Status
+
+Provider live transports are documented in
+[`docs/PROVIDER_LIVE_TRANSPORTS.md`](../PROVIDER_LIVE_TRANSPORTS.md).
+Default tests and CI must stay fake/offline. Live tests require an explicit
+environment gate and credentials stored behind `CredentialStore`.
+
+Current live/foundation status:
+
+- Club Log, QRZ Logbook, and eQSL: gated live ADIF upload transports.
+- QRZ XML and HamQTH: live XML response parsers; hosted lookup execution still
+  pending.
+- POTA: live request builder and spot fixture parser; hosted fetch route still
+  pending.
+- SOTAWatch: fixture parser only; live access deferred pending API
+  approval/terms handling.
+- DX Cluster: parser and read-once Telnet client foundation; no always-on
+  daemon.
+- LoTW: fake/scaffold only until TQSL/certificate signing is modeled.
+
+Credential secrets may be JSON objects or `key=value` pairs, but they must be
+retrieved only through `CredentialStore` and must never be stored in provider
+settings, support metadata, official events, diagnostics, logs, backups, or
+test snapshots.

@@ -72,7 +72,7 @@ Before considering an implementation complete:
 2. Update `README.md` if contributor-facing behavior changed.
 3. Update architecture docs when architecture, protocols, permissions, or event catalogs change.
 4. Update this developer guide when workflow expectations change.
-5. Run formatting, linting, tests, and release build.
+5. Run formatting, linting, tests, and subsystem-specific validation. `just ci` is the workspace baseline; use `cargo build --release --workspace`, `node --check crates\\ham-gui\\web\\app.js`, `cargo tauri info`, and `cargo tauri build` when the touched subsystem requires them.
 6. Fix every discovered issue.
 7. Report changed files, architecture decisions, risks, TODOs, and the next milestone.
 

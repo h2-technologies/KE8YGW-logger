@@ -70,9 +70,7 @@ official log events. Provider configuration should reference `credential_id`
 values. Secret values are retrieved only through `CredentialStore` after plugin
 permission and operator role checks pass.
 
-The MVP includes an OS keychain placeholder and an explicit opt-in insecure
-development fallback. Production online integrations must use native OS
-credential backends before storing real provider secrets.
+The current implementation includes native OS credential backends for Windows Credential Manager, macOS Keychain, and Linux Secret Service/libsecret tooling, plus an explicit opt-in insecure development fallback. Production online integrations must continue to use native OS credential backends for real provider secrets.
 
 ## Net Control Safety
 
@@ -98,7 +96,7 @@ Future work:
 - Plugin loading is static and not sandboxed.
 - Grant scopes are recorded but not fully enforced across every subsystem.
 - The GUI assumes a local-admin posture for permission review.
-- Cloud server storage is in-memory in MVP.
+- The self-hosted sync/report server now uses durable local storage by default; production migration, retention, and hosted-operations hardening still remain.
 - LAN peers are not yet authenticated.
-- Native OS keychain backends are not implemented yet.
+- Native OS credential backends are implemented, but clean release-runner and packaged-app validation still remain.
 - Net Control template UI and ICS-style exports are not complete.

@@ -56,4 +56,4 @@ Runtime events are diagnostic only and are not synced.
 
 The GUI shell exposes a Service Providers screen showing provider name, service type, plugin source, enabled state, health, priority, offline/network status, missing config warnings, capabilities, and required permissions.
 
-Provider enable/disable and priority editing are model-level placeholders until persisted provider settings are added.
+Provider enable/disable and priority editing are persisted through support storage in the local app, with hosted provider-setting counterparts in `ham-server`.

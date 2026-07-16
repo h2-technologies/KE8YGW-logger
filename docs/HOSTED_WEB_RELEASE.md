@@ -92,6 +92,13 @@ events, and filesystem-backed diagnostic report payloads.
 - `GET /api/v1/providers/:id`
 - `PATCH /api/v1/providers/:id`
 - `POST /api/v1/providers/:id/test`
+- `POST /api/v1/providers/qrz-xml/lookup`
+- `POST /api/v1/providers/hamqth/lookup`
+- `GET /api/v1/providers/pota-spots/spots`
+- `POST /api/v1/providers/dx-cluster/connect`
+- `POST /api/v1/providers/dx-cluster/read`
+- `POST /api/v1/providers/dx-cluster/disconnect`
+- `GET /api/v1/providers/dx-cluster/status`
 - `GET /api/v1/uploads`
 - `POST /api/v1/uploads/run`
 - `POST /api/v1/uploads/:id/retry`
@@ -110,12 +117,27 @@ The previous scaffolded workflow routes now have beta implementations. Future
 routes should be added explicitly rather than treated as hidden mutable state.
 
 Provider settings store credential IDs/references only. The provider test route
-is deterministic in CI through fake/mock mode and reports credential reference
-presence/status/resolution without returning secret values. Upload queue
-execution currently generates ADIF from official projections and stores
-queue/history metadata in SurrealDB, but it does not yet call live external
-provider APIs. Hosted deployments must keep raw provider secrets outside
-SurrealDB unless a future explicit server-side secret vault is added.
+is deterministic in CI through fake/mock mode and reports capability tested,
+credential requirement, credential reference presence/status/resolution,
+provider health state, redacted diagnostics, and next recommended action without
+returning secret values. Upload queue execution generates ADIF from official
+projections, stores queue/history metadata in SurrealDB, deduplicates queued,
+running, and successful jobs, and executes through the Tier 1 adapter boundary.
+Club Log, QRZ Logbook, and eQSL can run gated live HTTP uploads when
+`live_test=true` and a credential reference resolves through `CredentialStore`.
+QRZ XML/HamQTH lookup execution, POTA spot fetching, and DX Cluster bounded
+connect/read/disconnect/status routes are wired with fake mode as the default.
+Live mode remains explicit and provider-account validation is still required.
+SOTAWatch live access is disabled pending API approval/terms handling, and LoTW
+TQSL signing is not production-complete. Hosted deployments must keep raw
+provider secrets outside SurrealDB unless a future explicit server-side secret
+vault is added.
+
+Live validation is release-runner gated. All live hooks require
+`HAM_LIVE_PROVIDER_TESTS=1`; upload hooks also require
+`HAM_LIVE_PROVIDER_ALLOW_UPLOAD=1` and may create provider-side records. Runtime
+failures expose stable redacted `error_code` values and high-level messages
+only, not raw provider XML/HTML bodies.
 
 Activation and Net Control writes go through core proposal validation and append
 official events. Current core role policy requires Admin/Owner for those
@@ -239,8 +261,14 @@ embedded lock.
 ## Current Limitations
 
 - Session expiry/refresh policy is still beta-level and not production hardened.
-- Provider adapters are still fake/stub-backed through the hosted upload/test
-  routes; live network execution remains separate v0.2 work.
+- Club Log, QRZ Logbook, and eQSL live uploads are gated behind explicit
+  provider settings and credentials; release-runner validation with real
+  provider accounts remains.
+- Real-account validation for hosted QRZ XML/HamQTH lookup, POTA spot fetch,
+  DX Cluster read-once operation, and Club Log/QRZ Logbook/eQSL uploads remains.
+- SOTAWatch live route work remains deferred pending approved API/terms handling.
+- LoTW TQSL signing remains deferred until a safe certificate-signing model is
+  designed.
 - Backup import is conservative and same-logbook only. Importing a backup into
   a different logbook would require re-authoring official events and is blocked
   for v0.2.

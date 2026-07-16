@@ -20,9 +20,13 @@ Registered provider metadata now covers:
 - Weather: NOAA and Open-Meteo
 - Maps: OpenStreetMap tiles, offline tile cache, reverse geocoder
 
-The current implementation is offline-testable. Live network adapters must be
-added behind these provider records and must use `CredentialStore` references
-rather than raw secrets.
+The current implementation remains offline-testable by default. Club Log, QRZ
+Logbook, and eQSL have gated live HTTP upload transports behind provider
+settings and `CredentialStore` credential references. QRZ XML and HamQTH have
+live response parsers, POTA has a live request builder and fixture parser, and
+DX Cluster has a read-once Telnet client foundation. SOTAWatch live access is
+deferred pending explicit API approval/terms handling. LoTW live upload remains
+deferred until a safe TQSL/certificate-signing flow is modeled.
 
 ## Upload Engine
 
@@ -36,8 +40,10 @@ adds:
 - notification generation for upload outcomes
 
 Providers expose upload capability through the service framework. Live provider
-adapters should implement authentication, ADIF upload, status checks, and
-confirmation download where the upstream service supports it.
+adapters resolve credentials through `CredentialStore`, submit ADIF generated
+from official projections, and return redacted structured results. Confirmation
+download remains fixture/foundation work until safe provider-specific matching
+is modeled.
 
 ## Download Engine
 
@@ -55,9 +61,10 @@ Supported foundation targets:
 ## Spotting
 
 The DX Cluster parser handles standard telnet spot lines and converts them into
-the common `Spot` model. POTA/SOTA spots also map into the same model, allowing
-future click actions to center the map, run callsign lookup, tune a rig, or
-start logging without provider-specific UI code.
+the common `Spot` model. The live foundation is read-once connect/login/read
+without an always-on daemon. POTA/SOTA spots also map into the same model,
+allowing future click actions to center the map, run callsign lookup, tune a
+rig, or start logging without provider-specific UI code.
 
 ## Automation and Notifications
 
@@ -90,9 +97,9 @@ synced as official log events and must not contain credential secrets.
 
 ## Current Limitations
 
-- Live network adapters are not enabled in CI and require provider-specific API
-  work.
-- Telnet reconnect loops are modeled but not run as background services yet.
+- Live network tests are not enabled in CI and require explicit provider env
+  vars plus credentials.
+- Hosted QRZ XML/HamQTH lookup and POTA/SOTA spot fetch routes are still pending.
+- Telnet reconnect loops are not run as background services yet.
 - Upload queue persistence and automatic scheduling remain future work.
-- OS keychain backends are still placeholders until native integrations are
-  implemented.
+- LoTW production upload is fake/scaffold only until TQSL signing is modeled.

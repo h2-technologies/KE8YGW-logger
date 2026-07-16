@@ -109,7 +109,7 @@ Current REST surface:
 - `POST /api/v1/logbooks/{logbook_id}/push`
 - `GET /api/v1/sync/status`
 
-The current self-hosted server uses an in-memory MVP backend. Durable server storage is required before real hosted use.
+The current self-hosted server uses durable local storage by default: embedded SurrealDB metadata/support state, append-only JSONL official-event storage, and filesystem-backed diagnostic report payloads. The in-memory backend remains for deterministic tests.
 
 ## Deferred Work
 

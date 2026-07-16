@@ -26,7 +26,8 @@ iOS client in v1.1.
 - [x] Hosted ADIF import/export routes using official projections/proposals.
 - [x] Hosted provider settings/test routes with credential-reference-only
   storage.
-- [x] Hosted upload queue execution foundation using fake/stub provider mode.
+- [x] Hosted upload queue execution through Tier 1 provider adapters with
+  deterministic fake/mock mode.
 - [x] Hosted sync pull route with scoped missing-event responses.
 - [x] Hosted activation routes using proposal-backed official events.
 - [x] Hosted Net Control routes using proposal-backed official events.
@@ -37,14 +38,28 @@ iOS client in v1.1.
 - [x] Desktop packaging foundation with `ham-desktop` and `src-tauri` config.
 - [x] Native desktop file dialog bridge contract for import/export flows.
 - [x] Desktop/native dialog command helper implementation.
+- [x] Actual Tauri runtime wrapper under `src-tauri`.
 - [x] Production OS credential backend wiring for Windows Credential Manager,
   macOS Keychain, and Linux Secret Service/libsecret tooling.
 - [x] Provider credential validation response hooks and upload missing-credential
   safety checks.
-- [ ] Live Tier 1 provider adapters.
-- [ ] Upload queue execution against live providers.
+- [x] Tier 1 provider adapter boundaries for QRZ XML, HamQTH, POTA spots,
+  SOTAWatch, Club Log, QRZ Logbook, eQSL, LoTW, and DX Cluster.
+- [x] Upload queue execution against the provider adapter framework.
+- [x] Gated live HTTP upload transports for Club Log, QRZ Logbook, and eQSL.
+- [x] QRZ XML/HamQTH response parsers, POTA request/fixture parser, and
+  DX Cluster read-once Telnet foundation.
+- [x] Hosted lookup route execution for QRZ XML and HamQTH.
+- [x] Hosted POTA spot fetch route execution.
+- [x] DX Cluster bounded connect/read/disconnect/status runtime controls.
+- [x] Ignored live validation hooks for QRZ XML, HamQTH, POTA, DX Cluster, Club
+  Log, QRZ Logbook, and eQSL with explicit env gating and redacted output.
+- [x] Stable redacted provider runtime error-code mapping for lookup/spot/DX
+  validation paths.
+- [ ] Approved SOTAWatch live endpoint and terms handling.
+- [ ] LoTW TQSL/certificate-signing upload flow.
 - [ ] Confirmation download/reconciliation UI.
-- [x] Tauri desktop packaging foundation.
+- [x] Tauri desktop runtime and packaging foundation.
 - [x] Native desktop file dialog bridge foundation.
 - [x] Full backup restore/import foundation for safe same-logbook append/replay.
 - [x] Conflict/divergence review API foundation.
@@ -82,8 +97,8 @@ iOS client in v1.1.
   merge.
 - GUI exposes backup export, restore dry-run/import review, import result, sync
   divergence detail, and divergence report export surfaces.
-- Desktop packaging foundation exists and release mode is documented as
-  no-dev-server.
+- Desktop packaging foundation exists, release mode bundles the shared web UI,
+  and no frontend dev server is required.
 - Desktop native dialog command helpers cover ADIF, backup, diagnostics,
   divergence reports, and app data directory selection, with browser fallback
   intact.
@@ -119,23 +134,30 @@ iOS client in v1.1.
 - OS credential backends are implemented through platform APIs/tools, but
   environment-specific validation is still needed on clean Windows, macOS, and
   Linux packaging runners.
-- Live provider adapters are still mostly metadata/stub-backed; hosted provider
-  tests and uploads use fake/stub behavior for deterministic CI.
+- Tier 1 provider adapters are wired into hosted tests/uploads. Club Log, QRZ
+  Logbook, and eQSL have gated live upload transports; LoTW is intentionally
+  fake/scaffold only until TQSL signing is modeled.
+- QRZ XML/HamQTH lookup, POTA spot fetching, and DX Cluster read-once runtime
+  are wired in hosted routes with ignored live validation hooks. Real-account
+  provider validation still requires explicit credentials or provider-approved
+  fixtures. SOTAWatch live access remains deferred pending explicit API
+  approval/terms.
 - Backup import is intentionally conservative: it supports same-logbook clean
   append/idempotent replay and blocks divergent targets rather than merging.
 - GUI browser tests are not yet present.
-- Full Tauri runtime packaging is not wired into CI yet; the foundation config,
-  desktop crate, and command helpers are present.
+- Tauri installer/package validation is not wired into CI yet; the runtime
+  crate, bundled UI config, desktop crate, and command helpers are present.
 - Permission scopes are enforced in the implemented hosted slices but not yet
   consistently across every older GUI/local route.
 
 ## v1.0 Delta After v0.2
 
 - Validate production credential backends on release runners.
-- Complete live provider adapters and provider error handling.
+- Validate hosted lookup/spot/DX runtime on provider-approved accounts or
+  fixtures, complete LoTW TQSL signing, and run live-provider release-runner
+  validation.
 - Harden backup import UX and add browser-level coverage.
-- Add the actual Tauri runtime wrapper, then finish packaging/signing/
-  notarization decisions.
+- Finish Tauri package validation, signing, and notarization decisions.
 - Add browser-level GUI tests and release artifact checks.
 - Tighten documentation and operator-facing setup guides.
 - Fix beta bugs found during real hosted/self-hosted testing.

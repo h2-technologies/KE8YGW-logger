@@ -1,0 +1,15 @@
+[package]
+name = "ke8ygw-logger-desktop"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+ham-desktop = { path = "../crates/ham-desktop" }
+rfd = "0.15"
+serde.workspace = true
+tauri = { version = "2", features = [] }
+ureq = { version = "2", default-features = true }
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }

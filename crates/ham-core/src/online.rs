@@ -4,7 +4,12 @@
 //! the shared upload/download, health, spotting, automation, notification, and
 //! provider metadata primitives used by online integrations.
 
-use std::collections::HashMap;
+use std::{
+    collections::HashMap,
+    io::{BufRead, BufReader, Write},
+    net::{TcpStream, ToSocketAddrs},
+    time::Duration as StdDuration,
+};
 
 use chrono::{DateTime, Duration, Utc};
 use ham_plugin_sdk::{PluginCapability, ServiceType, OFFICIAL_LOG_UPLOAD_COMPLETED};
@@ -17,14 +22,15 @@ use crate::{
     adif::parse_adif,
     credential::{CredentialMetadata, CredentialStatus},
     event::{CoreEventEnvelope, NewLogbookEvent},
+    lookup::{normalize_callsign, LookupResult},
     projection::QsoCurrentStateProjection,
     service::{
         cache_entry_for_value, LogUploadProvider, LogUploadRequest, LogUploadResponse,
         ProviderHealth, ProviderHealthState, ServiceCache, ServiceError, ServiceProviderMetadata,
-        Spot, SpotSource, UploadJobStatus, CAP_MAP_REVERSE_GEOCODING, CAP_MAP_TILES_OFFLINE,
-        CAP_MAP_TILES_ONLINE, CAP_PROPAGATION_SOLAR_INDICES, CAP_SPOTTING_DX_CLUSTER,
-        CAP_SPOTTING_POTA, CAP_SPOTTING_RBN, CAP_SPOTTING_SOTA, CAP_UPLOAD_ADIF,
-        CAP_UPLOAD_CONFIRMATION_PULL, CAP_UPLOAD_INCREMENTAL, CAP_WEATHER_CURRENT,
+        Spot, SpotSource, UploadJobStatus, CAP_LOOKUP_CALLSIGN_BASIC, CAP_MAP_REVERSE_GEOCODING,
+        CAP_MAP_TILES_OFFLINE, CAP_MAP_TILES_ONLINE, CAP_PROPAGATION_SOLAR_INDICES,
+        CAP_SPOTTING_DX_CLUSTER, CAP_SPOTTING_POTA, CAP_SPOTTING_RBN, CAP_SPOTTING_SOTA,
+        CAP_UPLOAD_ADIF, CAP_UPLOAD_CONFIRMATION_PULL, CAP_UPLOAD_INCREMENTAL, CAP_WEATHER_CURRENT,
         CAP_WEATHER_FORECAST,
     },
     store::{LogbookEventStore, StoreError},
@@ -198,6 +204,901 @@ pub struct UploadExecutionResult {
     pub rejected_count: usize,
     pub next_retry_at: Option<DateTime<Utc>>,
     pub message: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderAdapterMode {
+    Fake,
+    Live,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProviderAdapterTestInput {
+    pub provider_id: String,
+    pub capability: Option<String>,
+    pub enabled: bool,
+    pub credential_reference_present: bool,
+    pub credential_resolved: bool,
+    pub mode: ProviderAdapterMode,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProviderAdapterTestResult {
+    pub provider_id: String,
+    pub capability_tested: Option<String>,
+    pub credential_required: bool,
+    pub credential_reference_present: bool,
+    pub credential_resolved: bool,
+    pub test_status: String,
+    pub provider_health_state: ProviderHealthState,
+    pub redacted_diagnostics: Vec<String>,
+    pub next_recommended_action: String,
+    pub checked_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProviderUploadInput {
+    pub provider_id: String,
+    pub job_id: Uuid,
+    pub adif_payload: String,
+    pub qso_count: usize,
+    pub enabled: bool,
+    pub credential_reference_present: bool,
+    pub credential_resolved: bool,
+    #[serde(skip_serializing, skip_deserializing)]
+    pub credential_secret: Option<String>,
+    pub mode: ProviderAdapterMode,
+    pub force_fake_failure: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProviderUploadExecution {
+    pub provider_id: String,
+    pub status: UploadJobStatus,
+    pub accepted_count: usize,
+    pub rejected_count: usize,
+    pub provider_correlation_id: Option<String>,
+    pub result_summary: String,
+    pub failure_reason: Option<String>,
+    pub redacted_error: Option<String>,
+    pub retryable: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderRuntimeStatus {
+    Succeeded,
+    NotFound,
+    Failed,
+    NeedsCredentials,
+    Disabled,
+    LiveModeNotConfigured,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProviderLookupInput {
+    pub provider_id: String,
+    pub callsign: String,
+    pub enabled: bool,
+    pub credential_reference_present: bool,
+    pub credential_resolved: bool,
+    #[serde(skip_serializing, skip_deserializing)]
+    pub credential_secret: Option<String>,
+    pub mode: ProviderAdapterMode,
+    pub fake_response: Option<String>,
+    pub force_fake_not_found: bool,
+    pub force_fake_auth_failure: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProviderLookupExecution {
+    pub provider_id: String,
+    pub status: ProviderRuntimeStatus,
+    pub result: Option<LookupResult>,
+    pub result_summary: String,
+    pub failure_reason: Option<String>,
+    pub error_code: Option<String>,
+    pub redacted_error: Option<String>,
+    pub checked_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProviderSpotInput {
+    pub provider_id: String,
+    pub enabled: bool,
+    pub mode: ProviderAdapterMode,
+    pub fake_response: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProviderSpotExecution {
+    pub provider_id: String,
+    pub status: ProviderRuntimeStatus,
+    pub spots: Vec<Spot>,
+    pub result_summary: String,
+    pub failure_reason: Option<String>,
+    pub error_code: Option<String>,
+    pub redacted_error: Option<String>,
+    pub checked_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProviderDxClusterInput {
+    pub enabled: bool,
+    pub mode: ProviderAdapterMode,
+    pub config: DxClusterClientConfig,
+    pub fake_lines: Vec<String>,
+}
+
+#[derive(Debug, Error, Clone, PartialEq, Eq)]
+pub enum ProviderAdapterError {
+    #[error("provider {0} is not registered")]
+    UnknownProvider(String),
+    #[error("provider {provider_id} does not support capability {capability}")]
+    UnsupportedCapability {
+        provider_id: String,
+        capability: String,
+    },
+}
+
+const PROVIDER_USER_AGENT: &str = "KE8YGW-logger/0.2 provider-transport";
+const DEFAULT_PROVIDER_TIMEOUT_SECONDS: u64 = 20;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProviderHttpRequest {
+    pub method: String,
+    pub url: String,
+    pub content_type: Option<String>,
+    pub body: Option<String>,
+    pub timeout_seconds: u64,
+    pub user_agent: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProviderHttpResponse {
+    pub status: u16,
+    pub body: String,
+}
+
+#[derive(Debug, Error, Clone, PartialEq, Eq)]
+pub enum ProviderHttpError {
+    #[error("provider HTTP request timed out")]
+    Timeout,
+    #[error("provider HTTP status {status}: {body}")]
+    HttpStatus { status: u16, body: String },
+    #[error("provider HTTP transport failed: {0}")]
+    Transport(String),
+    #[error("provider operation is unsupported: {0}")]
+    Unsupported(String),
+}
+
+pub fn redact_provider_text(value: &str, secrets: &[String]) -> String {
+    let mut redacted = value.to_owned();
+    for secret in secrets {
+        if !secret.is_empty() {
+            redacted = redacted.replace(secret, "[REDACTED]");
+        }
+    }
+    redacted
+}
+
+pub fn provider_form_body(fields: &[(&str, &str)]) -> String {
+    fields
+        .iter()
+        .map(|(key, value)| {
+            format!(
+                "{}={}",
+                urlencoding::encode(key),
+                urlencoding::encode(value)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("&")
+}
+
+pub fn fake_provider_http_response(status: u16, body: impl Into<String>) -> ProviderHttpResponse {
+    ProviderHttpResponse {
+        status,
+        body: body.into(),
+    }
+}
+
+pub fn map_provider_http_status(
+    response: ProviderHttpResponse,
+) -> Result<ProviderHttpResponse, ProviderHttpError> {
+    if (200..300).contains(&response.status) {
+        Ok(response)
+    } else {
+        Err(ProviderHttpError::HttpStatus {
+            status: response.status,
+            body: response.body,
+        })
+    }
+}
+
+pub fn provider_http_error_from_transport(message: &str) -> ProviderHttpError {
+    let lower = message.to_ascii_lowercase();
+    if lower.contains("timed out") || lower.contains("timeout") {
+        ProviderHttpError::Timeout
+    } else {
+        ProviderHttpError::Transport(message.to_owned())
+    }
+}
+
+pub fn send_provider_http_request(
+    request: &ProviderHttpRequest,
+) -> Result<ProviderHttpResponse, ProviderHttpError> {
+    let agent = ureq::AgentBuilder::new()
+        .timeout(StdDuration::from_secs(request.timeout_seconds))
+        .user_agent(&request.user_agent)
+        .build();
+    let result = match request.method.as_str() {
+        "GET" => agent.get(&request.url).call(),
+        "POST" => {
+            let mut req = agent.post(&request.url);
+            if let Some(content_type) = &request.content_type {
+                req = req.set("Content-Type", content_type);
+            }
+            req.send_string(request.body.as_deref().unwrap_or_default())
+        }
+        other => {
+            return Err(ProviderHttpError::Unsupported(format!(
+                "HTTP method {other} is not supported"
+            )))
+        }
+    };
+    match result {
+        Ok(response) => Ok(ProviderHttpResponse {
+            status: response.status(),
+            body: response.into_string().unwrap_or_default(),
+        }),
+        Err(ureq::Error::Status(status, response)) => Err(ProviderHttpError::HttpStatus {
+            status,
+            body: response.into_string().unwrap_or_default(),
+        }),
+        Err(ureq::Error::Transport(error)) => {
+            Err(provider_http_error_from_transport(&error.to_string()))
+        }
+    }
+}
+
+fn credential_fields(secret: Option<&str>) -> HashMap<String, String> {
+    let Some(secret) = secret else {
+        return HashMap::new();
+    };
+    if let Ok(value) = serde_json::from_str::<HashMap<String, String>>(secret) {
+        return value
+            .into_iter()
+            .map(|(key, value)| (key.to_ascii_lowercase(), value))
+            .collect();
+    }
+    secret
+        .split(['\n', ';'])
+        .filter_map(|part| {
+            let (key, value) = part.split_once('=')?;
+            Some((key.trim().to_ascii_lowercase(), value.trim().to_owned()))
+        })
+        .collect()
+}
+
+fn required_field(fields: &HashMap<String, String>, names: &[&str]) -> Result<String, String> {
+    names
+        .iter()
+        .find_map(|name| fields.get(&name.to_ascii_lowercase()).cloned())
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| format!("credential secret is missing {}", names.join("/")))
+}
+
+pub fn tier_one_provider_metadata(provider_id: &str) -> Option<ServiceProviderMetadata> {
+    online_provider_metadata()
+        .into_iter()
+        .find(|provider| provider.provider_id == provider_id)
+}
+
+pub fn tier_one_provider_supports_capability(
+    provider_id: &str,
+    capability: &str,
+) -> Result<bool, ProviderAdapterError> {
+    let provider = tier_one_provider_metadata(provider_id)
+        .ok_or_else(|| ProviderAdapterError::UnknownProvider(provider_id.to_owned()))?;
+    Ok(provider
+        .capabilities
+        .iter()
+        .any(|value| value == capability))
+}
+
+pub fn test_tier_one_provider(
+    input: ProviderAdapterTestInput,
+) -> Result<ProviderAdapterTestResult, ProviderAdapterError> {
+    let provider = tier_one_provider_metadata(&input.provider_id)
+        .ok_or_else(|| ProviderAdapterError::UnknownProvider(input.provider_id.clone()))?;
+    if let Some(capability) = input.capability.clone() {
+        if !provider
+            .capabilities
+            .iter()
+            .any(|value| value == &capability)
+        {
+            return Ok(provider_test_result(
+                input,
+                provider_requires_credentials(&provider),
+                "unsupported_capability",
+                ProviderHealthState::Unavailable,
+                vec![format!("provider does not support capability {capability}")],
+                "select a provider that supports the requested capability",
+            ));
+        }
+    }
+    if !input.enabled {
+        return Ok(provider_test_result(
+            input,
+            provider_requires_credentials(&provider),
+            "disabled",
+            ProviderHealthState::Unavailable,
+            vec!["provider is disabled for this logbook".to_owned()],
+            "enable the provider before running live operations",
+        ));
+    }
+    let credential_required = provider_requires_credentials(&provider);
+    if input.mode == ProviderAdapterMode::Live && credential_required {
+        if !input.credential_reference_present {
+            return Ok(provider_test_result(
+                input,
+                credential_required,
+                "missing_credential",
+                ProviderHealthState::MissingConfig,
+                vec!["credential reference is required".to_owned()],
+                "store a credential in the credential backend and attach its credential_id",
+            ));
+        }
+        if !input.credential_resolved {
+            return Ok(provider_test_result(
+                input,
+                credential_required,
+                "invalid_credential_reference",
+                ProviderHealthState::MissingConfig,
+                vec![
+                    "credential reference did not resolve through the configured backend"
+                        .to_owned(),
+                ],
+                "replace the provider credential_id with an active credential reference",
+            ));
+        }
+    }
+    if input.mode == ProviderAdapterMode::Fake {
+        return Ok(provider_test_result(
+            input,
+            credential_required,
+            "ok",
+            ProviderHealthState::Healthy,
+            vec!["fake provider test succeeded without network access".to_owned()],
+            "safe for CI; set live_test=true only for release-runner validation",
+        ));
+    }
+    if matches!(
+        provider.provider_id.as_str(),
+        "clublog" | "qrz-logbook" | "eqsl" | "qrz-xml" | "hamqth" | "pota-spots" | "dx-cluster"
+    ) {
+        let diagnostics = match provider.provider_id.as_str() {
+            "clublog" => vec![
+                "live transport modeled from Club Log real-time upload API".to_owned(),
+                "network execution is gated by live_test and credential resolution".to_owned(),
+            ],
+            "qrz-logbook" => vec![
+                "live transport modeled from QRZ Logbook API ACTION=INSERT".to_owned(),
+                "network execution is gated by live_test and credential resolution".to_owned(),
+            ],
+            "eqsl" => vec![
+                "live transport modeled from eQSL logger ADIF upload interface".to_owned(),
+                "network execution is gated by live_test and credential resolution".to_owned(),
+            ],
+            "qrz-xml" => vec![
+                "QRZ XML session and callsign response parsers are available".to_owned(),
+                "lookup route execution remains fake until a lookup request route is wired"
+                    .to_owned(),
+            ],
+            "hamqth" => vec![
+                "HamQTH session and callsign response parsers are available".to_owned(),
+                "lookup route execution remains fake until a lookup request route is wired"
+                    .to_owned(),
+            ],
+            "pota-spots" => vec![
+                "POTA spot JSON parser and live endpoint request builder are available".to_owned(),
+                "spot route execution remains fake until a spot fetch route is wired".to_owned(),
+            ],
+            "dx-cluster" => vec![
+                "DX Cluster telnet read-once client foundation is available".to_owned(),
+                "no always-on daemon is started by provider tests".to_owned(),
+            ],
+            _ => vec![],
+        };
+        return Ok(provider_test_result(
+            input,
+            credential_required,
+            "live_transport_ready",
+            ProviderHealthState::Healthy,
+            diagnostics,
+            "run explicit gated live validation with provider credentials before production use",
+        ));
+    }
+    Ok(provider_test_result(
+        input,
+        credential_required,
+        "live_transport_not_configured",
+        ProviderHealthState::Unavailable,
+        vec![live_limitation_for_provider(&provider.provider_id)],
+        "run fake tests by default; complete provider-specific live transport before release use",
+    ))
+}
+
+pub fn execute_tier_one_upload(
+    input: ProviderUploadInput,
+) -> Result<ProviderUploadExecution, ProviderAdapterError> {
+    let provider = tier_one_provider_metadata(&input.provider_id)
+        .ok_or_else(|| ProviderAdapterError::UnknownProvider(input.provider_id.clone()))?;
+    if provider.service_type != ServiceType::LogUpload
+        || !provider
+            .capabilities
+            .iter()
+            .any(|capability| capability == CAP_UPLOAD_ADIF)
+    {
+        return Err(ProviderAdapterError::UnsupportedCapability {
+            provider_id: input.provider_id,
+            capability: CAP_UPLOAD_ADIF.to_owned(),
+        });
+    }
+    if !input.enabled {
+        return Ok(ProviderUploadExecution {
+            provider_id: provider.provider_id,
+            status: UploadJobStatus::Failed,
+            accepted_count: 0,
+            rejected_count: 0,
+            provider_correlation_id: None,
+            result_summary: "provider is disabled".to_owned(),
+            failure_reason: Some("provider disabled".to_owned()),
+            redacted_error: Some("provider is disabled for this logbook".to_owned()),
+            retryable: false,
+        });
+    }
+    let credential_required = provider_requires_credentials(&provider);
+    if input.force_fake_failure {
+        return Ok(ProviderUploadExecution {
+            provider_id: provider.provider_id,
+            status: UploadJobStatus::Failed,
+            accepted_count: 0,
+            rejected_count: input.qso_count,
+            provider_correlation_id: Some(format!("fake-{}", input.job_id)),
+            result_summary: "forced fake provider failure".to_owned(),
+            failure_reason: Some("forced fake provider failure".to_owned()),
+            redacted_error: Some("redacted fake provider failure".to_owned()),
+            retryable: true,
+        });
+    }
+    if input.mode == ProviderAdapterMode::Fake {
+        return Ok(ProviderUploadExecution {
+            provider_id: provider.provider_id,
+            status: UploadJobStatus::Succeeded,
+            accepted_count: input.qso_count,
+            rejected_count: 0,
+            provider_correlation_id: Some(format!("fake-{}", input.job_id)),
+            result_summary: format!("fake upload accepted {} QSO(s)", input.qso_count),
+            failure_reason: None,
+            redacted_error: None,
+            retryable: false,
+        });
+    }
+    if credential_required && !input.credential_reference_present {
+        return Ok(ProviderUploadExecution {
+            provider_id: provider.provider_id,
+            status: UploadJobStatus::NeedsCredentials,
+            accepted_count: 0,
+            rejected_count: input.qso_count,
+            provider_correlation_id: None,
+            result_summary: "credential reference is required".to_owned(),
+            failure_reason: Some("missing credential reference".to_owned()),
+            redacted_error: Some("credential reference is required".to_owned()),
+            retryable: true,
+        });
+    }
+    if credential_required && !input.credential_resolved {
+        return Ok(ProviderUploadExecution {
+            provider_id: provider.provider_id,
+            status: UploadJobStatus::NeedsCredentials,
+            accepted_count: 0,
+            rejected_count: input.qso_count,
+            provider_correlation_id: None,
+            result_summary: "credential reference did not resolve".to_owned(),
+            failure_reason: Some("invalid credential reference".to_owned()),
+            redacted_error: Some(
+                "credential reference did not resolve through the configured backend".to_owned(),
+            ),
+            retryable: true,
+        });
+    }
+    if input.mode == ProviderAdapterMode::Live {
+        let provider_id = provider.provider_id.clone();
+        let execution = match provider_id.as_str() {
+            "clublog" => execute_clublog_upload(&input),
+            "qrz-logbook" => execute_qrz_logbook_upload(&input),
+            "eqsl" => execute_eqsl_upload(&input),
+            "lotw" => Ok(ProviderUploadExecution {
+                provider_id: provider_id.clone(),
+                status: UploadJobStatus::Failed,
+                accepted_count: 0,
+                rejected_count: input.qso_count,
+                provider_correlation_id: None,
+                result_summary: live_limitation_for_provider(&provider_id),
+                failure_reason: Some("tqsl signing flow not modeled".to_owned()),
+                redacted_error: Some(live_limitation_for_provider(&provider_id)),
+                retryable: false,
+            }),
+            _ => Err(ProviderHttpError::Unsupported(
+                live_limitation_for_provider(&provider_id),
+            )),
+        };
+        return Ok(match execution {
+            Ok(execution) => execution,
+            Err(error) => ProviderUploadExecution {
+                provider_id,
+                status: UploadJobStatus::Failed,
+                accepted_count: 0,
+                rejected_count: input.qso_count,
+                provider_correlation_id: None,
+                result_summary: "provider live upload failed".to_owned(),
+                failure_reason: Some("provider live upload failed".to_owned()),
+                redacted_error: Some(error.to_string()),
+                retryable: matches!(
+                    error,
+                    ProviderHttpError::Timeout
+                        | ProviderHttpError::Transport(_)
+                        | ProviderHttpError::HttpStatus {
+                            status: 500..=599,
+                            ..
+                        }
+                ),
+            },
+        });
+    }
+    Ok(ProviderUploadExecution {
+        provider_id: provider.provider_id.clone(),
+        status: UploadJobStatus::Failed,
+        accepted_count: 0,
+        rejected_count: input.qso_count,
+        provider_correlation_id: None,
+        result_summary: live_limitation_for_provider(&provider.provider_id),
+        failure_reason: Some("live provider transport not configured".to_owned()),
+        redacted_error: Some(live_limitation_for_provider(&provider.provider_id)),
+        retryable: false,
+    })
+}
+
+fn execute_clublog_upload(
+    input: &ProviderUploadInput,
+) -> Result<ProviderUploadExecution, ProviderHttpError> {
+    let fields = credential_fields(input.credential_secret.as_deref());
+    let email = required_field(&fields, &["email"]).map_err(ProviderHttpError::Unsupported)?;
+    let password = required_field(&fields, &["password", "app_password"])
+        .map_err(ProviderHttpError::Unsupported)?;
+    let callsign =
+        required_field(&fields, &["callsign"]).map_err(ProviderHttpError::Unsupported)?;
+    let api =
+        required_field(&fields, &["api", "api_key"]).map_err(ProviderHttpError::Unsupported)?;
+    let body = provider_form_body(&[
+        ("email", &email),
+        ("password", &password),
+        ("callsign", &callsign),
+        ("api", &api),
+        ("adif", &input.adif_payload),
+    ]);
+    let response = send_provider_http_request(&ProviderHttpRequest {
+        method: "POST".to_owned(),
+        url: "https://clublog.org/realtime.php".to_owned(),
+        content_type: Some("application/x-www-form-urlencoded".to_owned()),
+        body: Some(body),
+        timeout_seconds: DEFAULT_PROVIDER_TIMEOUT_SECONDS,
+        user_agent: PROVIDER_USER_AGENT.to_owned(),
+    });
+    parse_clublog_upload_response(
+        input,
+        response.map_err(|error| redact_http_error(error, &[email, password, api]))?,
+    )
+}
+
+fn execute_qrz_logbook_upload(
+    input: &ProviderUploadInput,
+) -> Result<ProviderUploadExecution, ProviderHttpError> {
+    let fields = credential_fields(input.credential_secret.as_deref());
+    let key =
+        required_field(&fields, &["key", "api_key"]).map_err(ProviderHttpError::Unsupported)?;
+    let body = provider_form_body(&[
+        ("KEY", &key),
+        ("ACTION", "INSERT"),
+        ("ADIF", &input.adif_payload),
+    ]);
+    let response = send_provider_http_request(&ProviderHttpRequest {
+        method: "POST".to_owned(),
+        url: "https://logbook.qrz.com/api".to_owned(),
+        content_type: Some("application/x-www-form-urlencoded".to_owned()),
+        body: Some(body),
+        timeout_seconds: DEFAULT_PROVIDER_TIMEOUT_SECONDS,
+        user_agent: PROVIDER_USER_AGENT.to_owned(),
+    });
+    parse_qrz_logbook_upload_response(
+        input,
+        response.map_err(|error| redact_http_error(error, &[key]))?,
+    )
+}
+
+fn execute_eqsl_upload(
+    input: &ProviderUploadInput,
+) -> Result<ProviderUploadExecution, ProviderHttpError> {
+    let fields = credential_fields(input.credential_secret.as_deref());
+    let username = required_field(&fields, &["username", "callsign"])
+        .map_err(ProviderHttpError::Unsupported)?;
+    let password =
+        required_field(&fields, &["password"]).map_err(ProviderHttpError::Unsupported)?;
+    let mut pairs = vec![
+        ("UserName", username.as_str()),
+        ("Password", password.as_str()),
+        ("ADIFData", input.adif_payload.as_str()),
+    ];
+    if let Some(qth) = fields
+        .get("qthnickname")
+        .or_else(|| fields.get("qth_nickname"))
+    {
+        pairs.push(("QTHNickname", qth.as_str()));
+    }
+    let body = provider_form_body(&pairs);
+    let response = send_provider_http_request(&ProviderHttpRequest {
+        method: "POST".to_owned(),
+        url: "https://www.eqsl.cc/qslcard/ImportADIF.cfm".to_owned(),
+        content_type: Some("application/x-www-form-urlencoded".to_owned()),
+        body: Some(body),
+        timeout_seconds: DEFAULT_PROVIDER_TIMEOUT_SECONDS,
+        user_agent: PROVIDER_USER_AGENT.to_owned(),
+    });
+    parse_eqsl_upload_response(
+        input,
+        response.map_err(|error| redact_http_error(error, &[username, password]))?,
+    )
+}
+
+fn redact_http_error(error: ProviderHttpError, secrets: &[String]) -> ProviderHttpError {
+    match error {
+        ProviderHttpError::HttpStatus { status, body } => ProviderHttpError::HttpStatus {
+            status,
+            body: redact_provider_text(&body, secrets),
+        },
+        ProviderHttpError::Transport(message) => {
+            ProviderHttpError::Transport(redact_provider_text(&message, secrets))
+        }
+        other => other,
+    }
+}
+
+pub fn parse_clublog_upload_response(
+    input: &ProviderUploadInput,
+    response: ProviderHttpResponse,
+) -> Result<ProviderUploadExecution, ProviderHttpError> {
+    let body = response.body.trim();
+    if response.status == 403 {
+        return Ok(provider_upload_failure(
+            &input.provider_id,
+            input.qso_count,
+            "Club Log authentication failed",
+            body,
+            false,
+        ));
+    }
+    if response.status == 400 {
+        return Ok(provider_upload_failure(
+            &input.provider_id,
+            input.qso_count,
+            "Club Log rejected the QSO",
+            body,
+            false,
+        ));
+    }
+    if response.status >= 500 {
+        return Ok(provider_upload_failure(
+            &input.provider_id,
+            input.qso_count,
+            "Club Log temporary server failure",
+            body,
+            true,
+        ));
+    }
+    let lower = body.to_ascii_lowercase();
+    if response.status == 200
+        && (lower.contains("qso ok")
+            || lower.contains("qso duplicate")
+            || lower.contains("qso modified")
+            || lower.contains("accepted"))
+    {
+        return Ok(provider_upload_success(
+            &input.provider_id,
+            input.qso_count,
+            body,
+        ));
+    }
+    Ok(provider_upload_failure(
+        &input.provider_id,
+        input.qso_count,
+        "Club Log returned an unrecognized response",
+        body,
+        false,
+    ))
+}
+
+pub fn parse_qrz_logbook_upload_response(
+    input: &ProviderUploadInput,
+    response: ProviderHttpResponse,
+) -> Result<ProviderUploadExecution, ProviderHttpError> {
+    let body = response.body.trim();
+    let lower = body.to_ascii_lowercase();
+    if response.status >= 500 {
+        return Ok(provider_upload_failure(
+            &input.provider_id,
+            input.qso_count,
+            "QRZ Logbook temporary server failure",
+            body,
+            true,
+        ));
+    }
+    if response.status == 401 || lower.contains("auth") || lower.contains("not authorized") {
+        return Ok(provider_upload_failure(
+            &input.provider_id,
+            input.qso_count,
+            "QRZ Logbook authentication failed",
+            body,
+            false,
+        ));
+    }
+    if response.status == 200 && (lower.contains("result=ok") || lower.contains("<result>ok")) {
+        return Ok(provider_upload_success(
+            &input.provider_id,
+            input.qso_count,
+            body,
+        ));
+    }
+    Ok(provider_upload_failure(
+        &input.provider_id,
+        input.qso_count,
+        "QRZ Logbook rejected the upload",
+        body,
+        false,
+    ))
+}
+
+pub fn parse_eqsl_upload_response(
+    input: &ProviderUploadInput,
+    response: ProviderHttpResponse,
+) -> Result<ProviderUploadExecution, ProviderHttpError> {
+    let body = response.body.trim();
+    let lower = body.to_ascii_lowercase();
+    if response.status >= 500 {
+        return Ok(provider_upload_failure(
+            &input.provider_id,
+            input.qso_count,
+            "eQSL temporary server failure",
+            body,
+            true,
+        ));
+    }
+    if lower.contains("password") && (lower.contains("invalid") || lower.contains("incorrect")) {
+        return Ok(provider_upload_failure(
+            &input.provider_id,
+            input.qso_count,
+            "eQSL authentication failed",
+            body,
+            false,
+        ));
+    }
+    if response.status == 200
+        && (lower.contains("records added")
+            || lower.contains("record added")
+            || lower.contains("success")
+            || lower.contains("accepted"))
+    {
+        return Ok(provider_upload_success(
+            &input.provider_id,
+            input.qso_count,
+            body,
+        ));
+    }
+    Ok(provider_upload_failure(
+        &input.provider_id,
+        input.qso_count,
+        "eQSL returned an unrecognized response",
+        body,
+        false,
+    ))
+}
+
+fn provider_upload_success(
+    provider_id: &str,
+    qso_count: usize,
+    summary: &str,
+) -> ProviderUploadExecution {
+    ProviderUploadExecution {
+        provider_id: provider_id.to_owned(),
+        status: UploadJobStatus::Succeeded,
+        accepted_count: qso_count,
+        rejected_count: 0,
+        provider_correlation_id: Some(format!("live-{}", Uuid::new_v4())),
+        result_summary: summary.to_owned(),
+        failure_reason: None,
+        redacted_error: None,
+        retryable: false,
+    }
+}
+
+fn provider_upload_failure(
+    provider_id: &str,
+    qso_count: usize,
+    summary: &str,
+    error: &str,
+    retryable: bool,
+) -> ProviderUploadExecution {
+    ProviderUploadExecution {
+        provider_id: provider_id.to_owned(),
+        status: UploadJobStatus::Failed,
+        accepted_count: 0,
+        rejected_count: qso_count,
+        provider_correlation_id: None,
+        result_summary: summary.to_owned(),
+        failure_reason: Some(summary.to_owned()),
+        redacted_error: Some(error.to_owned()),
+        retryable,
+    }
+}
+
+fn provider_requires_credentials(provider: &ServiceProviderMetadata) -> bool {
+    !provider.required_credentials.is_empty() || !provider.required_config_keys.is_empty()
+}
+
+fn provider_test_result(
+    input: ProviderAdapterTestInput,
+    credential_required: bool,
+    test_status: &str,
+    provider_health_state: ProviderHealthState,
+    redacted_diagnostics: Vec<String>,
+    next_recommended_action: &str,
+) -> ProviderAdapterTestResult {
+    ProviderAdapterTestResult {
+        provider_id: input.provider_id,
+        capability_tested: input.capability,
+        credential_required,
+        credential_reference_present: input.credential_reference_present,
+        credential_resolved: input.credential_resolved,
+        test_status: test_status.to_owned(),
+        provider_health_state,
+        redacted_diagnostics,
+        next_recommended_action: next_recommended_action.to_owned(),
+        checked_at: Utc::now(),
+    }
+}
+
+fn live_limitation_for_provider(provider_id: &str) -> String {
+    match provider_id {
+        "lotw" => "LoTW upload requires a modeled TQSL/certificate signing flow before live upload"
+            .to_owned(),
+        "dx-cluster" => {
+            "DX Cluster live client has parser/scaffold support; persistent telnet runtime is pending"
+                .to_owned()
+        }
+        "pota-spots" | "sotawatch" => {
+            "spot feed adapter has fake/scaffold support; POTA live parser is modeled, SOTA live access is deferred pending API approval".to_owned()
+        }
+        "qrz-xml" | "hamqth" => {
+            "callsign lookup adapter has credential/test scaffolding and live response parsers; hosted lookup execution is pending"
+                .to_owned()
+        }
+        "clublog" | "qrz-logbook" | "eqsl" => {
+            "ADIF upload adapter has fake/test execution and gated live HTTP transport".to_owned()
+        }
+        _ => "live provider transport is not configured for this build".to_owned(),
+    }
 }
 
 #[derive(Debug, Error)]
@@ -438,6 +1339,865 @@ pub fn pota_spot_to_spot(record: PotaSpotRecord) -> Spot {
         grid: None,
         reference: Some(record.reference),
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SotaSpotRecord {
+    pub activator: String,
+    pub summit_reference: String,
+    pub frequency_hz: u64,
+    pub mode: Option<String>,
+    pub spotted_at: DateTime<Utc>,
+    pub comments: Option<String>,
+}
+
+pub fn sota_spot_to_spot(record: SotaSpotRecord) -> Spot {
+    Spot {
+        spotted_callsign: record.activator,
+        spotter_callsign: None,
+        frequency_hz: record.frequency_hz,
+        band: None,
+        mode: record.mode,
+        comment: record.comments,
+        source: SpotSource {
+            provider_id: "sotawatch".to_owned(),
+            label: "SOTAWatch".to_owned(),
+        },
+        spotted_at: record.spotted_at,
+        entity: None,
+        grid: None,
+        reference: Some(record.summit_reference),
+    }
+}
+
+pub fn pota_spots_request() -> ProviderHttpRequest {
+    ProviderHttpRequest {
+        method: "GET".to_owned(),
+        url: "https://api.pota.app/spot/activator".to_owned(),
+        content_type: None,
+        body: None,
+        timeout_seconds: DEFAULT_PROVIDER_TIMEOUT_SECONDS,
+        user_agent: PROVIDER_USER_AGENT.to_owned(),
+    }
+}
+
+pub fn sota_spots_request() -> Result<ProviderHttpRequest, ProviderHttpError> {
+    Err(ProviderHttpError::Unsupported(
+        "SOTA API terms require explicit approval/terms handling before live spot access"
+            .to_owned(),
+    ))
+}
+
+pub fn parse_pota_spots_json(payload: &str) -> Result<Vec<PotaSpotRecord>, String> {
+    let value = serde_json::from_str::<Value>(payload).map_err(|error| error.to_string())?;
+    let rows = value
+        .as_array()
+        .ok_or_else(|| "POTA spot payload is not an array".to_owned())?;
+    rows.iter()
+        .map(|row| {
+            let activator = string_field(row, &["activator", "activatorCallsign", "callsign"])
+                .ok_or_else(|| "POTA spot missing activator".to_owned())?;
+            let reference = string_field(row, &["reference", "referenceId", "park", "parkId"])
+                .ok_or_else(|| "POTA spot missing reference".to_owned())?;
+            let frequency_hz = frequency_hz_from_value(row, &["frequency", "frequencyKHz", "freq"])
+                .ok_or_else(|| "POTA spot missing frequency".to_owned())?;
+            let spotted_at = datetime_field(row, &["spotTime", "spottedAt", "timestamp", "time"])
+                .unwrap_or_else(Utc::now);
+            Ok(PotaSpotRecord {
+                activator: activator.to_ascii_uppercase(),
+                reference,
+                frequency_hz,
+                mode: string_field(row, &["mode"]),
+                spotted_at,
+                comments: string_field(row, &["comments", "comment", "remarks"]),
+            })
+        })
+        .collect()
+}
+
+pub fn parse_sota_spots_json(payload: &str) -> Result<Vec<SotaSpotRecord>, String> {
+    let value = serde_json::from_str::<Value>(payload).map_err(|error| error.to_string())?;
+    let rows = value
+        .as_array()
+        .ok_or_else(|| "SOTA spot payload is not an array".to_owned())?;
+    rows.iter()
+        .map(|row| {
+            let activator = string_field(row, &["activatorCallsign", "activator", "callsign"])
+                .ok_or_else(|| "SOTA spot missing activator".to_owned())?;
+            let summit_reference =
+                string_field(row, &["summitCode", "summitReference", "reference"])
+                    .ok_or_else(|| "SOTA spot missing summit reference".to_owned())?;
+            let frequency_hz = frequency_hz_from_value(row, &["frequency", "frequencyMHz", "freq"])
+                .ok_or_else(|| "SOTA spot missing frequency".to_owned())?;
+            let spotted_at = datetime_field(row, &["timeStamp", "spottedAt", "timestamp", "time"])
+                .unwrap_or_else(Utc::now);
+            Ok(SotaSpotRecord {
+                activator: activator.to_ascii_uppercase(),
+                summit_reference,
+                frequency_hz,
+                mode: string_field(row, &["mode"]),
+                spotted_at,
+                comments: string_field(row, &["comments", "comment"]),
+            })
+        })
+        .collect()
+}
+
+fn string_field(value: &Value, keys: &[&str]) -> Option<String> {
+    keys.iter().find_map(|key| {
+        value
+            .get(*key)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+    })
+}
+
+fn datetime_field(value: &Value, keys: &[&str]) -> Option<DateTime<Utc>> {
+    string_field(value, keys)
+        .and_then(|value| DateTime::parse_from_rfc3339(&value).ok())
+        .map(|value| value.with_timezone(&Utc))
+}
+
+fn frequency_hz_from_value(value: &Value, keys: &[&str]) -> Option<u64> {
+    keys.iter().find_map(|key| {
+        let raw = value.get(*key)?;
+        let number = raw.as_f64().or_else(|| {
+            raw.as_str()
+                .and_then(|value| value.trim().parse::<f64>().ok())
+        })?;
+        if number > 1_000_000.0 {
+            Some(number.round() as u64)
+        } else if number > 1_000.0 {
+            Some((number * 1_000.0).round() as u64)
+        } else {
+            Some((number * 1_000_000.0).round() as u64)
+        }
+    })
+}
+
+pub fn parse_qrz_xml_lookup_response(payload: &str) -> Result<Option<LookupResult>, String> {
+    if tag_text(payload, "Error").is_some() {
+        return Ok(None);
+    }
+    let Some(callsign) = tag_text(payload, "call") else {
+        return Ok(None);
+    };
+    let normalized_callsign = normalize_callsign(&callsign).map_err(|error| error.to_string())?;
+    let name = [tag_text(payload, "fname"), tag_text(payload, "name")]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .trim()
+        .to_owned();
+    Ok(Some(LookupResult {
+        callsign,
+        normalized_callsign,
+        name: (!name.is_empty()).then_some(name),
+        qth: tag_text(payload, "addr2"),
+        country: tag_text(payload, "country"),
+        dxcc: tag_text(payload, "dxcc").and_then(|value| value.parse().ok()),
+        cq_zone: tag_text(payload, "cqzone").and_then(|value| value.parse().ok()),
+        itu_zone: tag_text(payload, "ituzone").and_then(|value| value.parse().ok()),
+        grid: tag_text(payload, "grid"),
+        latitude: tag_text(payload, "lat").and_then(|value| value.parse().ok()),
+        longitude: tag_text(payload, "lon").and_then(|value| value.parse().ok()),
+        license_class: tag_text(payload, "class"),
+        previous_callsigns: Vec::new(),
+        source_provider: "qrz-xml".to_owned(),
+        fetched_at: Utc::now(),
+        expires_at: None,
+        confidence: 0.95,
+        raw_metadata: None,
+    }))
+}
+
+pub fn parse_hamqth_lookup_response(payload: &str) -> Result<Option<LookupResult>, String> {
+    if tag_text(payload, "error").is_some() {
+        return Ok(None);
+    }
+    let Some(callsign) = tag_text(payload, "callsign") else {
+        return Ok(None);
+    };
+    let normalized_callsign = normalize_callsign(&callsign).map_err(|error| error.to_string())?;
+    Ok(Some(LookupResult {
+        callsign,
+        normalized_callsign,
+        name: tag_text(payload, "nick").or_else(|| tag_text(payload, "adr_name")),
+        qth: tag_text(payload, "qth"),
+        country: tag_text(payload, "country"),
+        dxcc: tag_text(payload, "dxcc").and_then(|value| value.parse().ok()),
+        cq_zone: tag_text(payload, "cq").and_then(|value| value.parse().ok()),
+        itu_zone: tag_text(payload, "itu").and_then(|value| value.parse().ok()),
+        grid: tag_text(payload, "grid"),
+        latitude: tag_text(payload, "latitude").and_then(|value| value.parse().ok()),
+        longitude: tag_text(payload, "longitude").and_then(|value| value.parse().ok()),
+        license_class: None,
+        previous_callsigns: Vec::new(),
+        source_provider: "hamqth".to_owned(),
+        fetched_at: Utc::now(),
+        expires_at: None,
+        confidence: 0.9,
+        raw_metadata: None,
+    }))
+}
+
+pub fn execute_tier_one_lookup(
+    input: ProviderLookupInput,
+) -> Result<ProviderLookupExecution, ProviderAdapterError> {
+    let provider = tier_one_provider_metadata(&input.provider_id)
+        .ok_or_else(|| ProviderAdapterError::UnknownProvider(input.provider_id.clone()))?;
+    if !provider
+        .capabilities
+        .iter()
+        .any(|capability| capability == CAP_LOOKUP_CALLSIGN_BASIC)
+    {
+        return Err(ProviderAdapterError::UnsupportedCapability {
+            provider_id: input.provider_id.clone(),
+            capability: CAP_LOOKUP_CALLSIGN_BASIC.to_owned(),
+        });
+    }
+    if !input.enabled {
+        return Ok(provider_lookup_failure(
+            &input.provider_id,
+            ProviderRuntimeStatus::Disabled,
+            "provider disabled",
+            "enable the provider before running lookup operations",
+        ));
+    }
+    if input.mode == ProviderAdapterMode::Live {
+        if !input.credential_reference_present {
+            return Ok(provider_lookup_failure(
+                &input.provider_id,
+                ProviderRuntimeStatus::NeedsCredentials,
+                "missing credential reference",
+                "store a credential reference before live lookup",
+            ));
+        }
+        if !input.credential_resolved {
+            return Ok(provider_lookup_failure(
+                &input.provider_id,
+                ProviderRuntimeStatus::NeedsCredentials,
+                "invalid credential reference",
+                "credential reference did not resolve through CredentialStore",
+            ));
+        }
+    }
+    match input.provider_id.as_str() {
+        "qrz-xml" => execute_qrz_xml_lookup(&input),
+        "hamqth" => execute_hamqth_lookup(&input),
+        _ => Ok(provider_lookup_failure(
+            &input.provider_id,
+            ProviderRuntimeStatus::LiveModeNotConfigured,
+            "lookup live mode not configured",
+            &live_limitation_for_provider(&input.provider_id),
+        )),
+    }
+}
+
+pub fn fetch_tier_one_spots(
+    input: ProviderSpotInput,
+) -> Result<ProviderSpotExecution, ProviderAdapterError> {
+    let provider = tier_one_provider_metadata(&input.provider_id)
+        .ok_or_else(|| ProviderAdapterError::UnknownProvider(input.provider_id.clone()))?;
+    if !provider
+        .capabilities
+        .iter()
+        .any(|capability| capability == CAP_SPOTTING_POTA)
+    {
+        return Err(ProviderAdapterError::UnsupportedCapability {
+            provider_id: input.provider_id.clone(),
+            capability: CAP_SPOTTING_POTA.to_owned(),
+        });
+    }
+    if !input.enabled {
+        return Ok(provider_spot_failure(
+            &input.provider_id,
+            ProviderRuntimeStatus::Disabled,
+            "provider disabled",
+            "enable the provider before fetching spots",
+        ));
+    }
+    match input.provider_id.as_str() {
+        "pota-spots" => execute_pota_spots(input),
+        _ => Ok(provider_spot_failure(
+            &input.provider_id,
+            ProviderRuntimeStatus::LiveModeNotConfigured,
+            "spot live mode not configured",
+            &live_limitation_for_provider(&input.provider_id),
+        )),
+    }
+}
+
+pub fn execute_dx_cluster_read_once(input: ProviderDxClusterInput) -> ProviderSpotExecution {
+    if !input.enabled {
+        return provider_spot_failure(
+            "dx-cluster",
+            ProviderRuntimeStatus::Disabled,
+            "provider disabled",
+            "enable DX Cluster before connecting",
+        );
+    }
+    if input.mode == ProviderAdapterMode::Fake {
+        let spots = input
+            .fake_lines
+            .iter()
+            .filter_map(|line| parse_dx_cluster_line(line))
+            .map(|spot| dx_cluster_spot_to_spot(spot, "dx-cluster"))
+            .collect::<Vec<_>>();
+        return ProviderSpotExecution {
+            provider_id: "dx-cluster".to_owned(),
+            status: ProviderRuntimeStatus::Succeeded,
+            result_summary: format!("fake DX Cluster read returned {} parsed spots", spots.len()),
+            spots,
+            failure_reason: None,
+            error_code: None,
+            redacted_error: None,
+            checked_at: Utc::now(),
+        };
+    }
+    match read_dx_cluster_spots_once(&input.config) {
+        Ok(spots) => ProviderSpotExecution {
+            provider_id: "dx-cluster".to_owned(),
+            status: ProviderRuntimeStatus::Succeeded,
+            result_summary: format!("DX Cluster read returned {} parsed spots", spots.len()),
+            spots,
+            failure_reason: None,
+            error_code: None,
+            redacted_error: None,
+            checked_at: Utc::now(),
+        },
+        Err(error) => provider_spot_failure(
+            "dx-cluster",
+            ProviderRuntimeStatus::Failed,
+            "DX Cluster read failed",
+            &error.to_string(),
+        ),
+    }
+}
+
+fn execute_qrz_xml_lookup(
+    input: &ProviderLookupInput,
+) -> Result<ProviderLookupExecution, ProviderAdapterError> {
+    if input.mode == ProviderAdapterMode::Fake {
+        return execute_fake_lookup(input, "qrz-xml");
+    }
+    let fields = credential_fields(input.credential_secret.as_deref());
+    let username = match required_field(&fields, &["username", "callsign"]) {
+        Ok(value) => value,
+        Err(error) => {
+            return Ok(provider_lookup_failure(
+                &input.provider_id,
+                ProviderRuntimeStatus::NeedsCredentials,
+                "missing QRZ XML credential field",
+                &error,
+            ))
+        }
+    };
+    let password = match required_field(&fields, &["password"]) {
+        Ok(value) => value,
+        Err(error) => {
+            return Ok(provider_lookup_failure(
+                &input.provider_id,
+                ProviderRuntimeStatus::NeedsCredentials,
+                "missing QRZ XML credential field",
+                &error,
+            ))
+        }
+    };
+    let session_url = format!(
+        "https://xmldata.qrz.com/xml/current/?username={}&password={}",
+        urlencoding::encode(&username),
+        urlencoding::encode(&password)
+    );
+    let session = match send_provider_http_request(&ProviderHttpRequest {
+        method: "GET".to_owned(),
+        url: session_url,
+        content_type: None,
+        body: None,
+        timeout_seconds: DEFAULT_PROVIDER_TIMEOUT_SECONDS,
+        user_agent: PROVIDER_USER_AGENT.to_owned(),
+    }) {
+        Ok(response) => response.body,
+        Err(error) => {
+            let redacted = redact_http_error(error, &[username, password]);
+            return Ok(provider_lookup_failure(
+                &input.provider_id,
+                ProviderRuntimeStatus::Failed,
+                "QRZ XML session request failed",
+                &redacted.to_string(),
+            ));
+        }
+    };
+    let Some(key) = tag_text(&session, "Key") else {
+        let message =
+            tag_text(&session, "Error").unwrap_or_else(|| "QRZ XML session key missing".to_owned());
+        return Ok(provider_lookup_failure(
+            &input.provider_id,
+            ProviderRuntimeStatus::NeedsCredentials,
+            "QRZ XML authentication failed",
+            &redact_provider_text(&message, &[username, password]),
+        ));
+    };
+    let lookup_url = format!(
+        "https://xmldata.qrz.com/xml/current/?s={}&callsign={}",
+        urlencoding::encode(&key),
+        urlencoding::encode(&input.callsign)
+    );
+    let response = match send_provider_http_request(&ProviderHttpRequest {
+        method: "GET".to_owned(),
+        url: lookup_url,
+        content_type: None,
+        body: None,
+        timeout_seconds: DEFAULT_PROVIDER_TIMEOUT_SECONDS,
+        user_agent: PROVIDER_USER_AGENT.to_owned(),
+    }) {
+        Ok(response) => response,
+        Err(error) => {
+            let redacted = redact_http_error(error, &[key]);
+            return Ok(provider_lookup_failure(
+                &input.provider_id,
+                ProviderRuntimeStatus::Failed,
+                "QRZ XML lookup request failed",
+                &redacted.to_string(),
+            ));
+        }
+    };
+    parse_lookup_execution(input, response.body, "QRZ XML")
+}
+
+fn execute_hamqth_lookup(
+    input: &ProviderLookupInput,
+) -> Result<ProviderLookupExecution, ProviderAdapterError> {
+    if input.mode == ProviderAdapterMode::Fake {
+        return execute_fake_lookup(input, "hamqth");
+    }
+    let fields = credential_fields(input.credential_secret.as_deref());
+    let username = match required_field(&fields, &["username", "callsign"]) {
+        Ok(value) => value,
+        Err(error) => {
+            return Ok(provider_lookup_failure(
+                &input.provider_id,
+                ProviderRuntimeStatus::NeedsCredentials,
+                "missing HamQTH credential field",
+                &error,
+            ))
+        }
+    };
+    let password = match required_field(&fields, &["password"]) {
+        Ok(value) => value,
+        Err(error) => {
+            return Ok(provider_lookup_failure(
+                &input.provider_id,
+                ProviderRuntimeStatus::NeedsCredentials,
+                "missing HamQTH credential field",
+                &error,
+            ))
+        }
+    };
+    let session_url = format!(
+        "https://www.hamqth.com/xml.php?u={}&p={}",
+        urlencoding::encode(&username),
+        urlencoding::encode(&password)
+    );
+    let session = match send_provider_http_request(&ProviderHttpRequest {
+        method: "GET".to_owned(),
+        url: session_url,
+        content_type: None,
+        body: None,
+        timeout_seconds: DEFAULT_PROVIDER_TIMEOUT_SECONDS,
+        user_agent: PROVIDER_USER_AGENT.to_owned(),
+    }) {
+        Ok(response) => response.body,
+        Err(error) => {
+            let redacted = redact_http_error(error, &[username, password]);
+            return Ok(provider_lookup_failure(
+                &input.provider_id,
+                ProviderRuntimeStatus::Failed,
+                "HamQTH session request failed",
+                &redacted.to_string(),
+            ));
+        }
+    };
+    let Some(session_id) = tag_text(&session, "session_id") else {
+        let message =
+            tag_text(&session, "error").unwrap_or_else(|| "HamQTH session id missing".to_owned());
+        return Ok(provider_lookup_failure(
+            &input.provider_id,
+            ProviderRuntimeStatus::NeedsCredentials,
+            "HamQTH authentication failed",
+            &redact_provider_text(&message, &[username, password]),
+        ));
+    };
+    let lookup_url = format!(
+        "https://www.hamqth.com/xml.php?id={}&callsign={}&prg=KE8YGW-logger",
+        urlencoding::encode(&session_id),
+        urlencoding::encode(&input.callsign)
+    );
+    let response = match send_provider_http_request(&ProviderHttpRequest {
+        method: "GET".to_owned(),
+        url: lookup_url,
+        content_type: None,
+        body: None,
+        timeout_seconds: DEFAULT_PROVIDER_TIMEOUT_SECONDS,
+        user_agent: PROVIDER_USER_AGENT.to_owned(),
+    }) {
+        Ok(response) => response,
+        Err(error) => {
+            let redacted = redact_http_error(error, &[session_id]);
+            return Ok(provider_lookup_failure(
+                &input.provider_id,
+                ProviderRuntimeStatus::Failed,
+                "HamQTH lookup request failed",
+                &redacted.to_string(),
+            ));
+        }
+    };
+    parse_lookup_execution(input, response.body, "HamQTH")
+}
+
+fn execute_fake_lookup(
+    input: &ProviderLookupInput,
+    provider_id: &str,
+) -> Result<ProviderLookupExecution, ProviderAdapterError> {
+    if input.force_fake_auth_failure {
+        return Ok(provider_lookup_failure(
+            provider_id,
+            ProviderRuntimeStatus::NeedsCredentials,
+            "fake authentication failed",
+            "fake provider reported authentication failure",
+        ));
+    }
+    if input.force_fake_not_found {
+        return Ok(provider_lookup_failure(
+            provider_id,
+            ProviderRuntimeStatus::NotFound,
+            "callsign not found",
+            "fake provider did not find the callsign",
+        ));
+    }
+    let payload = input.fake_response.clone().unwrap_or_else(|| {
+        if provider_id == "qrz-xml" {
+            format!(
+                "<QRZDatabase><Callsign><call>{}</call><fname>Ada</fname><name>Lovelace</name><addr2>Cleveland</addr2><country>United States</country><grid>EN91</grid><dxcc>291</dxcc></Callsign></QRZDatabase>",
+                input.callsign
+            )
+        } else {
+            format!(
+                "<HamQTH><search><callsign>{}</callsign><nick>Ada</nick><qth>Cleveland</qth><country>United States</country><grid>EN91</grid><dxcc>291</dxcc></search></HamQTH>",
+                input.callsign
+            )
+        }
+    });
+    parse_lookup_execution(
+        input,
+        payload,
+        if provider_id == "qrz-xml" {
+            "QRZ XML"
+        } else {
+            "HamQTH"
+        },
+    )
+}
+
+fn parse_lookup_execution(
+    input: &ProviderLookupInput,
+    payload: String,
+    display_name: &str,
+) -> Result<ProviderLookupExecution, ProviderAdapterError> {
+    let parsed = match input.provider_id.as_str() {
+        "qrz-xml" => parse_qrz_xml_lookup_response(&payload),
+        "hamqth" => parse_hamqth_lookup_response(&payload),
+        _ => Ok(None),
+    };
+    match parsed {
+        Ok(Some(result)) => Ok(ProviderLookupExecution {
+            provider_id: input.provider_id.clone(),
+            status: ProviderRuntimeStatus::Succeeded,
+            result_summary: format!("{display_name} lookup succeeded"),
+            result: Some(result),
+            failure_reason: None,
+            error_code: None,
+            redacted_error: None,
+            checked_at: Utc::now(),
+        }),
+        Ok(None) => Ok(provider_lookup_failure(
+            &input.provider_id,
+            lookup_failure_status(&payload),
+            lookup_failure_reason(&payload, display_name),
+            &lookup_failure_message(&payload, display_name),
+        )),
+        Err(error) => Ok(provider_lookup_failure(
+            &input.provider_id,
+            ProviderRuntimeStatus::Failed,
+            "malformed provider response",
+            &error,
+        )),
+    }
+}
+
+fn execute_pota_spots(
+    input: ProviderSpotInput,
+) -> Result<ProviderSpotExecution, ProviderAdapterError> {
+    if input.mode == ProviderAdapterMode::Fake {
+        let payload = input.fake_response.unwrap_or_else(|| {
+            r#"[{"activator":"K1ABC","reference":"US-0001","frequency":14.074,"mode":"FT8","spotTime":"2026-07-08T18:00:00Z","comments":"fake POTA spot"}]"#.to_owned()
+        });
+        return parse_pota_spot_execution(&input.provider_id, &payload);
+    }
+    let response = match send_provider_http_request(&pota_spots_request()) {
+        Ok(response) => response,
+        Err(error) => {
+            return Ok(provider_spot_failure(
+                &input.provider_id,
+                ProviderRuntimeStatus::Failed,
+                "POTA spot request failed",
+                &error.to_string(),
+            ))
+        }
+    };
+    parse_pota_spot_execution(&input.provider_id, &response.body)
+}
+
+fn parse_pota_spot_execution(
+    provider_id: &str,
+    payload: &str,
+) -> Result<ProviderSpotExecution, ProviderAdapterError> {
+    match parse_pota_spots_json(payload) {
+        Ok(records) => {
+            let spots = records
+                .into_iter()
+                .map(pota_spot_to_spot)
+                .collect::<Vec<_>>();
+            Ok(ProviderSpotExecution {
+                provider_id: provider_id.to_owned(),
+                status: ProviderRuntimeStatus::Succeeded,
+                result_summary: format!("POTA spot fetch returned {} spots", spots.len()),
+                spots,
+                failure_reason: None,
+                error_code: None,
+                redacted_error: None,
+                checked_at: Utc::now(),
+            })
+        }
+        Err(error) => Ok(provider_spot_failure(
+            provider_id,
+            ProviderRuntimeStatus::Failed,
+            "malformed POTA spot response",
+            &error,
+        )),
+    }
+}
+
+fn provider_lookup_failure(
+    provider_id: &str,
+    status: ProviderRuntimeStatus,
+    reason: &str,
+    error: &str,
+) -> ProviderLookupExecution {
+    let error_code = provider_runtime_error_code(&status, reason, error);
+    ProviderLookupExecution {
+        provider_id: provider_id.to_owned(),
+        status,
+        result: None,
+        result_summary: reason.to_owned(),
+        failure_reason: Some(reason.to_owned()),
+        error_code: Some(error_code),
+        redacted_error: Some(error.to_owned()),
+        checked_at: Utc::now(),
+    }
+}
+
+fn provider_spot_failure(
+    provider_id: &str,
+    status: ProviderRuntimeStatus,
+    reason: &str,
+    error: &str,
+) -> ProviderSpotExecution {
+    let error_code = provider_runtime_error_code(&status, reason, error);
+    ProviderSpotExecution {
+        provider_id: provider_id.to_owned(),
+        status,
+        spots: Vec::new(),
+        result_summary: reason.to_owned(),
+        failure_reason: Some(reason.to_owned()),
+        error_code: Some(error_code),
+        redacted_error: Some(error.to_owned()),
+        checked_at: Utc::now(),
+    }
+}
+
+fn lookup_failure_status(payload: &str) -> ProviderRuntimeStatus {
+    let code = provider_lookup_error_code(payload);
+    if code == "callsign_not_found" {
+        ProviderRuntimeStatus::NotFound
+    } else if matches!(code.as_str(), "auth_failure" | "session_failure") {
+        ProviderRuntimeStatus::NeedsCredentials
+    } else {
+        ProviderRuntimeStatus::Failed
+    }
+}
+
+fn lookup_failure_reason(payload: &str, display_name: &str) -> &'static str {
+    match provider_lookup_error_code(payload).as_str() {
+        "callsign_not_found" => "callsign not found",
+        "auth_failure" => "provider authentication failed",
+        "session_failure" => "provider session failed",
+        "rate_limited" | "permission_issue" => "provider permission or rate issue",
+        _ => {
+            if payload.trim().is_empty() {
+                "empty provider response"
+            } else if payload.contains('<') {
+                "malformed provider response"
+            } else {
+                let _ = display_name;
+                "malformed provider response"
+            }
+        }
+    }
+}
+
+fn lookup_failure_message(payload: &str, display_name: &str) -> String {
+    let code = provider_lookup_error_code(payload);
+    if code == "malformed_response" {
+        format!("{display_name} returned no parseable callsign record")
+    } else {
+        format!("{display_name} returned provider error category {code}")
+    }
+}
+
+fn provider_lookup_error_code(payload: &str) -> String {
+    let error = tag_text(payload, "Error")
+        .or_else(|| tag_text(payload, "error"))
+        .unwrap_or_default();
+    provider_runtime_error_code(&ProviderRuntimeStatus::Failed, "", &error)
+}
+
+fn provider_runtime_error_code(
+    status: &ProviderRuntimeStatus,
+    reason: &str,
+    error: &str,
+) -> String {
+    let text = format!("{reason} {error}").to_ascii_lowercase();
+    if matches!(status, ProviderRuntimeStatus::Disabled) || text.contains("disabled") {
+        "provider_disabled".to_owned()
+    } else if matches!(status, ProviderRuntimeStatus::LiveModeNotConfigured)
+        || text.contains("live provider transport not configured")
+    {
+        "live_mode_not_configured".to_owned()
+    } else if text.contains("missing credential") || text.contains("not_present") {
+        "missing_credential".to_owned()
+    } else if text.contains("invalid credential")
+        || text.contains("unresolved")
+        || text.contains("did not resolve")
+    {
+        "invalid_credential_reference".to_owned()
+    } else if text.contains("auth")
+        || text.contains("password")
+        || text.contains("username")
+        || text.contains("login")
+    {
+        "auth_failure".to_owned()
+    } else if text.contains("session")
+        || text.contains("key missing")
+        || text.contains("id missing")
+    {
+        "session_failure".to_owned()
+    } else if text.contains("not found")
+        || text.contains("no match")
+        || text.contains("unknown call")
+    {
+        "callsign_not_found".to_owned()
+    } else if text.contains("rate") || text.contains("too many") || text.contains("429") {
+        "rate_limited".to_owned()
+    } else if text.contains("permission")
+        || text.contains("subscription")
+        || text.contains("not authorized")
+        || text.contains("terms")
+        || text.contains("approval")
+    {
+        "permission_issue".to_owned()
+    } else if text.contains("timed out") || text.contains("timeout") {
+        "network_timeout".to_owned()
+    } else if text.contains("refused") || text.contains("did not resolve") {
+        "connection_failed".to_owned()
+    } else if text.contains("tls") || text.contains("certificate") {
+        "transport_failure".to_owned()
+    } else if text.contains("malformed") || text.contains("parse") || text.contains("not an array")
+    {
+        "malformed_response".to_owned()
+    } else if text.contains("rejected") {
+        "provider_rejection".to_owned()
+    } else {
+        match status {
+            ProviderRuntimeStatus::NotFound => "callsign_not_found".to_owned(),
+            ProviderRuntimeStatus::NeedsCredentials => "missing_credential".to_owned(),
+            ProviderRuntimeStatus::Failed => "provider_error".to_owned(),
+            ProviderRuntimeStatus::Succeeded => "ok".to_owned(),
+            ProviderRuntimeStatus::Disabled => "provider_disabled".to_owned(),
+            ProviderRuntimeStatus::LiveModeNotConfigured => "live_mode_not_configured".to_owned(),
+        }
+    }
+}
+
+fn tag_text(payload: &str, tag: &str) -> Option<String> {
+    let start = format!("<{tag}>");
+    let end = format!("</{tag}>");
+    let (_, after_start) = payload.split_once(&start)?;
+    let (value, _) = after_start.split_once(&end)?;
+    Some(value.trim().to_owned()).filter(|value| !value.is_empty())
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DxClusterClientConfig {
+    pub host: String,
+    pub port: u16,
+    pub callsign: String,
+    pub read_lines: usize,
+    pub timeout_seconds: u64,
+}
+
+pub fn read_dx_cluster_spots_once(
+    config: &DxClusterClientConfig,
+) -> Result<Vec<Spot>, ProviderHttpError> {
+    let address = (config.host.as_str(), config.port)
+        .to_socket_addrs()
+        .map_err(|error| ProviderHttpError::Transport(error.to_string()))?
+        .next()
+        .ok_or_else(|| {
+            ProviderHttpError::Transport("DX Cluster host did not resolve".to_owned())
+        })?;
+    let timeout = StdDuration::from_secs(config.timeout_seconds);
+    let mut stream = TcpStream::connect_timeout(&address, timeout).map_err(|error| {
+        provider_http_error_from_transport(&format!("DX Cluster connect failed: {error}"))
+    })?;
+    stream
+        .set_read_timeout(Some(timeout))
+        .map_err(|error| ProviderHttpError::Transport(error.to_string()))?;
+    stream
+        .write_all(format!("{}\r\n", config.callsign).as_bytes())
+        .map_err(|error| ProviderHttpError::Transport(error.to_string()))?;
+    let mut reader = BufReader::new(stream);
+    let mut spots = Vec::new();
+    for _ in 0..config.read_lines {
+        let mut line = String::new();
+        match reader.read_line(&mut line) {
+            Ok(0) => break,
+            Ok(_) => {
+                if let Some(parsed) = parse_dx_cluster_line(&line) {
+                    spots.push(dx_cluster_spot_to_spot(parsed, "dx-cluster"));
+                }
+            }
+            Err(error) => {
+                return Err(provider_http_error_from_transport(&format!(
+                    "DX Cluster read failed: {error}"
+                )))
+            }
+        }
+    }
+    Ok(spots)
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1007,6 +2767,619 @@ mod tests {
                 .iter()
                 .any(|provider| provider.provider_id == provider_id));
         }
+    }
+
+    #[test]
+    fn tier_one_registry_reports_unsupported_capabilities() {
+        assert!(tier_one_provider_supports_capability("clublog", CAP_UPLOAD_ADIF).unwrap());
+        assert!(!tier_one_provider_supports_capability("qrz-xml", CAP_UPLOAD_ADIF).unwrap());
+        assert!(matches!(
+            tier_one_provider_supports_capability("missing-provider", CAP_UPLOAD_ADIF),
+            Err(ProviderAdapterError::UnknownProvider(_))
+        ));
+    }
+
+    #[test]
+    fn fake_provider_test_is_ci_safe_without_credentials() {
+        let result = test_tier_one_provider(ProviderAdapterTestInput {
+            provider_id: "qrz-xml".to_owned(),
+            capability: Some("lookup.callsign.basic".to_owned()),
+            enabled: true,
+            credential_reference_present: false,
+            credential_resolved: false,
+            mode: ProviderAdapterMode::Fake,
+        })
+        .unwrap();
+        assert_eq!(result.test_status, "ok");
+        assert!(result.credential_required);
+        assert_eq!(result.provider_health_state, ProviderHealthState::Healthy);
+    }
+
+    #[test]
+    fn live_provider_test_requires_resolved_credentials() {
+        let result = test_tier_one_provider(ProviderAdapterTestInput {
+            provider_id: "clublog".to_owned(),
+            capability: Some(CAP_UPLOAD_ADIF.to_owned()),
+            enabled: true,
+            credential_reference_present: true,
+            credential_resolved: false,
+            mode: ProviderAdapterMode::Live,
+        })
+        .unwrap();
+        assert_eq!(result.test_status, "invalid_credential_reference");
+        assert_eq!(
+            result.provider_health_state,
+            ProviderHealthState::MissingConfig
+        );
+    }
+
+    #[test]
+    fn fake_upload_succeeds_and_live_missing_credential_is_retryable() {
+        let fake = execute_tier_one_upload(ProviderUploadInput {
+            provider_id: "clublog".to_owned(),
+            job_id: Uuid::new_v4(),
+            adif_payload: "<CALL:5>K1ABC<EOR>".to_owned(),
+            qso_count: 1,
+            enabled: true,
+            credential_reference_present: false,
+            credential_resolved: false,
+            credential_secret: None,
+            mode: ProviderAdapterMode::Fake,
+            force_fake_failure: false,
+        })
+        .unwrap();
+        assert_eq!(fake.status, UploadJobStatus::Succeeded);
+        assert_eq!(fake.accepted_count, 1);
+
+        let missing = execute_tier_one_upload(ProviderUploadInput {
+            provider_id: "clublog".to_owned(),
+            job_id: Uuid::new_v4(),
+            adif_payload: "<CALL:5>K1ABC<EOR>".to_owned(),
+            qso_count: 1,
+            enabled: true,
+            credential_reference_present: false,
+            credential_resolved: false,
+            credential_secret: None,
+            mode: ProviderAdapterMode::Live,
+            force_fake_failure: false,
+        })
+        .unwrap();
+        assert_eq!(missing.status, UploadJobStatus::NeedsCredentials);
+        assert!(missing.retryable);
+    }
+
+    fn upload_input(provider_id: &str) -> ProviderUploadInput {
+        ProviderUploadInput {
+            provider_id: provider_id.to_owned(),
+            job_id: Uuid::new_v4(),
+            adif_payload: "<CALL:5>K1ABC<EOR>".to_owned(),
+            qso_count: 1,
+            enabled: true,
+            credential_reference_present: true,
+            credential_resolved: true,
+            credential_secret: None,
+            mode: ProviderAdapterMode::Live,
+            force_fake_failure: false,
+        }
+    }
+
+    fn live_provider_tests_enabled() -> bool {
+        std::env::var("HAM_LIVE_PROVIDER_TESTS").ok().as_deref() == Some("1")
+    }
+
+    fn live_upload_tests_enabled() -> bool {
+        live_provider_tests_enabled()
+            && std::env::var("HAM_LIVE_PROVIDER_ALLOW_UPLOAD")
+                .ok()
+                .as_deref()
+                == Some("1")
+    }
+
+    fn live_env(name: &str) -> Option<String> {
+        std::env::var(name)
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+    }
+
+    fn skip_live(provider_id: &str, reason: &str) {
+        eprintln!("provider={provider_id} mode=live result=skip reason={reason}");
+    }
+
+    fn assert_execution_redacted(summary: &str, error: Option<&str>, secrets: &[&str]) {
+        for secret in secrets {
+            assert!(!secret.is_empty());
+            assert!(!summary.contains(secret));
+            if let Some(error) = error {
+                assert!(!error.contains(secret));
+            }
+        }
+    }
+
+    fn live_upload_input(provider_id: &str, credential_secret: String) -> ProviderUploadInput {
+        ProviderUploadInput {
+            provider_id: provider_id.to_owned(),
+            job_id: Uuid::new_v4(),
+            adif_payload:
+                "<CALL:5>N0CALL<BAND:3>20M<MODE:3>FT8<QSO_DATE:8>20260708<TIME_ON:6>120000<EOR>"
+                    .to_owned(),
+            qso_count: 1,
+            enabled: true,
+            credential_reference_present: true,
+            credential_resolved: true,
+            credential_secret: Some(credential_secret),
+            mode: ProviderAdapterMode::Live,
+            force_fake_failure: false,
+        }
+    }
+
+    #[test]
+    #[ignore = "release-runner live validation; requires HAM_LIVE_PROVIDER_TESTS=1 and real Club Log test credentials"]
+    fn live_clublog_upload_validation_is_env_gated() {
+        if !live_upload_tests_enabled() {
+            skip_live(
+                "clublog",
+                "HAM_LIVE_PROVIDER_TESTS/HAM_LIVE_PROVIDER_ALLOW_UPLOAD not set",
+            );
+            return;
+        }
+        let (Some(email), Some(callsign), Some(password), Some(api)) = (
+            live_env("HAM_CLUBLOG_TEST_EMAIL"),
+            live_env("HAM_CLUBLOG_TEST_CALLSIGN"),
+            live_env("HAM_CLUBLOG_TEST_PASSWORD"),
+            live_env("HAM_CLUBLOG_TEST_API_KEY"),
+        ) else {
+            skip_live("clublog", "provider-specific credentials missing");
+            return;
+        };
+        eprintln!(
+            "provider=clublog mode=live action=upload warning=may_create_provider_side_record"
+        );
+        let secret = serde_json::json!({
+            "email": email.clone(),
+            "callsign": callsign.clone(),
+            "password": password.clone(),
+            "api": api.clone(),
+        })
+        .to_string();
+        let result = execute_tier_one_upload(live_upload_input("clublog", secret)).unwrap();
+        assert!(matches!(
+            result.status,
+            UploadJobStatus::Succeeded | UploadJobStatus::Failed
+        ));
+        eprintln!(
+            "provider=clublog mode=live status={:?} retryable={}",
+            result.status, result.retryable
+        );
+        assert_execution_redacted(
+            &result.result_summary,
+            result.redacted_error.as_deref(),
+            &[&password, &api],
+        );
+    }
+
+    #[test]
+    #[ignore = "release-runner live validation; requires HAM_LIVE_PROVIDER_TESTS=1 and real QRZ Logbook test key"]
+    fn live_qrz_logbook_upload_validation_is_env_gated() {
+        if !live_upload_tests_enabled() {
+            skip_live(
+                "qrz-logbook",
+                "HAM_LIVE_PROVIDER_TESTS/HAM_LIVE_PROVIDER_ALLOW_UPLOAD not set",
+            );
+            return;
+        }
+        let Some(key) = live_env("HAM_QRZ_LOGBOOK_TEST_KEY") else {
+            skip_live("qrz-logbook", "HAM_QRZ_LOGBOOK_TEST_KEY missing");
+            return;
+        };
+        eprintln!(
+            "provider=qrz-logbook mode=live action=upload warning=may_create_provider_side_record"
+        );
+        let secret = serde_json::json!({ "key": key.clone() }).to_string();
+        let result = execute_tier_one_upload(live_upload_input("qrz-logbook", secret)).unwrap();
+        assert!(matches!(
+            result.status,
+            UploadJobStatus::Succeeded | UploadJobStatus::Failed
+        ));
+        eprintln!(
+            "provider=qrz-logbook mode=live status={:?} retryable={}",
+            result.status, result.retryable
+        );
+        assert_execution_redacted(
+            &result.result_summary,
+            result.redacted_error.as_deref(),
+            &[&key],
+        );
+    }
+
+    #[test]
+    #[ignore = "release-runner live validation; requires HAM_LIVE_PROVIDER_TESTS=1 and real eQSL test credentials"]
+    fn live_eqsl_upload_validation_is_env_gated() {
+        if !live_upload_tests_enabled() {
+            skip_live(
+                "eqsl",
+                "HAM_LIVE_PROVIDER_TESTS/HAM_LIVE_PROVIDER_ALLOW_UPLOAD not set",
+            );
+            return;
+        }
+        let (Some(username), Some(password)) = (
+            live_env("HAM_EQSL_TEST_USERNAME"),
+            live_env("HAM_EQSL_TEST_PASSWORD"),
+        ) else {
+            skip_live("eqsl", "provider-specific credentials missing");
+            return;
+        };
+        eprintln!("provider=eqsl mode=live action=upload warning=may_create_provider_side_record");
+        let secret = serde_json::json!({
+            "username": username.clone(),
+            "password": password.clone(),
+        })
+        .to_string();
+        let result = execute_tier_one_upload(live_upload_input("eqsl", secret)).unwrap();
+        assert!(matches!(
+            result.status,
+            UploadJobStatus::Succeeded | UploadJobStatus::Failed
+        ));
+        eprintln!(
+            "provider=eqsl mode=live status={:?} retryable={}",
+            result.status, result.retryable
+        );
+        assert_execution_redacted(
+            &result.result_summary,
+            result.redacted_error.as_deref(),
+            &[&password],
+        );
+    }
+
+    #[test]
+    #[ignore = "release-runner live validation; requires HAM_LIVE_PROVIDER_TESTS=1 and QRZ XML credentials"]
+    fn live_qrz_xml_lookup_validation_is_env_gated() {
+        if !live_provider_tests_enabled() {
+            skip_live("qrz-xml", "HAM_LIVE_PROVIDER_TESTS not set");
+            return;
+        }
+        let (Some(username), Some(password), Some(callsign)) = (
+            live_env("HAM_QRZ_XML_TEST_USERNAME"),
+            live_env("HAM_QRZ_XML_TEST_PASSWORD"),
+            live_env("HAM_QRZ_XML_TEST_CALLSIGN"),
+        ) else {
+            skip_live("qrz-xml", "provider-specific credentials/callsign missing");
+            return;
+        };
+        let secret = serde_json::json!({
+            "username": username.clone(),
+            "password": password.clone(),
+        })
+        .to_string();
+        let result = execute_tier_one_lookup(ProviderLookupInput {
+            provider_id: "qrz-xml".to_owned(),
+            callsign,
+            enabled: true,
+            credential_reference_present: true,
+            credential_resolved: true,
+            credential_secret: Some(secret),
+            mode: ProviderAdapterMode::Live,
+            fake_response: None,
+            force_fake_not_found: false,
+            force_fake_auth_failure: false,
+        })
+        .unwrap();
+        eprintln!(
+            "provider=qrz-xml mode=live status={:?} code={}",
+            result.status,
+            result.error_code.as_deref().unwrap_or("ok")
+        );
+        assert_execution_redacted(
+            &result.result_summary,
+            result.redacted_error.as_deref(),
+            &[&password],
+        );
+        if result.status == ProviderRuntimeStatus::Succeeded {
+            assert!(result.result.is_some());
+        } else {
+            assert!(result.error_code.is_some());
+        }
+    }
+
+    #[test]
+    #[ignore = "release-runner live validation; requires HAM_LIVE_PROVIDER_TESTS=1 and HamQTH credentials"]
+    fn live_hamqth_lookup_validation_is_env_gated() {
+        if !live_provider_tests_enabled() {
+            skip_live("hamqth", "HAM_LIVE_PROVIDER_TESTS not set");
+            return;
+        }
+        let (Some(username), Some(password), Some(callsign)) = (
+            live_env("HAM_HAMQTH_TEST_USERNAME"),
+            live_env("HAM_HAMQTH_TEST_PASSWORD"),
+            live_env("HAM_HAMQTH_TEST_CALLSIGN"),
+        ) else {
+            skip_live("hamqth", "provider-specific credentials/callsign missing");
+            return;
+        };
+        let secret = serde_json::json!({
+            "username": username.clone(),
+            "password": password.clone(),
+        })
+        .to_string();
+        let result = execute_tier_one_lookup(ProviderLookupInput {
+            provider_id: "hamqth".to_owned(),
+            callsign,
+            enabled: true,
+            credential_reference_present: true,
+            credential_resolved: true,
+            credential_secret: Some(secret),
+            mode: ProviderAdapterMode::Live,
+            fake_response: None,
+            force_fake_not_found: false,
+            force_fake_auth_failure: false,
+        })
+        .unwrap();
+        eprintln!(
+            "provider=hamqth mode=live status={:?} code={}",
+            result.status,
+            result.error_code.as_deref().unwrap_or("ok")
+        );
+        assert_execution_redacted(
+            &result.result_summary,
+            result.redacted_error.as_deref(),
+            &[&password],
+        );
+        if result.status == ProviderRuntimeStatus::Succeeded {
+            assert!(result.result.is_some());
+        } else {
+            assert!(result.error_code.is_some());
+        }
+    }
+
+    #[test]
+    #[ignore = "release-runner live validation; requires HAM_LIVE_PROVIDER_TESTS=1 for read-only POTA fetch"]
+    fn live_pota_spot_fetch_validation_is_env_gated() {
+        if !live_provider_tests_enabled() {
+            skip_live("pota-spots", "HAM_LIVE_PROVIDER_TESTS not set");
+            return;
+        }
+        let result = fetch_tier_one_spots(ProviderSpotInput {
+            provider_id: "pota-spots".to_owned(),
+            enabled: true,
+            mode: ProviderAdapterMode::Live,
+            fake_response: None,
+        })
+        .unwrap();
+        eprintln!(
+            "provider=pota-spots mode=live status={:?} count={} code={}",
+            result.status,
+            result.spots.len(),
+            result.error_code.as_deref().unwrap_or("ok")
+        );
+        if result.status == ProviderRuntimeStatus::Succeeded {
+            assert!(result
+                .spots
+                .iter()
+                .all(|spot| spot.source.provider_id == "pota-spots"));
+        } else {
+            assert!(result.error_code.is_some());
+        }
+    }
+
+    #[test]
+    #[ignore = "release-runner live validation; requires HAM_LIVE_PROVIDER_TESTS=1 and DX Cluster host/callsign"]
+    fn live_dx_cluster_read_once_validation_is_env_gated() {
+        if !live_provider_tests_enabled() {
+            skip_live("dx-cluster", "HAM_LIVE_PROVIDER_TESTS not set");
+            return;
+        }
+        let (Some(host), Some(callsign)) = (
+            live_env("HAM_DX_CLUSTER_TEST_HOST"),
+            live_env("HAM_DX_CLUSTER_TEST_CALLSIGN"),
+        ) else {
+            skip_live("dx-cluster", "host/callsign missing");
+            return;
+        };
+        let port = live_env("HAM_DX_CLUSTER_TEST_PORT")
+            .and_then(|value| value.parse::<u16>().ok())
+            .unwrap_or(7300);
+        let timeout_seconds = live_env("HAM_DX_CLUSTER_TEST_TIMEOUT_SECONDS")
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(5)
+            .min(30);
+        let result = execute_dx_cluster_read_once(ProviderDxClusterInput {
+            enabled: true,
+            mode: ProviderAdapterMode::Live,
+            config: DxClusterClientConfig {
+                host,
+                port,
+                callsign,
+                read_lines: 20,
+                timeout_seconds,
+            },
+            fake_lines: Vec::new(),
+        });
+        eprintln!(
+            "provider=dx-cluster mode=live status={:?} count={} code={}",
+            result.status,
+            result.spots.len(),
+            result.error_code.as_deref().unwrap_or("ok")
+        );
+        if result.status != ProviderRuntimeStatus::Succeeded {
+            assert!(result.error_code.is_some());
+        }
+    }
+
+    #[test]
+    fn provider_redaction_masks_secret_values() {
+        let redacted = redact_provider_text(
+            "POST password=swordfish api=abc123",
+            &["swordfish".to_owned(), "abc123".to_owned()],
+        );
+        assert!(!redacted.contains("swordfish"));
+        assert!(!redacted.contains("abc123"));
+        assert!(redacted.contains("[REDACTED]"));
+    }
+
+    #[test]
+    fn provider_http_error_mapping_handles_status_and_timeout() {
+        assert!(matches!(
+            map_provider_http_status(fake_provider_http_response(500, "down")),
+            Err(ProviderHttpError::HttpStatus { status: 500, .. })
+        ));
+        assert!(matches!(
+            provider_http_error_from_transport("operation timed out"),
+            ProviderHttpError::Timeout
+        ));
+    }
+
+    #[test]
+    fn provider_runtime_error_codes_classify_common_failures() {
+        assert_eq!(
+            provider_runtime_error_code(
+                &ProviderRuntimeStatus::NeedsCredentials,
+                "missing credential reference",
+                "",
+            ),
+            "missing_credential"
+        );
+        assert_eq!(
+            provider_runtime_error_code(
+                &ProviderRuntimeStatus::Failed,
+                "QRZ XML authentication failed",
+                "password incorrect",
+            ),
+            "auth_failure"
+        );
+        assert_eq!(
+            provider_runtime_error_code(
+                &ProviderRuntimeStatus::Failed,
+                "provider request failed",
+                "operation timed out",
+            ),
+            "network_timeout"
+        );
+        assert_eq!(
+            provider_runtime_error_code(
+                &ProviderRuntimeStatus::Failed,
+                "malformed provider response",
+                "POTA spot payload is not an array",
+            ),
+            "malformed_response"
+        );
+
+        let lookup = execute_tier_one_lookup(ProviderLookupInput {
+            provider_id: "qrz-xml".to_owned(),
+            callsign: "K1ABC".to_owned(),
+            enabled: true,
+            credential_reference_present: false,
+            credential_resolved: false,
+            credential_secret: None,
+            mode: ProviderAdapterMode::Fake,
+            fake_response: Some(
+                "<QRZDatabase><Session><Error>Not found: K1ABC</Error></Session></QRZDatabase>"
+                    .to_owned(),
+            ),
+            force_fake_not_found: false,
+            force_fake_auth_failure: false,
+        })
+        .unwrap();
+        assert_eq!(lookup.status, ProviderRuntimeStatus::NotFound);
+        assert_eq!(lookup.error_code.as_deref(), Some("callsign_not_found"));
+
+        let spots = fetch_tier_one_spots(ProviderSpotInput {
+            provider_id: "pota-spots".to_owned(),
+            enabled: true,
+            mode: ProviderAdapterMode::Fake,
+            fake_response: Some("{}".to_owned()),
+        })
+        .unwrap();
+        assert_eq!(spots.status, ProviderRuntimeStatus::Failed);
+        assert_eq!(spots.error_code.as_deref(), Some("malformed_response"));
+    }
+
+    #[test]
+    fn live_upload_response_parsers_classify_success_auth_and_retry() {
+        let input = upload_input("clublog");
+        let ok = parse_clublog_upload_response(&input, fake_provider_http_response(200, "QSO OK"))
+            .unwrap();
+        assert_eq!(ok.status, UploadJobStatus::Succeeded);
+
+        let auth =
+            parse_clublog_upload_response(&input, fake_provider_http_response(403, "bad password"))
+                .unwrap();
+        assert_eq!(auth.status, UploadJobStatus::Failed);
+        assert!(!auth.retryable);
+
+        let retry =
+            parse_clublog_upload_response(&input, fake_provider_http_response(500, "temporary"))
+                .unwrap();
+        assert!(retry.retryable);
+
+        let qrz = parse_qrz_logbook_upload_response(
+            &upload_input("qrz-logbook"),
+            fake_provider_http_response(200, "RESULT=OK&LOGID=123"),
+        )
+        .unwrap();
+        assert_eq!(qrz.status, UploadJobStatus::Succeeded);
+
+        let eqsl = parse_eqsl_upload_response(
+            &upload_input("eqsl"),
+            fake_provider_http_response(200, "1 out of 1 records added"),
+        )
+        .unwrap();
+        assert_eq!(eqsl.accepted_count, 1);
+    }
+
+    #[test]
+    fn lookup_xml_parsers_extract_safe_fields() {
+        let qrz = parse_qrz_xml_lookup_response(
+            "<QRZDatabase><Callsign><call>K1ABC</call><fname>Ada</fname><name>Lovelace</name><addr2>Cleveland</addr2><country>United States</country><grid>EN91</grid><dxcc>291</dxcc></Callsign></QRZDatabase>",
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(qrz.normalized_callsign, "K1ABC");
+        assert_eq!(qrz.grid.as_deref(), Some("EN91"));
+        assert_eq!(qrz.source_provider, "qrz-xml");
+
+        let hamqth = parse_hamqth_lookup_response(
+            "<HamQTH><search><callsign>K1ABC</callsign><nick>Ada</nick><qth>Cleveland</qth><grid>EN91</grid><dxcc>291</dxcc></search></HamQTH>",
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(hamqth.source_provider, "hamqth");
+        assert_eq!(hamqth.name.as_deref(), Some("Ada"));
+    }
+
+    #[test]
+    fn spot_fixture_parsers_normalize_pota_and_sota() {
+        let pota = parse_pota_spots_json(
+            r#"[{"activator":"k1abc","reference":"US-0001","frequency":14.074,"mode":"FT8","spotTime":"2026-07-08T18:00:00Z","comments":"test"}]"#,
+        )
+        .unwrap();
+        assert_eq!(pota[0].frequency_hz, 14_074_000);
+        assert_eq!(
+            pota_spot_to_spot(pota[0].clone()).reference.as_deref(),
+            Some("US-0001")
+        );
+
+        let sota = parse_sota_spots_json(
+            r#"[{"activatorCallsign":"k1abc","summitCode":"W8O/NE-001","frequency":14.285,"mode":"SSB","timeStamp":"2026-07-08T18:00:00Z","comments":"cq"}]"#,
+        )
+        .unwrap();
+        assert_eq!(
+            sota_spot_to_spot(sota[0].clone()).reference.as_deref(),
+            Some("W8O/NE-001")
+        );
+        assert!(parse_pota_spots_json("{}").is_err());
+        assert!(sota_spots_request().is_err());
+    }
+
+    #[test]
+    fn dx_cluster_client_config_and_malformed_lines_are_safe() {
+        let config = DxClusterClientConfig {
+            host: "cluster.example.test".to_owned(),
+            port: 7300,
+            callsign: "K1ABC".to_owned(),
+            read_lines: 10,
+            timeout_seconds: 3,
+        };
+        assert_eq!(config.port, 7300);
+        assert!(parse_dx_cluster_line("not a spot").is_none());
     }
 
     #[test]

@@ -8,12 +8,17 @@ use std::{
 
 use chrono::{DateTime, Utc};
 use ham_core::{
-    adif_for_upload_job, default_log_directory, default_service_registry, export_adif, import_adif,
-    qso_map_objects, station_markers_from_profiles, submit_proposal, AdifImportOptions, Coordinate,
-    CoreEventEnvelope, EquipmentItem, EquipmentStatus, EquipmentType, InMemoryEventBus,
-    InMemoryLogbookEventStore, JsonlLogbookEventStore, LogbookEventStore, MapLayerStack,
-    NetControlProjection, OperatorRole, Projection, ProposalContext, RegisteredServiceProvider,
-    StationProfile,
+    adif_for_upload_job, default_credential_store, default_log_directory, default_service_registry,
+    execute_dx_cluster_read_once, execute_tier_one_lookup, execute_tier_one_upload, export_adif,
+    fetch_tier_one_spots, import_adif, qso_map_objects, station_markers_from_profiles,
+    submit_proposal, test_tier_one_provider, AdifImportOptions, Coordinate, CoreEventEnvelope,
+    CredentialStore, DxClusterClientConfig, EquipmentItem, EquipmentStatus, EquipmentType,
+    InMemoryEventBus, InMemoryLogbookEventStore, JsonlLogbookEventStore, LogbookEventStore,
+    MapLayerStack, NetControlProjection, OperatorRole, Projection, ProposalContext,
+    ProviderAdapterMode, ProviderAdapterTestInput, ProviderDxClusterInput, ProviderLookupExecution,
+    ProviderLookupInput, ProviderRuntimeStatus, ProviderSpotExecution, ProviderSpotInput,
+    ProviderUploadExecution, ProviderUploadInput, RegisteredServiceProvider, StationProfile,
+    UploadJobStatus,
 };
 use ham_plugin_sdk::{
     PluginCapability, PluginManifest, ProposalEnvelope, PROPOSAL_ACTIVATION_CREATE,
@@ -357,6 +362,29 @@ pub struct ProviderPatchRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProviderTestRequest {
     pub logbook_id: Uuid,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProviderLookupRequest {
+    pub logbook_id: Uuid,
+    pub callsign: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProviderSpotFetchRequest {
+    pub logbook_id: Uuid,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DxClusterConnectRequest {
+    pub logbook_id: Uuid,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DxClusterReadRequest {
+    pub logbook_id: Uuid,
+    pub read_lines: Option<usize>,
+    pub timeout_seconds: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1265,6 +1293,7 @@ pub struct HostedServer {
     metadata_store: Arc<dyn HostedMetadataStore>,
     store: Arc<dyn LogbookEventStore>,
     bus: Arc<InMemoryEventBus>,
+    credential_store: Arc<Mutex<Box<dyn CredentialStore>>>,
 }
 
 pub fn default_metadata_store_path() -> PathBuf {
@@ -1282,6 +1311,15 @@ pub fn default_server_official_event_log_path() -> PathBuf {
                 .join("official-events.jsonl")
         },
         PathBuf::from,
+    )
+}
+
+pub fn default_server_credential_store() -> Box<dyn CredentialStore> {
+    let allow_insecure =
+        std::env::var("HAM_PLATFORM_ALLOW_INSECURE_DEV_CREDENTIALS").as_deref() == Ok("1");
+    default_credential_store(
+        default_log_directory().join("server").join("credentials"),
+        allow_insecure,
     )
 }
 
@@ -1342,6 +1380,7 @@ impl HostedServer {
             metadata_store,
             store: Arc::new(InMemoryLogbookEventStore::new()),
             bus: Arc::new(InMemoryEventBus::new(256)),
+            credential_store: Arc::new(Mutex::new(default_server_credential_store())),
         })
     }
 
@@ -1355,7 +1394,18 @@ impl HostedServer {
             metadata_store,
             store,
             bus: Arc::new(InMemoryEventBus::new(256)),
+            credential_store: Arc::new(Mutex::new(default_server_credential_store())),
         })
+    }
+
+    pub fn with_credential_store_for_tests(
+        self,
+        credential_store: Box<dyn CredentialStore>,
+    ) -> Self {
+        Self {
+            credential_store: Arc::new(Mutex::new(credential_store)),
+            ..self
+        }
     }
 
     pub async fn handle(&self, request: ApiRequest) -> ApiResponse {
@@ -1509,6 +1559,24 @@ impl HostedServer {
             }
             ("POST", ["api", "v1", "providers", provider_id, "test"]) => {
                 self.test_provider(&request, provider_id).await
+            }
+            ("POST", ["api", "v1", "providers", provider_id, "lookup"]) => {
+                self.lookup_provider(&request, provider_id).await
+            }
+            ("GET", ["api", "v1", "providers", provider_id, "spots"]) => {
+                self.fetch_provider_spots(&request, provider_id).await
+            }
+            ("POST", ["api", "v1", "providers", "dx-cluster", "connect"]) => {
+                self.dx_cluster_connect(&request).await
+            }
+            ("POST", ["api", "v1", "providers", "dx-cluster", "read"]) => {
+                self.dx_cluster_read(&request).await
+            }
+            ("POST", ["api", "v1", "providers", "dx-cluster", "disconnect"]) => {
+                self.dx_cluster_disconnect(&request).await
+            }
+            ("GET", ["api", "v1", "providers", "dx-cluster", "status"]) => {
+                self.dx_cluster_status(&request).await
             }
             ("GET", ["api", "v1", "uploads"]) => self.list_uploads(&request).await,
             ("POST", ["api", "v1", "uploads", "run"]) => self.run_upload(&request).await,
@@ -2947,9 +3015,16 @@ impl HostedServer {
                         .filter(|setting| setting.account_id == auth.session.account_id)
                         .cloned()
                 });
+                let health = setting
+                    .as_ref()
+                    .map(provider_health_summary)
+                    .unwrap_or_else(|| {
+                        provider_health_for_missing_setting(&provider.metadata.provider_id)
+                    });
                 json!({
                     "provider": provider,
                     "setting": setting,
+                    "health": health,
                 })
             })
             .collect::<Vec<_>>();
@@ -2972,7 +3047,11 @@ impl HostedServer {
             .get(&provider_setting_key(logbook_id, provider_id))
             .filter(|setting| setting.account_id == auth.session.account_id)
             .cloned();
-        Ok(json!({"provider": provider, "setting": setting}))
+        let health = setting
+            .as_ref()
+            .map(provider_health_summary)
+            .unwrap_or_else(|| provider_health_for_missing_setting(provider_id));
+        Ok(json!({"provider": provider, "setting": setting, "health": health}))
     }
 
     async fn patch_provider(
@@ -3025,49 +3104,328 @@ impl HostedServer {
             .require_logbook_role(request, input.logbook_id, LogbookAccess::Admin)
             .await?;
         let provider = provider_metadata(provider_id).ok_or(ApiError::NotFound)?;
-        let state = self.state.read().await;
+        let mut state = self.state.write().await;
         let setting = state
             .provider_settings
             .get(&provider_setting_key(input.logbook_id, provider_id))
             .filter(|setting| setting.account_id == auth.session.account_id)
             .cloned();
-        let credential_present = setting
-            .as_ref()
-            .and_then(|setting| setting.credential_id.as_ref())
-            .is_some();
+        let mode = provider_adapter_mode(setting.as_ref());
+        let credential = resolve_provider_credential(
+            setting.as_ref(),
+            &self.credential_store,
+            mode == ProviderAdapterMode::Live,
+        );
+        let enabled = setting.as_ref().is_some_and(|setting| setting.enabled);
+        let capability = provider.metadata.capabilities.first().cloned();
+        let adapter_result = test_tier_one_provider(ProviderAdapterTestInput {
+            provider_id: provider_id.to_owned(),
+            capability: capability.clone(),
+            enabled,
+            credential_reference_present: credential.reference_present,
+            credential_resolved: credential.resolved,
+            mode,
+        })
+        .map_err(|error| ApiError::BadRequest(error.to_string()))?;
+        if let Some(setting) = state
+            .provider_settings
+            .get_mut(&provider_setting_key(input.logbook_id, provider_id))
+            .filter(|setting| setting.account_id == auth.session.account_id)
+        {
+            record_provider_test_result(setting, &adapter_result, credential.status.as_str());
+            self.persist_metadata(&state)?;
+        }
         let mock_mode = setting
             .as_ref()
             .is_some_and(|setting| config_bool(&setting.config, "mock_mode"));
-        let enabled = setting.as_ref().is_some_and(|setting| setting.enabled);
-        let requires_credential = !provider.metadata.required_credentials.is_empty()
-            || !provider.metadata.required_config_keys.is_empty();
         let credential_reference_status = if mock_mode {
             "mock_bypassed"
-        } else if requires_credential && !credential_present {
+        } else if adapter_result.credential_required && !credential.reference_present {
             "missing"
-        } else if credential_present {
-            "reference_present"
+        } else if credential.resolved {
+            "resolved"
+        } else if credential.reference_present {
+            credential.status.as_str()
         } else {
             "not_required"
         };
-        let credential_reference_resolves =
-            mock_mode || credential_reference_status == "reference_present";
-        let (status, diagnostic_message) = if mock_mode {
-            ("ok", "fake provider test succeeded")
-        } else if requires_credential && !credential_present {
-            ("missing_credential", "credential reference is required")
-        } else {
-            ("ok", "provider credential reference is structurally valid")
-        };
+        let diagnostic_message = adapter_result
+            .redacted_diagnostics
+            .first()
+            .cloned()
+            .unwrap_or_else(|| "provider test completed".to_owned());
         Ok(json!({
             "provider_id": provider_id,
+            "capability_tested": adapter_result.capability_tested,
             "enabled": enabled,
-            "credential_reference_present": credential_present,
+            "credential_required": adapter_result.credential_required,
+            "credential_reference_present": credential.reference_present,
             "credential_reference_status": credential_reference_status,
-            "credential_reference_resolves": credential_reference_resolves,
-            "test_status": status,
+            "credential_reference_resolves": adapter_result.credential_resolved || mock_mode,
+            "credential_resolved": adapter_result.credential_resolved,
+            "test_status": adapter_result.test_status,
+            "provider_health_state": adapter_result.provider_health_state,
+            "redacted_diagnostics": adapter_result.redacted_diagnostics,
+            "next_recommended_action": adapter_result.next_recommended_action,
             "diagnostic_message": diagnostic_message,
-            "redacted_error": Value::Null
+            "redacted_error": if adapter_result.test_status == "ok" { Value::Null } else { json!(diagnostic_message) }
+        }))
+    }
+
+    async fn lookup_provider(
+        &self,
+        request: &ApiRequest,
+        provider_id: &str,
+    ) -> Result<Value, ApiError> {
+        let input: ProviderLookupRequest = parse_json(&request.body)?;
+        let auth = self
+            .require_logbook_role(request, input.logbook_id, LogbookAccess::Read)
+            .await?;
+        if !matches!(provider_id, "qrz-xml" | "hamqth") {
+            return Err(ApiError::NotFound);
+        }
+        provider_metadata(provider_id).ok_or(ApiError::NotFound)?;
+        let callsign = input.callsign.trim().to_ascii_uppercase();
+        if callsign.is_empty() {
+            return Err(ApiError::BadRequest("callsign is required".to_owned()));
+        }
+        let mut state = self.state.write().await;
+        let key = provider_setting_key(input.logbook_id, provider_id);
+        let setting = state
+            .provider_settings
+            .get(&key)
+            .filter(|setting| setting.account_id == auth.session.account_id)
+            .cloned();
+        let mode = provider_adapter_mode(setting.as_ref());
+        let credential = resolve_provider_credential(
+            setting.as_ref(),
+            &self.credential_store,
+            mode == ProviderAdapterMode::Live,
+        );
+        let execution = execute_tier_one_lookup(ProviderLookupInput {
+            provider_id: provider_id.to_owned(),
+            callsign,
+            enabled: setting.as_ref().is_some_and(|setting| setting.enabled),
+            credential_reference_present: credential.reference_present,
+            credential_resolved: credential.resolved,
+            credential_secret: credential.secret.clone(),
+            mode,
+            fake_response: setting
+                .as_ref()
+                .and_then(|setting| config_string(&setting.config, "fake_response")),
+            force_fake_not_found: setting
+                .as_ref()
+                .is_some_and(|setting| config_bool(&setting.config, "fake_not_found")),
+            force_fake_auth_failure: setting
+                .as_ref()
+                .is_some_and(|setting| config_bool(&setting.config, "fake_auth_failure")),
+        })
+        .map_err(|error| ApiError::BadRequest(error.to_string()))?;
+        if let Some(setting) = state
+            .provider_settings
+            .get_mut(&key)
+            .filter(|setting| setting.account_id == auth.session.account_id)
+        {
+            record_lookup_provider_status(setting, &execution, mode, &credential);
+            self.persist_metadata(&state)?;
+        }
+        let health = setting
+            .as_ref()
+            .map(provider_health_summary)
+            .unwrap_or_else(|| provider_health_for_missing_setting(provider_id));
+        Ok(json!({
+            "provider_id": provider_id,
+            "mode": mode,
+            "ok": execution.status == ProviderRuntimeStatus::Succeeded,
+            "status": execution.status,
+            "result": execution.result,
+            "result_summary": execution.result_summary,
+            "failure_reason": execution.failure_reason,
+            "error_code": execution.error_code,
+            "redacted_error": execution.redacted_error,
+            "credential_reference_present": credential.reference_present,
+            "credential_reference_status": credential.status,
+            "credential_resolved": credential.resolved,
+            "health": health,
+        }))
+    }
+
+    async fn fetch_provider_spots(
+        &self,
+        request: &ApiRequest,
+        provider_id: &str,
+    ) -> Result<Value, ApiError> {
+        let logbook_id = logbook_id_from_query(request)?;
+        let auth = self
+            .require_logbook_role(request, logbook_id, LogbookAccess::Read)
+            .await?;
+        if provider_id != "pota-spots" {
+            return Err(ApiError::NotFound);
+        }
+        provider_metadata(provider_id).ok_or(ApiError::NotFound)?;
+        let mut state = self.state.write().await;
+        let key = provider_setting_key(logbook_id, provider_id);
+        let setting = state
+            .provider_settings
+            .get(&key)
+            .filter(|setting| setting.account_id == auth.session.account_id)
+            .cloned();
+        let mode = provider_adapter_mode(setting.as_ref());
+        let execution = fetch_tier_one_spots(ProviderSpotInput {
+            provider_id: provider_id.to_owned(),
+            enabled: setting.as_ref().is_some_and(|setting| setting.enabled),
+            mode,
+            fake_response: setting
+                .as_ref()
+                .and_then(|setting| config_string(&setting.config, "fake_response")),
+        })
+        .map_err(|error| ApiError::BadRequest(error.to_string()))?;
+        if let Some(setting) = state
+            .provider_settings
+            .get_mut(&key)
+            .filter(|setting| setting.account_id == auth.session.account_id)
+        {
+            record_spot_provider_status(setting, &execution, mode);
+            self.persist_metadata(&state)?;
+        }
+        let health = setting
+            .as_ref()
+            .map(provider_health_summary)
+            .unwrap_or_else(|| provider_health_for_missing_setting(provider_id));
+        Ok(json!({
+            "provider_id": provider_id,
+            "mode": mode,
+            "ok": execution.status == ProviderRuntimeStatus::Succeeded,
+            "status": execution.status,
+            "spots": execution.spots,
+            "result_summary": execution.result_summary,
+            "failure_reason": execution.failure_reason,
+            "error_code": execution.error_code,
+            "redacted_error": execution.redacted_error,
+            "health": health,
+        }))
+    }
+
+    async fn dx_cluster_connect(&self, request: &ApiRequest) -> Result<Value, ApiError> {
+        let input: DxClusterConnectRequest = parse_json(&request.body)?;
+        let auth = self
+            .require_logbook_role(request, input.logbook_id, LogbookAccess::Read)
+            .await?;
+        let mut state = self.state.write().await;
+        let key = provider_setting_key(input.logbook_id, "dx-cluster");
+        let setting = state
+            .provider_settings
+            .get_mut(&key)
+            .filter(|setting| setting.account_id == auth.session.account_id)
+            .ok_or(ApiError::NotFound)?;
+        if !setting.enabled {
+            record_dx_cluster_status(setting, "disabled", "provider disabled", None);
+        } else {
+            record_dx_cluster_status(
+                setting,
+                "connected",
+                "bounded read-once session ready",
+                None,
+            );
+        }
+        let status = provider_health_summary(setting);
+        self.persist_metadata(&state)?;
+        Ok(json!({
+            "provider_id": "dx-cluster",
+            "connection_state": status["dx_cluster_connection_state"],
+            "status": status,
+        }))
+    }
+
+    async fn dx_cluster_read(&self, request: &ApiRequest) -> Result<Value, ApiError> {
+        let input: DxClusterReadRequest = parse_json(&request.body)?;
+        let auth = self
+            .require_logbook_role(request, input.logbook_id, LogbookAccess::Read)
+            .await?;
+        let mut state = self.state.write().await;
+        let key = provider_setting_key(input.logbook_id, "dx-cluster");
+        let setting = state
+            .provider_settings
+            .get(&key)
+            .filter(|setting| setting.account_id == auth.session.account_id)
+            .cloned()
+            .ok_or(ApiError::NotFound)?;
+        let mode = provider_adapter_mode(Some(&setting));
+        let config =
+            dx_cluster_config_from_setting(&setting, input.read_lines, input.timeout_seconds)?;
+        let fake_lines = config_string(&setting.config, "fake_lines")
+            .map(|value| value.lines().map(str::to_owned).collect())
+            .unwrap_or_else(|| vec!["DX de K1ABC: 14074.0 JA1XYZ FT8 loud 1234Z".to_owned()]);
+        let execution = execute_dx_cluster_read_once(ProviderDxClusterInput {
+            enabled: setting.enabled,
+            mode,
+            config,
+            fake_lines,
+        });
+        if let Some(setting) = state
+            .provider_settings
+            .get_mut(&key)
+            .filter(|setting| setting.account_id == auth.session.account_id)
+        {
+            record_spot_provider_status(setting, &execution, mode);
+            record_dx_cluster_status(
+                setting,
+                "connected",
+                &execution.result_summary,
+                execution.redacted_error.as_deref(),
+            );
+            self.persist_metadata(&state)?;
+        }
+        Ok(json!({
+            "provider_id": "dx-cluster",
+            "mode": mode,
+            "ok": execution.status == ProviderRuntimeStatus::Succeeded,
+            "status": execution.status,
+            "spots": execution.spots,
+            "result_summary": execution.result_summary,
+            "failure_reason": execution.failure_reason,
+            "error_code": execution.error_code,
+            "redacted_error": execution.redacted_error,
+        }))
+    }
+
+    async fn dx_cluster_disconnect(&self, request: &ApiRequest) -> Result<Value, ApiError> {
+        let input: DxClusterConnectRequest = parse_json(&request.body)?;
+        let auth = self
+            .require_logbook_role(request, input.logbook_id, LogbookAccess::Read)
+            .await?;
+        let mut state = self.state.write().await;
+        let key = provider_setting_key(input.logbook_id, "dx-cluster");
+        let setting = state
+            .provider_settings
+            .get_mut(&key)
+            .filter(|setting| setting.account_id == auth.session.account_id)
+            .ok_or(ApiError::NotFound)?;
+        record_dx_cluster_status(setting, "disconnected", "DX Cluster disconnected", None);
+        let status = provider_health_summary(setting);
+        self.persist_metadata(&state)?;
+        Ok(json!({
+            "provider_id": "dx-cluster",
+            "connection_state": "disconnected",
+            "status": status,
+        }))
+    }
+
+    async fn dx_cluster_status(&self, request: &ApiRequest) -> Result<Value, ApiError> {
+        let logbook_id = logbook_id_from_query(request)?;
+        let auth = self
+            .require_logbook_role(request, logbook_id, LogbookAccess::Read)
+            .await?;
+        let state = self.state.read().await;
+        let setting = state
+            .provider_settings
+            .get(&provider_setting_key(logbook_id, "dx-cluster"))
+            .filter(|setting| setting.account_id == auth.session.account_id)
+            .cloned()
+            .ok_or(ApiError::NotFound)?;
+        Ok(json!({
+            "provider_id": "dx-cluster",
+            "status": provider_health_summary(&setting),
         }))
     }
 
@@ -3136,7 +3494,13 @@ impl HostedServer {
             created_at: now,
             updated_at: now,
         };
-        execute_hosted_upload_job(&mut job, &state, input.force_fail.unwrap_or(false));
+        let upload_execution = execute_hosted_upload_job(
+            &mut job,
+            &state,
+            &self.credential_store,
+            input.force_fail.unwrap_or(false),
+        )?;
+        record_upload_provider_status(&mut state, &job, &upload_execution);
         state.upload_jobs.insert(job.upload_id, job.clone());
         self.persist_metadata(&state)?;
         Ok(json!({"upload": job, "deduplicated": false}))
@@ -3161,8 +3525,10 @@ impl HostedServer {
             return Ok(json!({"upload": job, "deduplicated": true}));
         }
         job.retry_count += 1;
-        execute_hosted_upload_job(job, &snapshot, false);
+        let upload_execution =
+            execute_hosted_upload_job(job, &snapshot, &self.credential_store, false)?;
         let job = job.clone();
+        record_upload_provider_status(&mut state, &job, &upload_execution);
         self.persist_metadata(&state)?;
         Ok(json!({"upload": job, "deduplicated": false}))
     }
@@ -3982,35 +4348,445 @@ fn config_bool(config: &Map<String, Value>, key: &str) -> bool {
     config.get(key).and_then(Value::as_bool).unwrap_or(false)
 }
 
-fn execute_hosted_upload_job(job: &mut HostedUploadJob, state: &ServerState, force_fail: bool) {
+fn config_string(config: &Map<String, Value>, key: &str) -> Option<String> {
+    config
+        .get(key)
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .filter(|value| !value.trim().is_empty())
+}
+
+fn config_u64(config: &Map<String, Value>, key: &str) -> Option<u64> {
+    config.get(key).and_then(Value::as_u64)
+}
+
+fn provider_adapter_mode(setting: Option<&HostedProviderSetting>) -> ProviderAdapterMode {
+    if setting.is_some_and(|setting| config_bool(&setting.config, "live_test")) {
+        ProviderAdapterMode::Live
+    } else {
+        ProviderAdapterMode::Fake
+    }
+}
+
+fn provider_health_summary(setting: &HostedProviderSetting) -> Value {
+    let mode = provider_adapter_mode(Some(setting));
+    let credential_reference_present = setting.credential_id.is_some();
+    let credential_reference_status = setting
+        .config
+        .get("credential_reference_status")
+        .cloned()
+        .unwrap_or_else(|| {
+            if credential_reference_present {
+                json!("present")
+            } else {
+                json!("not_present")
+            }
+        });
+    let provider_health_state = setting
+        .config
+        .get("provider_health_state")
+        .cloned()
+        .unwrap_or_else(|| {
+            if setting.enabled {
+                json!("unknown")
+            } else {
+                json!("disabled")
+            }
+        });
+    let last_error = setting
+        .config
+        .get("last_redacted_error")
+        .or_else(|| setting.config.get("last_diagnostic_message"))
+        .cloned();
+    json!({
+        "provider_id": setting.provider_id,
+        "capability": setting.config.get("last_capability").cloned().unwrap_or(Value::Null),
+        "mode": mode,
+        "enabled": setting.enabled,
+        "credential_required": provider_metadata(&setting.provider_id)
+            .is_some_and(|provider| !provider.metadata.required_config_keys.is_empty() || !provider.metadata.required_credentials.is_empty()),
+        "credential_reference_present": credential_reference_present,
+        "credential_reference_status": credential_reference_status,
+        "credential_resolved": setting.config.get("credential_resolved").cloned().unwrap_or(Value::Null),
+        "last_test_time": setting.config.get("last_tested_at").cloned().unwrap_or(Value::Null),
+        "last_success_time": setting.config.get("last_successful_run").cloned().unwrap_or(Value::Null),
+        "last_failure_time": setting.config.get("last_failure").cloned().unwrap_or(Value::Null),
+        "last_run_time": setting.config.get("last_run_at").cloned().unwrap_or(Value::Null),
+        "last_error": last_error.unwrap_or(Value::Null),
+        "last_error_code": setting.config.get("last_error_code").cloned().unwrap_or(Value::Null),
+        "last_run_mode": setting.config.get("last_run_mode").cloned().unwrap_or(json!(mode)),
+        "provider_health_state": provider_health_state,
+        "next_recommended_action": setting.config.get("next_recommended_action").cloned().unwrap_or_else(|| {
+            if setting.enabled {
+                json!("run provider test or fake runtime operation before enabling release validation")
+            } else {
+                json!("enable the provider for this logbook")
+            }
+        }),
+        "dx_cluster_connection_state": setting.config.get("dx_cluster_connection_state").cloned().unwrap_or(Value::Null),
+    })
+}
+
+fn provider_health_for_missing_setting(provider_id: &str) -> Value {
+    json!({
+        "provider_id": provider_id,
+        "mode": "fake",
+        "enabled": false,
+        "credential_required": provider_metadata(provider_id)
+            .is_some_and(|provider| !provider.metadata.required_config_keys.is_empty() || !provider.metadata.required_credentials.is_empty()),
+        "credential_reference_present": false,
+        "credential_reference_status": "not_present",
+        "credential_resolved": false,
+        "provider_health_state": "disabled",
+        "next_recommended_action": "create or enable provider settings for this logbook",
+    })
+}
+
+fn dx_cluster_config_from_setting(
+    setting: &HostedProviderSetting,
+    read_lines: Option<usize>,
+    timeout_seconds: Option<u64>,
+) -> Result<DxClusterClientConfig, ApiError> {
+    let host = config_string(&setting.config, "host")
+        .or_else(|| config_string(&setting.config, "dx_cluster_host"))
+        .unwrap_or_else(|| "dxc.nc7j.com".to_owned());
+    let port = config_u64(&setting.config, "port")
+        .or_else(|| config_u64(&setting.config, "dx_cluster_port"))
+        .unwrap_or(7300);
+    let port = u16::try_from(port)
+        .map_err(|_| ApiError::BadRequest("DX Cluster port is out of range".to_owned()))?;
+    let callsign = config_string(&setting.config, "callsign")
+        .or_else(|| config_string(&setting.config, "login_callsign"))
+        .unwrap_or_else(|| "N0CALL".to_owned());
+    Ok(DxClusterClientConfig {
+        host,
+        port,
+        callsign,
+        read_lines: read_lines
+            .or_else(|| config_u64(&setting.config, "read_lines").map(|value| value as usize))
+            .unwrap_or(20)
+            .min(200),
+        timeout_seconds: timeout_seconds
+            .or_else(|| config_u64(&setting.config, "timeout_seconds"))
+            .unwrap_or(5)
+            .min(30),
+    })
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct HostedCredentialResolution {
+    reference_present: bool,
+    resolved: bool,
+    status: String,
+    secret: Option<String>,
+}
+
+fn resolve_provider_credential(
+    setting: Option<&HostedProviderSetting>,
+    credential_store: &Arc<Mutex<Box<dyn CredentialStore>>>,
+    resolve_live_secret: bool,
+) -> HostedCredentialResolution {
+    let Some(credential_id) = setting.and_then(|setting| setting.credential_id.as_ref()) else {
+        return HostedCredentialResolution {
+            reference_present: false,
+            resolved: false,
+            status: "not_present".to_owned(),
+            secret: None,
+        };
+    };
+    let Ok(credential_id) = Uuid::parse_str(credential_id) else {
+        return HostedCredentialResolution {
+            reference_present: true,
+            resolved: false,
+            status: "invalid_reference".to_owned(),
+            secret: None,
+        };
+    };
+    let mut store = credential_store
+        .lock()
+        .expect("credential store mutex should not be poisoned");
+    let mut secret = None;
+    let resolved = if resolve_live_secret {
+        match store.retrieve_secret(credential_id) {
+            Ok(value) => {
+                secret = Some(value);
+                true
+            }
+            Err(_) => false,
+        }
+    } else {
+        store.test_credential(credential_id).unwrap_or(false)
+    };
+    HostedCredentialResolution {
+        reference_present: true,
+        resolved,
+        status: if resolved {
+            "resolved".to_owned()
+        } else {
+            "unresolved".to_owned()
+        },
+        secret,
+    }
+}
+
+fn record_provider_test_result(
+    setting: &mut HostedProviderSetting,
+    result: &ham_core::ProviderAdapterTestResult,
+    credential_status: &str,
+) {
+    setting
+        .config
+        .insert("last_test_status".to_owned(), json!(result.test_status));
+    setting.config.insert(
+        "provider_health_state".to_owned(),
+        json!(result.provider_health_state),
+    );
+    setting.config.insert(
+        "credential_reference_status".to_owned(),
+        json!(credential_status),
+    );
+    setting
+        .config
+        .insert("last_tested_at".to_owned(), json!(result.checked_at));
+    setting.config.insert(
+        "last_diagnostic_message".to_owned(),
+        json!(result
+            .redacted_diagnostics
+            .first()
+            .cloned()
+            .unwrap_or_default()),
+    );
+    setting.updated_at = Utc::now();
+}
+
+fn record_upload_provider_status(
+    state: &mut ServerState,
+    job: &HostedUploadJob,
+    result: &ProviderUploadExecution,
+) {
+    let Some(setting) = state
+        .provider_settings
+        .get_mut(&provider_setting_key(job.logbook_id, &job.provider_id))
+    else {
+        return;
+    };
+    setting
+        .config
+        .insert("last_run_at".to_owned(), json!(job.updated_at));
+    setting.config.insert(
+        "last_result_summary".to_owned(),
+        json!(result.result_summary),
+    );
+    setting.config.insert(
+        "last_provider_correlation_id".to_owned(),
+        json!(result.provider_correlation_id),
+    );
+    match job.status {
+        HostedUploadStatus::Succeeded => {
+            setting
+                .config
+                .insert("last_successful_run".to_owned(), json!(job.updated_at));
+            setting
+                .config
+                .insert("provider_health_state".to_owned(), json!("healthy"));
+            setting.config.remove("last_failure");
+        }
+        HostedUploadStatus::Failed
+        | HostedUploadStatus::Retryable
+        | HostedUploadStatus::Skipped => {
+            setting
+                .config
+                .insert("last_failure".to_owned(), json!(job.updated_at));
+            setting
+                .config
+                .insert("provider_health_state".to_owned(), json!("unavailable"));
+        }
+        HostedUploadStatus::Queued | HostedUploadStatus::Running => {}
+    }
+    setting.updated_at = Utc::now();
+}
+
+fn record_lookup_provider_status(
+    setting: &mut HostedProviderSetting,
+    result: &ProviderLookupExecution,
+    mode: ProviderAdapterMode,
+    credential: &HostedCredentialResolution,
+) {
+    setting
+        .config
+        .insert("last_capability".to_owned(), json!("lookup.callsign.basic"));
+    setting
+        .config
+        .insert("last_run_at".to_owned(), json!(result.checked_at));
+    setting
+        .config
+        .insert("last_run_mode".to_owned(), json!(mode));
+    setting.config.insert(
+        "last_result_summary".to_owned(),
+        json!(result.result_summary),
+    );
+    setting
+        .config
+        .insert("last_error_code".to_owned(), json!(result.error_code));
+    setting.config.insert(
+        "credential_reference_status".to_owned(),
+        json!(credential.status),
+    );
+    setting
+        .config
+        .insert("credential_resolved".to_owned(), json!(credential.resolved));
+    record_runtime_status(
+        setting,
+        &result.status,
+        result.checked_at,
+        result.redacted_error.clone(),
+    );
+}
+
+fn record_spot_provider_status(
+    setting: &mut HostedProviderSetting,
+    result: &ProviderSpotExecution,
+    mode: ProviderAdapterMode,
+) {
+    setting
+        .config
+        .insert("last_capability".to_owned(), json!("spotting"));
+    setting
+        .config
+        .insert("last_run_at".to_owned(), json!(result.checked_at));
+    setting
+        .config
+        .insert("last_run_mode".to_owned(), json!(mode));
+    setting.config.insert(
+        "last_result_summary".to_owned(),
+        json!(result.result_summary),
+    );
+    setting
+        .config
+        .insert("last_error_code".to_owned(), json!(result.error_code));
+    record_runtime_status(
+        setting,
+        &result.status,
+        result.checked_at,
+        result.redacted_error.clone(),
+    );
+}
+
+fn record_runtime_status(
+    setting: &mut HostedProviderSetting,
+    status: &ProviderRuntimeStatus,
+    checked_at: DateTime<Utc>,
+    redacted_error: Option<String>,
+) {
+    match status {
+        ProviderRuntimeStatus::Succeeded => {
+            setting
+                .config
+                .insert("last_successful_run".to_owned(), json!(checked_at));
+            setting
+                .config
+                .insert("provider_health_state".to_owned(), json!("healthy"));
+            setting.config.remove("last_failure");
+            setting.config.remove("last_redacted_error");
+        }
+        ProviderRuntimeStatus::NeedsCredentials => {
+            setting
+                .config
+                .insert("last_failure".to_owned(), json!(checked_at));
+            setting
+                .config
+                .insert("provider_health_state".to_owned(), json!("missing_config"));
+            if let Some(error) = redacted_error {
+                setting
+                    .config
+                    .insert("last_redacted_error".to_owned(), json!(error));
+            }
+        }
+        ProviderRuntimeStatus::Disabled => {
+            setting
+                .config
+                .insert("provider_health_state".to_owned(), json!("disabled"));
+        }
+        ProviderRuntimeStatus::NotFound
+        | ProviderRuntimeStatus::Failed
+        | ProviderRuntimeStatus::LiveModeNotConfigured => {
+            setting
+                .config
+                .insert("last_failure".to_owned(), json!(checked_at));
+            setting
+                .config
+                .insert("provider_health_state".to_owned(), json!("unavailable"));
+            if let Some(error) = redacted_error {
+                setting
+                    .config
+                    .insert("last_redacted_error".to_owned(), json!(error));
+            }
+        }
+    }
+    setting.updated_at = Utc::now();
+}
+
+fn record_dx_cluster_status(
+    setting: &mut HostedProviderSetting,
+    state: &str,
+    message: &str,
+    redacted_error: Option<&str>,
+) {
+    let now = Utc::now();
+    setting
+        .config
+        .insert("dx_cluster_connection_state".to_owned(), json!(state));
+    setting.config.insert("last_run_at".to_owned(), json!(now));
+    setting
+        .config
+        .insert("last_result_summary".to_owned(), json!(message));
+    if let Some(error) = redacted_error {
+        setting
+            .config
+            .insert("last_redacted_error".to_owned(), json!(error));
+    }
+    setting.updated_at = now;
+}
+
+fn execute_hosted_upload_job(
+    job: &mut HostedUploadJob,
+    state: &ServerState,
+    credential_store: &Arc<Mutex<Box<dyn CredentialStore>>>,
+    force_fail: bool,
+) -> Result<ProviderUploadExecution, ApiError> {
     job.status = HostedUploadStatus::Running;
     job.updated_at = Utc::now();
     let setting = state
         .provider_settings
         .get(&provider_setting_key(job.logbook_id, &job.provider_id));
-    let mock_mode = setting.is_some_and(|setting| config_bool(&setting.config, "mock_mode"));
-    let credential_present = setting
-        .and_then(|setting| setting.credential_id.as_ref())
-        .is_some();
-    let provider_requires_credentials =
-        provider_metadata(&job.provider_id).is_some_and(|provider| {
-            !provider.metadata.required_credentials.is_empty()
-                || !provider.metadata.required_config_keys.is_empty()
-        });
-    if force_fail {
-        job.status = HostedUploadStatus::Retryable;
-        job.failure_reason = Some("forced fake provider failure".to_owned());
-        job.provider_error = Some("redacted fake provider failure".to_owned());
-    } else if !mock_mode && provider_requires_credentials && !credential_present {
-        job.status = HostedUploadStatus::Retryable;
-        job.failure_reason = Some("missing credential reference".to_owned());
-        job.provider_error = Some("credential reference is required".to_owned());
-    } else {
-        job.status = HostedUploadStatus::Succeeded;
-        job.failure_reason = None;
-        job.provider_error = None;
-    }
+    let mode = provider_adapter_mode(setting);
+    let credential =
+        resolve_provider_credential(setting, credential_store, mode == ProviderAdapterMode::Live);
+    let execution = execute_tier_one_upload(ProviderUploadInput {
+        provider_id: job.provider_id.clone(),
+        job_id: job.upload_id,
+        adif_payload: job.generated_adif.clone(),
+        qso_count: job.qso_ids.len(),
+        enabled: setting.is_some_and(|setting| setting.enabled),
+        credential_reference_present: credential.reference_present,
+        credential_resolved: credential.resolved,
+        credential_secret: credential.secret,
+        mode,
+        force_fake_failure: force_fail,
+    })
+    .map_err(|error| ApiError::BadRequest(error.to_string()))?;
+    job.status = match execution.status {
+        UploadJobStatus::Queued => HostedUploadStatus::Queued,
+        UploadJobStatus::Running => HostedUploadStatus::Running,
+        UploadJobStatus::Succeeded => HostedUploadStatus::Succeeded,
+        UploadJobStatus::Failed if execution.retryable => HostedUploadStatus::Retryable,
+        UploadJobStatus::Failed => HostedUploadStatus::Failed,
+        UploadJobStatus::NeedsCredentials => HostedUploadStatus::Retryable,
+    };
+    job.failure_reason = execution.failure_reason.clone();
+    job.provider_error = execution.redacted_error.clone();
     job.updated_at = Utc::now();
+    Ok(execution)
 }
 
 fn upload_summary(uploads: &[HostedUploadJob]) -> Value {
@@ -4643,6 +5419,12 @@ fn route_catalog() -> RouteCatalogResponse {
             "GET /api/v1/providers/:id".to_owned(),
             "PATCH /api/v1/providers/:id".to_owned(),
             "POST /api/v1/providers/:id/test".to_owned(),
+            "POST /api/v1/providers/:id/lookup".to_owned(),
+            "GET /api/v1/providers/:id/spots".to_owned(),
+            "POST /api/v1/providers/dx-cluster/connect".to_owned(),
+            "POST /api/v1/providers/dx-cluster/read".to_owned(),
+            "POST /api/v1/providers/dx-cluster/disconnect".to_owned(),
+            "GET /api/v1/providers/dx-cluster/status".to_owned(),
             "GET /api/v1/uploads".to_owned(),
             "POST /api/v1/uploads/run".to_owned(),
             "POST /api/v1/uploads/:id/retry".to_owned(),
@@ -5667,7 +6449,7 @@ mod tests {
             .handle(
                 ApiRequest::json(
                     "PATCH",
-                    "/api/v1/providers/lotw-stub",
+                    "/api/v1/providers/lotw",
                     &ProviderPatchRequest {
                         logbook_id,
                         enabled: Some(true),
@@ -5687,7 +6469,7 @@ mod tests {
             .handle(
                 ApiRequest::json(
                     "PATCH",
-                    "/api/v1/providers/lotw-stub",
+                    "/api/v1/providers/lotw",
                     &ProviderPatchRequest {
                         logbook_id,
                         enabled: Some(true),
@@ -5700,11 +6482,120 @@ mod tests {
             .await;
         assert_eq!(viewer_patch.status, 403);
 
+        let live_missing_credential = server
+            .handle(
+                ApiRequest::json(
+                    "PATCH",
+                    "/api/v1/providers/clublog",
+                    &ProviderPatchRequest {
+                        logbook_id,
+                        enabled: Some(true),
+                        credential_id: None,
+                        config: Map::from_iter([("live_test".to_owned(), Value::Bool(true))]),
+                    },
+                )
+                .with_bearer(&owner_token),
+            )
+            .await;
+        assert_eq!(live_missing_credential.status, 200);
+        let live_missing_test = server
+            .handle(
+                ApiRequest::json(
+                    "POST",
+                    "/api/v1/providers/clublog/test",
+                    &ProviderTestRequest { logbook_id },
+                )
+                .with_bearer(&owner_token),
+            )
+            .await;
+        assert_eq!(live_missing_test.status, 200);
+        let live_missing_test: Value = live_missing_test.json();
+        assert_eq!(live_missing_test["test_status"], "missing_credential");
+        assert_eq!(live_missing_test["credential_reference_present"], false);
+        assert_eq!(live_missing_test["credential_resolved"], false);
+
+        let live_missing_upload = server
+            .handle(
+                ApiRequest::json(
+                    "POST",
+                    "/api/v1/uploads/run",
+                    &UploadRunRequest {
+                        logbook_id,
+                        provider_id: "clublog".to_owned(),
+                        qso_ids: None,
+                        force_fail: None,
+                    },
+                )
+                .with_bearer(&owner_token),
+            )
+            .await;
+        assert_eq!(live_missing_upload.status, 200);
+        let live_missing_upload: Value = live_missing_upload.json();
+        assert_eq!(live_missing_upload["upload"]["status"], "retryable");
+        assert_eq!(
+            live_missing_upload["upload"]["failure_reason"],
+            "missing credential reference"
+        );
+
+        let invalid_credential_reference = server
+            .handle(
+                ApiRequest::json(
+                    "PATCH",
+                    "/api/v1/providers/qrz-logbook",
+                    &ProviderPatchRequest {
+                        logbook_id,
+                        enabled: Some(true),
+                        credential_id: Some("not-a-uuid".to_owned()),
+                        config: Map::from_iter([("live_test".to_owned(), Value::Bool(true))]),
+                    },
+                )
+                .with_bearer(&owner_token),
+            )
+            .await;
+        assert_eq!(invalid_credential_reference.status, 200);
+        let invalid_credential_test = server
+            .handle(
+                ApiRequest::json(
+                    "POST",
+                    "/api/v1/providers/qrz-logbook/test",
+                    &ProviderTestRequest { logbook_id },
+                )
+                .with_bearer(&owner_token),
+            )
+            .await;
+        assert_eq!(invalid_credential_test.status, 200);
+        let invalid_credential_test: Value = invalid_credential_test.json();
+        assert_eq!(
+            invalid_credential_test["test_status"],
+            "invalid_credential_reference"
+        );
+        assert_eq!(
+            invalid_credential_test["credential_reference_status"],
+            "invalid_reference"
+        );
+
+        let viewer_upload = server
+            .handle(
+                ApiRequest::json(
+                    "POST",
+                    "/api/v1/uploads/run",
+                    &UploadRunRequest {
+                        logbook_id,
+                        provider_id: "clublog".to_owned(),
+                        qso_ids: None,
+                        force_fail: None,
+                    },
+                )
+                .with_bearer(&viewer_token),
+            )
+            .await;
+        assert_eq!(viewer_upload.status, 403);
+
         let patched = server
             .handle(
                 ApiRequest::json(
                     "PATCH",
-                    "/api/v1/providers/lotw-stub",
+                    "/api/v1/providers/lotw",
                     &ProviderPatchRequest {
                         logbook_id,
                         enabled: Some(true),
@@ -5723,7 +6614,7 @@ mod tests {
             .handle(
                 ApiRequest::json(
                     "POST",
-                    "/api/v1/providers/lotw-stub/test",
+                    "/api/v1/providers/lotw/test",
                     &ProviderTestRequest { logbook_id },
                 )
                 .with_bearer(&owner_token),
@@ -5743,7 +6634,7 @@ mod tests {
                     "/api/v1/uploads/run",
                     &UploadRunRequest {
                         logbook_id,
-                        provider_id: "lotw-stub".to_owned(),
+                        provider_id: "lotw".to_owned(),
                         qso_ids: None,
                         force_fail: Some(true),
                     },
@@ -5786,9 +6677,381 @@ mod tests {
             .await;
         assert_eq!(uploads.status, 200);
         let uploads: Value = uploads.json();
-        assert_eq!(uploads["uploads"].as_array().unwrap().len(), 1);
-        assert_eq!(uploads["uploads"][0]["status"], "succeeded");
+        let upload_rows = uploads["uploads"].as_array().unwrap();
+        assert_eq!(upload_rows.len(), 2);
+        assert!(upload_rows
+            .iter()
+            .any(|upload| upload["provider_id"] == "lotw" && upload["status"] == "succeeded"));
+        assert!(upload_rows
+            .iter()
+            .any(|upload| upload["provider_id"] == "clublog" && upload["status"] == "retryable"));
         assert!(!uploads.to_string().contains(TEST_SECRET));
+    }
+
+    #[tokio::test]
+    async fn hosted_provider_runtime_routes_are_scoped_fake_safe_and_persist_health() {
+        let path = surreal_test_path("provider-runtime");
+        let server = open_surreal_test_server(&path);
+        let (owner_token, logbook_id, _) = login(&server, "owner@example.test").await;
+        let (viewer_token, _, _) = login(&server, "viewer@example.test").await;
+        server
+            .add_membership_for_email("viewer@example.test", logbook_id, LogbookRole::Viewer)
+            .await
+            .unwrap();
+
+        for provider_id in ["qrz-xml", "hamqth", "pota-spots", "dx-cluster"] {
+            let patched = server
+                .handle(
+                    ApiRequest::json(
+                        "PATCH",
+                        format!("/api/v1/providers/{provider_id}"),
+                        &ProviderPatchRequest {
+                            logbook_id,
+                            enabled: Some(true),
+                            credential_id: None,
+                            config: Map::new(),
+                        },
+                    )
+                    .with_bearer(&owner_token),
+                )
+                .await;
+            assert_eq!(patched.status, 200);
+        }
+
+        let qrz = server
+            .handle(
+                ApiRequest::json(
+                    "POST",
+                    "/api/v1/providers/qrz-xml/lookup",
+                    &ProviderLookupRequest {
+                        logbook_id,
+                        callsign: "k1abc".to_owned(),
+                    },
+                )
+                .with_bearer(&owner_token),
+            )
+            .await;
+        assert_eq!(qrz.status, 200);
+        let qrz: Value = qrz.json();
+        assert_eq!(qrz["ok"], true);
+        assert_eq!(qrz["result"]["normalized_callsign"], "K1ABC");
+        assert_eq!(qrz["mode"], "fake");
+
+        let viewer_lookup = server
+            .handle(
+                ApiRequest::json(
+                    "POST",
+                    "/api/v1/providers/qrz-xml/lookup",
+                    &ProviderLookupRequest {
+                        logbook_id,
+                        callsign: "k1abc".to_owned(),
+                    },
+                )
+                .with_bearer(&viewer_token),
+            )
+            .await;
+        assert_eq!(viewer_lookup.status, 200);
+
+        let qrz_not_found_patch = server
+            .handle(
+                ApiRequest::json(
+                    "PATCH",
+                    "/api/v1/providers/qrz-xml",
+                    &ProviderPatchRequest {
+                        logbook_id,
+                        enabled: Some(true),
+                        credential_id: None,
+                        config: Map::from_iter([("fake_not_found".to_owned(), Value::Bool(true))]),
+                    },
+                )
+                .with_bearer(&owner_token),
+            )
+            .await;
+        assert_eq!(qrz_not_found_patch.status, 200);
+        let qrz_not_found = server
+            .handle(
+                ApiRequest::json(
+                    "POST",
+                    "/api/v1/providers/qrz-xml/lookup",
+                    &ProviderLookupRequest {
+                        logbook_id,
+                        callsign: "missing".to_owned(),
+                    },
+                )
+                .with_bearer(&owner_token),
+            )
+            .await;
+        assert_eq!(qrz_not_found.status, 200);
+        let qrz_not_found: Value = qrz_not_found.json();
+        assert_eq!(qrz_not_found["ok"], false);
+        assert_eq!(qrz_not_found["status"], "not_found");
+
+        let malformed_patch = server
+            .handle(
+                ApiRequest::json(
+                    "PATCH",
+                    "/api/v1/providers/qrz-xml",
+                    &ProviderPatchRequest {
+                        logbook_id,
+                        enabled: Some(true),
+                        credential_id: None,
+                        config: Map::from_iter([
+                            ("fake_not_found".to_owned(), Value::Bool(false)),
+                            (
+                                "fake_response".to_owned(),
+                                Value::String(
+                                    "<QRZDatabase><Callsign><call>@@@</call></Callsign></QRZDatabase>"
+                                        .to_owned(),
+                                ),
+                            ),
+                        ]),
+                    },
+                )
+                .with_bearer(&owner_token),
+            )
+            .await;
+        assert_eq!(malformed_patch.status, 200);
+        let malformed = server
+            .handle(
+                ApiRequest::json(
+                    "POST",
+                    "/api/v1/providers/qrz-xml/lookup",
+                    &ProviderLookupRequest {
+                        logbook_id,
+                        callsign: "bad".to_owned(),
+                    },
+                )
+                .with_bearer(&owner_token),
+            )
+            .await;
+        assert_eq!(malformed.status, 200);
+        let malformed: Value = malformed.json();
+        assert_eq!(malformed["status"], "failed");
+        assert_eq!(malformed["failure_reason"], "malformed provider response");
+
+        let hamqth_auth_patch = server
+            .handle(
+                ApiRequest::json(
+                    "PATCH",
+                    "/api/v1/providers/hamqth",
+                    &ProviderPatchRequest {
+                        logbook_id,
+                        enabled: Some(true),
+                        credential_id: None,
+                        config: Map::from_iter([(
+                            "fake_auth_failure".to_owned(),
+                            Value::Bool(true),
+                        )]),
+                    },
+                )
+                .with_bearer(&owner_token),
+            )
+            .await;
+        assert_eq!(hamqth_auth_patch.status, 200);
+        let hamqth_auth = server
+            .handle(
+                ApiRequest::json(
+                    "POST",
+                    "/api/v1/providers/hamqth/lookup",
+                    &ProviderLookupRequest {
+                        logbook_id,
+                        callsign: "k1abc".to_owned(),
+                    },
+                )
+                .with_bearer(&owner_token),
+            )
+            .await;
+        assert_eq!(hamqth_auth.status, 200);
+        assert_eq!(hamqth_auth.json::<Value>()["status"], "needs_credentials");
+
+        let live_missing = server
+            .handle(
+                ApiRequest::json(
+                    "PATCH",
+                    "/api/v1/providers/hamqth",
+                    &ProviderPatchRequest {
+                        logbook_id,
+                        enabled: Some(true),
+                        credential_id: None,
+                        config: Map::from_iter([("live_test".to_owned(), Value::Bool(true))]),
+                    },
+                )
+                .with_bearer(&owner_token),
+            )
+            .await;
+        assert_eq!(live_missing.status, 200);
+        let live_missing = server
+            .handle(
+                ApiRequest::json(
+                    "POST",
+                    "/api/v1/providers/hamqth/lookup",
+                    &ProviderLookupRequest {
+                        logbook_id,
+                        callsign: "k1abc".to_owned(),
+                    },
+                )
+                .with_bearer(&owner_token),
+            )
+            .await;
+        assert_eq!(live_missing.status, 200);
+        let live_missing: Value = live_missing.json();
+        assert_eq!(live_missing["status"], "needs_credentials");
+        assert_eq!(live_missing["credential_reference_present"], false);
+
+        let invalid_reference = server
+            .handle(
+                ApiRequest::json(
+                    "PATCH",
+                    "/api/v1/providers/hamqth",
+                    &ProviderPatchRequest {
+                        logbook_id,
+                        enabled: Some(true),
+                        credential_id: Some("not-a-uuid".to_owned()),
+                        config: Map::from_iter([("live_test".to_owned(), Value::Bool(true))]),
+                    },
+                )
+                .with_bearer(&owner_token),
+            )
+            .await;
+        assert_eq!(invalid_reference.status, 200);
+        let invalid_reference = server
+            .handle(
+                ApiRequest::json(
+                    "POST",
+                    "/api/v1/providers/hamqth/lookup",
+                    &ProviderLookupRequest {
+                        logbook_id,
+                        callsign: "k1abc".to_owned(),
+                    },
+                )
+                .with_bearer(&owner_token),
+            )
+            .await;
+        assert_eq!(invalid_reference.status, 200);
+        let invalid_reference: Value = invalid_reference.json();
+        assert_eq!(invalid_reference["status"], "needs_credentials");
+        assert_eq!(
+            invalid_reference["credential_reference_status"],
+            "invalid_reference"
+        );
+
+        let spots = server
+            .handle(
+                ApiRequest::get(format!(
+                    "/api/v1/providers/pota-spots/spots?logbook_id={logbook_id}"
+                ))
+                .with_bearer(&owner_token),
+            )
+            .await;
+        assert_eq!(spots.status, 200);
+        let spots: Value = spots.json();
+        assert_eq!(spots["ok"], true);
+        assert_eq!(spots["spots"].as_array().unwrap().len(), 1);
+        assert_eq!(spots["spots"][0]["reference"], "US-0001");
+
+        let bad_spots_patch = server
+            .handle(
+                ApiRequest::json(
+                    "PATCH",
+                    "/api/v1/providers/pota-spots",
+                    &ProviderPatchRequest {
+                        logbook_id,
+                        enabled: Some(true),
+                        credential_id: None,
+                        config: Map::from_iter([(
+                            "fake_response".to_owned(),
+                            Value::String("{}".to_owned()),
+                        )]),
+                    },
+                )
+                .with_bearer(&owner_token),
+            )
+            .await;
+        assert_eq!(bad_spots_patch.status, 200);
+        let bad_spots = server
+            .handle(
+                ApiRequest::get(format!(
+                    "/api/v1/providers/pota-spots/spots?logbook_id={logbook_id}"
+                ))
+                .with_bearer(&owner_token),
+            )
+            .await;
+        assert_eq!(bad_spots.status, 200);
+        assert_eq!(bad_spots.json::<Value>()["status"], "failed");
+
+        let dx_connect = server
+            .handle(
+                ApiRequest::json(
+                    "POST",
+                    "/api/v1/providers/dx-cluster/connect",
+                    &DxClusterConnectRequest { logbook_id },
+                )
+                .with_bearer(&owner_token),
+            )
+            .await;
+        assert_eq!(dx_connect.status, 200);
+        assert_eq!(dx_connect.json::<Value>()["connection_state"], "connected");
+
+        let dx_read = server
+            .handle(
+                ApiRequest::json(
+                    "POST",
+                    "/api/v1/providers/dx-cluster/read",
+                    &DxClusterReadRequest {
+                        logbook_id,
+                        read_lines: Some(5),
+                        timeout_seconds: Some(1),
+                    },
+                )
+                .with_bearer(&owner_token),
+            )
+            .await;
+        assert_eq!(dx_read.status, 200);
+        let dx_read: Value = dx_read.json();
+        assert_eq!(dx_read["ok"], true);
+        assert_eq!(dx_read["spots"][0]["spotted_callsign"], "JA1XYZ");
+
+        let dx_status = server
+            .handle(
+                ApiRequest::get(format!(
+                    "/api/v1/providers/dx-cluster/status?logbook_id={logbook_id}"
+                ))
+                .with_bearer(&owner_token),
+            )
+            .await;
+        assert_eq!(dx_status.status, 200);
+        assert_eq!(
+            dx_status.json::<Value>()["status"]["provider_health_state"],
+            "healthy"
+        );
+
+        let dx_disconnect = server
+            .handle(
+                ApiRequest::json(
+                    "POST",
+                    "/api/v1/providers/dx-cluster/disconnect",
+                    &DxClusterConnectRequest { logbook_id },
+                )
+                .with_bearer(&owner_token),
+            )
+            .await;
+        assert_eq!(dx_disconnect.status, 200);
+        assert_eq!(
+            dx_disconnect.json::<Value>()["connection_state"],
+            "disconnected"
+        );
+
+        server.reload_metadata_from_store().await.unwrap();
+        let detail = server
+            .handle(
+                ApiRequest::get(format!("/api/v1/providers/qrz-xml?logbook_id={logbook_id}"))
+                    .with_bearer(&owner_token),
+            )
+            .await;
+        assert_eq!(detail.status, 200);
+        let detail: Value = detail.json();
+        assert!(detail["health"]["last_run_time"].is_string());
+        assert!(!detail.to_string().contains("TEST_SECRET_SHOULD_NOT_APPEAR"));
     }
 
     #[tokio::test]
@@ -5939,7 +7202,7 @@ mod tests {
             .handle(
                 ApiRequest::json(
                     "PATCH",
-                    "/api/v1/providers/lotw-stub",
+                    "/api/v1/providers/lotw",
                     &ProviderPatchRequest {
                         logbook_id,
                         enabled: Some(true),
@@ -5955,7 +7218,7 @@ mod tests {
             .handle(
                 ApiRequest::json(
                     "PATCH",
-                    "/api/v1/providers/lotw-stub",
+                    "/api/v1/providers/lotw",
                     &ProviderPatchRequest {
                         logbook_id,
                         enabled: None,
@@ -6107,7 +7370,7 @@ mod tests {
             .handle(
                 ApiRequest::json(
                     "PATCH",
-                    "/api/v1/providers/lotw-stub",
+                    "/api/v1/providers/lotw",
                     &ProviderPatchRequest {
                         logbook_id,
                         enabled: Some(true),
@@ -6195,10 +7458,8 @@ mod tests {
 
         let provider_after_restore = server
             .handle(
-                ApiRequest::get(format!(
-                    "/api/v1/providers/lotw-stub?logbook_id={logbook_id}"
-                ))
-                .with_bearer(&owner_token),
+                ApiRequest::get(format!("/api/v1/providers/lotw?logbook_id={logbook_id}"))
+                    .with_bearer(&owner_token),
             )
             .await;
         assert_eq!(provider_after_restore.status, 200);

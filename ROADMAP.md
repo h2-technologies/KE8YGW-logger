@@ -30,8 +30,17 @@ station/equipment profiles, ADIF import/export, provider settings/test, upload
 queue execution foundation, activation/Net Control routes, map summaries,
 backup export/dry-run/import, divergence review, sync preview/push/pull, and
 route tests. The GUI now has backup/restore and divergence review surfaces, and
-the repository has a `ham-desktop` crate plus `src-tauri` packaging foundation
-and native dialog bridge contract.
+the repository has a `ham-desktop` crate plus a real `src-tauri` Tauri runtime
+wrapper with native dialog commands and bundled shared web assets. Tier 1
+provider adapter boundaries and hosted upload execution are now wired with
+deterministic fake mode and credential-reference validation. Club Log, QRZ
+Logbook, and eQSL now have gated live HTTP upload transports plus ignored
+release-runner validation hooks that skip without explicit live/upload env vars
+and provider credentials. QRZ XML and HamQTH hosted lookup execution, POTA
+hosted spot fetching, and DX Cluster bounded connect/read/disconnect/status
+runtime controls are wired with redacted error-code mapping. SOTAWatch live access remains deferred pending
+explicit API approval/terms handling, and LoTW production upload remains
+deferred until a safe TQSL/certificate-signing flow is modeled.
 
 ## Release Scope Correction
 
@@ -41,27 +50,30 @@ v1.1 is the first native iOS target: SwiftUI, App Store-ready Xcode project, nat
 
 ## Recommended Next Milestone
 
-Live Provider Adapters, Credentials, and Desktop Runtime:
+Provider Runtime Hardening, Credentials, and Desktop Runtime:
 
-- Add the actual Tauri runtime wrapper crate and validate package builds.
+- Validate Tauri package builds on clean release runners.
 - Validate production OS credential backends on release runners.
-- Implement live Tier 1 provider adapters.
+- Validate gated Club Log, QRZ Logbook, and eQSL live uploads on explicit
+  release-runner credentials.
 - Browser-level GUI tests.
 
 Then continue Live Provider Adapters and Production Credential Backends:
 
 - Native OS keychain/secret-store release hardening.
-- Real QRZ XML and HamQTH lookup clients.
-- Real LoTW/eQSL/Club Log/QRZ/HRDLog upload clients.
+- Real-account validation for hosted QRZ XML/HamQTH lookup and POTA/DX runtime
+  behavior.
+- LoTW/TQSL and HRDLog upload transports; release-runner validation for Club
+  Log, QRZ Logbook, and eQSL.
 - Real LoTW/eQSL/Club Log/QRZ confirmation download clients.
-- DX Cluster Telnet background runtime.
-- POTA and SOTAWatch live feed adapters.
+- DX Cluster background reconnect lifecycle if needed after read-once runtime.
+- Approved SOTAWatch live feed adapter.
 - NOAA/Open-Meteo/space-weather live providers.
 - Upload queue execution against real providers and scheduler execution.
 
 ## Future Milestones
 
-- v0.2 almost-v1 beta completion: live provider adapter work, real Tauri packaging wrapper, LAN trust pairing, station/equipment GUI polish, interactive map polish, browser tests, and CI release hardening.
+- v0.2 almost-v1 beta completion: live provider adapter work, Tauri package validation, LAN trust pairing, station/equipment GUI polish, interactive map polish, browser tests, and CI release hardening.
 - v1.0 web + desktop production release: hosted web, installable desktop, stabilized API/storage/sync/providers, production credentials, docs cleanup, and beta bug fixes.
 - v1.1 native iOS release: SwiftUI app, native offline queue, Keychain, native ADIF document flows, native Maps, iPhone/iPad layouts, and TestFlight/App Store readiness.
 - LoTW upload/download and confirmation pull.
@@ -71,7 +83,7 @@ Then continue Live Provider Adapters and Production Credential Backends:
 - QRZ/HamQTH real callsign lookup.
 - OS keychain/secret-store release-runner validation.
 
-- Full Tauri runtime packaging and installer/signing polish.
+- Tauri installer/signing polish and release-runner package validation.
 - Award rule databases and needed-list intelligence.
 - Durable upload queue and provider settings.
 - LAN trust pairing UX and real peer-to-peer transport.
