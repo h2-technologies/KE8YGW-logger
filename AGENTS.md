@@ -49,7 +49,7 @@ Planned but not implemented end-to-end:
 - LAN trust pairing and real peer-to-peer HTTP transport.
 - Conflict resolution UI and automatic merge policy.
 - Full production provider coverage for LoTW/TQSL, SOTAWatch live access, NOAA/Open-Meteo, FCC ULS, RBN, and other placeholder providers.
-- Native iOS application code, Rust FFI/UniFFI bridge, Swift projection cache, and Xcode project.
+- Swift projection cache and production App Store packaging.
 - Interactive tile/vector map renderer.
 - Full EmComm and contesting product surfaces.
 
@@ -70,8 +70,8 @@ Provider reality check:
 - Many map, weather, propagation, and spotting providers are metadata-only, mock, or placeholder implementations.
 
 Native iOS status:
-- No native iOS, Swift, Xcode, UniFFI, or Rust FFI source trees are present in this repository as of July 16, 2026.
-- iOS currently exists only as planning and release-readiness documentation under `docs/`.
+- Native SwiftUI, Rust FFI, Xcode project, Apple build scripts, and iOS workflow files are present as of July 16, 2026.
+- iOS release hardening, signing, TestFlight/App Store distribution, and full production validation remain incomplete.
 
 ## 3. Source-Of-Truth Hierarchy
 

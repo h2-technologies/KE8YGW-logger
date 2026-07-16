@@ -2,11 +2,54 @@ name: CI
 
 on:
   pull_request:
+    branches:
+      - dev
+      - main
   push:
     branches:
+      - dev
       - main
 
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
+  promotion-policy:
+    name: Main promotion policy
+    if: github.event_name == 'pull_request' && github.base_ref == 'main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require dev promotion or documented hotfix
+        shell: bash
+        env:
+          PR_HEAD_REF: ${{ github.head_ref }}
+        run: |
+          set -euo pipefail
+          head_ref="$PR_HEAD_REF"
+          body_file="$GITHUB_EVENT_PATH"
+          if [[ "$head_ref" == "dev" ]]; then
+            echo "Main promotion originates from dev."
+            exit 0
+          fi
+
+          if [[ "$head_ref" == hotfix/* ]]; then
+            body="$(jq -r '.pull_request.body // ""' "$body_file")"
+            if grep -Eiq 'sync(ing)? (back )?(to|into) dev|follow-up.*dev|backport.*dev' <<<"$body"; then
+              echo "Documented hotfix exception accepted for $head_ref."
+              exit 0
+            fi
+            echo "Hotfix PRs to main must document the immediate follow-up sync back into dev." >&2
+            exit 1
+          fi
+
+          echo "Normal PRs targeting main must originate from dev. Use hotfix/* only for documented emergency fixes." >&2
+          exit 1
+
   ci:
     name: Rust CI (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
@@ -47,3 +90,57 @@ jobs:
 
       - name: Run CI checks
         run: just ci
+
+  internal-artifact:
+    name: Internal dev artifact
+    if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
+    needs: ci
+    runs-on: ubuntu-latest
+    steps:
+      - name: Write internal build manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/internal
+          {
+            echo "channel=internal-dev"
+            echo "sha=${GITHUB_SHA}"
+            echo "run_number=${GITHUB_RUN_NUMBER}"
+            echo "run_id=${GITHUB_RUN_ID}"
+            echo "artifact=internal-dev-build-${GITHUB_SHA}-${GITHUB_RUN_NUMBER}"
+            echo "note=Internal validation artifact only. Not a beta or production release."
+          } > dist/internal/BUILD-MANIFEST.txt
+
+      - name: Upload internal build manifest
+        uses: actions/upload-artifact@v4
+        with:
+          name: internal-dev-${{ github.sha }}-${{ github.run_number }}
+          path: dist/internal
+          retention-days: 7
+
+  beta-artifact:
+    name: Beta build manifest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: ci
+    runs-on: ubuntu-latest
+    steps:
+      - name: Write beta build manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/beta
+          {
+            echo "channel=beta-main"
+            echo "sha=${GITHUB_SHA}"
+            echo "run_number=${GITHUB_RUN_NUMBER}"
+            echo "run_id=${GITHUB_RUN_ID}"
+            echo "artifact=beta-main-build-${GITHUB_SHA}-${GITHUB_RUN_NUMBER}"
+            echo "note=Beta tester artifact metadata only. Not a production release."
+          } > dist/beta/BUILD-MANIFEST.txt
+
+      - name: Upload beta build manifest
+        uses: actions/upload-artifact@v4
+        with:
+          name: beta-main-${{ github.sha }}-${{ github.run_number }}
+          path: dist/beta
+          retention-days: 30
