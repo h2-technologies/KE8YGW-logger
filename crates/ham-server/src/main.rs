@@ -62,10 +62,16 @@ fn handle_stream(
         404 => "Not Found",
         _ => "OK",
     };
+    let extra_headers = response
+        .headers
+        .iter()
+        .map(|(name, value)| format!("{name}: {value}\r\n"))
+        .collect::<String>();
     let header = format!(
-        "HTTP/1.1 {} {}\r\nContent-Type: application/json; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        "HTTP/1.1 {} {}\r\nContent-Type: application/json; charset=utf-8\r\n{}Content-Length: {}\r\nConnection: close\r\n\r\n",
         response.status,
         status_text,
+        extra_headers,
         response.body.len()
     );
     stream.write_all(header.as_bytes())?;

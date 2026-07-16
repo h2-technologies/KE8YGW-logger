@@ -2,6 +2,8 @@
 
 Online providers must register through the Unified Service Framework and use
 the shared permission, credential, cache, runtime event, and proposal systems.
+Provider runtime hardening requirements and the current gap matrix are tracked
+in [`docs/PROVIDER_RUNTIME_HARDENING.md`](../PROVIDER_RUNTIME_HARDENING.md).
 
 ## Required Rules
 
@@ -9,6 +11,10 @@ the shared permission, credential, cache, runtime event, and proposal systems.
 - Do not log passwords, tokens, certificates, API keys, or raw provider
   responses containing secrets.
 - Use `CredentialStore` and credential IDs for secrets.
+- Use the shared provider HTTP runtime for HTTP transports; do not create a
+  provider-local timeout/retry/body-size policy.
+- Use shared provider outcome, retry classification, rate-limit, circuit, queue,
+  health, and diagnostic models for cross-cutting behavior.
 - Publish runtime events for auth, upload, download, lookup, spot, weather,
   propagation, cache, and health activity.
 - Use service cache for expirable support data.
@@ -71,9 +77,9 @@ Current live/foundation status:
 
 - Club Log, QRZ Logbook, and eQSL: gated live ADIF upload transports.
 - QRZ XML and HamQTH: live XML response parsers; hosted lookup execution still
-  pending.
-- POTA: live request builder and spot fixture parser; hosted fetch route still
-  pending.
+  wired through fake-default/live-gated hosted routes.
+- POTA: live request builder and spot fixture parser; hosted fetch route is
+  wired through a fake-default/live-gated route.
 - SOTAWatch: fixture parser only; live access deferred pending API
   approval/terms handling.
 - DX Cluster: parser and read-once Telnet client foundation; no always-on

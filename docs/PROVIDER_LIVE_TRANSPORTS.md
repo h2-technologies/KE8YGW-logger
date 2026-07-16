@@ -7,6 +7,9 @@ Default CI and developer tests use fake mode. Live network execution is gated by
 provider settings (`live_test=true`) and external credentials stored behind
 `CredentialStore`. Provider settings store credential IDs only.
 
+Provider runtime hardening details, operator queue guidance, and the issue #32
+gap matrix live in [`docs/PROVIDER_RUNTIME_HARDENING.md`](PROVIDER_RUNTIME_HARDENING.md).
+
 ## Support Matrix
 
 | Provider | Reference | Auth | Request | Response | Status |
@@ -54,6 +57,13 @@ Provider runtime responses include `provider_id`, `mode`, `ok`, `status`,
 result or spot records, `result_summary`, `failure_reason`, `redacted_error`,
 and health/status metadata where applicable. Provider results never mutate QSO
 records directly.
+
+HTTP transports must use the shared provider runtime helper with typed
+timeouts, bounded response bodies, redirect limits, correlation IDs, safe
+response capture, retry classification, rate-limit snapshots, and circuit
+breaker state. DX Cluster is connection-oriented and keeps its own bounded TCP
+read lifecycle while sharing redaction, retry classification, health, and
+diagnostic vocabulary.
 
 ## Redaction Guarantees
 
@@ -148,6 +158,11 @@ practical:
 
 Human-readable messages remain intentionally high level. Raw XML/HTML/text
 provider bodies are not returned when they may contain account/session data.
+Provider-internal outcomes additionally use `ProviderOutcomeKind` and
+`ProviderRetryClass` so hosted routes and future adapters can distinguish
+authentication-required, authentication-rejected, authorization-denied,
+rate-limited, unavailable, malformed-response, invalid-local-configuration,
+timeout, transport-failure, cancelled, and uncertain-result cases.
 
 ## Confirmation Reconciliation
 
@@ -162,6 +177,9 @@ mutate QSO rows directly.
 
 - Validate hosted QRZ XML/HamQTH/POTA/DX runtime behavior with real accounts or
   provider-approved test fixtures.
+- Add full mock-server coverage for every common transport fixture across every
+  provider adapter; current coverage includes parser fixtures, fake executions,
+  gated live tests, oversized-body rejection, and secret echo redaction.
 - Add any approved SOTA endpoint only after explicit API approval and terms
   handling are recorded.
 - Add provider-specific confirmation download/reconciliation once safe matching
