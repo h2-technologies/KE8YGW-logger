@@ -13,6 +13,9 @@ clippy:
 test:
     cargo test --workspace
 
+governance-check:
+    pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/governance-check.ps1
+
 build:
     cargo build --workspace
 
@@ -25,4 +28,4 @@ gui:
 sync-server:
     cargo run -p ham-sync-server --bin ham-sync-server
 
-ci: fmt-check clippy test build
+ci: fmt-check clippy test build governance-check

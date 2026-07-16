@@ -9,6 +9,12 @@ Before implementing a feature, read:
 1. `docs/MASTER_BLUEPRINT.md`
 2. `PROJECT_STATE.md`
 3. The topic-specific document for the area being touched:
+   - `CONTRIBUTING.md`
+   - `GOVERNANCE.md`
+   - `RELEASE.md`
+   - `SECURITY.md`
+   - `SUPPORT.md`
+   - `docs/adr/README.md`
    - `docs/EVENT_CATALOG.md`
    - `docs/PLUGIN_SDK.md`
    - `docs/SYNC_PROTOCOL.md`
@@ -44,6 +50,7 @@ just clippy
 just test
 just build
 just release
+just governance-check
 just ci
 ```
 
@@ -56,6 +63,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 cargo build --workspace
 cargo build --release --workspace
+pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/governance-check.ps1
 ```
 
 For the current static GUI JavaScript, also run:
@@ -75,6 +83,10 @@ Before considering an implementation complete:
 5. Run formatting, linting, tests, and subsystem-specific validation. `just ci` is the workspace baseline; use `cargo build --release --workspace`, `node --check crates\\ham-gui\\web\\app.js`, `cargo tauri info`, and `cargo tauri build` when the touched subsystem requires them.
 6. Fix every discovered issue.
 7. Report changed files, architecture decisions, risks, TODOs, and the next milestone.
+
+For governance or repository-standard changes, update the root policy files,
+GitHub templates, CODEOWNERS, and ADR process docs together when needed. Run
+`just governance-check` before opening a PR.
 
 ## Adding Features
 

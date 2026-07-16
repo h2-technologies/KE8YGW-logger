@@ -1,0 +1,70 @@
+name: Feature request
+description: Suggest a focused improvement for KE8YGW Logger.
+title: "[Feature]: "
+labels:
+  - enhancement
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What operator or maintainer problem should this solve?
+    validations:
+      required: true
+  - type: textarea
+    id: proposed-behavior
+    attributes:
+      label: Proposed behavior
+      description: Describe the expected workflow or outcome.
+    validations:
+      required: true
+  - type: dropdown
+    id: user-type
+    attributes:
+      label: User type
+      options:
+        - Casual logger
+        - Portable operator
+        - Net control operator
+        - Contest operator
+        - Emergency communications operator
+        - Hosted administrator
+        - Self-hosted administrator
+        - Plugin developer
+        - Maintainer
+        - Other
+    validations:
+      required: true
+  - type: checkboxes
+    id: platform-impact
+    attributes:
+      label: Platform impact
+      options:
+        - label: Web
+        - label: Desktop or Tauri
+        - label: CLI
+        - label: Hosted server
+        - label: Self-hosted sync
+        - label: Future iOS or native client
+        - label: Unknown
+  - type: textarea
+    id: offline-implications
+    attributes:
+      label: Offline implications
+      description: How should this behave without network connectivity?
+    validations:
+      required: true
+  - type: textarea
+    id: security-privacy
+    attributes:
+      label: Security or privacy implications
+      description: Describe any credential, authorization, sync, provider, backup, diagnostic, or user data impact.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Describe workarounds or other designs considered.
+    validations:
+      required: false
