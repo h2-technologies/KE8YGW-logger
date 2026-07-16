@@ -102,6 +102,8 @@ passes should start with these documents:
 - `ham-cli`: placeholder command-line entry point.
 - `ham-gui`: initial GUI shell, workspace model, panel registry, command registry,
   and static web shell served by a small Rust binary.
+- `ios/KE8YGWLogger`: native iOS SwiftUI/SwiftData app skeleton for manual
+  Xcode builds.
 
 ## v0.2 Almost-v1 Beta Status
 
@@ -1176,8 +1178,8 @@ just release
 Tagged releases are automated from git tags matching `v*.*.*`, for example:
 
 ```powershell
-git tag v0.1.0
-git push origin v0.1.0
+git tag v0.2.0
+git push origin v0.2.0
 ```
 
 The release workflow builds `ham-gui` in release mode on:

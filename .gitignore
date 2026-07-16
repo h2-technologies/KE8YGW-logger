@@ -1,5 +1,9 @@
 /target/
 /dist/
+/artifacts/
+ios/KE8YGWLogger/build/
+**/*.xcuserstate
+**/xcuserdata/
 *.pdb
 .idea/
 .vscode/

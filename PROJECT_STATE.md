@@ -8,6 +8,29 @@ Last update timestamp: 2026-07-16T00:00:00-04:00
 
 Repository health status: Healthy for this v0.2 provider validation-hardening slice. Hosted QRZ XML/HamQTH lookup, POTA spot fetch, DX Cluster bounded runtime controls, and Club Log/QRZ Logbook/eQSL uploads remain fake/offline by default, with ignored live validation hooks gated by explicit environment variables and credentials. Runtime responses and persisted provider health now carry stable redacted error codes for common credential, auth, malformed-response, provider-rejection, rate-limit, timeout, and transport failures. SOTAWatch and LoTW remain explicitly deferred where provider/API safety requires it. Formatting, Rust check, Clippy with warnings denied, full workspace tests, GUI JavaScript syntax check, package builds, diff whitespace check, and Tauri package build passed after this slice. The Rust test suite currently reports 212 passed tests and 7 ignored live validation hooks.
 
+Current iOS Rust-authority pass:
+
+- Hardened `ham-ios-ffi` with a byte-buffer JSON command ABI, structured error envelope, ABI/schema versioning, bounded input, UTF-8/null validation, panic containment, correlation IDs, and explicit Rust-owned response deallocation.
+- Added C header/module map and macOS scripts for Apple Rust targets and deterministic `artifacts/HamIOSFFI.xcframework` packaging.
+- Integrated the XCFramework into the Xcode project through a relative framework reference and a documented pre-link build phase.
+- Reworked the Swift bridge around the byte-buffer ABI and typed request/result DTOs.
+- Routed QSO create/delete through Rust proposals/events, station profile/equipment/select through Rust station-book storage, POTA/SOTA activation start/end through Rust proposals, and Net Control session/check-in/traffic operations through Rust proposals.
+- Reclassified SwiftData QSO/station/equipment rows as projection/cache records with canonical IDs, Rust revision metadata, projection source/schema, tombstone state, and refresh timestamps.
+- Added a projection refresh service and Diagnostics bridge self-test.
+- Added native macOS CI workflow scaffolding in `.github/workflows/ios.yml`.
+- Added `docs/IOS_BUILD_AND_LINKING.md` and updated iOS status/gap documentation.
+
+Current iOS parity pass:
+
+- Added `IOS_GAP_ANALYSIS.md` based on repository evidence.
+- Added `crates/ham-ios-ffi`, a Rust C ABI bridge crate exposing JSON snapshots and utility calls from `ham-core`/`ham-sync` for iOS.
+- Added native Swift bridge infrastructure under `Shared/RustBridge`, with live symbol loading when the Rust library is linked and a visible fallback when it is not.
+- Replaced the iOS single home flow with a SwiftUI split-view app shell covering Dashboard, Logging, Callsign, Stations, Providers, Maps, POTA, SOTA, Net Control, Emergency, Sync, Backup, Diagnostics, and Settings.
+- Expanded iOS QSO, station, equipment, settings, export, backup, diagnostics, provider, callsign lookup, mapping, activation, Net Control, and emergency workflows.
+- Added Apple Keychain credential storage and local notification authorization plumbing.
+- Switched iOS ADIF export to prefer the Rust bridge and fall back to Swift export only when the bridge is unavailable.
+- Added iOS bridge fallback tests for version, providers, and lookup contracts.
+
 ---
 
 # Completed Features
@@ -108,6 +131,26 @@ Repository health status: Healthy for this v0.2 provider validation-hardening sl
 - [ ] Interactive dockable panel movement
 - [x] Native file dialog command helpers and browser fallback bridge
 - [x] Tauri desktop runtime wrapper and Windows package validation
+
+## iOS
+
+- [x] Native SwiftUI Xcode project skeleton
+- [x] SwiftData local persistence models for QSO, station profile, and settings
+- [x] SwiftData local cache models for QSO, station profile, station equipment, and settings
+- [x] Native split-view app shell for iPhone/iPad feature navigation
+- [x] Dashboard with operator, station, GPS/grid, profile, recent QSO, upload, provider, sync, offline, battery, and network status
+- [x] Expanded QSO form for voice, CW, digital, satellite, contest, net, emergency, POTA, and SOTA logging fields
+- [x] Logbook, QSO detail, station profile, export, settings, and backup/restore screens
+- [x] Station management for multiple station profiles and equipment cache rows
+- [x] Provider status, callsign lookup, Keychain credential entry, sync, maps, POTA, SOTA, Net Control, Emergency, diagnostics, and backup workspaces
+- [x] ADIF export prefers Rust bridge; CSV export remains Swift-only
+- [x] Shared Xcode scheme
+- [x] Unit tests for callsign utilities, RST defaults, ADIF, CSV, date formatting, and bridge fallback decoding
+- [ ] Manual validation in Xcode on macOS
+- [x] Initial Swift bridge client and Rust FFI crate for core snapshots/utilities
+- [ ] Bundle/link Rust iOS static library into Xcode target
+- [ ] Route QSO create/correct/delete, station edits, activations, Net Control, and sync mutations through Rust FFI proposals
+- [ ] iOS sync parity with durable Rust official event store
 
 ## Sync
 
@@ -219,6 +262,7 @@ Diagnostics include runtime event logs, redaction helpers, report ZIP generation
 - `crates/ham-desktop`: desktop runtime configuration and testable native-dialog command helpers for the Tauri wrapper.
 - `src-tauri`: Tauri v2 desktop runtime wrapper, capabilities, icons, bundled web UI config, native dialog command bridge, and restricted desktop API proxy.
 - `crates/ham-cli`: CLI commands for ADIF and chain/projection operations.
+- `ios/KE8YGWLogger`: native SwiftUI/SwiftData iOS project for manual Xcode builds.
 - `docs/architecture`: service framework, online services, station profiles, award engine, search, and upload queue architecture notes.
 - `docs/plugins`: provider and online provider development guides.
 - `docs/maps`, `docs/grid-system`, `docs/propagation`, `docs/weather`, `docs/plugin-map-providers`: mapping and provider framework documentation.
@@ -236,6 +280,8 @@ Diagnostics include runtime event logs, redaction helpers, report ZIP generation
 - [x] Add durable storage to the self-hosted sync/report server before real hosted use.
 - [ ] Implement trust pairing/authentication for LAN peers before unattended sync.
 - [ ] Validate production OS keychain/secret-store backends on clean release runners before real online upload/lookup provider credentials are enabled for testers.
+- [ ] Build and link the Rust `ham-ios-ffi` static library for iOS simulator/device targets in Xcode.
+- [ ] Move iOS write operations from SwiftData-only cache writes to Rust proposal/event append paths.
 
 ## High
 
@@ -251,6 +297,7 @@ Diagnostics include runtime event logs, redaction helpers, report ZIP generation
 - [ ] Implement LoTW/TQSL, HRDLog, and confirmation download/reconciliation clients.
 - [ ] Implement hosted/runtime transports for remaining FCC ULS, RBN, approved SOTAWatch access, NOAA, Open-Meteo, and OSM adapters. QRZ XML, HamQTH, POTA, and DX Cluster bounded runtime wiring are complete for v0.2 validation.
 - [ ] Replace the map preview shell with a full interactive tile/vector renderer.
+- [ ] Add Xcode UI tests for the iOS split-view shell, offline QSO save, provider credential entry, MapKit screen, sync screen, and Net Control roster.
 
 ## Medium
 
@@ -1395,6 +1442,67 @@ Complete provider-specific live transports for Club Log, QRZ Logbook, eQSL, QRZ
 XML, HamQTH, POTA spots, SOTAWatch, and DX Cluster using official provider API
 references, with real-network tests gated behind explicit credentials and
 release-runner secrets.
+
+## 2026-07-07
+
+Summary: Added a native iOS SwiftUI/SwiftData Xcode project for KE8YGW Logger on the `apple-swift` branch.
+
+Major files changed:
+
+- `ios/KE8YGWLogger/KE8YGWLogger.xcodeproj/project.pbxproj`
+- `ios/KE8YGWLogger/KE8YGWLogger.xcodeproj/xcshareddata/xcschemes/KE8YGWLogger.xcscheme`
+- `ios/KE8YGWLogger/KE8YGWLogger/App/KE8YGWLoggerApp.swift`
+- `ios/KE8YGWLogger/KE8YGWLogger/Models/QSO.swift`
+- `ios/KE8YGWLogger/KE8YGWLogger/Models/StationProfile.swift`
+- `ios/KE8YGWLogger/KE8YGWLogger/Models/AppSettings.swift`
+- `ios/KE8YGWLogger/KE8YGWLogger/Services/HamRadioUtilities.swift`
+- `ios/KE8YGWLogger/KE8YGWLogger/Services/LogExportService.swift`
+- `ios/KE8YGWLogger/KE8YGWLogger/Views/*.swift`
+- `ios/KE8YGWLogger/KE8YGWLoggerTests/*.swift`
+- `ios/KE8YGWLogger/KE8YGWLogger/Resources/Info.plist`
+- `ios/KE8YGWLogger/README.md`
+- `README.md`
+- `ROADMAP.md`
+- `PROJECT_STATE.md`
+
+Architectural decisions:
+
+- The iOS app is a separate Apple-native project under `ios/` and does not alter the Rust workspace build.
+- SwiftData is used for local-first iOS persistence on iOS 17+.
+- ADIF/CSV export and ham-radio utility logic are pure Swift services with unit tests.
+- Apple paid capabilities, CI, TestFlight, iCloud, push notifications, and associated domains are intentionally not configured.
+
+New plugins:
+
+- None.
+
+Breaking changes:
+
+- None.
+
+## 2026-07-07
+
+Summary: Added the iOS app icon asset catalog for the Apple-native KE8YGW Logger project and wired the app bundle to use `AppIcon`.
+
+Major files changed:
+
+- `ios/KE8YGWLogger/KE8YGWLogger/Assets.xcassets`
+- `ios/KE8YGWLogger/KE8YGWLogger/Resources/Info.plist`
+- `ios/KE8YGWLogger/KE8YGWLogger.xcodeproj/project.pbxproj`
+- `PROJECT_STATE.md`
+
+Architectural decisions:
+
+- App icons are managed through a standard Xcode asset catalog rather than loose image files.
+- The bundle explicitly declares `CFBundleIconName` as `AppIcon`.
+
+New plugins:
+
+- None.
+
+Breaking changes:
+
+- None.
 
 ## 2026-07-07
 

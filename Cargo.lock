@@ -2508,6 +2508,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "ham-ios-ffi"
+version = "0.2.0"
+dependencies = [
+ "chrono",
+ "ham-core",
+ "ham-plugin-sdk",
+ "ham-sync",
+ "serde",
+ "serde_json",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "ham-plugin-sdk"
 version = "0.2.0"
 dependencies = [

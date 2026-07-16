@@ -20,6 +20,9 @@ This root roadmap summarizes the current implementation plan. Detailed architect
 - Mapping and Propagation Framework: GIS models, Maidenhead grid engine, great-circle math, map provider model, map layers, markers, QSO/station visualization, grayline, mock propagation/weather, and Maps workspace panels.
 - Online Services Ecosystem foundation: connected provider metadata, upload/download engine models, confirmation import events, DX/POTA/SOTA spot normalization, provider health, automation tasks, notifications, and Online Services workspace.
 - Durable Support Storage MVP: versioned JSON sidecar storage for service provider settings, service cache metadata, upload queue state, map layer preferences, lookup/rig UI config, online automation/notification support state, and support-storage runtime events.
+- Native iOS SwiftUI skeleton: Xcode project, SwiftData local persistence, QSO logging screens, station profile, ADIF/CSV export, settings, shared scheme, and unit-test targets for manual Xcode builds.
+- Native iOS functional parity pass: repository gap analysis, Rust `ham-ios-ffi` bridge crate, Swift bridge client, iPhone/iPad split-view shell, Dashboard, expanded QSO logging, station/equipment management, provider/callsign/credential screens, MapKit screen, POTA/SOTA workspaces, Net Control, Emergency, Sync, Backup/Restore, Diagnostics, Keychain plumbing, local notification plumbing, and bridge fallback tests.
+- Native iOS Rust-authority bridge pass: hardened byte-buffer FFI command ABI, public header/module map, Apple target build scripts, deterministic XCFramework packaging path, Xcode framework reference/build phase, typed Swift bridge wrappers, QSO/station/activation/Net Control Rust mutation routes, SwiftData projection metadata, Diagnostics self-test, and macOS CI workflow scaffolding.
 
 ## Current Milestone
 
@@ -42,6 +45,11 @@ runtime controls are wired with redacted error-code mapping. SOTAWatch live acce
 explicit API approval/terms handling, and LoTW production upload remains
 deferred until a safe TQSL/certificate-signing flow is modeled.
 
+Native iOS parity is implemented at an MVP surface level and key mutation paths
+now prefer Rust authority. Rust verification passes in this Windows workspace,
+but Apple target compilation, XCFramework assembly, Xcode simulator/device
+builds, archive validation, and Swift tests still need to run on macOS.
+
 ## Release Scope Correction
 
 v1.0 targets hosted web, installable desktop, shared Rust core, shared hosted/self-hosted API, cloud/self-hosted sync, production provider integrations, and production credential storage. iOS is not part of v1.0, and PWA installability is not a release target.
@@ -57,6 +65,14 @@ Provider Runtime Hardening, Credentials, and Desktop Runtime:
 - Validate gated Club Log, QRZ Logbook, and eQSL live uploads on explicit
   release-runner credentials.
 - Browser-level GUI tests.
+
+iOS Native Validation and Sync/Restore Authority:
+
+- Run the new macOS workflow or local macOS commands to validate Apple Rust targets, XCFramework contents, simulator build/test, generic device build, and archive behavior.
+- Add QSO correction/update and richer projection rebuild commands through Rust FFI.
+- Route hosted sync push/pull/merge/conflict resolution through `ham-sync` FFI commands.
+- Route JSON/ZIP backup inspect, dry-run restore, and apply restore through Rust when the repository exposes those workflows.
+- Add Xcode UI/snapshot/offline/provider mock/sync/map tests and run them in the macOS workflow.
 
 Then continue Live Provider Adapters and Production Credential Backends:
 
@@ -84,6 +100,7 @@ Then continue Live Provider Adapters and Production Credential Backends:
 - OS keychain/secret-store release-runner validation.
 
 - Tauri installer/signing polish and release-runner package validation.
+- iOS parity with the Rust core event/proposal/sync architecture.
 - Award rule databases and needed-list intelligence.
 - Durable upload queue and provider settings.
 - LAN trust pairing UX and real peer-to-peer transport.
