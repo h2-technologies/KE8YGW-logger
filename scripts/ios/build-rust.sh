@@ -47,10 +47,21 @@ if [[ -n "${IOS_RUST_TARGETS:-}" ]]; then
   IOS_RUST_TARGETS="${TARGETS[*]}" bash "$SCRIPT_DIR/install-targets.sh"
 fi
 
-CARGO_LOCKED_ARGS=()
+USE_CARGO_LOCKED=0
 if [[ "${CI:-}" == "true" || "${CARGO_LOCKED:-}" == "1" ]]; then
-  CARGO_LOCKED_ARGS+=(--locked)
+  USE_CARGO_LOCKED=1
 fi
+
+cargo_build_ham_ios_ffi() {
+  local target="$1"
+  shift
+
+  if [[ "$USE_CARGO_LOCKED" == "1" ]]; then
+    cargo build --locked -p ham-ios-ffi --target "$target" "$@"
+  else
+    cargo build -p ham-ios-ffi --target "$target" "$@"
+  fi
+}
 
 target_requested() {
   local requested="$1"
@@ -69,9 +80,9 @@ cd "$REPO_ROOT"
 for target in "${TARGETS[@]}"; do
   echo "Building ham-ios-ffi for $target ($CONFIGURATION)"
   if [[ "$PROFILE_DIR" == "debug" ]]; then
-    cargo build "${CARGO_LOCKED_ARGS[@]}" -p ham-ios-ffi --target "$target"
+    cargo_build_ham_ios_ffi "$target"
   else
-    cargo build "${CARGO_LOCKED_ARGS[@]}" -p ham-ios-ffi --target "$target" --release
+    cargo_build_ham_ios_ffi "$target" --release
   fi
 done
 
