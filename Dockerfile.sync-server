@@ -1,13 +1,74 @@
-FROM rust:1-bookworm AS builder
+# syntax=docker/dockerfile:1.7
+ARG RUST_VERSION=1.96.0
+
+FROM rust:${RUST_VERSION}-bookworm AS builder
 WORKDIR /app
+
+COPY Cargo.toml Cargo.lock ./
+COPY crates/ham-api-contract/Cargo.toml crates/ham-api-contract/Cargo.toml
+COPY crates/ham-core/Cargo.toml crates/ham-core/Cargo.toml
+COPY crates/ham-plugin-sdk/Cargo.toml crates/ham-plugin-sdk/Cargo.toml
+COPY crates/ham-sync/Cargo.toml crates/ham-sync/Cargo.toml
+COPY crates/ham-sync-server/Cargo.toml crates/ham-sync-server/Cargo.toml
+COPY crates/ham-server/Cargo.toml crates/ham-server/Cargo.toml
+COPY crates/ham-cli/Cargo.toml crates/ham-cli/Cargo.toml
+COPY crates/ham-gui/Cargo.toml crates/ham-gui/Cargo.toml
+COPY crates/ham-desktop/Cargo.toml crates/ham-desktop/Cargo.toml
+COPY crates/ham-ios-ffi/Cargo.toml crates/ham-ios-ffi/Cargo.toml
+COPY src-tauri/Cargo.toml src-tauri/Cargo.toml
+
+RUN mkdir -p \
+      crates/ham-api-contract/src \
+      crates/ham-core/src \
+      crates/ham-plugin-sdk/src \
+      crates/ham-sync/src \
+      crates/ham-sync-server/src \
+      crates/ham-server/src \
+      crates/ham-cli/src \
+      crates/ham-gui/src \
+      crates/ham-desktop/src \
+      crates/ham-ios-ffi/src \
+      src-tauri/src && \
+    touch \
+      crates/ham-api-contract/src/lib.rs \
+      crates/ham-core/src/lib.rs \
+      crates/ham-plugin-sdk/src/lib.rs \
+      crates/ham-sync/src/lib.rs \
+      crates/ham-sync-server/src/main.rs \
+      crates/ham-server/src/lib.rs \
+      crates/ham-server/src/main.rs \
+      crates/ham-cli/src/main.rs \
+      crates/ham-gui/src/lib.rs \
+      crates/ham-gui/src/main.rs \
+      crates/ham-desktop/src/lib.rs \
+      crates/ham-desktop/src/main.rs \
+      crates/ham-ios-ffi/src/lib.rs \
+      src-tauri/src/main.rs
+
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
+    cargo fetch --locked
+
 COPY . .
-RUN cargo build --release -p ham-sync-server
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
+    --mount=type=cache,target=/app/target,sharing=locked \
+    cargo build --locked --release -p ham-sync-server --bin ham-sync-server && \
+    cp /app/target/release/ham-sync-server /tmp/ham-sync-server
 
 FROM debian:bookworm-slim
-WORKDIR /app
-COPY --from=builder /app/target/release/ham-sync-server /usr/local/bin/ham-sync-server
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends ca-certificates && \
+    rm -rf /var/lib/apt/lists/* && \
+    useradd --system --uid 10001 --home-dir /nonexistent --shell /usr/sbin/nologin ham-sync && \
+    mkdir -p /var/lib/ham-sync/logs && \
+    chown -R ham-sync:ham-sync /var/lib/ham-sync
+WORKDIR /var/lib/ham-sync
+COPY --from=builder /tmp/ham-sync-server /usr/local/bin/ham-sync-server
 ENV HAM_SYNC_SERVER_BIND=0.0.0.0:9740
 ENV HAM_SYNC_PUBLIC_URL=http://localhost:9740
 ENV HAM_SYNC_SERVICE_MODE=self_hosted
+ENV HAM_PLATFORM_LOG_DIR=/var/lib/ham-sync/logs
 EXPOSE 9740
+USER ham-sync
 CMD ["ham-sync-server"]
