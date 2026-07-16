@@ -72,11 +72,22 @@ passes should start with these documents:
   credential handling, config schemas, runtime redaction, and report safety.
 - [Developer Guide](docs/DEVELOPER_GUIDE.md): local commands, completion
   checklist, feature workflow, and testing expectations.
+- [Contribution Guide](CONTRIBUTING.md): local setup, branch, commit, PR,
+  validation, architecture, API, migration, generated-file, and secrets rules.
+- [Security Policy](SECURITY.md): private vulnerability reporting and
+  security-sensitive project areas.
+- [Support Policy](SUPPORT.md): bug, feature, usage, provider, self-hosting,
+  and diagnostic-reporting expectations.
+- [Governance](GOVERNANCE.md): owner-led project governance, review,
+  maintainer, release approval, ADR, and conflict-resolution rules.
+- [Release Policy](RELEASE.md): release channels, versioning, CI gates,
+  artifacts, signing/SBOM expectations, migrations, and emergency releases.
+- [License](LICENSE): MIT license for the repository.
+- [Architecture Decision Records](docs/adr/README.md): ADR process, template,
+  and accepted decisions.
 - [Root Roadmap](ROADMAP.md): current milestone summary and next milestone.
 - [Project State](PROJECT_STATE.md): authoritative implementation status,
   technical debt, test coverage, and next recommended milestone.
-- [Architecture Decisions](docs/adr/0001-append-only-official-log.md): accepted
-  ADRs for the foundational design choices.
 
 ## Workspace
 
@@ -1117,6 +1128,7 @@ just clippy   # clippy for all workspace crates and targets, warnings are errors
 just test     # run all workspace tests
 just build    # debug build for all workspace crates
 just release  # release build for all workspace crates
+just governance-check # repository governance, template, metadata, and link checks
 just gui      # run the local GUI shell at http://127.0.0.1:9467
 just sync-server # run the self-hosted sync server at http://127.0.0.1:9740
 cargo run -p ham-server --bin ham-server # run hosted beta API at http://127.0.0.1:9750
@@ -1134,6 +1146,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 cargo build --workspace
 cargo build --release --workspace
+pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/governance-check.ps1
 cargo run -p ham-gui --bin ham-gui
 cargo run -p ham-sync-server --bin ham-sync-server
 cargo run -p ham-server --bin ham-server

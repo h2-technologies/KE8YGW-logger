@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security reports
+    url: https://github.com/h2-technologies/KE8YGW-logger/security
+    about: Report vulnerabilities privately. Do not disclose security issues in public issues.
+  - name: Contribution guide
+    url: https://github.com/h2-technologies/KE8YGW-logger/blob/main/CONTRIBUTING.md
+    about: Read local setup, validation, architecture, and pull-request expectations.
