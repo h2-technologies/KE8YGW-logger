@@ -1,6 +1,6 @@
 # iOS Build And Rust Linking
 
-Last updated: 2026-07-12
+Last updated: 2026-07-16
 
 This document describes the reproducible macOS workflow for building the Rust
 FFI library and linking it into the native iOS app.
@@ -39,33 +39,80 @@ artifacts/ios/link/Release-iphonesimulator/libham_ios_ffi.a
 `artifacts/` is ignored by Git. Do not commit machine-generated framework
 output unless the repository intentionally changes that policy.
 
+This is the production/package validation path. It builds the device slice,
+the Apple Silicon simulator slice, and the Intel simulator slice when the Rust
+toolchain supports it, then assembles `artifacts/HamIOSFFI.xcframework/`.
+
+## Fast Simulator CI Path
+
+Ordinary pull-request and developer validation should avoid the full
+XCFramework path. Build and stage only the Apple Silicon simulator static
+library in Debug with low Rust debug info, then let a single `xcodebuild test`
+build the Swift target and run unit tests:
+
+```bash
+CONFIGURATION=Debug \
+IOS_RUST_TARGETS=aarch64-apple-ios-sim \
+CARGO_PROFILE_DEV_DEBUG=1 \
+CARGO_PROFILE_DEV_SPLIT_DEBUGINFO=off \
+bash scripts/ios/build-rust.sh
+
+SKIP_RUST_XCFRAMEWORK_BUILD=1 \
+xcodebuild \
+  -project "ios/KE8YGWLogger/KE8YGWLogger.xcodeproj" \
+  -scheme "KE8YGWLogger" \
+  -configuration Debug \
+  -destination "platform=iOS Simulator,name=iPhone 16" \
+  CODE_SIGNING_ALLOWED=NO \
+  test
+```
+
+That stages the library at:
+
+```text
+artifacts/ios/link/Debug-iphonesimulator/libham_ios_ffi.a
+```
+
+Do not add a separate `xcodebuild build` before `xcodebuild test`; the test
+action already performs the build.
+
 ## Xcode Integration
 
 The `KE8YGWLogger` target has a pre-link build phase named
-`Build HamIOSFFI Rust Library`. It runs:
+`Build HamIOSFFI Rust Library`. For Debug simulator builds, it runs:
+
+```bash
+IOS_RUST_TARGETS="${IOS_RUST_TARGETS:-aarch64-apple-ios-sim}" \
+bash "$SRCROOT/../../scripts/ios/build-rust.sh"
+```
+
+For other configurations and platforms, it runs:
 
 ```bash
 bash "$SRCROOT/../../scripts/ios/build-xcframework.sh"
 ```
 
-This keeps the framework generation documented and reproducible. Xcode does not
-directly link a generated `HamIOSFFI.xcframework` file reference, because a
-clean checkout has no `artifacts/` directory yet and Xcode can fail before the
-build phase creates it. Instead, the app target links `-lham_ios_ffi` from:
+This keeps the fast developer path cheap while preserving the full
+XCFramework-producing path for device, archive, and release validation. Xcode
+does not directly link a generated `HamIOSFFI.xcframework` file reference,
+because a clean checkout has no `artifacts/` directory yet and Xcode can fail
+before the build phase creates it. Instead, the app target links
+`-lham_ios_ffi` from:
 
 ```text
 $(SRCROOT)/../../artifacts/ios/link/$(CONFIGURATION)$(EFFECTIVE_PLATFORM_NAME)
 ```
 
 The build script copies the correct device or simulator static library to that
-path before the link step. It still assembles
-`artifacts/HamIOSFFI.xcframework/` for CI, packaging, and architecture
-inspection, but the `.xcframework` directory is not declared as an Xcode build
-phase output.
+path before the link step. The production script still assembles
+`artifacts/HamIOSFFI.xcframework/` for packaging and architecture inspection,
+but the `.xcframework` directory is not declared as an Xcode build phase
+output.
 
-Set `SKIP_RUST_XCFRAMEWORK_BUILD=1` only when the generated static library and
-framework already exist and you are intentionally testing Xcode without
-rebuilding Rust.
+Set `SKIP_RUST_XCFRAMEWORK_BUILD=1` when the generated static library has
+already been staged for Xcode and you are intentionally testing Xcode without
+rebuilding Rust. The GitHub iOS workflow uses this after its one explicit
+Rust FFI build step.
 
 ## Build And Test Locally
 
@@ -90,9 +137,12 @@ xcodebuild \
 Command-line unit tests:
 
 ```bash
+CONFIGURATION=Debug IOS_RUST_TARGETS=aarch64-apple-ios-sim bash scripts/ios/build-rust.sh
+SKIP_RUST_XCFRAMEWORK_BUILD=1 \
 xcodebuild \
   -project "ios/KE8YGWLogger/KE8YGWLogger.xcodeproj" \
   -scheme "KE8YGWLogger" \
+  -configuration Debug \
   -destination "platform=iOS Simulator,name=iPhone 16" \
   CODE_SIGNING_ALLOWED=NO \
   test

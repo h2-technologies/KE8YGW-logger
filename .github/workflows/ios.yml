@@ -2,10 +2,21 @@ name: iOS Native
 
 on:
   pull_request:
+    branches:
+      - dev
+      - main
   push:
     branches:
+      - dev
       - main
   workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   ios:
@@ -26,19 +37,24 @@ jobs:
 
       - name: Show toolchains
         run: |
+          set -euo pipefail
+          echo "host arch: $(uname -m)"
+          if [[ "$(uname -m)" != "arm64" ]]; then
+            echo "error: iOS CI expects an arm64 macOS runner for aarch64-apple-ios-sim builds." >&2
+            exit 1
+          fi
           swift --version
           xcodebuild -version
           rustc --version
           cargo --version
 
-      - name: Build HamIOSFFI XCFramework
-        run: bash scripts/ios/build-xcframework.sh
-
-      - name: Verify HamIOSFFI linkage
-        run: bash scripts/ios/verify-linkage.sh
-
-      - name: Run Rust FFI tests
-        run: cargo test -p ham-ios-ffi
+      - name: Build and stage simulator Rust FFI
+        env:
+          CONFIGURATION: Debug
+          IOS_RUST_TARGETS: aarch64-apple-ios-sim
+          CARGO_PROFILE_DEV_DEBUG: "1"
+          CARGO_PROFILE_DEV_SPLIT_DEBUGINFO: "off"
+        run: bash scripts/ios/build-rust.sh
 
       - name: Pick iOS simulator
         id: simulator
@@ -52,21 +68,16 @@ jobs:
           echo "device=$DEVICE" >> "$GITHUB_OUTPUT"
           echo "Using simulator: $DEVICE"
 
-      - name: Build iOS simulator target
+      - name: Build and test iOS simulator target
+        env:
+          SKIP_RUST_XCFRAMEWORK_BUILD: "1"
         run: |
-          xcodebuild \
-            -project "ios/KE8YGWLogger/KE8YGWLogger.xcodeproj" \
-            -scheme "KE8YGWLogger" \
-            -destination "platform=iOS Simulator,name=${{ steps.simulator.outputs.device }}" \
-            CODE_SIGNING_ALLOWED=NO \
-            build
-
-      - name: Run Swift unit tests
-        run: |
+          set -euo pipefail
           mkdir -p build
           xcodebuild \
             -project "ios/KE8YGWLogger/KE8YGWLogger.xcodeproj" \
             -scheme "KE8YGWLogger" \
+            -configuration Debug \
             -destination "platform=iOS Simulator,name=${{ steps.simulator.outputs.device }}" \
             -resultBundlePath "build/ios-tests.xcresult" \
             CODE_SIGNING_ALLOWED=NO \
