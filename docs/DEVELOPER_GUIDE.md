@@ -61,6 +61,8 @@ cargo fmt --all
 cargo check --workspace --all-targets
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
+cargo check --locked -p ham-sync --no-default-features --all-targets
+cargo test --locked -p ham-sync --features surreal-storage
 cargo build --workspace
 cargo build --release --workspace
 pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/governance-check.ps1
@@ -149,6 +151,7 @@ At minimum, tests should cover:
 - persistence/reload where storage is touched
 - projection rebuild behavior
 - sync verification behavior where replication is touched
+- both lightweight and `surreal-storage` sync feature paths when sync dependencies change
 - GUI model logic where UI structure changes
 
 Network and GUI browser tests may be mocked or model-level when CI reliability would otherwise suffer.
