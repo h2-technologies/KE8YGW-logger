@@ -2449,6 +2449,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "ham-api-contract"
+version = "0.2.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "ham-cli"
 version = "0.2.0"
 dependencies = [
@@ -2514,6 +2522,7 @@ name = "ham-server"
 version = "0.2.0"
 dependencies = [
  "chrono",
+ "ham-api-contract",
  "ham-core",
  "ham-plugin-sdk",
  "ham-sync",
@@ -2545,6 +2554,7 @@ dependencies = [
 name = "ham-sync-server"
 version = "0.2.0"
 dependencies = [
+ "ham-api-contract",
  "ham-sync",
  "serde",
  "serde_json",

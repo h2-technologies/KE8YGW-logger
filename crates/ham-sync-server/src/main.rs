@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     env,
     io::{BufRead, BufReader, Read, Write},
     net::{TcpListener, TcpStream},
@@ -6,13 +7,13 @@ use std::{
     sync::Arc,
 };
 
+use ham_api_contract::{ApiErrorBody, ApiErrorCode};
 use ham_sync::{
     CloudAuth, CloudHealthResponse, CloudPreviewPullRequest, CloudPullEventsRequest,
     CloudPushEventsRequest, CloudServerConfig, CloudServiceMode, DiagnosticReportUploadRequest,
     DurableCloudSyncPaths, DurableCloudSyncServer, PairDeviceRequest,
 };
 use serde::Serialize;
-use serde_json::json;
 use uuid::Uuid;
 
 fn main() {
@@ -73,6 +74,7 @@ fn main() {
 struct HttpRequest {
     method: String,
     target: String,
+    headers: HashMap<String, String>,
     body: Vec<u8>,
 }
 
@@ -89,38 +91,59 @@ fn handle_client(
         }
     };
     let (path, query) = split_target(&request.target);
+    let request_id = request_id(&request);
 
     let response = match (request.method.as_str(), path) {
         ("GET", "/health") => json_response(&server.health()),
         ("POST", "/api/v1/auth/pair") => {
             match serde_json::from_slice::<PairDeviceRequest>(&request.body) {
                 Ok(pair) => json_response(&runtime.block_on(server.pair_device(pair))),
-                Err(error) => json_error(400, format!("invalid pair request: {error}")),
+                Err(_) => json_error(
+                    400,
+                    "invalid pair request",
+                    ApiErrorCode::InvalidJson,
+                    request_id.clone(),
+                ),
             }
         }
         ("GET", "/api/v1/logbooks") => match auth_from_query(query) {
             Some(auth) => match runtime.block_on(server.list_logbooks(&auth)) {
                 Ok(payload) => json_response(&payload),
-                Err(error) => json_error(403, error.to_string()),
+                Err(error) => cloud_error(error, request_id.clone()),
             },
-            None => json_error(401, "missing token"),
+            None => json_error(
+                401,
+                "missing token",
+                ApiErrorCode::MissingToken,
+                request_id.clone(),
+            ),
         },
         ("GET", path) if path.starts_with("/api/v1/logbooks/") && path.ends_with("/head") => {
-            with_logbook_auth(path, query, "/head", |auth, logbook_id| {
-                match runtime.block_on(server.get_head(&auth, logbook_id)) {
+            with_logbook_auth(
+                path,
+                query,
+                "/head",
+                request_id.clone(),
+                |auth, logbook_id| match runtime.block_on(server.get_head(&auth, logbook_id)) {
                     Ok(payload) => json_response(&payload),
-                    Err(error) => json_error(403, error.to_string()),
-                }
-            })
+                    Err(error) => cloud_error(error, request_id.clone()),
+                },
+            )
         }
         ("GET", path) if path.starts_with("/api/v1/logbooks/") && path.ends_with("/events") => {
-            with_logbook_auth(path, query, "/events", |auth, logbook_id| {
-                let after_hash = parse_query(query).get("after_hash").cloned();
-                match runtime.block_on(server.event_metadata(&auth, logbook_id, after_hash)) {
-                    Ok(payload) => json_response(&payload),
-                    Err(error) => json_error(403, error.to_string()),
-                }
-            })
+            with_logbook_auth(
+                path,
+                query,
+                "/events",
+                request_id.clone(),
+                |auth, logbook_id| {
+                    let after_hash = parse_query(query).get("after_hash").cloned();
+                    match runtime.block_on(server.event_metadata(&auth, logbook_id, after_hash)) {
+                        Ok(payload) => json_response(&payload),
+                        Err(error) => cloud_error(error, request_id.clone()),
+                    }
+                },
+            )
         }
         ("POST", path)
             if path.starts_with("/api/v1/logbooks/") && path.ends_with("/preview-pull") =>
@@ -128,51 +151,66 @@ fn handle_client(
             match serde_json::from_slice::<CloudPreviewPullRequest>(&request.body) {
                 Ok(payload) => match runtime.block_on(server.preview_pull(payload)) {
                     Ok(payload) => json_response(&payload),
-                    Err(error) => json_error(403, error.to_string()),
+                    Err(error) => cloud_error(error, request_id.clone()),
                 },
-                Err(error) => json_error(400, format!("invalid preview request: {error}")),
+                Err(_) => json_error(
+                    400,
+                    "invalid preview request",
+                    ApiErrorCode::InvalidJson,
+                    request_id.clone(),
+                ),
             }
         }
         ("POST", path) if path.starts_with("/api/v1/logbooks/") && path.ends_with("/pull") => {
             match serde_json::from_slice::<CloudPullEventsRequest>(&request.body) {
                 Ok(payload) => match runtime.block_on(server.pull_events(payload)) {
                     Ok(payload) => json_response(&payload),
-                    Err(error) => json_error(403, error.to_string()),
+                    Err(error) => cloud_error(error, request_id.clone()),
                 },
-                Err(error) => json_error(400, format!("invalid pull request: {error}")),
+                Err(_) => json_error(
+                    400,
+                    "invalid pull request",
+                    ApiErrorCode::InvalidJson,
+                    request_id.clone(),
+                ),
             }
         }
         ("POST", path) if path.starts_with("/api/v1/logbooks/") && path.ends_with("/push") => {
             match serde_json::from_slice::<CloudPushEventsRequest>(&request.body) {
                 Ok(payload) => match runtime.block_on(server.push_events(payload)) {
                     Ok(payload) => json_response(&payload),
-                    Err(error) => json_error(403, error.to_string()),
+                    Err(error) => cloud_error(error, request_id.clone()),
                 },
-                Err(error) => json_error(400, format!("invalid push request: {error}")),
+                Err(_) => json_error(
+                    400,
+                    "invalid push request",
+                    ApiErrorCode::InvalidJson,
+                    request_id.clone(),
+                ),
             }
         }
         ("GET", "/api/v1/sync/status") => match auth_from_query(query) {
             Some(auth) => match runtime.block_on(server.status(Some(&auth))) {
                 Ok(payload) => json_response(&payload),
-                Err(error) => json_error(403, error.to_string()),
+                Err(error) => cloud_error(error, request_id.clone()),
             },
             None => match runtime.block_on(server.status(None)) {
                 Ok(payload) => json_response(&payload),
-                Err(error) => json_error(403, error.to_string()),
+                Err(error) => cloud_error(error, request_id.clone()),
             },
         },
         ("POST", "/api/v1/reports") => {
             match serde_json::from_slice::<DiagnosticReportUploadRequest>(&request.body) {
                 Ok(payload) => match runtime.block_on(server.upload_report(payload)) {
                     Ok(payload) => json_response(&payload),
-                    Err(error) => match error {
-                        ham_sync::CloudSyncError::Unauthenticated => {
-                            json_error(401, error.to_string())
-                        }
-                        _ => json_error(403, error.to_string()),
-                    },
+                    Err(error) => cloud_error(error, request_id.clone()),
                 },
-                Err(error) => json_error(400, format!("invalid report upload request: {error}")),
+                Err(_) => json_error(
+                    400,
+                    "invalid report upload request",
+                    ApiErrorCode::InvalidJson,
+                    request_id.clone(),
+                ),
             }
         }
         ("GET", path) if path.starts_with("/api/v1/reports/") => match auth_from_query(query) {
@@ -180,12 +218,17 @@ fn handle_client(
                 let report_id = path.trim_start_matches("/api/v1/reports/");
                 match runtime.block_on(server.report_metadata(&auth, report_id)) {
                     Ok(payload) => json_response(&payload),
-                    Err(error) => json_error(403, error.to_string()),
+                    Err(error) => cloud_error(error, request_id.clone()),
                 }
             }
-            None => json_error(401, "missing token"),
+            None => json_error(
+                401,
+                "missing token",
+                ApiErrorCode::MissingToken,
+                request_id.clone(),
+            ),
         },
-        _ => json_error(404, "not found"),
+        _ => json_error(404, "not found", ApiErrorCode::NotFound, request_id),
     };
 
     let _ = stream.write_all(&response);
@@ -199,6 +242,7 @@ fn read_http_request(reader: &mut BufReader<&mut TcpStream>) -> std::io::Result<
     let target = parts.next().unwrap_or("/").to_owned();
 
     let mut content_length = 0usize;
+    let mut headers = HashMap::new();
     loop {
         let mut header = String::new();
         reader.read_line(&mut header)?;
@@ -207,9 +251,12 @@ fn read_http_request(reader: &mut BufReader<&mut TcpStream>) -> std::io::Result<
             break;
         }
         if let Some((name, value)) = header.split_once(':') {
+            let name = name.trim().to_ascii_lowercase();
+            let value = value.trim().to_owned();
             if name.eq_ignore_ascii_case("content-length") {
-                content_length = value.trim().parse().unwrap_or(0);
+                content_length = value.parse().unwrap_or(0);
             }
+            headers.insert(name, value);
         }
     }
 
@@ -220,6 +267,7 @@ fn read_http_request(reader: &mut BufReader<&mut TcpStream>) -> std::io::Result<
     Ok(HttpRequest {
         method,
         target,
+        headers,
         body,
     })
 }
@@ -228,10 +276,11 @@ fn with_logbook_auth(
     path: &str,
     query: &str,
     suffix: &str,
+    request_id: String,
     handler: impl FnOnce(CloudAuth, Uuid) -> Vec<u8>,
 ) -> Vec<u8> {
     let Some(auth) = auth_from_query(query) else {
-        return json_error(401, "missing token");
+        return json_error(401, "missing token", ApiErrorCode::MissingToken, request_id);
     };
     let Some(logbook_id) = path
         .trim_start_matches("/api/v1/logbooks/")
@@ -240,7 +289,12 @@ fn with_logbook_auth(
         .parse::<Uuid>()
         .ok()
     else {
-        return json_error(400, "invalid logbook id");
+        return json_error(
+            400,
+            "invalid logbook id",
+            ApiErrorCode::InvalidUuid,
+            request_id,
+        );
     };
     handler(auth, logbook_id)
 }
@@ -276,10 +330,52 @@ fn json_response<T: Serialize>(payload: &T) -> Vec<u8> {
     response(200, "application/json; charset=utf-8", &body)
 }
 
-fn json_error(status: u16, message: impl Into<String>) -> Vec<u8> {
-    let body = serde_json::to_vec(&json!({ "error": message.into() }))
+fn cloud_error(error: ham_sync::CloudSyncError, request_id: String) -> Vec<u8> {
+    match error {
+        ham_sync::CloudSyncError::Unauthenticated => json_error(
+            401,
+            "unauthenticated",
+            ApiErrorCode::InvalidToken,
+            request_id,
+        ),
+        ham_sync::CloudSyncError::UnauthorizedLogbook(_) => {
+            json_error(403, "forbidden", ApiErrorCode::Forbidden, request_id)
+        }
+        ham_sync::CloudSyncError::PairingRejected(_) | ham_sync::CloudSyncError::Validation(_) => {
+            json_error(
+                400,
+                "request validation failed",
+                ApiErrorCode::ValidationFailed,
+                request_id,
+            )
+        }
+        ham_sync::CloudSyncError::Store(_) => json_error(
+            500,
+            "request could not be completed",
+            ApiErrorCode::StoreUnavailable,
+            request_id,
+        ),
+    }
+}
+
+fn json_error(
+    status: u16,
+    message: impl Into<String>,
+    code: ApiErrorCode,
+    request_id: String,
+) -> Vec<u8> {
+    let body = serde_json::to_vec(&ApiErrorBody::new(message.into(), code, request_id, false))
         .expect("error payload should serialize");
     response(status, "application/json; charset=utf-8", &body)
+}
+
+fn request_id(request: &HttpRequest) -> String {
+    request
+        .headers
+        .get("x-request-id")
+        .filter(|value| !value.trim().is_empty())
+        .cloned()
+        .unwrap_or_else(|| Uuid::new_v4().to_string())
 }
 
 fn response(status: u16, content_type: &str, body: &[u8]) -> Vec<u8> {
@@ -302,3 +398,29 @@ fn response(status: u16, content_type: &str, body: &[u8]) -> Vec<u8> {
 
 #[allow(dead_code)]
 fn _assert_health_is_serializable(_: CloudHealthResponse) {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::Value;
+
+    #[test]
+    fn self_hosted_errors_keep_stable_shape() {
+        let response = json_error(
+            401,
+            "missing token",
+            ApiErrorCode::MissingToken,
+            "sync-contract-test".to_owned(),
+        );
+        let text = String::from_utf8(response).expect("HTTP response should be UTF-8");
+        let body = text
+            .split("\r\n\r\n")
+            .nth(1)
+            .expect("HTTP response should contain a body");
+        let json: Value = serde_json::from_str(body).expect("error body should be JSON");
+        assert_eq!(json["error"], "missing token");
+        assert_eq!(json["code"], "missing_token");
+        assert_eq!(json["request_id"], "sync-contract-test");
+        assert_eq!(json["retryable"], false);
+    }
+}

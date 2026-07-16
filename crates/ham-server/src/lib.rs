@@ -7,6 +7,7 @@ use std::{
 };
 
 use chrono::{DateTime, Utc};
+use ham_api_contract::{hosted_route_strings, ApiErrorBody, ApiErrorCode};
 use ham_core::{
     adif_for_upload_job, default_credential_store, default_log_directory, default_service_registry,
     execute_dx_cluster_read_once, execute_tier_one_lookup, execute_tier_one_upload, export_adif,
@@ -211,6 +212,7 @@ impl ApiRequest {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ApiResponse {
     pub status: u16,
+    pub headers: HashMap<String, String>,
     pub body: Vec<u8>,
 }
 
@@ -232,6 +234,8 @@ pub enum ApiError {
     Forbidden,
     #[error("not found")]
     NotFound,
+    #[error("invalid uuid: {0}")]
+    InvalidUuid(String),
     #[error("bad request: {0}")]
     BadRequest(String),
     #[error("proposal rejected: {0}")]
@@ -1409,15 +1413,10 @@ impl HostedServer {
     }
 
     pub async fn handle(&self, request: ApiRequest) -> ApiResponse {
+        let request_id = request_id(&request);
         match self.route(request).await {
             Ok(response) => json_response(200, &response),
-            Err(ApiError::BadRequest(message)) => json_error(400, message),
-            Err(
-                ApiError::Unauthenticated | ApiError::InactiveSession | ApiError::RevokedDevice,
-            ) => json_error(401, "unauthenticated"),
-            Err(ApiError::Forbidden) => json_error(403, "forbidden"),
-            Err(ApiError::NotFound) => json_error(404, "not found"),
-            Err(ApiError::Proposal(message) | ApiError::Store(message)) => json_error(400, message),
+            Err(error) => api_error_response(error, request_id),
         }
     }
 
@@ -5359,86 +5358,7 @@ fn restore_backup_support_metadata(
 
 fn route_catalog() -> RouteCatalogResponse {
     RouteCatalogResponse {
-        implemented: vec![
-            "GET /health".to_owned(),
-            "GET /api/v1/status".to_owned(),
-            "POST /api/v1/auth/login".to_owned(),
-            "POST /api/v1/auth/logout".to_owned(),
-            "GET /api/v1/auth/session".to_owned(),
-            "GET /api/v1/logbooks".to_owned(),
-            "POST /api/v1/logbooks".to_owned(),
-            "GET /api/v1/logbooks/:id".to_owned(),
-            "PATCH /api/v1/logbooks/:id".to_owned(),
-            "GET /api/v1/qsos".to_owned(),
-            "POST /api/v1/qsos".to_owned(),
-            "GET /api/v1/qsos/:id".to_owned(),
-            "PATCH /api/v1/qsos/:id".to_owned(),
-            "POST /api/v1/qsos/:id/delete".to_owned(),
-            "POST /api/v1/qsos/:id/restore".to_owned(),
-            "POST /api/v1/qsos/:id/notes".to_owned(),
-            "GET /api/v1/station-profiles".to_owned(),
-            "POST /api/v1/station-profiles".to_owned(),
-            "GET /api/v1/station-profiles/:id".to_owned(),
-            "PATCH /api/v1/station-profiles/:id".to_owned(),
-            "POST /api/v1/station-profiles/:id/archive".to_owned(),
-            "POST /api/v1/station-profiles/:id/set-default".to_owned(),
-            "GET /api/v1/equipment".to_owned(),
-            "POST /api/v1/equipment".to_owned(),
-            "GET /api/v1/equipment/:id".to_owned(),
-            "PATCH /api/v1/equipment/:id".to_owned(),
-            "POST /api/v1/equipment/:id/archive".to_owned(),
-            "POST /api/v1/adif/import".to_owned(),
-            "GET /api/v1/adif/export".to_owned(),
-            "GET /api/v1/activations".to_owned(),
-            "POST /api/v1/activations".to_owned(),
-            "GET /api/v1/activations/:id".to_owned(),
-            "PATCH /api/v1/activations/:id".to_owned(),
-            "POST /api/v1/activations/:id/end".to_owned(),
-            "GET /api/v1/activations/:id/qsos".to_owned(),
-            "GET /api/v1/net-control/sessions".to_owned(),
-            "POST /api/v1/net-control/sessions".to_owned(),
-            "GET /api/v1/net-control/sessions/:id".to_owned(),
-            "PATCH /api/v1/net-control/sessions/:id".to_owned(),
-            "POST /api/v1/net-control/sessions/:id/start".to_owned(),
-            "POST /api/v1/net-control/sessions/:id/end".to_owned(),
-            "POST /api/v1/net-control/sessions/:id/checkins".to_owned(),
-            "PATCH /api/v1/net-control/sessions/:id/checkins/:id".to_owned(),
-            "POST /api/v1/net-control/sessions/:id/traffic".to_owned(),
-            "GET /api/v1/maps/qsos".to_owned(),
-            "GET /api/v1/maps/stations".to_owned(),
-            "GET /api/v1/maps/paths".to_owned(),
-            "GET /api/v1/maps/settings".to_owned(),
-            "PATCH /api/v1/maps/settings".to_owned(),
-            "POST /api/v1/backups/export".to_owned(),
-            "GET /api/v1/backups".to_owned(),
-            "GET /api/v1/backups/:id".to_owned(),
-            "GET /api/v1/backups/:id/download".to_owned(),
-            "POST /api/v1/backups/import/dry-run".to_owned(),
-            "POST /api/v1/backups/import".to_owned(),
-            "GET /api/v1/providers".to_owned(),
-            "GET /api/v1/providers/:id".to_owned(),
-            "PATCH /api/v1/providers/:id".to_owned(),
-            "POST /api/v1/providers/:id/test".to_owned(),
-            "POST /api/v1/providers/:id/lookup".to_owned(),
-            "GET /api/v1/providers/:id/spots".to_owned(),
-            "POST /api/v1/providers/dx-cluster/connect".to_owned(),
-            "POST /api/v1/providers/dx-cluster/read".to_owned(),
-            "POST /api/v1/providers/dx-cluster/disconnect".to_owned(),
-            "GET /api/v1/providers/dx-cluster/status".to_owned(),
-            "GET /api/v1/uploads".to_owned(),
-            "POST /api/v1/uploads/run".to_owned(),
-            "POST /api/v1/uploads/:id/retry".to_owned(),
-            "GET /api/v1/sync/status".to_owned(),
-            "POST /api/v1/sync/preview".to_owned(),
-            "POST /api/v1/sync/push".to_owned(),
-            "POST /api/v1/sync/pull".to_owned(),
-            "POST /api/v1/sync/divergence/review".to_owned(),
-            "GET /api/v1/sync/divergence/:id".to_owned(),
-            "POST /api/v1/sync/divergence/:id/export".to_owned(),
-            "GET /api/v1/devices".to_owned(),
-            "POST /api/v1/devices".to_owned(),
-            "POST /api/v1/devices/:id/revoke".to_owned(),
-        ],
+        implemented: hosted_route_strings(),
         scaffolded: SCAFFOLDED_ROUTES
             .iter()
             .map(|route| (*route).to_owned())
@@ -5495,7 +5415,7 @@ fn parse_json<T: for<'de> Deserialize<'de>>(body: &[u8]) -> Result<T, ApiError> 
 }
 
 fn parse_uuid(value: &str) -> Result<Uuid, ApiError> {
-    Uuid::parse_str(value).map_err(|_| ApiError::BadRequest(format!("invalid uuid: {value}")))
+    Uuid::parse_str(value).map_err(|_| ApiError::InvalidUuid(value.to_owned()))
 }
 
 fn bearer_token(request: &ApiRequest) -> Option<String> {
@@ -5510,18 +5430,92 @@ fn bearer_token(request: &ApiRequest) -> Option<String> {
 fn json_response<T: Serialize>(status: u16, payload: &T) -> ApiResponse {
     ApiResponse {
         status,
+        headers: HashMap::new(),
         body: serde_json::to_vec(payload).expect("API payload should serialize"),
     }
 }
 
-fn json_error(status: u16, message: impl Into<String>) -> ApiResponse {
-    json_response(
+fn api_error_response(error: ApiError, request_id: String) -> ApiResponse {
+    match error {
+        ApiError::BadRequest(message) => {
+            json_error(400, message, ApiErrorCode::BadRequest, request_id, false)
+        }
+        ApiError::InvalidUuid(_) => json_error(
+            400,
+            "invalid UUID",
+            ApiErrorCode::InvalidUuid,
+            request_id,
+            false,
+        ),
+        ApiError::Unauthenticated => json_error(
+            401,
+            "unauthenticated",
+            ApiErrorCode::InvalidToken,
+            request_id,
+            false,
+        ),
+        ApiError::InactiveSession => json_error(
+            401,
+            "unauthenticated",
+            ApiErrorCode::SessionInactive,
+            request_id,
+            false,
+        ),
+        ApiError::RevokedDevice => json_error(
+            401,
+            "unauthenticated",
+            ApiErrorCode::DeviceRevoked,
+            request_id,
+            false,
+        ),
+        ApiError::Forbidden => {
+            json_error(403, "forbidden", ApiErrorCode::Forbidden, request_id, false)
+        }
+        ApiError::NotFound => {
+            json_error(404, "not found", ApiErrorCode::NotFound, request_id, false)
+        }
+        ApiError::Proposal(message) => json_error(
+            400,
+            message,
+            ApiErrorCode::ProposalRejected,
+            request_id,
+            false,
+        ),
+        ApiError::Store(_) => json_error(
+            500,
+            "request could not be completed",
+            ApiErrorCode::StoreUnavailable,
+            request_id,
+            true,
+        ),
+    }
+}
+
+fn json_error(
+    status: u16,
+    message: impl Into<String>,
+    code: ApiErrorCode,
+    request_id: String,
+    retryable: bool,
+) -> ApiResponse {
+    let mut response = json_response(
         status,
-        &json!({
-            "error": message.into(),
-            "retryable": false
-        }),
-    )
+        &ApiErrorBody::new(message.into(), code, request_id.clone(), retryable),
+    );
+    response
+        .headers
+        .insert("x-request-id".to_owned(), request_id);
+    response
+}
+
+fn request_id(request: &ApiRequest) -> String {
+    request
+        .headers
+        .get("x-request-id")
+        .or_else(|| request.headers.get("X-Request-ID"))
+        .filter(|value| !value.trim().is_empty())
+        .cloned()
+        .unwrap_or_else(|| Uuid::new_v4().to_string())
 }
 
 pub fn split_target(target: &str) -> (&str, &str) {
@@ -5857,6 +5851,10 @@ mod tests {
         let response = server.handle(ApiRequest::get("/api/v1/routes")).await;
         assert_eq!(response.status, 200);
         let catalog: RouteCatalogResponse = response.json();
+        assert_eq!(
+            catalog.implemented,
+            ham_api_contract::hosted_route_strings()
+        );
         assert!(catalog
             .implemented
             .contains(&"POST /api/v1/qsos".to_owned()));
@@ -5875,8 +5873,34 @@ mod tests {
     #[tokio::test]
     async fn unknown_routes_return_not_found() {
         let server = HostedServer::new();
-        let response = server.handle(ApiRequest::get("/api/v1/not-a-route")).await;
+        let mut request = ApiRequest::get("/api/v1/not-a-route");
+        request.headers.insert(
+            "x-request-id".to_owned(),
+            "contract-test-request".to_owned(),
+        );
+        let response = server.handle(request).await;
         assert_eq!(response.status, 404);
+        assert_eq!(
+            response.headers.get("x-request-id").map(String::as_str),
+            Some("contract-test-request")
+        );
+        let body: Value = response.json();
+        assert_eq!(body["error"], "not found");
+        assert_eq!(body["code"], "not_found");
+        assert_eq!(body["request_id"], "contract-test-request");
+        assert_eq!(body["retryable"], false);
+    }
+
+    #[tokio::test]
+    async fn hosted_auth_required_errors_keep_stable_shape() {
+        let server = HostedServer::new();
+        let response = server.handle(ApiRequest::get("/api/v1/logbooks")).await;
+        assert_eq!(response.status, 401);
+        let body: Value = response.json();
+        assert!(body.get("error").and_then(Value::as_str).is_some());
+        assert_eq!(body["code"], "invalid_token");
+        assert!(body.get("request_id").and_then(Value::as_str).is_some());
+        assert_eq!(body["retryable"], false);
     }
 
     #[tokio::test]
