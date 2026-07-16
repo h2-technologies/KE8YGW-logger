@@ -1,6 +1,7 @@
 //! Shared core for the local-first amateur radio operations platform.
 
 pub mod adif;
+pub mod application_settings;
 pub mod awards;
 pub mod bus;
 pub mod credential;
@@ -25,6 +26,10 @@ pub mod upload;
 pub use adif::{
     export_adif, export_adif_with_activations, import_adif, parse_adif, AdifImportOptions,
     AdifImportSummary, DuplicatePolicy,
+};
+pub use application_settings::{
+    ApplicationSettings, ApplicationSettingsError, ProviderValidationSettings,
+    APPLICATION_SETTINGS_SCHEMA_VERSION,
 };
 pub use awards::{
     compute_award_progress, default_award_definitions, AwardCredit, AwardDefinition, AwardEngine,

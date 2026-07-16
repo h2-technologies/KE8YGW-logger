@@ -81,6 +81,110 @@ final class RustBridgeTests: XCTestCase {
             XCTFail("Unexpected error: \(error)")
         }
     }
+
+    func testFallbackSettingsGetReportsMissingRecord() async throws {
+        let client = FallbackRustBridgeClient()
+        let result: ApplicationSettingsBridgeResult = try await decodeCommand(
+            client: client,
+            command: "settings.get",
+            payload: ["app_support_dir": "swift-test-\(UUID().uuidString)"]
+        )
+
+        XCTAssertFalse(result.exists)
+        XCTAssertNil(result.settings)
+        XCTAssertEqual(result.recordCount, 0)
+    }
+
+    func testFallbackSettingsCreateIsIdempotentAndLoadsRecord() async throws {
+        let client = FallbackRustBridgeClient()
+        let appSupportDir = "swift-test-\(UUID().uuidString)"
+        let first: ApplicationSettingsBridgeResult = try await decodeCommand(
+            client: client,
+            command: "settings.create_default",
+            payload: ["app_support_dir": appSupportDir]
+        )
+        let second: ApplicationSettingsBridgeResult = try await decodeCommand(
+            client: client,
+            command: "settings.create_default",
+            payload: ["app_support_dir": appSupportDir]
+        )
+        let loaded: ApplicationSettingsBridgeResult = try await decodeCommand(
+            client: client,
+            command: "settings.get",
+            payload: ["app_support_dir": appSupportDir]
+        )
+
+        XCTAssertTrue(first.exists)
+        XCTAssertTrue(first.created)
+        XCTAssertFalse(second.created)
+        XCTAssertEqual(second.recordCount, 1)
+        XCTAssertEqual(loaded.settings?.operator.primaryCallsign, "KE8YGW")
+    }
+
+    func testFallbackSettingsUpdateSurvivesReload() async throws {
+        let client = FallbackRustBridgeClient()
+        let appSupportDir = "swift-test-\(UUID().uuidString)"
+        let created: ApplicationSettingsBridgeResult = try await decodeCommand(
+            client: client,
+            command: "settings.create_default",
+            payload: ["app_support_dir": appSupportDir]
+        )
+        var settings = try XCTUnwrap(created.settings)
+        settings.operator.primaryCallsign = "k1abc"
+        settings.sync.syncServerUrl = "https://sync.example.test"
+        let updated: ApplicationSettingsBridgeResult = try await decodeCommand(
+            client: client,
+            command: "settings.update",
+            payload: settingsPayload(appSupportDir: appSupportDir, settings: settings)
+        )
+        let loaded: ApplicationSettingsBridgeResult = try await decodeCommand(
+            client: client,
+            command: "settings.get",
+            payload: ["app_support_dir": appSupportDir]
+        )
+
+        XCTAssertEqual(updated.settings?.operator.primaryCallsign, "K1ABC")
+        XCTAssertEqual(loaded.settings?.sync.syncServerUrl, "https://sync.example.test")
+    }
+
+    func testAppSettingsPayloadDoesNotContainCredentialSecrets() throws {
+        let settings = AppSettings()
+        settings.setProviderCredentialMetadata("qrz", metadata: [
+            "username": "KE8YGW",
+            "password_configured": "true"
+        ])
+        let data = try JSONEncoder().encode(settings.rustSettingsPayload())
+        let json = String(decoding: data, as: UTF8.self)
+
+        XCTAssertFalse(json.contains("super-secret"))
+        XCTAssertFalse(json.contains("\"password\":\""))
+        XCTAssertTrue(json.contains("password_configured"))
+    }
+
+    private func decodeCommand<T: Decodable>(
+        client: FallbackRustBridgeClient,
+        command: String,
+        payload: [String: Any]
+    ) async throws -> T {
+        let request = try JSONSerialization.data(withJSONObject: [
+            "command": command,
+            "correlation_id": UUID().uuidString,
+            "payload": payload
+        ])
+        let data = try await client.callJSON(request)
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        let envelope = try decoder.decode(RustBridgeEnvelope<T>.self, from: data)
+        return try XCTUnwrap(envelope.data)
+    }
+
+    private func settingsPayload(appSupportDir: String, settings: RustApplicationSettings) throws -> [String: Any] {
+        let encoder = JSONEncoder()
+        encoder.keyEncodingStrategy = .convertToSnakeCase
+        let settingsData = try encoder.encode(settings)
+        let settingsObject = try JSONSerialization.jsonObject(with: settingsData)
+        return ["app_support_dir": appSupportDir, "settings": settingsObject]
+    }
 }
 
 struct ErrorRustBridgeClient: RustBridgeClient {
