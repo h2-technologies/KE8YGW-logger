@@ -215,7 +215,12 @@ pub extern "C" fn ham_ios_abi_version() -> u32 {
 }
 
 #[no_mangle]
-pub extern "C" fn ham_ios_free_string(ptr: *mut c_char) {
+/// # Safety
+///
+/// `ptr` must be a pointer returned by this crate's string-returning FFI
+/// functions and must not have already been freed. Passing any other pointer
+/// is undefined behavior.
+pub unsafe extern "C" fn ham_ios_free_string(ptr: *mut c_char) {
     if ptr.is_null() {
         return;
     }
@@ -855,9 +860,7 @@ fn create_qso_command(payload: Value, correlation_id: Uuid) -> Result<Value, Bri
                 .rebuild_projections(logbook_id)
                 .await
                 .map_err(|error| BridgeFault::storage(error.to_string()))?;
-            return Ok(
-                qso_mutation_result(&store, logbook_id, &projection, &existing, true).await?,
-            );
+            return qso_mutation_result(&store, logbook_id, &projection, &existing, true).await;
         }
 
         let mut qso_payload = normalize_qso_payload(request.qso, &operation_id)?;
@@ -1557,7 +1560,9 @@ mod tests {
 
     fn take_string(ptr: *mut c_char) -> String {
         let text = unsafe { CStr::from_ptr(ptr).to_string_lossy().into_owned() };
-        ham_ios_free_string(ptr);
+        unsafe {
+            ham_ios_free_string(ptr);
+        }
         text
     }
 
