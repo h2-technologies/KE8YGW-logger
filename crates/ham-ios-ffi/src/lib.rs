@@ -1601,7 +1601,7 @@ mod tests {
 
     #[test]
     fn oversized_input_returns_before_reading_buffer() {
-        let bytes = [b'{'];
+        let bytes = b"{";
         let ptr = ham_ios_call_json_bytes(bytes.as_ptr(), MAX_INPUT_BYTES + 1);
         let value: Value = serde_json::from_str(&take_string(ptr)).unwrap();
         assert_eq!(value["ok"], false);
