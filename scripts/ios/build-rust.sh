@@ -13,8 +13,6 @@ if [[ "$(uname -s)" != "Darwin" ]]; then
   exit 1
 fi
 
-bash "$SCRIPT_DIR/install-targets.sh"
-
 CONFIGURATION="${CONFIGURATION:-Release}"
 CONFIGURATION_LOWER="$(printf '%s' "$CONFIGURATION" | tr '[:upper:]' '[:lower:]')"
 PROFILE_DIR="release"
@@ -22,18 +20,58 @@ if [[ "$CONFIGURATION_LOWER" == "debug" ]]; then
   PROFILE_DIR="debug"
 fi
 
-TARGETS=(aarch64-apple-ios aarch64-apple-ios-sim)
-if rustup target list --installed | grep -qx "x86_64-apple-ios"; then
-  TARGETS+=(x86_64-apple-ios)
+if [[ -z "${IOS_RUST_TARGETS:-}" ]]; then
+  bash "$SCRIPT_DIR/install-targets.sh"
 fi
+
+if [[ -n "${IOS_RUST_TARGETS:-}" ]]; then
+  read -r -a TARGETS <<<"$IOS_RUST_TARGETS"
+else
+  TARGETS=(aarch64-apple-ios aarch64-apple-ios-sim)
+  if rustup target list --installed | grep -qx "x86_64-apple-ios"; then
+    TARGETS+=(x86_64-apple-ios)
+  fi
+fi
+
+for target in "${TARGETS[@]}"; do
+  case "$target" in
+    aarch64-apple-ios|aarch64-apple-ios-sim|x86_64-apple-ios) ;;
+    *)
+      echo "error: unsupported iOS Rust target '$target'." >&2
+      exit 1
+      ;;
+  esac
+done
+
+if [[ -n "${IOS_RUST_TARGETS:-}" ]]; then
+  IOS_RUST_TARGETS="${TARGETS[*]}" bash "$SCRIPT_DIR/install-targets.sh"
+fi
+
+CARGO_LOCKED_ARGS=()
+if [[ "${CI:-}" == "true" || "${CARGO_LOCKED:-}" == "1" ]]; then
+  CARGO_LOCKED_ARGS+=(--locked)
+fi
+
+target_requested() {
+  local requested="$1"
+  local target
+
+  for target in "${TARGETS[@]}"; do
+    if [[ "$target" == "$requested" ]]; then
+      return 0
+    fi
+  done
+
+  return 1
+}
 
 cd "$REPO_ROOT"
 for target in "${TARGETS[@]}"; do
   echo "Building ham-ios-ffi for $target ($CONFIGURATION)"
   if [[ "$PROFILE_DIR" == "debug" ]]; then
-    cargo build -p ham-ios-ffi --target "$target"
+    cargo build "${CARGO_LOCKED_ARGS[@]}" -p ham-ios-ffi --target "$target"
   else
-    cargo build -p ham-ios-ffi --target "$target" --release
+    cargo build "${CARGO_LOCKED_ARGS[@]}" -p ham-ios-ffi --target "$target" --release
   fi
 done
 
@@ -48,23 +86,40 @@ SIM_LIB_ARM="$REPO_ROOT/target/aarch64-apple-ios-sim/$PROFILE_DIR/libham_ios_ffi
 SIM_LIB_X86="$REPO_ROOT/target/x86_64-apple-ios/$PROFILE_DIR/libham_ios_ffi.a"
 SIM_LIB_OUT="$SIM_OUTPUT_DIR/libham_ios_ffi.a"
 
-rm -f "$SIM_LIB_OUT"
-if [[ -f "$SIM_LIB_ARM" && -f "$SIM_LIB_X86" ]]; then
-  xcrun lipo -create "$SIM_LIB_ARM" "$SIM_LIB_X86" -output "$SIM_LIB_OUT"
-elif [[ -f "$SIM_LIB_ARM" ]]; then
-  cp "$SIM_LIB_ARM" "$SIM_LIB_OUT"
-else
-  echo "error: simulator library was not produced at $SIM_LIB_ARM" >&2
-  exit 1
+SIM_INPUTS=()
+if target_requested "aarch64-apple-ios-sim"; then
+  if [[ ! -f "$SIM_LIB_ARM" ]]; then
+    echo "error: simulator library was not produced at $SIM_LIB_ARM" >&2
+    exit 1
+  fi
+  SIM_INPUTS+=("$SIM_LIB_ARM")
 fi
-xcrun ranlib "$SIM_LIB_OUT"
+if target_requested "x86_64-apple-ios"; then
+  if [[ ! -f "$SIM_LIB_X86" ]]; then
+    echo "error: simulator library was not produced at $SIM_LIB_X86" >&2
+    exit 1
+  fi
+  SIM_INPUTS+=("$SIM_LIB_X86")
+fi
+
+if [[ "${#SIM_INPUTS[@]}" -gt 0 ]]; then
+  rm -f "$SIM_LIB_OUT"
+  if [[ "${#SIM_INPUTS[@]}" -gt 1 ]]; then
+    xcrun lipo -create "${SIM_INPUTS[@]}" -output "$SIM_LIB_OUT"
+  else
+    cp "${SIM_INPUTS[0]}" "$SIM_LIB_OUT"
+  fi
+  xcrun ranlib "$SIM_LIB_OUT"
+fi
 
 DEVICE_LIB="$REPO_ROOT/target/aarch64-apple-ios/$PROFILE_DIR/libham_ios_ffi.a"
-if [[ ! -f "$DEVICE_LIB" ]]; then
-  echo "error: device library was not produced at $DEVICE_LIB" >&2
-  exit 1
+if target_requested "aarch64-apple-ios"; then
+  if [[ ! -f "$DEVICE_LIB" ]]; then
+    echo "error: device library was not produced at $DEVICE_LIB" >&2
+    exit 1
+  fi
+  xcrun ranlib "$DEVICE_LIB"
 fi
-xcrun ranlib "$DEVICE_LIB"
 
 LINK_ROOT="$REPO_ROOT/artifacts/ios/link"
 copy_link_library() {
@@ -79,18 +134,34 @@ copy_link_library() {
 
 case "${EFFECTIVE_PLATFORM_NAME:-}" in
   -iphoneos)
+    if ! target_requested "aarch64-apple-ios"; then
+      echo "error: EFFECTIVE_PLATFORM_NAME=-iphoneos requires IOS_RUST_TARGETS to include aarch64-apple-ios." >&2
+      exit 1
+    fi
     copy_link_library "-iphoneos" "$DEVICE_LIB"
     ;;
   -iphonesimulator)
+    if [[ "${#SIM_INPUTS[@]}" -eq 0 ]]; then
+      echo "error: EFFECTIVE_PLATFORM_NAME=-iphonesimulator requires a simulator target in IOS_RUST_TARGETS." >&2
+      exit 1
+    fi
     copy_link_library "-iphonesimulator" "$SIM_LIB_OUT"
     ;;
   *)
-    copy_link_library "-iphoneos" "$DEVICE_LIB"
-    copy_link_library "-iphonesimulator" "$SIM_LIB_OUT"
+    if target_requested "aarch64-apple-ios"; then
+      copy_link_library "-iphoneos" "$DEVICE_LIB"
+    fi
+    if [[ "${#SIM_INPUTS[@]}" -gt 0 ]]; then
+      copy_link_library "-iphonesimulator" "$SIM_LIB_OUT"
+    fi
     ;;
 esac
 
 echo "Rust iOS libraries ready:"
-echo "  device:    $DEVICE_LIB"
-echo "  simulator: $SIM_LIB_OUT"
+if target_requested "aarch64-apple-ios"; then
+  echo "  device:    $DEVICE_LIB"
+fi
+if [[ "${#SIM_INPUTS[@]}" -gt 0 ]]; then
+  echo "  simulator: $SIM_LIB_OUT"
+fi
 echo "  headers:   $INCLUDE_DIR"
