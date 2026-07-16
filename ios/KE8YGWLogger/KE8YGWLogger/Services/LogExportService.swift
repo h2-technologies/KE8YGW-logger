@@ -89,7 +89,12 @@ enum LogExportService {
 
     static func writeTemporaryExportFile(name: String, contents: String) throws -> URL {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(name)
-        try contents.data(using: .utf8)?.write(to: url, options: [.atomic])
+        guard let data = contents.data(using: .utf8) else {
+            throw CocoaError(.fileWriteUnknown, userInfo: [
+                NSLocalizedDescriptionKey: "Unable to encode export contents as UTF-8."
+            ])
+        }
+        try data.write(to: url, options: [.atomic])
         return url
     }
 

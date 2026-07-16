@@ -106,12 +106,11 @@ enum ProjectionRefreshService {
             target.stationCallsign = profileSnapshot.stationCallsign
             target.defaultGridSquare = profileSnapshot.defaultGrid ?? target.defaultGridSquare
             target.defaultQTH = profileSnapshot.defaultQth ?? target.defaultQTH
-            target.defaultPowerWatts = Double(profileSnapshot.defaultPowerWatts ?? Int(target.defaultPowerWatts))
+            target.defaultPowerWatts = profileSnapshot.defaultPowerWatts.map(Double.init) ?? target.defaultPowerWatts
             target.isActive = profileSnapshot.stationProfileId == activeProfileID || profileSnapshot.active == true
             target.isTombstoned = false
             target.projectionSource = "rust"
             target.projectionSchemaVersion = 1
-            target.lastRustRevision = activeProfileID ?? ""
             target.lastProjectionRefreshAt = Date()
             target.updatedAt = Date()
         }

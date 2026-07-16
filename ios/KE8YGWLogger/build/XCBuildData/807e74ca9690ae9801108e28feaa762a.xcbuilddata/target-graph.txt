@@ -1,2 +1,0 @@
-Target dependency graph (1 target)
-Target 'KE8YGWLogger' in project 'KE8YGWLogger' (no dependencies)
