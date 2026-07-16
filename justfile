@@ -13,6 +13,9 @@ clippy:
 test:
     cargo test --workspace
 
+api-contract:
+    python scripts/check_api_contract.py
+
 governance-check:
     pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/governance-check.ps1
 
@@ -28,4 +31,4 @@ gui:
 sync-server:
     cargo run -p ham-sync-server --bin ham-sync-server
 
-ci: fmt-check clippy test build governance-check
+ci: fmt-check clippy test api-contract build governance-check

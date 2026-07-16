@@ -398,3 +398,29 @@ fn response(status: u16, content_type: &str, body: &[u8]) -> Vec<u8> {
 
 #[allow(dead_code)]
 fn _assert_health_is_serializable(_: CloudHealthResponse) {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::Value;
+
+    #[test]
+    fn self_hosted_errors_keep_stable_shape() {
+        let response = json_error(
+            401,
+            "missing token",
+            ApiErrorCode::MissingToken,
+            "sync-contract-test".to_owned(),
+        );
+        let text = String::from_utf8(response).expect("HTTP response should be UTF-8");
+        let body = text
+            .split("\r\n\r\n")
+            .nth(1)
+            .expect("HTTP response should contain a body");
+        let json: Value = serde_json::from_str(body).expect("error body should be JSON");
+        assert_eq!(json["error"], "missing token");
+        assert_eq!(json["code"], "missing_token");
+        assert_eq!(json["request_id"], "sync-contract-test");
+        assert_eq!(json["retryable"], false);
+    }
+}

@@ -18,7 +18,8 @@ passes should start with these documents:
 - [v1.1 Native iOS Plan](docs/V1_1_IOS_NATIVE_PLAN.md): SwiftUI iOS app
   scope, offline queue, native ADIF flows, Maps, and TestFlight target.
 - [API Client Contract](docs/API_CLIENT_CONTRACT.md): hosted/self-hosted API
-  rules and future native-client contract requirements.
+  rules, route inventory, OpenAPI location, and future native-client contract
+  requirements.
 - [Hosted Web Release](docs/HOSTED_WEB_RELEASE.md): hosted web/server mode,
   implemented API slice, and production gaps.
 - [Desktop Release](docs/DESKTOP_RELEASE.md): installable desktop target,

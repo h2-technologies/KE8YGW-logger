@@ -5661,19 +5661,6 @@ fn request_id(request: &ApiRequest) -> String {
         .unwrap_or_else(|| Uuid::new_v4().to_string())
 }
 
-#[allow(dead_code)]
-fn legacy_json_error(status: u16, message: impl Into<String>) -> ApiResponse {
-    json_response(
-        status,
-        &ApiErrorBody::new(
-            message.into(),
-            ApiErrorCode::BadRequest,
-            Uuid::new_v4().to_string(),
-            false,
-        ),
-    )
-}
-
 pub fn split_target(target: &str) -> (&str, &str) {
     target
         .split_once('?')
@@ -6007,6 +5994,10 @@ mod tests {
         let response = server.handle(ApiRequest::get("/api/v1/routes")).await;
         assert_eq!(response.status, 200);
         let catalog: RouteCatalogResponse = response.json();
+        assert_eq!(
+            catalog.implemented,
+            ham_api_contract::hosted_route_strings()
+        );
         assert!(catalog
             .implemented
             .contains(&"POST /api/v1/qsos".to_owned()));
@@ -6025,8 +6016,34 @@ mod tests {
     #[tokio::test]
     async fn unknown_routes_return_not_found() {
         let server = HostedServer::new();
-        let response = server.handle(ApiRequest::get("/api/v1/not-a-route")).await;
+        let mut request = ApiRequest::get("/api/v1/not-a-route");
+        request.headers.insert(
+            "x-request-id".to_owned(),
+            "contract-test-request".to_owned(),
+        );
+        let response = server.handle(request).await;
         assert_eq!(response.status, 404);
+        assert_eq!(
+            response.headers.get("x-request-id").map(String::as_str),
+            Some("contract-test-request")
+        );
+        let body: Value = response.json();
+        assert_eq!(body["error"], "not found");
+        assert_eq!(body["code"], "not_found");
+        assert_eq!(body["request_id"], "contract-test-request");
+        assert_eq!(body["retryable"], false);
+    }
+
+    #[tokio::test]
+    async fn hosted_auth_required_errors_keep_stable_shape() {
+        let server = HostedServer::new();
+        let response = server.handle(ApiRequest::get("/api/v1/logbooks")).await;
+        assert_eq!(response.status, 401);
+        let body: Value = response.json();
+        assert!(body.get("error").and_then(Value::as_str).is_some());
+        assert_eq!(body["code"], "invalid_token");
+        assert!(body.get("request_id").and_then(Value::as_str).is_some());
+        assert_eq!(body["retryable"], false);
     }
 
     #[tokio::test]
