@@ -1,0 +1,35 @@
+name: Branch promotion policy
+
+on:
+  pull_request:
+    branches:
+      - dev
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  promotion-policy:
+    name: promotion-policy
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate branch promotion
+        shell: bash
+        env:
+          BASE_BRANCH: ${{ github.base_ref }}
+          BASE_REPOSITORY: ${{ github.repository }}
+          HEAD_BRANCH: ${{ github.head_ref }}
+          HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+        run: |
+          if [[ "${BASE_BRANCH}" != "main" ]]; then
+            echo "Pull request into ${BASE_BRANCH} is allowed by the promotion policy."
+            exit 0
+          fi
+
+          if [[ "${HEAD_BRANCH}" != "dev" || "${HEAD_REPOSITORY}" != "${BASE_REPOSITORY}" ]]; then
+            echo "::error title=Invalid promotion::Pull requests into main must originate from the dev branch in this repository."
+            exit 1
+          fi
+
+          echo "Valid promotion: ${BASE_REPOSITORY}:dev -> ${BASE_REPOSITORY}:main"
