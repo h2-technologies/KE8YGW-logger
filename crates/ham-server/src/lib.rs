@@ -7,6 +7,7 @@ use std::{
 };
 
 use chrono::{DateTime, Utc};
+use ham_api_contract::{hosted_route_strings, ApiErrorBody, ApiErrorCode};
 use ham_core::{
     adif_for_upload_job, default_credential_store, default_log_directory, default_service_registry,
     execute_dx_cluster_read_once, execute_tier_one_lookup, execute_tier_one_upload, export_adif,
@@ -211,6 +212,7 @@ impl ApiRequest {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ApiResponse {
     pub status: u16,
+    pub headers: HashMap<String, String>,
     pub body: Vec<u8>,
 }
 
@@ -232,6 +234,8 @@ pub enum ApiError {
     Forbidden,
     #[error("not found")]
     NotFound,
+    #[error("invalid uuid: {0}")]
+    InvalidUuid(String),
     #[error("bad request: {0}")]
     BadRequest(String),
     #[error("proposal rejected: {0}")]
@@ -541,6 +545,31 @@ pub enum HostedUploadStatus {
     Skipped,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HostedQueueState {
+    Pending,
+    Running,
+    RetryScheduled,
+    NeedsUserAction,
+    Succeeded,
+    Cancelled,
+    DeadLetter,
+    Uncertain,
+}
+
+fn default_hosted_queue_state() -> HostedQueueState {
+    HostedQueueState::Pending
+}
+
+fn default_upload_operation_type() -> String {
+    "upload.adif".to_owned()
+}
+
+fn default_hosted_idempotency_key() -> String {
+    Uuid::new_v4().to_string()
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct HostedUploadJob {
     pub upload_id: Uuid,
@@ -548,11 +577,37 @@ pub struct HostedUploadJob {
     pub logbook_id: Uuid,
     pub provider_id: String,
     pub status: HostedUploadStatus,
+    #[serde(default = "default_hosted_queue_state")]
+    pub queue_state: HostedQueueState,
+    #[serde(default)]
+    pub account_scope: Option<String>,
+    #[serde(default = "default_upload_operation_type")]
+    pub operation_type: String,
+    #[serde(default = "default_hosted_idempotency_key")]
+    pub idempotency_key: String,
     pub qso_ids: Vec<Uuid>,
     pub generated_adif: String,
     pub retry_count: u32,
+    #[serde(default)]
+    pub attempt_count: u32,
     pub failure_reason: Option<String>,
     pub provider_error: Option<String>,
+    #[serde(default)]
+    pub safe_failure_code: Option<String>,
+    #[serde(default)]
+    pub credential_reference: Option<String>,
+    #[serde(default)]
+    pub provider_side_identifier: Option<String>,
+    #[serde(default)]
+    pub uncertain_outcome: bool,
+    #[serde(default)]
+    pub last_attempt_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub next_attempt_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub claim_token: Option<Uuid>,
+    #[serde(default)]
+    pub lease_expires_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -1409,15 +1464,10 @@ impl HostedServer {
     }
 
     pub async fn handle(&self, request: ApiRequest) -> ApiResponse {
+        let request_id = request_id(&request);
         match self.route(request).await {
             Ok(response) => json_response(200, &response),
-            Err(ApiError::BadRequest(message)) => json_error(400, message),
-            Err(
-                ApiError::Unauthenticated | ApiError::InactiveSession | ApiError::RevokedDevice,
-            ) => json_error(401, "unauthenticated"),
-            Err(ApiError::Forbidden) => json_error(403, "forbidden"),
-            Err(ApiError::NotFound) => json_error(404, "not found"),
-            Err(ApiError::Proposal(message) | ApiError::Store(message)) => json_error(400, message),
+            Err(error) => api_error_response(error, request_id),
         }
     }
 
@@ -3464,12 +3514,14 @@ impl HostedServer {
                 .collect()
         });
         let adif = adif_for_upload_job(&projection, &qso_ids);
+        let idempotency_key =
+            hosted_upload_idempotency_key(&input.provider_id, input.logbook_id, &qso_ids);
         let mut state = self.state.write().await;
         if let Some(existing) = state.upload_jobs.values().find(|job| {
             job.account_id == auth.session.account_id
                 && job.logbook_id == input.logbook_id
                 && job.provider_id == input.provider_id
-                && job.qso_ids == qso_ids
+                && job.idempotency_key == idempotency_key
                 && matches!(
                     job.status,
                     HostedUploadStatus::Queued
@@ -3486,11 +3538,24 @@ impl HostedServer {
             logbook_id: input.logbook_id,
             provider_id: input.provider_id,
             status: HostedUploadStatus::Queued,
+            queue_state: HostedQueueState::Pending,
+            account_scope: Some(auth.session.account_id.to_string()),
+            operation_type: "upload.adif".to_owned(),
+            idempotency_key,
             qso_ids,
             generated_adif: adif,
             retry_count: 0,
+            attempt_count: 0,
             failure_reason: None,
             provider_error: None,
+            safe_failure_code: None,
+            credential_reference: None,
+            provider_side_identifier: None,
+            uncertain_outcome: false,
+            last_attempt_at: None,
+            next_attempt_at: None,
+            claim_token: None,
+            lease_expires_at: None,
             created_at: now,
             updated_at: now,
         };
@@ -4754,14 +4819,21 @@ fn execute_hosted_upload_job(
     credential_store: &Arc<Mutex<Box<dyn CredentialStore>>>,
     force_fail: bool,
 ) -> Result<ProviderUploadExecution, ApiError> {
+    let now = Utc::now();
     job.status = HostedUploadStatus::Running;
-    job.updated_at = Utc::now();
+    job.queue_state = HostedQueueState::Running;
+    job.claim_token = Some(Uuid::new_v4());
+    job.lease_expires_at = Some(now + chrono::Duration::minutes(5));
+    job.attempt_count += 1;
+    job.last_attempt_at = Some(now);
+    job.updated_at = now;
     let setting = state
         .provider_settings
         .get(&provider_setting_key(job.logbook_id, &job.provider_id));
     let mode = provider_adapter_mode(setting);
     let credential =
         resolve_provider_credential(setting, credential_store, mode == ProviderAdapterMode::Live);
+    job.credential_reference = setting.and_then(|setting| setting.credential_id.clone());
     let execution = execute_tier_one_upload(ProviderUploadInput {
         provider_id: job.provider_id.clone(),
         job_id: job.upload_id,
@@ -4783,10 +4855,75 @@ fn execute_hosted_upload_job(
         UploadJobStatus::Failed => HostedUploadStatus::Failed,
         UploadJobStatus::NeedsCredentials => HostedUploadStatus::Retryable,
     };
+    job.queue_state = match job.status {
+        HostedUploadStatus::Queued => HostedQueueState::Pending,
+        HostedUploadStatus::Running => HostedQueueState::Running,
+        HostedUploadStatus::Succeeded => HostedQueueState::Succeeded,
+        HostedUploadStatus::Retryable => {
+            if execution.status == UploadJobStatus::NeedsCredentials {
+                HostedQueueState::NeedsUserAction
+            } else if execution.retryable {
+                HostedQueueState::RetryScheduled
+            } else {
+                HostedQueueState::DeadLetter
+            }
+        }
+        HostedUploadStatus::Failed | HostedUploadStatus::Skipped => HostedQueueState::DeadLetter,
+    };
     job.failure_reason = execution.failure_reason.clone();
     job.provider_error = execution.redacted_error.clone();
+    job.safe_failure_code = execution.failure_reason.as_ref().map(|reason| {
+        provider_safe_failure_code(
+            &job.provider_id,
+            reason,
+            execution.redacted_error.as_deref().unwrap_or_default(),
+        )
+    });
+    job.provider_side_identifier = execution.provider_correlation_id.clone();
+    job.uncertain_outcome = execution.retryable
+        && execution
+            .redacted_error
+            .as_deref()
+            .is_some_and(|error| error.to_ascii_lowercase().contains("timed out"));
+    job.next_attempt_at = (job.queue_state == HostedQueueState::RetryScheduled)
+        .then(|| Utc::now() + chrono::Duration::minutes(1));
+    job.claim_token = None;
+    job.lease_expires_at = None;
     job.updated_at = Utc::now();
     Ok(execution)
+}
+
+fn hosted_upload_idempotency_key(provider_id: &str, logbook_id: Uuid, qso_ids: &[Uuid]) -> String {
+    let mut qso_ids = qso_ids.to_vec();
+    qso_ids.sort();
+    format!(
+        "upload.adif:{provider_id}:{logbook_id}:{}",
+        qso_ids
+            .iter()
+            .map(Uuid::to_string)
+            .collect::<Vec<_>>()
+            .join(",")
+    )
+}
+
+fn provider_safe_failure_code(provider_id: &str, reason: &str, redacted_error: &str) -> String {
+    let reason = reason.to_ascii_lowercase();
+    let error = redacted_error.to_ascii_lowercase();
+    if reason.contains("credential") {
+        "credential_required".to_owned()
+    } else if reason.contains("auth") || error.contains("password") {
+        "authentication_failed".to_owned()
+    } else if error.contains("rate") || error.contains("429") {
+        "rate_limited".to_owned()
+    } else if error.contains("timeout") || error.contains("timed out") {
+        "timeout".to_owned()
+    } else if reason.contains("temporary") || error.contains("503") || error.contains("502") {
+        "provider_unavailable".to_owned()
+    } else if provider_id == "lotw" && reason.contains("tqsl") {
+        "provider_not_configured".to_owned()
+    } else {
+        "provider_rejected".to_owned()
+    }
 }
 
 fn upload_summary(uploads: &[HostedUploadJob]) -> Value {
@@ -5334,6 +5471,11 @@ fn restore_backup_support_metadata(
             job.logbook_id = logbook_id;
             if job.status == HostedUploadStatus::Running {
                 job.status = HostedUploadStatus::Retryable;
+                job.queue_state = HostedQueueState::Uncertain;
+                job.uncertain_outcome = true;
+                job.safe_failure_code = Some("restored_running_job".to_owned());
+                job.claim_token = None;
+                job.lease_expires_at = None;
                 job.failure_reason =
                     Some("restored from backup while job state was running".to_owned());
             }
@@ -5359,86 +5501,7 @@ fn restore_backup_support_metadata(
 
 fn route_catalog() -> RouteCatalogResponse {
     RouteCatalogResponse {
-        implemented: vec![
-            "GET /health".to_owned(),
-            "GET /api/v1/status".to_owned(),
-            "POST /api/v1/auth/login".to_owned(),
-            "POST /api/v1/auth/logout".to_owned(),
-            "GET /api/v1/auth/session".to_owned(),
-            "GET /api/v1/logbooks".to_owned(),
-            "POST /api/v1/logbooks".to_owned(),
-            "GET /api/v1/logbooks/:id".to_owned(),
-            "PATCH /api/v1/logbooks/:id".to_owned(),
-            "GET /api/v1/qsos".to_owned(),
-            "POST /api/v1/qsos".to_owned(),
-            "GET /api/v1/qsos/:id".to_owned(),
-            "PATCH /api/v1/qsos/:id".to_owned(),
-            "POST /api/v1/qsos/:id/delete".to_owned(),
-            "POST /api/v1/qsos/:id/restore".to_owned(),
-            "POST /api/v1/qsos/:id/notes".to_owned(),
-            "GET /api/v1/station-profiles".to_owned(),
-            "POST /api/v1/station-profiles".to_owned(),
-            "GET /api/v1/station-profiles/:id".to_owned(),
-            "PATCH /api/v1/station-profiles/:id".to_owned(),
-            "POST /api/v1/station-profiles/:id/archive".to_owned(),
-            "POST /api/v1/station-profiles/:id/set-default".to_owned(),
-            "GET /api/v1/equipment".to_owned(),
-            "POST /api/v1/equipment".to_owned(),
-            "GET /api/v1/equipment/:id".to_owned(),
-            "PATCH /api/v1/equipment/:id".to_owned(),
-            "POST /api/v1/equipment/:id/archive".to_owned(),
-            "POST /api/v1/adif/import".to_owned(),
-            "GET /api/v1/adif/export".to_owned(),
-            "GET /api/v1/activations".to_owned(),
-            "POST /api/v1/activations".to_owned(),
-            "GET /api/v1/activations/:id".to_owned(),
-            "PATCH /api/v1/activations/:id".to_owned(),
-            "POST /api/v1/activations/:id/end".to_owned(),
-            "GET /api/v1/activations/:id/qsos".to_owned(),
-            "GET /api/v1/net-control/sessions".to_owned(),
-            "POST /api/v1/net-control/sessions".to_owned(),
-            "GET /api/v1/net-control/sessions/:id".to_owned(),
-            "PATCH /api/v1/net-control/sessions/:id".to_owned(),
-            "POST /api/v1/net-control/sessions/:id/start".to_owned(),
-            "POST /api/v1/net-control/sessions/:id/end".to_owned(),
-            "POST /api/v1/net-control/sessions/:id/checkins".to_owned(),
-            "PATCH /api/v1/net-control/sessions/:id/checkins/:id".to_owned(),
-            "POST /api/v1/net-control/sessions/:id/traffic".to_owned(),
-            "GET /api/v1/maps/qsos".to_owned(),
-            "GET /api/v1/maps/stations".to_owned(),
-            "GET /api/v1/maps/paths".to_owned(),
-            "GET /api/v1/maps/settings".to_owned(),
-            "PATCH /api/v1/maps/settings".to_owned(),
-            "POST /api/v1/backups/export".to_owned(),
-            "GET /api/v1/backups".to_owned(),
-            "GET /api/v1/backups/:id".to_owned(),
-            "GET /api/v1/backups/:id/download".to_owned(),
-            "POST /api/v1/backups/import/dry-run".to_owned(),
-            "POST /api/v1/backups/import".to_owned(),
-            "GET /api/v1/providers".to_owned(),
-            "GET /api/v1/providers/:id".to_owned(),
-            "PATCH /api/v1/providers/:id".to_owned(),
-            "POST /api/v1/providers/:id/test".to_owned(),
-            "POST /api/v1/providers/:id/lookup".to_owned(),
-            "GET /api/v1/providers/:id/spots".to_owned(),
-            "POST /api/v1/providers/dx-cluster/connect".to_owned(),
-            "POST /api/v1/providers/dx-cluster/read".to_owned(),
-            "POST /api/v1/providers/dx-cluster/disconnect".to_owned(),
-            "GET /api/v1/providers/dx-cluster/status".to_owned(),
-            "GET /api/v1/uploads".to_owned(),
-            "POST /api/v1/uploads/run".to_owned(),
-            "POST /api/v1/uploads/:id/retry".to_owned(),
-            "GET /api/v1/sync/status".to_owned(),
-            "POST /api/v1/sync/preview".to_owned(),
-            "POST /api/v1/sync/push".to_owned(),
-            "POST /api/v1/sync/pull".to_owned(),
-            "POST /api/v1/sync/divergence/review".to_owned(),
-            "GET /api/v1/sync/divergence/:id".to_owned(),
-            "POST /api/v1/sync/divergence/:id/export".to_owned(),
-            "GET /api/v1/devices".to_owned(),
-            "POST /api/v1/devices".to_owned(),
-            "POST /api/v1/devices/:id/revoke".to_owned(),
-        ],
+        implemented: hosted_route_strings(),
         scaffolded: SCAFFOLDED_ROUTES
             .iter()
             .map(|route| (*route).to_owned())
@@ -5495,7 +5558,7 @@ fn parse_json<T: for<'de> Deserialize<'de>>(body: &[u8]) -> Result<T, ApiError> 
 }
 
 fn parse_uuid(value: &str) -> Result<Uuid, ApiError> {
-    Uuid::parse_str(value).map_err(|_| ApiError::BadRequest(format!("invalid uuid: {value}")))
+    Uuid::parse_str(value).map_err(|_| ApiError::InvalidUuid(value.to_owned()))
 }
 
 fn bearer_token(request: &ApiRequest) -> Option<String> {
@@ -5510,17 +5573,104 @@ fn bearer_token(request: &ApiRequest) -> Option<String> {
 fn json_response<T: Serialize>(status: u16, payload: &T) -> ApiResponse {
     ApiResponse {
         status,
+        headers: HashMap::new(),
         body: serde_json::to_vec(payload).expect("API payload should serialize"),
     }
 }
 
-fn json_error(status: u16, message: impl Into<String>) -> ApiResponse {
+fn api_error_response(error: ApiError, request_id: String) -> ApiResponse {
+    match error {
+        ApiError::BadRequest(message) => {
+            json_error(400, message, ApiErrorCode::BadRequest, request_id, false)
+        }
+        ApiError::InvalidUuid(_) => json_error(
+            400,
+            "invalid UUID",
+            ApiErrorCode::InvalidUuid,
+            request_id,
+            false,
+        ),
+        ApiError::Unauthenticated => json_error(
+            401,
+            "unauthenticated",
+            ApiErrorCode::InvalidToken,
+            request_id,
+            false,
+        ),
+        ApiError::InactiveSession => json_error(
+            401,
+            "unauthenticated",
+            ApiErrorCode::SessionInactive,
+            request_id,
+            false,
+        ),
+        ApiError::RevokedDevice => json_error(
+            401,
+            "unauthenticated",
+            ApiErrorCode::DeviceRevoked,
+            request_id,
+            false,
+        ),
+        ApiError::Forbidden => {
+            json_error(403, "forbidden", ApiErrorCode::Forbidden, request_id, false)
+        }
+        ApiError::NotFound => {
+            json_error(404, "not found", ApiErrorCode::NotFound, request_id, false)
+        }
+        ApiError::Proposal(message) => json_error(
+            400,
+            message,
+            ApiErrorCode::ProposalRejected,
+            request_id,
+            false,
+        ),
+        ApiError::Store(_) => json_error(
+            500,
+            "request could not be completed",
+            ApiErrorCode::StoreUnavailable,
+            request_id,
+            true,
+        ),
+    }
+}
+
+fn json_error(
+    status: u16,
+    message: impl Into<String>,
+    code: ApiErrorCode,
+    request_id: String,
+    retryable: bool,
+) -> ApiResponse {
+    let mut response = json_response(
+        status,
+        &ApiErrorBody::new(message.into(), code, request_id.clone(), retryable),
+    );
+    response
+        .headers
+        .insert("x-request-id".to_owned(), request_id);
+    response
+}
+
+fn request_id(request: &ApiRequest) -> String {
+    request
+        .headers
+        .get("x-request-id")
+        .or_else(|| request.headers.get("X-Request-ID"))
+        .filter(|value| !value.trim().is_empty())
+        .cloned()
+        .unwrap_or_else(|| Uuid::new_v4().to_string())
+}
+
+#[allow(dead_code)]
+fn legacy_json_error(status: u16, message: impl Into<String>) -> ApiResponse {
     json_response(
         status,
-        &json!({
-            "error": message.into(),
-            "retryable": false
-        }),
+        &ApiErrorBody::new(
+            message.into(),
+            ApiErrorCode::BadRequest,
+            Uuid::new_v4().to_string(),
+            false,
+        ),
     )
 }
 

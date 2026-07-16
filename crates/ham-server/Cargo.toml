@@ -6,6 +6,7 @@ version.workspace = true
 
 [dependencies]
 chrono.workspace = true
+ham-api-contract = { path = "../ham-api-contract" }
 ham-core = { path = "../ham-core" }
 ham-plugin-sdk = { path = "../ham-plugin-sdk" }
 ham-sync = { path = "../ham-sync" }
