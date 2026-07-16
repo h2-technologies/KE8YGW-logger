@@ -79,19 +79,25 @@ pub use online::{
     online_services_dashboard, parse_dx_cluster_line, parse_eqsl_upload_response,
     parse_hamqth_lookup_response, parse_noaa_solar_summary, parse_pota_spots_json,
     parse_qrz_logbook_upload_response, parse_qrz_xml_lookup_response, parse_sota_spots_json,
-    pota_spot_to_spot, pota_spots_request, provider_form_body, provider_metadata_for_kind,
-    read_dx_cluster_spots_once, redact_provider_text, runtime_severity_for_provider_status,
-    sota_spot_to_spot, sota_spots_request, test_tier_one_provider, tier_one_provider_metadata,
-    tier_one_provider_supports_capability, upload_engine_stats, upload_execution_from_response,
+    pota_spot_to_spot, pota_spots_request, provider_form_body, provider_http_config_for_request,
+    provider_metadata_for_kind, provider_retry_after_seconds, read_dx_cluster_spots_once,
+    redact_provider_text, retryable_http_status, runtime_severity_for_provider_status,
+    send_provider_http_request_with_config, sota_spot_to_spot, sota_spots_request,
+    test_tier_one_provider, tier_one_provider_metadata, tier_one_provider_supports_capability,
+    upload_engine_stats, upload_execution_from_response, CircuitBreakerState,
     ConfirmationDownloadRequest, ConfirmationDownloadResponse, ConfirmationRecord,
     DxClusterClientConfig, DxClusterSpot, NotificationSeverity, OnlineAccount,
     OnlineAutomationTask, OnlineNotification, OnlineProviderHealth, OnlineProviderStatus,
     OnlineServiceError, OnlineServiceProviderKind, OnlineServicesDashboard, PotaSpotRecord,
     ProviderAdapterError, ProviderAdapterMode, ProviderAdapterTestInput, ProviderAdapterTestResult,
-    ProviderDxClusterInput, ProviderHttpError, ProviderHttpRequest, ProviderHttpResponse,
-    ProviderLookupExecution, ProviderLookupInput, ProviderRuntimeStatus, ProviderSpotExecution,
-    ProviderSpotInput, ProviderUploadExecution, ProviderUploadInput, RetryPolicy, SolarIndexReport,
-    SotaSpotRecord, UploadEngineConfig, UploadEngineStats, UploadExecutionResult,
+    ProviderCircuitBreaker, ProviderDxClusterInput, ProviderHttpError, ProviderHttpRequest,
+    ProviderHttpResponse, ProviderHttpRuntimeConfig, ProviderHttpRuntimeResult, ProviderHttpTiming,
+    ProviderLookupExecution, ProviderLookupInput, ProviderOutcome, ProviderOutcomeKind,
+    ProviderRateLimitPolicy, ProviderRateLimitSnapshot, ProviderRateLimiter, ProviderRetryClass,
+    ProviderRuntimeEvent, ProviderRuntimeHealth, ProviderRuntimeHealthState, ProviderRuntimeStatus,
+    ProviderSpotExecution, ProviderSpotInput, ProviderUploadExecution, ProviderUploadInput,
+    RetryPolicy, SolarIndexReport, SotaSpotRecord, UploadEngineConfig, UploadEngineStats,
+    UploadExecutionResult,
 };
 pub use permissions::{
     check_plugin_permission, grant_builtin_defaults, JsonPermissionGrantStore, PermissionError,
@@ -140,8 +146,8 @@ pub use store::{
 pub use support::{JsonSupportStore, SupportEnvelope, SupportStoreError, SUPPORT_FILE_VERSION};
 pub use upload::{
     adif_for_upload_job, append_upload_status_event, build_log_upload_request,
-    select_qsos_for_upload, UploadJob as UploadQueueJob, UploadJobItem, UploadQueue,
-    UploadQueueError, UploadResult, UploadStatus, UploadTarget,
+    select_qsos_for_upload, upload_idempotency_key, UploadJob as UploadQueueJob, UploadJobItem,
+    UploadQueue, UploadQueueError, UploadQueueState, UploadResult, UploadStatus, UploadTarget,
 };
 
 #[cfg(test)]

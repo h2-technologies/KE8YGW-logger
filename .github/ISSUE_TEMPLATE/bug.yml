@@ -1,0 +1,90 @@
+name: Bug report
+description: Report a reproducible problem in KE8YGW Logger.
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      description: Release version, tag, branch, or commit SHA.
+    validations:
+      required: true
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options:
+        - Windows
+        - macOS
+        - Linux
+        - Web
+        - iOS
+        - Other
+    validations:
+      required: true
+  - type: dropdown
+    id: deployment-mode
+    attributes:
+      label: Deployment mode
+      options:
+        - Local GUI
+        - Tauri desktop
+        - Hosted web
+        - Self-hosted server
+        - Sync server
+        - CLI
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction steps
+      description: List the exact steps needed to reproduce the problem.
+      placeholder: |
+        1. Run ...
+        2. Open ...
+        3. Click ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or diagnostics
+      description: Redact tokens, passwords, API keys, pairing codes, LoTW certificate material, signing keys, private URLs, and personal QSO data before posting.
+      render: text
+    validations:
+      required: false
+  - type: dropdown
+    id: connectivity
+    attributes:
+      label: Offline or connectivity state
+      options:
+        - Offline
+        - Online
+        - Intermittent connectivity
+        - Behind proxy or VPN
+        - Unknown
+    validations:
+      required: true
+  - type: input
+    id: provider
+    attributes:
+      label: Provider involved
+      description: If applicable, name the provider or service. Do not include credentials.
+    validations:
+      required: false

@@ -17,6 +17,10 @@ use crate::{
     store::{LogbookEventStore, StoreError},
 };
 
+fn default_idempotency_key() -> String {
+    Uuid::new_v4().to_string()
+}
+
 #[derive(Debug, Error)]
 pub enum UploadQueueError {
     #[error("upload target {0} was not found")]
@@ -25,6 +29,12 @@ pub enum UploadQueueError {
     MissingProviderConfig(String, Vec<String>),
     #[error("upload job {0} was not found")]
     JobNotFound(Uuid),
+    #[error("upload queue is full")]
+    QueueFull,
+    #[error("upload job {0} is already claimed")]
+    AlreadyClaimed(Uuid),
+    #[error("upload job {0} claim token did not match")]
+    ClaimTokenMismatch(Uuid),
     #[error("official upload event append failed: {0}")]
     Store(#[from] StoreError),
 }
@@ -36,6 +46,29 @@ pub enum UploadStatus {
     Running,
     Completed,
     Failed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UploadQueueState {
+    Pending,
+    Running,
+    RetryScheduled,
+    NeedsUserAction,
+    Succeeded,
+    Cancelled,
+    DeadLetter,
+    Uncertain,
+}
+
+impl UploadQueueState {
+    pub fn is_claimable(self) -> bool {
+        matches!(self, Self::Pending | Self::RetryScheduled | Self::Uncertain)
+    }
+}
+
+fn default_queue_state() -> UploadQueueState {
+    UploadQueueState::Pending
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -70,13 +103,41 @@ pub struct UploadJobItem {
 pub struct UploadJob {
     pub upload_job_id: Uuid,
     pub target_id: String,
+    #[serde(default)]
+    pub provider_id: String,
+    #[serde(default)]
+    pub account_scope: Option<String>,
     pub logbook_id: Uuid,
+    #[serde(default)]
+    pub operation_type: String,
+    #[serde(default = "default_idempotency_key")]
+    pub idempotency_key: String,
     pub qso_ids: Vec<Uuid>,
     pub items: Vec<UploadJobItem>,
     pub status: UploadStatus,
+    #[serde(default = "default_queue_state")]
+    pub queue_state: UploadQueueState,
+    #[serde(default)]
+    pub attempt_count: u32,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    #[serde(default)]
+    pub last_attempt_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub next_attempt_at: Option<DateTime<Utc>>,
     pub last_error: Option<String>,
+    #[serde(default)]
+    pub safe_failure_code: Option<String>,
+    #[serde(default)]
+    pub credential_reference: Option<Uuid>,
+    #[serde(default)]
+    pub provider_side_identifier: Option<String>,
+    #[serde(default)]
+    pub uncertain_outcome: bool,
+    #[serde(default)]
+    pub claim_token: Option<Uuid>,
+    #[serde(default)]
+    pub lease_expires_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -93,6 +154,12 @@ pub struct UploadResult {
 pub struct UploadQueue {
     pub targets: Vec<UploadTarget>,
     pub jobs: VecDeque<UploadJob>,
+    #[serde(default = "default_queue_limit")]
+    pub queue_limit: usize,
+}
+
+fn default_queue_limit() -> usize {
+    1000
 }
 
 impl UploadQueue {
@@ -100,6 +167,7 @@ impl UploadQueue {
         Self {
             targets,
             jobs: VecDeque::new(),
+            queue_limit: default_queue_limit(),
         }
     }
 
@@ -117,7 +185,17 @@ impl UploadQueue {
         {
             return Err(UploadQueueError::TargetNotFound(target_id));
         }
+        if self.jobs.len() >= self.queue_limit {
+            return Err(UploadQueueError::QueueFull);
+        }
         let now = Utc::now();
+        let provider_id = self
+            .targets
+            .iter()
+            .find(|target| target.target_id == target_id)
+            .map(|target| target.provider_id.clone())
+            .unwrap_or_else(|| target_id.clone());
+        let idempotency_key = upload_idempotency_key(&provider_id, logbook_id, &qso_ids);
         let items = qso_ids
             .iter()
             .copied()
@@ -130,16 +208,110 @@ impl UploadQueue {
         let job = UploadJob {
             upload_job_id: Uuid::new_v4(),
             target_id,
+            provider_id,
+            account_scope: None,
             logbook_id,
+            operation_type: "upload.adif".to_owned(),
+            idempotency_key,
             qso_ids,
             items,
             status: UploadStatus::Queued,
+            queue_state: UploadQueueState::Pending,
+            attempt_count: 0,
             created_at: now,
             updated_at: now,
+            last_attempt_at: None,
+            next_attempt_at: None,
             last_error: None,
+            safe_failure_code: None,
+            credential_reference: None,
+            provider_side_identifier: None,
+            uncertain_outcome: false,
+            claim_token: None,
+            lease_expires_at: None,
         };
         self.jobs.push_back(job.clone());
         Ok(job)
+    }
+
+    pub fn find_duplicate(&self, idempotency_key: &str) -> Option<&UploadJob> {
+        self.jobs
+            .iter()
+            .find(|job| job.idempotency_key == idempotency_key)
+    }
+
+    pub fn claim_next(&mut self, now: DateTime<Utc>, lease_seconds: u64) -> Option<(Uuid, Uuid)> {
+        let job = self.jobs.iter_mut().find(|job| {
+            job.queue_state.is_claimable()
+                && job.next_attempt_at.is_none_or(|next| next <= now)
+                && job.lease_expires_at.is_none_or(|expires| expires <= now)
+        })?;
+        let token = Uuid::new_v4();
+        job.status = UploadStatus::Running;
+        job.queue_state = UploadQueueState::Running;
+        job.attempt_count += 1;
+        job.last_attempt_at = Some(now);
+        job.updated_at = now;
+        job.claim_token = Some(token);
+        job.lease_expires_at = Some(now + chrono::Duration::seconds(lease_seconds as i64));
+        Some((job.upload_job_id, token))
+    }
+
+    pub fn recover_expired_leases(&mut self, now: DateTime<Utc>) -> usize {
+        let mut recovered = 0;
+        for job in &mut self.jobs {
+            if job.queue_state == UploadQueueState::Running
+                && job.lease_expires_at.is_some_and(|expires| expires <= now)
+            {
+                job.status = UploadStatus::Failed;
+                job.queue_state = UploadQueueState::Uncertain;
+                job.uncertain_outcome = true;
+                job.safe_failure_code = Some("worker_lease_expired".to_owned());
+                job.last_error = Some("worker lease expired before completion".to_owned());
+                job.claim_token = None;
+                job.lease_expires_at = None;
+                job.updated_at = now;
+                recovered += 1;
+            }
+        }
+        recovered
+    }
+
+    pub fn schedule_retry(
+        &mut self,
+        job_id: Uuid,
+        claim_token: Uuid,
+        next_attempt_at: DateTime<Utc>,
+        safe_failure_code: impl Into<String>,
+        error: impl Into<String>,
+    ) -> Result<(), UploadQueueError> {
+        let job = self.job_for_claim(job_id, claim_token)?;
+        job.status = UploadStatus::Failed;
+        job.queue_state = UploadQueueState::RetryScheduled;
+        job.next_attempt_at = Some(next_attempt_at);
+        job.safe_failure_code = Some(safe_failure_code.into());
+        job.last_error = Some(error.into());
+        job.claim_token = None;
+        job.lease_expires_at = None;
+        job.updated_at = Utc::now();
+        Ok(())
+    }
+
+    pub fn mark_uncertain(
+        &mut self,
+        job_id: Uuid,
+        claim_token: Uuid,
+        safe_failure_code: impl Into<String>,
+    ) -> Result<(), UploadQueueError> {
+        let job = self.job_for_claim(job_id, claim_token)?;
+        job.status = UploadStatus::Failed;
+        job.queue_state = UploadQueueState::Uncertain;
+        job.uncertain_outcome = true;
+        job.safe_failure_code = Some(safe_failure_code.into());
+        job.claim_token = None;
+        job.lease_expires_at = None;
+        job.updated_at = Utc::now();
+        Ok(())
     }
 
     pub fn mark_completed(
@@ -151,7 +323,12 @@ impl UploadQueue {
             return Err(UploadQueueError::JobNotFound(job_id));
         };
         job.status = UploadStatus::Completed;
+        job.queue_state = UploadQueueState::Succeeded;
         job.updated_at = Utc::now();
+        job.claim_token = None;
+        job.lease_expires_at = None;
+        job.next_attempt_at = None;
+        job.uncertain_outcome = false;
         for item in &mut job.items {
             item.status = UploadStatus::Completed;
         }
@@ -175,8 +352,12 @@ impl UploadQueue {
             return Err(UploadQueueError::JobNotFound(job_id));
         };
         job.status = UploadStatus::Failed;
+        job.queue_state = UploadQueueState::DeadLetter;
         job.updated_at = Utc::now();
         job.last_error = Some(error.clone());
+        job.safe_failure_code = Some("upload_failed".to_owned());
+        job.claim_token = None;
+        job.lease_expires_at = None;
         for item in &mut job.items {
             item.status = UploadStatus::Failed;
             item.error = Some(error.clone());
@@ -190,6 +371,36 @@ impl UploadQueue {
             message: Some(error),
         })
     }
+
+    fn job_for_claim(
+        &mut self,
+        job_id: Uuid,
+        claim_token: Uuid,
+    ) -> Result<&mut UploadJob, UploadQueueError> {
+        let job = self
+            .jobs
+            .iter_mut()
+            .find(|job| job.upload_job_id == job_id)
+            .ok_or(UploadQueueError::JobNotFound(job_id))?;
+        match job.claim_token {
+            Some(token) if token == claim_token => Ok(job),
+            Some(_) => Err(UploadQueueError::ClaimTokenMismatch(job_id)),
+            None => Err(UploadQueueError::AlreadyClaimed(job_id)),
+        }
+    }
+}
+
+pub fn upload_idempotency_key(provider_id: &str, logbook_id: Uuid, qso_ids: &[Uuid]) -> String {
+    let mut qso_ids = qso_ids.to_vec();
+    qso_ids.sort();
+    format!(
+        "upload.adif:{provider_id}:{logbook_id}:{}",
+        qso_ids
+            .iter()
+            .map(Uuid::to_string)
+            .collect::<Vec<_>>()
+            .join(",")
+    )
 }
 
 pub fn select_qsos_for_upload(
@@ -305,6 +516,106 @@ mod tests {
             .create_job("lotw", Uuid::new_v4(), vec![qso_id])
             .unwrap();
         assert_eq!(job.items.len(), 1);
+        assert_eq!(job.queue_state, UploadQueueState::Pending);
+        assert_eq!(job.operation_type, "upload.adif");
+        assert_eq!(job.provider_id, "lotw.stub");
+        assert!(!job.idempotency_key.is_empty());
+    }
+
+    #[test]
+    fn queue_claims_are_exclusive_and_recover_after_lease_expiration() {
+        let mut queue = UploadQueue::new(vec![UploadTarget {
+            target_id: "lotw".to_owned(),
+            display_name: "LoTW".to_owned(),
+            provider_id: "lotw".to_owned(),
+            enabled: true,
+            required_config_keys: vec![],
+        }]);
+        let now = Utc::now();
+        let job = queue
+            .create_job("lotw", Uuid::new_v4(), vec![Uuid::new_v4()])
+            .unwrap();
+        let (claimed_id, token) = queue.claim_next(now, 30).unwrap();
+        assert_eq!(claimed_id, job.upload_job_id);
+        assert!(queue.claim_next(now, 30).is_none());
+        assert!(matches!(
+            queue.schedule_retry(
+                claimed_id,
+                Uuid::new_v4(),
+                now + chrono::Duration::minutes(1),
+                "temporary_failure",
+                "temporary"
+            ),
+            Err(UploadQueueError::ClaimTokenMismatch(_))
+        ));
+        queue
+            .schedule_retry(
+                claimed_id,
+                token,
+                now + chrono::Duration::minutes(1),
+                "temporary_failure",
+                "temporary",
+            )
+            .unwrap();
+        assert_eq!(queue.jobs[0].queue_state, UploadQueueState::RetryScheduled);
+        assert!(queue.claim_next(now, 30).is_none());
+        let (claimed_again, _) = queue
+            .claim_next(now + chrono::Duration::minutes(2), 30)
+            .unwrap();
+        assert_eq!(claimed_again, claimed_id);
+        assert_eq!(
+            queue.recover_expired_leases(now + chrono::Duration::minutes(3)),
+            1
+        );
+        assert_eq!(queue.jobs[0].queue_state, UploadQueueState::Uncertain);
+        assert!(queue.jobs[0].uncertain_outcome);
+    }
+
+    #[test]
+    fn idempotency_key_is_stable_for_duplicate_delivery() {
+        let logbook_id = Uuid::new_v4();
+        let left = Uuid::new_v4();
+        let right = Uuid::new_v4();
+        let one = upload_idempotency_key("clublog", logbook_id, &[left, right]);
+        let two = upload_idempotency_key("clublog", logbook_id, &[right, left]);
+        assert_eq!(one, two);
+
+        let mut queue = UploadQueue::new(vec![UploadTarget {
+            target_id: "clublog".to_owned(),
+            display_name: "Club Log".to_owned(),
+            provider_id: "clublog".to_owned(),
+            enabled: true,
+            required_config_keys: vec![],
+        }]);
+        let job = queue
+            .create_job("clublog", logbook_id, vec![left, right])
+            .unwrap();
+        assert_eq!(
+            queue
+                .find_duplicate(&job.idempotency_key)
+                .unwrap()
+                .upload_job_id,
+            job.upload_job_id
+        );
+    }
+
+    #[test]
+    fn queue_limit_reports_overflow() {
+        let mut queue = UploadQueue::new(vec![UploadTarget {
+            target_id: "eqsl".to_owned(),
+            display_name: "eQSL".to_owned(),
+            provider_id: "eqsl".to_owned(),
+            enabled: true,
+            required_config_keys: vec![],
+        }]);
+        queue.queue_limit = 1;
+        queue
+            .create_job("eqsl", Uuid::new_v4(), vec![Uuid::new_v4()])
+            .unwrap();
+        assert!(matches!(
+            queue.create_job("eqsl", Uuid::new_v4(), vec![Uuid::new_v4()]),
+            Err(UploadQueueError::QueueFull)
+        ));
     }
 
     #[test]

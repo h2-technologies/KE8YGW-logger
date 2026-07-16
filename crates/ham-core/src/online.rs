@@ -6,7 +6,7 @@
 
 use std::{
     collections::HashMap,
-    io::{BufRead, BufReader, Write},
+    io::{BufRead, BufReader, Read, Write},
     net::{TcpStream, ToSocketAddrs},
     time::Duration as StdDuration,
 };
@@ -101,6 +101,56 @@ impl OnlineProviderHealth {
             message: health.message.clone(),
             checked_at: health.checked_at,
             retry_after_seconds: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderRuntimeHealthState {
+    Unknown,
+    Healthy,
+    Degraded,
+    RateLimited,
+    Unavailable,
+    Misconfigured,
+    AuthenticationFailed,
+    Disabled,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProviderRuntimeHealth {
+    pub provider_id: String,
+    pub state: ProviderRuntimeHealthState,
+    pub last_success: Option<DateTime<Utc>>,
+    pub last_failure: Option<DateTime<Utc>>,
+    pub failure_category: Option<ProviderOutcomeKind>,
+    pub consecutive_failures: u32,
+    pub next_retry: Option<DateTime<Utc>>,
+    pub queue_depth: usize,
+    pub rate_limit_state: Option<ProviderRateLimitSnapshot>,
+    pub credential_reference_status: CredentialStatus,
+    pub credential_validation_status: Option<String>,
+    pub data_freshness_seconds: Option<u64>,
+    pub circuit_state: CircuitBreakerState,
+}
+
+impl ProviderRuntimeHealth {
+    pub fn unknown(provider_id: impl Into<String>) -> Self {
+        Self {
+            provider_id: provider_id.into(),
+            state: ProviderRuntimeHealthState::Unknown,
+            last_success: None,
+            last_failure: None,
+            failure_category: None,
+            consecutive_failures: 0,
+            next_retry: None,
+            queue_depth: 0,
+            rate_limit_state: None,
+            credential_reference_status: CredentialStatus::Missing,
+            credential_validation_status: None,
+            data_freshness_seconds: None,
+            circuit_state: CircuitBreakerState::Closed,
         }
     }
 }
@@ -331,6 +381,373 @@ pub struct ProviderDxClusterInput {
     pub fake_lines: Vec<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderOutcomeKind {
+    Success,
+    PartialSuccess,
+    RetryableFailure,
+    PermanentFailure,
+    AuthenticationRequired,
+    AuthenticationRejected,
+    AuthorizationDenied,
+    RateLimited,
+    ProviderUnavailable,
+    MalformedProviderResponse,
+    InvalidLocalConfiguration,
+    Timeout,
+    TransportFailure,
+    Cancelled,
+    UncertainResult,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderRetryClass {
+    None,
+    Retryable,
+    RetryAfter,
+    UserActionRequired,
+    UnknownSafety,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProviderOutcome {
+    pub provider_id: String,
+    pub kind: ProviderOutcomeKind,
+    pub code: String,
+    pub user_message: String,
+    pub retry_class: ProviderRetryClass,
+    pub retry_after_seconds: Option<u64>,
+    pub correlation_id: Uuid,
+    pub request_id: Option<String>,
+    pub queue_item_id: Option<Uuid>,
+    pub redacted_diagnostics: Vec<String>,
+}
+
+impl ProviderOutcome {
+    pub fn new(
+        provider_id: impl Into<String>,
+        kind: ProviderOutcomeKind,
+        code: impl Into<String>,
+        user_message: impl Into<String>,
+    ) -> Self {
+        Self {
+            provider_id: provider_id.into(),
+            kind,
+            code: code.into(),
+            user_message: user_message.into(),
+            retry_class: retry_class_for_outcome(kind),
+            retry_after_seconds: None,
+            correlation_id: Uuid::new_v4(),
+            request_id: None,
+            queue_item_id: None,
+            redacted_diagnostics: Vec::new(),
+        }
+    }
+}
+
+pub fn retry_class_for_outcome(kind: ProviderOutcomeKind) -> ProviderRetryClass {
+    match kind {
+        ProviderOutcomeKind::RetryableFailure
+        | ProviderOutcomeKind::ProviderUnavailable
+        | ProviderOutcomeKind::Timeout
+        | ProviderOutcomeKind::TransportFailure => ProviderRetryClass::Retryable,
+        ProviderOutcomeKind::RateLimited => ProviderRetryClass::RetryAfter,
+        ProviderOutcomeKind::AuthenticationRequired
+        | ProviderOutcomeKind::AuthenticationRejected
+        | ProviderOutcomeKind::AuthorizationDenied
+        | ProviderOutcomeKind::InvalidLocalConfiguration => ProviderRetryClass::UserActionRequired,
+        ProviderOutcomeKind::UncertainResult => ProviderRetryClass::UnknownSafety,
+        ProviderOutcomeKind::Success
+        | ProviderOutcomeKind::PartialSuccess
+        | ProviderOutcomeKind::PermanentFailure
+        | ProviderOutcomeKind::MalformedProviderResponse
+        | ProviderOutcomeKind::Cancelled => ProviderRetryClass::None,
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProviderRuntimeEvent {
+    pub provider_id: String,
+    pub capability: String,
+    pub operation: String,
+    pub correlation_id: Uuid,
+    pub duration_ms: u64,
+    pub outcome: ProviderOutcomeKind,
+    pub attempt: u32,
+    pub http_status: Option<u16>,
+    pub queue_item_id: Option<Uuid>,
+    pub retry_at: Option<DateTime<Utc>>,
+    pub rate_limit_state: Option<ProviderRateLimitSnapshot>,
+    pub circuit_state: Option<CircuitBreakerState>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProviderHttpRuntimeConfig {
+    pub connect_timeout_seconds: u64,
+    pub request_timeout_seconds: u64,
+    pub total_deadline_seconds: u64,
+    pub max_response_body_bytes: usize,
+    pub user_agent: String,
+    pub tls_verify: bool,
+    pub max_redirects: usize,
+    pub accept_compression: bool,
+    pub correlation_id: Uuid,
+}
+
+impl Default for ProviderHttpRuntimeConfig {
+    fn default() -> Self {
+        Self {
+            connect_timeout_seconds: 5,
+            request_timeout_seconds: DEFAULT_PROVIDER_TIMEOUT_SECONDS,
+            total_deadline_seconds: DEFAULT_PROVIDER_TIMEOUT_SECONDS + 5,
+            max_response_body_bytes: 512 * 1024,
+            user_agent: PROVIDER_USER_AGENT.to_owned(),
+            tls_verify: true,
+            max_redirects: 5,
+            accept_compression: true,
+            correlation_id: Uuid::new_v4(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProviderHttpTiming {
+    pub started_at: DateTime<Utc>,
+    pub completed_at: DateTime<Utc>,
+    pub duration_ms: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProviderHttpRuntimeResult {
+    pub response: ProviderHttpResponse,
+    pub timing: ProviderHttpTiming,
+    pub correlation_id: Uuid,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProviderRateLimitPolicy {
+    pub provider_id: String,
+    pub max_concurrent_global: u32,
+    pub max_concurrent_per_account: u32,
+    pub burst_limit: u32,
+    pub refill_interval_seconds: u64,
+    pub queue_limit: usize,
+}
+
+impl ProviderRateLimitPolicy {
+    pub fn for_provider(provider_id: impl Into<String>) -> Self {
+        Self {
+            provider_id: provider_id.into(),
+            max_concurrent_global: 4,
+            max_concurrent_per_account: 1,
+            burst_limit: 10,
+            refill_interval_seconds: 60,
+            queue_limit: 1000,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProviderRateLimitSnapshot {
+    pub provider_id: String,
+    pub account_scope: Option<String>,
+    pub available_burst: u32,
+    pub running_global: u32,
+    pub running_for_account: u32,
+    pub next_allowed_at: Option<DateTime<Utc>>,
+    pub queue_depth: usize,
+    pub overflowed: bool,
+    pub instance_local: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProviderRateLimiter {
+    pub policy: ProviderRateLimitPolicy,
+    pub available_burst: u32,
+    pub running_global: u32,
+    pub running_by_account: HashMap<String, u32>,
+    pub next_refill_at: DateTime<Utc>,
+    pub queue_depth: usize,
+}
+
+impl ProviderRateLimiter {
+    pub fn new(policy: ProviderRateLimitPolicy, now: DateTime<Utc>) -> Self {
+        Self {
+            available_burst: policy.burst_limit,
+            next_refill_at: now + Duration::seconds(policy.refill_interval_seconds as i64),
+            policy,
+            running_global: 0,
+            running_by_account: HashMap::new(),
+            queue_depth: 0,
+        }
+    }
+
+    pub fn try_acquire(
+        &mut self,
+        account_scope: Option<&str>,
+        now: DateTime<Utc>,
+    ) -> Result<ProviderRateLimitSnapshot, ProviderRateLimitSnapshot> {
+        self.refill(now);
+        let account_key = account_scope.unwrap_or("__anonymous__").to_owned();
+        let running_for_account = *self.running_by_account.get(&account_key).unwrap_or(&0);
+        let limited = self.running_global >= self.policy.max_concurrent_global
+            || running_for_account >= self.policy.max_concurrent_per_account
+            || self.available_burst == 0;
+        let overflowed = self.queue_depth >= self.policy.queue_limit;
+        if limited || overflowed {
+            return Err(self.snapshot(account_scope.map(str::to_owned), overflowed));
+        }
+        self.running_global += 1;
+        *self.running_by_account.entry(account_key).or_default() += 1;
+        self.available_burst = self.available_burst.saturating_sub(1);
+        Ok(self.snapshot(account_scope.map(str::to_owned), false))
+    }
+
+    pub fn release(&mut self, account_scope: Option<&str>) {
+        self.running_global = self.running_global.saturating_sub(1);
+        let account_key = account_scope.unwrap_or("__anonymous__").to_owned();
+        if let Some(running) = self.running_by_account.get_mut(&account_key) {
+            *running = running.saturating_sub(1);
+        }
+    }
+
+    pub fn snapshot(
+        &self,
+        account_scope: Option<String>,
+        overflowed: bool,
+    ) -> ProviderRateLimitSnapshot {
+        let running_for_account = account_scope
+            .as_deref()
+            .and_then(|account_key| self.running_by_account.get(account_key))
+            .copied()
+            .unwrap_or_else(|| *self.running_by_account.get("__anonymous__").unwrap_or(&0));
+        ProviderRateLimitSnapshot {
+            provider_id: self.policy.provider_id.clone(),
+            account_scope,
+            available_burst: self.available_burst,
+            running_global: self.running_global,
+            running_for_account,
+            next_allowed_at: (self.available_burst == 0).then_some(self.next_refill_at),
+            queue_depth: self.queue_depth,
+            overflowed,
+            instance_local: true,
+        }
+    }
+
+    fn refill(&mut self, now: DateTime<Utc>) {
+        if now >= self.next_refill_at {
+            self.available_burst = self.policy.burst_limit;
+            self.next_refill_at =
+                now + Duration::seconds(self.policy.refill_interval_seconds as i64);
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CircuitBreakerState {
+    Closed,
+    Open,
+    HalfOpen,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProviderCircuitBreaker {
+    pub state: CircuitBreakerState,
+    pub failure_threshold: u32,
+    pub consecutive_failures: u32,
+    pub cooldown_seconds: u64,
+    pub opened_at: Option<DateTime<Utc>>,
+    pub half_open_probe_limit: u32,
+    pub half_open_in_flight: u32,
+}
+
+impl ProviderCircuitBreaker {
+    pub fn new(failure_threshold: u32, cooldown_seconds: u64, half_open_probe_limit: u32) -> Self {
+        Self {
+            state: CircuitBreakerState::Closed,
+            failure_threshold,
+            consecutive_failures: 0,
+            cooldown_seconds,
+            opened_at: None,
+            half_open_probe_limit,
+            half_open_in_flight: 0,
+        }
+    }
+
+    pub fn allow_request(&mut self, now: DateTime<Utc>) -> bool {
+        match self.state {
+            CircuitBreakerState::Closed => true,
+            CircuitBreakerState::Open => {
+                let ready = self.opened_at.is_some_and(|opened| {
+                    now >= opened + Duration::seconds(self.cooldown_seconds as i64)
+                });
+                if ready {
+                    self.state = CircuitBreakerState::HalfOpen;
+                    self.half_open_in_flight = 0;
+                    self.allow_request(now)
+                } else {
+                    false
+                }
+            }
+            CircuitBreakerState::HalfOpen => {
+                if self.half_open_in_flight < self.half_open_probe_limit {
+                    self.half_open_in_flight += 1;
+                    true
+                } else {
+                    false
+                }
+            }
+        }
+    }
+
+    pub fn record_success(&mut self) {
+        self.state = CircuitBreakerState::Closed;
+        self.consecutive_failures = 0;
+        self.opened_at = None;
+        self.half_open_in_flight = 0;
+    }
+
+    pub fn record_outcome(&mut self, kind: ProviderOutcomeKind, now: DateTime<Utc>) {
+        if !opens_circuit(kind) {
+            if matches!(
+                kind,
+                ProviderOutcomeKind::Success | ProviderOutcomeKind::PartialSuccess
+            ) {
+                self.record_success();
+            }
+            return;
+        }
+        self.consecutive_failures += 1;
+        if self.state == CircuitBreakerState::HalfOpen
+            || self.consecutive_failures >= self.failure_threshold
+        {
+            self.state = CircuitBreakerState::Open;
+            self.opened_at = Some(now);
+            self.half_open_in_flight = 0;
+        }
+    }
+}
+
+impl Default for ProviderCircuitBreaker {
+    fn default() -> Self {
+        Self::new(3, 300, 1)
+    }
+}
+
+fn opens_circuit(kind: ProviderOutcomeKind) -> bool {
+    matches!(
+        kind,
+        ProviderOutcomeKind::RetryableFailure
+            | ProviderOutcomeKind::ProviderUnavailable
+            | ProviderOutcomeKind::Timeout
+            | ProviderOutcomeKind::TransportFailure
+            | ProviderOutcomeKind::MalformedProviderResponse
+    )
+}
+
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum ProviderAdapterError {
     #[error("provider {0} is not registered")]
@@ -367,10 +784,86 @@ pub enum ProviderHttpError {
     Timeout,
     #[error("provider HTTP status {status}: {body}")]
     HttpStatus { status: u16, body: String },
+    #[error("provider HTTP response exceeded {limit_bytes} bytes")]
+    ResponseTooLarge { limit_bytes: usize },
     #[error("provider HTTP transport failed: {0}")]
     Transport(String),
     #[error("provider operation is unsupported: {0}")]
     Unsupported(String),
+}
+
+pub fn provider_http_config_for_request(
+    request: &ProviderHttpRequest,
+) -> ProviderHttpRuntimeConfig {
+    ProviderHttpRuntimeConfig {
+        request_timeout_seconds: request.timeout_seconds,
+        total_deadline_seconds: request.timeout_seconds.saturating_add(5),
+        user_agent: request.user_agent.clone(),
+        ..ProviderHttpRuntimeConfig::default()
+    }
+}
+
+pub fn retryable_http_status(status: u16) -> bool {
+    matches!(status, 408 | 429 | 502 | 503 | 504)
+}
+
+pub fn classify_provider_http_error(error: &ProviderHttpError) -> ProviderOutcomeKind {
+    match error {
+        ProviderHttpError::Timeout => ProviderOutcomeKind::Timeout,
+        ProviderHttpError::ResponseTooLarge { .. } => {
+            ProviderOutcomeKind::MalformedProviderResponse
+        }
+        ProviderHttpError::Transport(message) => {
+            let lower = message.to_ascii_lowercase();
+            if lower.contains("dns")
+                || lower.contains("reset")
+                || lower.contains("temporar")
+                || lower.contains("connection refused")
+            {
+                ProviderOutcomeKind::TransportFailure
+            } else {
+                ProviderOutcomeKind::PermanentFailure
+            }
+        }
+        ProviderHttpError::HttpStatus { status, .. } if *status == 429 => {
+            ProviderOutcomeKind::RateLimited
+        }
+        ProviderHttpError::HttpStatus { status, .. } if retryable_http_status(*status) => {
+            ProviderOutcomeKind::ProviderUnavailable
+        }
+        ProviderHttpError::HttpStatus {
+            status: 401 | 403, ..
+        } => ProviderOutcomeKind::AuthenticationRejected,
+        ProviderHttpError::HttpStatus {
+            status: 400..=499, ..
+        } => ProviderOutcomeKind::PermanentFailure,
+        ProviderHttpError::HttpStatus { .. } => ProviderOutcomeKind::RetryableFailure,
+        ProviderHttpError::Unsupported(_) => ProviderOutcomeKind::InvalidLocalConfiguration,
+    }
+}
+
+pub fn provider_retry_after_seconds(value: &str, max_seconds: u64) -> Option<u64> {
+    let seconds = value.trim().parse::<u64>().ok()?;
+    Some(seconds.min(max_seconds))
+}
+
+pub fn next_retry_delay_with_jitter(
+    policy: &RetryPolicy,
+    attempt: u8,
+    jitter_ratio: f32,
+    jitter_seed: u64,
+) -> Duration {
+    let base = next_retry_delay(policy, attempt);
+    if jitter_ratio <= 0.0 {
+        return base;
+    }
+    let base_seconds = base.num_seconds().max(0) as u64;
+    let jitter_cap = ((base_seconds as f32) * jitter_ratio).round() as u64;
+    if jitter_cap == 0 {
+        return base;
+    }
+    let jitter = jitter_seed % (jitter_cap + 1);
+    Duration::seconds(base_seconds.saturating_add(jitter) as i64)
 }
 
 pub fn redact_provider_text(value: &str, secrets: &[String]) -> String {
@@ -429,14 +922,36 @@ pub fn provider_http_error_from_transport(message: &str) -> ProviderHttpError {
 pub fn send_provider_http_request(
     request: &ProviderHttpRequest,
 ) -> Result<ProviderHttpResponse, ProviderHttpError> {
+    send_provider_http_request_with_config(request, &provider_http_config_for_request(request))
+        .map(|result| result.response)
+}
+
+pub fn send_provider_http_request_with_config(
+    request: &ProviderHttpRequest,
+    config: &ProviderHttpRuntimeConfig,
+) -> Result<ProviderHttpRuntimeResult, ProviderHttpError> {
+    if !config.tls_verify {
+        return Err(ProviderHttpError::Unsupported(
+            "disabling TLS verification is not supported in this build".to_owned(),
+        ));
+    }
+    let started_at = Utc::now();
     let agent = ureq::AgentBuilder::new()
-        .timeout(StdDuration::from_secs(request.timeout_seconds))
-        .user_agent(&request.user_agent)
+        .timeout_connect(StdDuration::from_secs(config.connect_timeout_seconds))
+        .timeout_read(StdDuration::from_secs(config.request_timeout_seconds))
+        .timeout_write(StdDuration::from_secs(config.request_timeout_seconds))
+        .redirects(config.max_redirects.min(u32::MAX as usize) as u32)
+        .user_agent(&config.user_agent)
         .build();
     let result = match request.method.as_str() {
-        "GET" => agent.get(&request.url).call(),
+        "GET" => agent
+            .get(&request.url)
+            .set("X-Correlation-ID", &config.correlation_id.to_string())
+            .call(),
         "POST" => {
-            let mut req = agent.post(&request.url);
+            let mut req = agent
+                .post(&request.url)
+                .set("X-Correlation-ID", &config.correlation_id.to_string());
             if let Some(content_type) = &request.content_type {
                 req = req.set("Content-Type", content_type);
             }
@@ -448,19 +963,51 @@ pub fn send_provider_http_request(
             )))
         }
     };
+    let finish = |response: ProviderHttpResponse| {
+        let completed_at = Utc::now();
+        let duration_ms = completed_at
+            .signed_duration_since(started_at)
+            .num_milliseconds()
+            .max(0) as u64;
+        ProviderHttpRuntimeResult {
+            response,
+            timing: ProviderHttpTiming {
+                started_at,
+                completed_at,
+                duration_ms,
+            },
+            correlation_id: config.correlation_id,
+        }
+    };
     match result {
-        Ok(response) => Ok(ProviderHttpResponse {
-            status: response.status(),
-            body: response.into_string().unwrap_or_default(),
-        }),
-        Err(ureq::Error::Status(status, response)) => Err(ProviderHttpError::HttpStatus {
-            status,
-            body: response.into_string().unwrap_or_default(),
-        }),
+        Ok(response) => {
+            let status = response.status();
+            let body = read_bounded_provider_body(response, config.max_response_body_bytes)?;
+            Ok(finish(ProviderHttpResponse { status, body }))
+        }
+        Err(ureq::Error::Status(status, response)) => {
+            let body = read_bounded_provider_body(response, config.max_response_body_bytes)?;
+            Err(ProviderHttpError::HttpStatus { status, body })
+        }
         Err(ureq::Error::Transport(error)) => {
             Err(provider_http_error_from_transport(&error.to_string()))
         }
     }
+}
+
+fn read_bounded_provider_body(
+    response: ureq::Response,
+    limit_bytes: usize,
+) -> Result<String, ProviderHttpError> {
+    let mut reader = response.into_reader().take(limit_bytes as u64 + 1);
+    let mut bytes = Vec::new();
+    reader
+        .read_to_end(&mut bytes)
+        .map_err(|error| ProviderHttpError::Transport(error.to_string()))?;
+    if bytes.len() > limit_bytes {
+        return Err(ProviderHttpError::ResponseTooLarge { limit_bytes });
+    }
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
 }
 
 fn credential_fields(secret: Option<&str>) -> HashMap<String, String> {
@@ -594,17 +1141,17 @@ pub fn test_tier_one_provider(
             ],
             "qrz-xml" => vec![
                 "QRZ XML session and callsign response parsers are available".to_owned(),
-                "lookup route execution remains fake until a lookup request route is wired"
+                "hosted lookup execution is wired and remains fake by default unless live_test=true"
                     .to_owned(),
             ],
             "hamqth" => vec![
                 "HamQTH session and callsign response parsers are available".to_owned(),
-                "lookup route execution remains fake until a lookup request route is wired"
+                "hosted lookup execution is wired and remains fake by default unless live_test=true"
                     .to_owned(),
             ],
             "pota-spots" => vec![
                 "POTA spot JSON parser and live endpoint request builder are available".to_owned(),
-                "spot route execution remains fake until a spot fetch route is wired".to_owned(),
+                "hosted spot fetch execution is wired and remains fake by default unless live_test=true".to_owned(),
             ],
             "dx-cluster" => vec![
                 "DX Cluster telnet read-once client foundation is available".to_owned(),
@@ -1091,7 +1638,7 @@ fn live_limitation_for_provider(provider_id: &str) -> String {
             "spot feed adapter has fake/scaffold support; POTA live parser is modeled, SOTA live access is deferred pending API approval".to_owned()
         }
         "qrz-xml" | "hamqth" => {
-            "callsign lookup adapter has credential/test scaffolding and live response parsers; hosted lookup execution is pending"
+            "callsign lookup adapter has credential/test scaffolding, live response parsers, and hosted fake-default execution"
                 .to_owned()
         }
         "clublog" | "qrz-logbook" | "eqsl" => {
@@ -2741,6 +3288,29 @@ mod tests {
         }
     }
 
+    fn one_shot_http_fixture(status: u16, body: &'static str) -> String {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            if let Ok((mut stream, _)) = listener.accept() {
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut line = String::new();
+                while reader.read_line(&mut line).unwrap_or(0) > 0 {
+                    if line == "\r\n" {
+                        break;
+                    }
+                    line.clear();
+                }
+                let response = format!(
+                    "HTTP/1.1 {status} OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = stream.write_all(response.as_bytes());
+            }
+        });
+        format!("http://{address}/fixture")
+    }
+
     #[test]
     fn provider_metadata_covers_required_online_services() {
         let providers = online_provider_metadata();
@@ -3392,6 +3962,96 @@ mod tests {
         assert_eq!(next_retry_delay(&policy, 1), Duration::seconds(10));
         assert_eq!(next_retry_delay(&policy, 2), Duration::seconds(20));
         assert_eq!(next_retry_delay(&policy, 3), Duration::seconds(25));
+        assert_eq!(
+            next_retry_delay_with_jitter(&policy, 2, 0.25, 3),
+            Duration::seconds(23)
+        );
+        assert!(retryable_http_status(429));
+        assert!(!retryable_http_status(401));
+        assert_eq!(
+            provider_retry_after_seconds("999", 120),
+            Some(120),
+            "Retry-After values are capped"
+        );
+        assert_eq!(
+            classify_provider_http_error(&ProviderHttpError::HttpStatus {
+                status: 429,
+                body: "slow down".to_owned()
+            }),
+            ProviderOutcomeKind::RateLimited
+        );
+    }
+
+    #[test]
+    fn circuit_breaker_transitions_deterministically() {
+        let now = Utc::now();
+        let mut circuit = ProviderCircuitBreaker::new(2, 30, 1);
+        assert!(circuit.allow_request(now));
+        circuit.record_outcome(ProviderOutcomeKind::AuthenticationRejected, now);
+        assert_eq!(circuit.state, CircuitBreakerState::Closed);
+        circuit.record_outcome(ProviderOutcomeKind::Timeout, now);
+        assert_eq!(circuit.state, CircuitBreakerState::Closed);
+        circuit.record_outcome(ProviderOutcomeKind::ProviderUnavailable, now);
+        assert_eq!(circuit.state, CircuitBreakerState::Open);
+        assert!(!circuit.allow_request(now + Duration::seconds(10)));
+        assert!(circuit.allow_request(now + Duration::seconds(31)));
+        assert_eq!(circuit.state, CircuitBreakerState::HalfOpen);
+        assert!(!circuit.allow_request(now + Duration::seconds(32)));
+        circuit.record_success();
+        assert_eq!(circuit.state, CircuitBreakerState::Closed);
+    }
+
+    #[test]
+    fn rate_limiter_tracks_provider_account_and_overflow() {
+        let now = Utc::now();
+        let mut policy = ProviderRateLimitPolicy::for_provider("clublog");
+        policy.max_concurrent_global = 1;
+        policy.max_concurrent_per_account = 1;
+        policy.burst_limit = 1;
+        policy.queue_limit = 1;
+        let mut limiter = ProviderRateLimiter::new(policy, now);
+        let first = limiter.try_acquire(Some("acct-1"), now).unwrap();
+        assert_eq!(first.running_global, 1);
+        let blocked = limiter.try_acquire(Some("acct-1"), now).unwrap_err();
+        assert_eq!(blocked.next_allowed_at, Some(limiter.next_refill_at));
+        limiter.release(Some("acct-1"));
+        limiter.queue_depth = 1;
+        let overflow = limiter
+            .try_acquire(Some("acct-2"), now + Duration::seconds(61))
+            .unwrap_err();
+        assert!(overflow.overflowed);
+        assert!(overflow.instance_local);
+    }
+
+    #[test]
+    fn http_runtime_rejects_oversized_response_and_redacts_echoed_secret() {
+        let secret = "TEST_SECRET_SHOULD_NOT_APPEAR";
+        let request = ProviderHttpRequest {
+            method: "GET".to_owned(),
+            url: one_shot_http_fixture(500, secret),
+            content_type: None,
+            body: None,
+            timeout_seconds: 2,
+            user_agent: PROVIDER_USER_AGENT.to_owned(),
+        };
+        let error = send_provider_http_request_with_config(
+            &request,
+            &ProviderHttpRuntimeConfig {
+                max_response_body_bytes: 8,
+                ..provider_http_config_for_request(&request)
+            },
+        )
+        .unwrap_err();
+        assert!(matches!(error, ProviderHttpError::ResponseTooLarge { .. }));
+
+        let redacted = redact_http_error(
+            ProviderHttpError::HttpStatus {
+                status: 500,
+                body: format!("provider echoed password {secret}"),
+            },
+            &[secret.to_owned()],
+        );
+        assert!(!redacted.to_string().contains(secret));
     }
 
     #[test]
@@ -3485,13 +4145,27 @@ mod tests {
         queue.jobs.push_back(UploadJob {
             upload_job_id: Uuid::new_v4(),
             target_id: "lotw".to_owned(),
+            provider_id: "lotw".to_owned(),
+            account_scope: None,
             logbook_id: Uuid::new_v4(),
+            operation_type: "upload.adif".to_owned(),
+            idempotency_key: Uuid::new_v4().to_string(),
             qso_ids: vec![],
             items: vec![],
             status: UploadStatus::Failed,
+            queue_state: crate::upload::UploadQueueState::DeadLetter,
+            attempt_count: 0,
             created_at: Utc::now(),
             updated_at: Utc::now(),
+            last_attempt_at: None,
+            next_attempt_at: None,
             last_error: Some("offline".to_owned()),
+            safe_failure_code: Some("transport_failure".to_owned()),
+            credential_reference: None,
+            provider_side_identifier: None,
+            uncertain_outcome: false,
+            claim_token: None,
+            lease_expires_at: None,
         });
         let dashboard = online_services_dashboard(
             providers
@@ -3521,13 +4195,27 @@ mod tests {
         let job = UploadJob {
             upload_job_id: Uuid::new_v4(),
             target_id: "lotw".to_owned(),
+            provider_id: "lotw".to_owned(),
+            account_scope: None,
             logbook_id: Uuid::new_v4(),
+            operation_type: "upload.adif".to_owned(),
+            idempotency_key: Uuid::new_v4().to_string(),
             qso_ids: vec![],
             items: vec![],
             status: UploadStatus::Queued,
+            queue_state: crate::upload::UploadQueueState::Pending,
+            attempt_count: 0,
             created_at: Utc::now(),
             updated_at: Utc::now(),
+            last_attempt_at: None,
+            next_attempt_at: None,
             last_error: None,
+            safe_failure_code: None,
+            credential_reference: None,
+            provider_side_identifier: None,
+            uncertain_outcome: false,
+            claim_token: None,
+            lease_expires_at: None,
         };
         let projection = QsoCurrentStateProjection::new();
         let result =
