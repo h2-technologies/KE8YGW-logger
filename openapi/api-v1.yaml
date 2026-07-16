@@ -1,0 +1,5856 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "KE8YGW Logger API v1",
+    "version": "1.0.0",
+    "description": "Stable /api/v1 contract for hosted and self-hosted deployments. JSON syntax is used so the file is valid YAML and directly parseable in CI."
+  },
+  "servers": [
+    {
+      "url": "https://example.invalid",
+      "description": "Hosted deployment"
+    },
+    {
+      "url": "http://127.0.0.1:9740",
+      "description": "Self-hosted sync server"
+    }
+  ],
+  "security": [
+    {
+      "bearerSession": []
+    }
+  ],
+  "paths": {
+    "/api/v1/activations": {
+      "get": {
+        "operationId": "get_api_v1_activations",
+        "summary": "GET /api/v1/activations",
+        "tags": [
+          "hosted"
+        ],
+        "x-deployment-modes": [
+          "hosted"
+        ],
+        "x-stability": "stable",
+        "parameters": [
+          {
+            "name": "logbook_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response. Schema is endpoint-specific and additive fields are allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonObject"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "security": [
+          {
+            "bearerSession": []
+          }
+        ]
+      },
+      "post": {
+        "operationId": "post_api_v1_activations",
+        "summary": "POST /api/v1/activations",
+        "tags": [
+          "hosted"
+        ],
+        "x-deployment-modes": [
+          "hosted"
+        ],
+        "x-stability": "stable",
+        "responses": {
+          "200": {
+            "description": "Successful response. Schema is endpoint-specific and additive fields are allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonObject"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "security": [
+          {
+            "bearerSession": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonObject"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/activations/{id}": {
+      "get": {
+        "operationId": "get_api_v1_activations_id",
+        "summary": "GET /api/v1/activations/{id}",
+        "tags": [
+          "hosted"
+        ],
+        "x-deployment-modes": [
+          "hosted"
+        ],
+        "x-stability": "stable",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "UUID or stable route identifier as implemented by the server."
+          },
+          {
+            "name": "logbook_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response. Schema is endpoint-specific and additive fields are allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonObject"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "security": [
+          {
+            "bearerSession": []
+          }
+        ]
+      },
+      "patch": {
+        "operationId": "patch_api_v1_activations_id",
+        "summary": "PATCH /api/v1/activations/{id}",
+        "tags": [
+          "hosted"
+        ],
+        "x-deployment-modes": [
+          "hosted"
+        ],
+        "x-stability": "stable",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "UUID or stable route identifier as implemented by the server."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response. Schema is endpoint-specific and additive fields are allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonObject"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "security": [
+          {
+            "bearerSession": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonObject"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/activations/{id}/end": {
+      "post": {
+        "operationId": "post_api_v1_activations_id_end",
+        "summary": "POST /api/v1/activations/{id}/end",
+        "tags": [
+          "hosted"
+        ],
+        "x-deployment-modes": [
+          "hosted"
+        ],
+        "x-stability": "stable",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "UUID or stable route identifier as implemented by the server."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response. Schema is endpoint-specific and additive fields are allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonObject"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "security": [
+          {
+            "bearerSession": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonObject"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/activations/{id}/qsos": {
+      "get": {
+        "operationId": "get_api_v1_activations_id_qsos",
+        "summary": "GET /api/v1/activations/{id}/qsos",
+        "tags": [
+          "hosted"
+        ],
+        "x-deployment-modes": [
+          "hosted"
+        ],
+        "x-stability": "stable",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "UUID or stable route identifier as implemented by the server."
+          },
+          {
+            "name": "logbook_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response. Schema is endpoint-specific and additive fields are allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonObject"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "security": [
+          {
+            "bearerSession": []
+          }
+        ]
+      }
+    },
+    "/api/v1/adif/export": {
+      "get": {
+        "operationId": "get_api_v1_adif_export",
+        "summary": "GET /api/v1/adif/export",
+        "tags": [
+          "hosted"
+        ],
+        "x-deployment-modes": [
+          "hosted"
+        ],
+        "x-stability": "stable",
+        "responses": {
+          "200": {
+            "description": "Successful response. Schema is endpoint-specific and additive fields are allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonObject"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "security": [
+          {
+            "bearerSession": []
+          }
+        ]
+      }
+    },
+    "/api/v1/adif/import": {
+      "post": {
+        "operationId": "post_api_v1_adif_import",
+        "summary": "POST /api/v1/adif/import",
+        "tags": [
+          "hosted"
+        ],
+        "x-deployment-modes": [
+          "hosted"
+        ],
+        "x-stability": "stable",
+        "responses": {
+          "200": {
+            "description": "Successful response. Schema is endpoint-specific and additive fields are allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonObject"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "security": [
+          {
+            "bearerSession": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonObject"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/login": {
+      "post": {
+        "operationId": "post_api_v1_auth_login",
+        "summary": "POST /api/v1/auth/login",
+        "tags": [
+          "hosted"
+        ],
+        "x-deployment-modes": [
+          "hosted"
+        ],
+        "x-stability": "stable",
+        "responses": {
+          "200": {
+            "description": "Successful response. Schema is endpoint-specific and additive fields are allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonObject"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonObject"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/logout": {
+      "post": {
+        "operationId": "post_api_v1_auth_logout",
+        "summary": "POST /api/v1/auth/logout",
+        "tags": [
+          "hosted"
+        ],
+        "x-deployment-modes": [
+          "hosted"
+        ],
+        "x-stability": "stable",
+        "responses": {
+          "200": {
+            "description": "Successful response. Schema is endpoint-specific and additive fields are allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonObject"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "security": [
+          {
+            "bearerSession": []
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonObject"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/pair": {
+      "post": {
+        "operationId": "post_api_v1_auth_pair",
+        "summary": "POST /api/v1/auth/pair",
+        "tags": [
+          "self-hosted"
+        ],
+        "x-deployment-modes": [
+          "self_hosted"
+        ],
+        "x-stability": "compatibility-only",
+        "responses": {
+          "200": {
+            "description": "Successful response. Schema is endpoint-specific and additive fields are allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonObject"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "security": [
+          {
+            "syncTokenQuery": []
+          },
+          {
+            "syncTokenBody": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonObject"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/session": {
+      "get": {
+        "operationId": "get_api_v1_auth_session",
+        "summary": "GET /api/v1/auth/session",
+        "tags": [
+          "hosted"
+        ],
+        "x-deployment-modes": [
+          "hosted"
+        ],
+        "x-stability": "stable",
+        "responses": {
+          "200": {
+            "description": "Successful response. Schema is endpoint-specific and additive fields are allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonObject"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "security": [
+          {
+            "bearerSession": []
+          }
+        ]
+      }
+    },
+    "/api/v1/backups": {
+      "get": {
+        "operationId": "get_api_v1_backups",
+        "summary": "GET /api/v1/backups",
+        "tags": [
+          "hosted"
+        ],
+        "x-deployment-modes": [
+          "hosted"
+        ],
+        "x-stability": "stable",
+        "parameters": [
+          {
+            "name": "logbook_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response. Schema is endpoint-specific and additive fields are allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonObject"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "security": [
+          {
+            "bearerSession": []
+          }
+        ]
+      }
+    },
+    "/api/v1/backups/export": {
+      "post": {
+        "operationId": "post_api_v1_backups_export",
+        "summary": "POST /api/v1/backups/export",
+        "tags": [
+          "hosted"
+        ],
+        "x-deployment-modes": [
+          "hosted"
+        ],
+        "x-stability": "stable",
+        "responses": {
+          "200": {
+            "description": "Successful response. Schema is endpoint-specific and additive fields are allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonObject"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "security": [
+          {
+            "bearerSession": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonObject"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/backups/import": {
+      "post": {
+        "operationId": "post_api_v1_backups_import",
+        "summary": "POST /api/v1/backups/import",
+        "tags": [
+          "hosted"
+        ],
+        "x-deployment-modes": [
+          "hosted"
+        ],
+        "x-stability": "stable",
+        "responses": {
+          "200": {
+            "description": "Successful response. Schema is endpoint-specific and additive fields are allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonObject"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "security": [
+          {
+            "bearerSession": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonObject"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/backups/import/dry-run": {
+      "post": {
+        "operationId": "post_api_v1_backups_import_dry_run",
+        "summary": "POST /api/v1/backups/import/dry-run",
+        "tags": [
+          "hosted"
+        ],
+        "x-deployment-modes": [
+          "hosted"
+        ],
+        "x-stability": "stable",
+        "responses": {
+          "200": {
+            "description": "Successful response. Schema is endpoint-specific and additive fields are allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonObject"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "security": [
+          {
+            "bearerSession": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonObject"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/backups/{id}": {
+      "get": {
+        "operationId": "get_api_v1_backups_id",
+        "summary": "GET /api/v1/backups/{id}",
+        "tags": [
+          "hosted"
+        ],
+        "x-deployment-modes": [
+          "hosted"
+        ],
+        "x-stability": "stable",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "UUID or stable route identifier as implemented by the server."
+          },
+          {
+            "name": "logbook_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response. Schema is endpoint-specific and additive fields are allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonObject"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "security": [
+          {
+            "bearerSession": []
+          }
+        ]
+      }
+    },
+    "/api/v1/backups/{id}/download": {
+      "get": {
+        "operationId": "get_api_v1_backups_id_download",
+        "summary": "GET /api/v1/backups/{id}/download",
+        "tags": [
+          "hosted"
+        ],
+        "x-deployment-modes": [
+          "hosted"
+        ],
+        "x-stability": "stable",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "UUID or stable route identifier as implemented by the server."
+          },
+          {
+            "name": "logbook_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response. Schema is endpoint-specific and additive fields are allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonObject"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "security": [
+          {
+            "bearerSession": []
+          }
+        ]
+      }
+    },
+    "/api/v1/devices": {
+      "get": {
+        "operationId": "get_api_v1_devices",
+        "summary": "GET /api/v1/devices",
+        "tags": [
+          "hosted"
+        ],
+        "x-deployment-modes": [
+          "hosted"
+        ],
+        "x-stability": "stable",
+        "responses": {
+          "200": {
+            "description": "Successful response. Schema is endpoint-specific and additive fields are allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonObject"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "security": [
+          {
+            "bearerSession": []
+          }
+        ]
+      },
+      "post": {
+        "operationId": "post_api_v1_devices",
+        "summary": "POST /api/v1/devices",
+        "tags": [
+          "hosted"
+        ],
+        "x-deployment-modes": [
+          "hosted"
+        ],
+        "x-stability": "stable",
+        "responses": {
+          "200": {
+            "description": "Successful response. Schema is endpoint-specific and additive fields are allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonObject"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "security": [
+          {
+            "bearerSession": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonObject"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/devices/{id}/revoke": {
+      "post": {
+        "operationId": "post_api_v1_devices_id_revoke",
+        "summary": "POST /api/v1/devices/{id}/revoke",
+        "tags": [
+          "hosted"
+        ],
+        "x-deployment-modes": [
+          "hosted"
+        ],
+        "x-stability": "stable",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "UUID or stable route identifier as implemented by the server."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response. Schema is endpoint-specific and additive fields are allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonObject"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "security": [
+          {
+            "bearerSession": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonObject"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/equipment": {
+      "get": {
+        "operationId": "get_api_v1_equipment",
+        "summary": "GET /api/v1/equipment",
+        "tags": [
+          "hosted"
+        ],
+        "x-deployment-modes": [
+          "hosted"
+        ],
+        "x-stability": "stable",
+        "parameters": [
+          {
+            "name": "logbook_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response. Schema is endpoint-specific and additive fields are allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonObject"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "security": [
+          {
+            "bearerSession": []
+          }
+        ]
+      },
+      "post": {
+        "operationId": "post_api_v1_equipment",
+        "summary": "POST /api/v1/equipment",
+        "tags": [
+          "hosted"
+        ],
+        "x-deployment-modes": [
+          "hosted"
+        ],
+        "x-stability": "stable",
+        "responses": {
+          "200": {
+            "description": "Successful response. Schema is endpoint-specific and additive fields are allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonObject"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "security": [
+          {
+            "bearerSession": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonObject"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/equipment/{id}": {
+      "get": {
+        "operationId": "get_api_v1_equipment_id",
+        "summary": "GET /api/v1/equipment/{id}",
+        "tags": [
+          "hosted"
+        ],
+        "x-deployment-modes": [
+          "hosted"
+        ],
+        "x-stability": "stable",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "UUID or stable route identifier as implemented by the server."
+          },
+          {
+            "name": "logbook_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response. Schema is endpoint-specific and additive fields are allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonObject"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "security": [
+          {
+            "bearerSession": []
+          }
+        ]
+      },
+      "patch": {
+        "operationId": "patch_api_v1_equipment_id",
+        "summary": "PATCH /api/v1/equipment/{id}",
+        "tags": [
+          "hosted"
+        ],
+        "x-deployment-modes": [
+          "hosted"
+        ],
+        "x-stability": "stable",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "UUID or stable route identifier as implemented by the server."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response. Schema is endpoint-specific and additive fields are allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonObject"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "security": [
+          {
+            "bearerSession": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonObject"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/equipment/{id}/archive": {
+      "post": {
+        "operationId": "post_api_v1_equipment_id_archive",
+        "summary": "POST /api/v1/equipment/{id}/archive",
+        "tags": [
+          "hosted"
+        ],
+        "x-deployment-modes": [
+          "hosted"
+        ],
+        "x-stability": "stable",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "UUID or stable route identifier as implemented by the server."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response. Schema is endpoint-specific and additive fields are allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonObject"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "security": [
+          {
+            "bearerSession": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonObject"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/logbooks": {
+      "get": {
+        "operationId": "get_api_v1_logbooks",
+        "summary": "GET /api/v1/logbooks",
+        "tags": [
+          "hosted"
+        ],
+        "x-deployment-modes": [
+          "hosted",
+          "self_hosted"
+        ],
+        "x-stability": "stable",
+        "responses": {
+          "200": {
+            "description": "Successful response. Schema is endpoint-specific and additive fields are allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonObject"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "security": [
+          {
+            "bearerSession": []
+          }
+        ]
+      },
+      "post": {
+        "operationId": "post_api_v1_logbooks",
+        "summary": "POST /api/v1/logbooks",
+        "tags": [
+          "hosted"
+        ],
+        "x-deployment-modes": [
+          "hosted"
+        ],
+        "x-stability": "stable",
+        "responses": {
+          "200": {
+            "description": "Successful response. Schema is endpoint-specific and additive fields are allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonObject"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "security": [
+          {
+            "bearerSession": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonObject"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/logbooks/{id}": {
+      "get": {
+        "operationId": "get_api_v1_logbooks_id",
+        "summary": "GET /api/v1/logbooks/{id}",
+        "tags": [
+          "hosted"
+        ],
+        "x-deployment-modes": [
+          "hosted"
+        ],
+        "x-stability": "stable",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "UUID or stable route identifier as implemented by the server."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response. Schema is endpoint-specific and additive fields are allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonObject"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "security": [
+          {
+            "bearerSession": []
+          }
+        ]
+      },
+      "patch": {
+        "operationId": "patch_api_v1_logbooks_id",
+        "summary": "PATCH /api/v1/logbooks/{id}",
+        "tags": [
+          "hosted"
+        ],
+        "x-deployment-modes": [
+          "hosted"
+        ],
+        "x-stability": "stable",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "UUID or stable route identifier as implemented by the server."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response. Schema is endpoint-specific and additive fields are allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonObject"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "security": [
+          {
+            "bearerSession": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonObject"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/logbooks/{logbook_id}/events": {
+      "get": {
+        "operationId": "get_api_v1_logbooks_logbook_id_events",
+        "summary": "GET /api/v1/logbooks/{logbook_id}/events",
+        "tags": [
+          "self-hosted"
+        ],
+        "x-deployment-modes": [
+          "self_hosted"
+        ],
+        "x-stability": "compatibility-only",
+        "parameters": [
+          {
+            "name": "logbook_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "UUID or stable route identifier as implemented by the server."
+          },
+          {
+            "name": "token",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "after_hash",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response. Schema is endpoint-specific and additive fields are allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonObject"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "security": [
+          {
+            "syncTokenQuery": []
+          },
+          {
+            "syncTokenBody": []
+          }
+        ]
+      }
+    },
+    "/api/v1/logbooks/{logbook_id}/head": {
+      "get": {
+        "operationId": "get_api_v1_logbooks_logbook_id_head",
+        "summary": "GET /api/v1/logbooks/{logbook_id}/head",
+        "tags": [
+          "self-hosted"
+        ],
+        "x-deployment-modes": [
+          "self_hosted"
+        ],
+        "x-stability": "compatibility-only",
+        "parameters": [
+          {
+            "name": "logbook_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "UUID or stable route identifier as implemented by the server."
+          },
+          {
+            "name": "token",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response. Schema is endpoint-specific and additive fields are allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonObject"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "security": [
+          {
+            "syncTokenQuery": []
+          },
+          {
+            "syncTokenBody": []
+          }
+        ]
+      }
+    },
+    "/api/v1/logbooks/{logbook_id}/preview-pull": {
+      "post": {
+        "operationId": "post_api_v1_logbooks_logbook_id_preview_pull",
+        "summary": "POST /api/v1/logbooks/{logbook_id}/preview-pull",
+        "tags": [
+          "self-hosted"
+        ],
+        "x-deployment-modes": [
+          "self_hosted"
+        ],
+        "x-stability": "compatibility-only",
+        "parameters": [
+          {
+            "name": "logbook_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "UUID or stable route identifier as implemented by the server."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response. Schema is endpoint-specific and additive fields are allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonObject"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "security": [
+          {
+            "syncTokenQuery": []
+          },
+          {
+            "syncTokenBody": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonObject"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/logbooks/{logbook_id}/pull": {
+      "post": {
+        "operationId": "post_api_v1_logbooks_logbook_id_pull",
+        "summary": "POST /api/v1/logbooks/{logbook_id}/pull",
+        "tags": [
+          "self-hosted"
+        ],
+        "x-deployment-modes": [
+          "self_hosted"
+        ],
+        "x-stability": "compatibility-only",
+        "parameters": [
+          {
+            "name": "logbook_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "UUID or stable route identifier as implemented by the server."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response. Schema is endpoint-specific and additive fields are allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonObject"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "security": [
+          {
+            "syncTokenQuery": []
+          },
+          {
+            "syncTokenBody": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonObject"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/logbooks/{logbook_id}/push": {
+      "post": {
+        "operationId": "post_api_v1_logbooks_logbook_id_push",
+        "summary": "POST /api/v1/logbooks/{logbook_id}/push",
+        "tags": [
+          "self-hosted"
+        ],
+        "x-deployment-modes": [
+          "self_hosted"
+        ],
+        "x-stability": "compatibility-only",
+        "parameters": [
+          {
+            "name": "logbook_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "UUID or stable route identifier as implemented by the server."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response. Schema is endpoint-specific and additive fields are allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonObject"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "security": [
+          {
+            "syncTokenQuery": []
+          },
+          {
+            "syncTokenBody": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonObject"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/maps/paths": {
+      "get": {
+        "operationId": "get_api_v1_maps_paths",
+        "summary": "GET /api/v1/maps/paths",
+        "tags": [
+          "hosted"
+        ],
+        "x-deployment-modes": [
+          "hosted"
+        ],
+        "x-stability": "stable",
+        "parameters": [
+          {
+            "name": "logbook_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response. Schema is endpoint-specific and additive fields are allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonObject"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "security": [
+          {
+            "bearerSession": []
+          }
+        ]
+      }
+    },
+    "/api/v1/maps/qsos": {
+      "get": {
+        "operationId": "get_api_v1_maps_qsos",
+        "summary": "GET /api/v1/maps/qsos",
+        "tags": [
+          "hosted"
+        ],
+        "x-deployment-modes": [
+          "hosted"
+        ],
+        "x-stability": "stable",
+        "parameters": [
+          {
+            "name": "logbook_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response. Schema is endpoint-specific and additive fields are allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonObject"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "security": [
+          {
+            "bearerSession": []
+          }
+        ]
+      }
+    },
+    "/api/v1/maps/settings": {
+      "get": {
+        "operationId": "get_api_v1_maps_settings",
+        "summary": "GET /api/v1/maps/settings",
+        "tags": [
+          "hosted"
+        ],
+        "x-deployment-modes": [
+          "hosted"
+        ],
+        "x-stability": "stable",
+        "parameters": [
+          {
+            "name": "logbook_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response. Schema is endpoint-specific and additive fields are allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonObject"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "security": [
+          {
+            "bearerSession": []
+          }
+        ]
+      },
+      "patch": {
+        "operationId": "patch_api_v1_maps_settings",
+        "summary": "PATCH /api/v1/maps/settings",
+        "tags": [
+          "hosted"
+        ],
+        "x-deployment-modes": [
+          "hosted"
+        ],
+        "x-stability": "stable",
+        "responses": {
+          "200": {
+            "description": "Successful response. Schema is endpoint-specific and additive fields are allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonObject"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "security": [
+          {
+            "bearerSession": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonObject"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/maps/stations": {
+      "get": {
+        "operationId": "get_api_v1_maps_stations",
+        "summary": "GET /api/v1/maps/stations",
+        "tags": [
+          "hosted"
+        ],
+        "x-deployment-modes": [
+          "hosted"
+        ],
+        "x-stability": "stable",
+        "parameters": [
+          {
+            "name": "logbook_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response. Schema is endpoint-specific and additive fields are allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonObject"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "security": [
+          {
+            "bearerSession": []
+          }
+        ]
+      }
+    },
+    "/api/v1/net-control/sessions": {
+      "get": {
+        "operationId": "get_api_v1_net_control_sessions",
+        "summary": "GET /api/v1/net-control/sessions",
+        "tags": [
+          "hosted"
+        ],
+        "x-deployment-modes": [
+          "hosted"
+        ],
+        "x-stability": "stable",
+        "parameters": [
+          {
+            "name": "logbook_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response. Schema is endpoint-specific and additive fields are allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonObject"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "security": [
+          {
+            "bearerSession": []
+          }
+        ]
+      },
+      "post": {
+        "operationId": "post_api_v1_net_control_sessions",
+        "summary": "POST /api/v1/net-control/sessions",
+        "tags": [
+          "hosted"
+        ],
+        "x-deployment-modes": [
+          "hosted"
+        ],
+        "x-stability": "stable",
+        "responses": {
+          "200": {
+            "description": "Successful response. Schema is endpoint-specific and additive fields are allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonObject"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "security": [
+          {
+            "bearerSession": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonObject"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/net-control/sessions/{id}": {
+      "get": {
+        "operationId": "get_api_v1_net_control_sessions_id",
+        "summary": "GET /api/v1/net-control/sessions/{id}",
+        "tags": [
+          "hosted"
+        ],
+        "x-deployment-modes": [
+          "hosted"
+        ],
+        "x-stability": "stable",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "UUID or stable route identifier as implemented by the server."
+          },
+          {
+            "name": "logbook_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response. Schema is endpoint-specific and additive fields are allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonObject"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "security": [
+          {
+            "bearerSession": []
+          }
+        ]
+      },
+      "patch": {
+        "operationId": "patch_api_v1_net_control_sessions_id",
+        "summary": "PATCH /api/v1/net-control/sessions/{id}",
+        "tags": [
+          "hosted"
+        ],
+        "x-deployment-modes": [
+          "hosted"
+        ],
+        "x-stability": "stable",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "UUID or stable route identifier as implemented by the server."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response. Schema is endpoint-specific and additive fields are allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonObject"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "security": [
+          {
+            "bearerSession": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonObject"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/net-control/sessions/{id}/checkins": {
+      "post": {
+        "operationId": "post_api_v1_net_control_sessions_id_checkins",
+        "summary": "POST /api/v1/net-control/sessions/{id}/checkins",
+        "tags": [
+          "hosted"
+        ],
+        "x-deployment-modes": [
+          "hosted"
+        ],
+        "x-stability": "stable",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "UUID or stable route identifier as implemented by the server."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response. Schema is endpoint-specific and additive fields are allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonObject"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "security": [
+          {
+            "bearerSession": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonObject"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/net-control/sessions/{id}/checkins/{id}": {
+      "patch": {
+        "operationId": "patch_api_v1_net_control_sessions_id_checkins_id",
+        "summary": "PATCH /api/v1/net-control/sessions/{id}/checkins/{id}",
+        "tags": [
+          "hosted"
+        ],
+        "x-deployment-modes": [
+          "hosted"
+        ],
+        "x-stability": "stable",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "UUID or stable route identifier as implemented by the server."
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "UUID or stable route identifier as implemented by the server."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response. Schema is endpoint-specific and additive fields are allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonObject"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "security": [
+          {
+            "bearerSession": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonObject"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/net-control/sessions/{id}/end": {
+      "post": {
+        "operationId": "post_api_v1_net_control_sessions_id_end",
+        "summary": "POST /api/v1/net-control/sessions/{id}/end",
+        "tags": [
+          "hosted"
+        ],
+        "x-deployment-modes": [
+          "hosted"
+        ],
+        "x-stability": "stable",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "UUID or stable route identifier as implemented by the server."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response. Schema is endpoint-specific and additive fields are allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonObject"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "security": [
+          {
+            "bearerSession": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonObject"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/net-control/sessions/{id}/start": {
+      "post": {
+        "operationId": "post_api_v1_net_control_sessions_id_start",
+        "summary": "POST /api/v1/net-control/sessions/{id}/start",
+        "tags": [
+          "hosted"
+        ],
+        "x-deployment-modes": [
+          "hosted"
+        ],
+        "x-stability": "stable",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "UUID or stable route identifier as implemented by the server."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response. Schema is endpoint-specific and additive fields are allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonObject"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "security": [
+          {
+            "bearerSession": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonObject"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/net-control/sessions/{id}/traffic": {
+      "post": {
+        "operationId": "post_api_v1_net_control_sessions_id_traffic",
+        "summary": "POST /api/v1/net-control/sessions/{id}/traffic",
+        "tags": [
+          "hosted"
+        ],
+        "x-deployment-modes": [
+          "hosted"
+        ],
+        "x-stability": "stable",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "UUID or stable route identifier as implemented by the server."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response. Schema is endpoint-specific and additive fields are allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonObject"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "security": [
+          {
+            "bearerSession": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonObject"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/providers": {
+      "get": {
+        "operationId": "get_api_v1_providers",
+        "summary": "GET /api/v1/providers",
+        "tags": [
+          "hosted"
+        ],
+        "x-deployment-modes": [
+          "hosted"
+        ],
+        "x-stability": "stable",
+        "parameters": [
+          {
+            "name": "logbook_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response. Schema is endpoint-specific and additive fields are allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonObject"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "security": [
+          {
+            "bearerSession": []
+          }
+        ]
+      }
+    },
+    "/api/v1/providers/dx-cluster/connect": {
+      "post": {
+        "operationId": "post_api_v1_providers_dx_cluster_connect",
+        "summary": "POST /api/v1/providers/dx-cluster/connect",
+        "tags": [
+          "hosted"
+        ],
+        "x-deployment-modes": [
+          "hosted"
+        ],
+        "x-stability": "stable",
+        "responses": {
+          "200": {
+            "description": "Successful response. Schema is endpoint-specific and additive fields are allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonObject"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "security": [
+          {
+            "bearerSession": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonObject"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/providers/dx-cluster/disconnect": {
+      "post": {
+        "operationId": "post_api_v1_providers_dx_cluster_disconnect",
+        "summary": "POST /api/v1/providers/dx-cluster/disconnect",
+        "tags": [
+          "hosted"
+        ],
+        "x-deployment-modes": [
+          "hosted"
+        ],
+        "x-stability": "stable",
+        "responses": {
+          "200": {
+            "description": "Successful response. Schema is endpoint-specific and additive fields are allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonObject"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "security": [
+          {
+            "bearerSession": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonObject"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/providers/dx-cluster/read": {
+      "post": {
+        "operationId": "post_api_v1_providers_dx_cluster_read",
+        "summary": "POST /api/v1/providers/dx-cluster/read",
+        "tags": [
+          "hosted"
+        ],
+        "x-deployment-modes": [
+          "hosted"
+        ],
+        "x-stability": "stable",
+        "responses": {
+          "200": {
+            "description": "Successful response. Schema is endpoint-specific and additive fields are allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonObject"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "security": [
+          {
+            "bearerSession": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonObject"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/providers/dx-cluster/status": {
+      "get": {
+        "operationId": "get_api_v1_providers_dx_cluster_status",
+        "summary": "GET /api/v1/providers/dx-cluster/status",
+        "tags": [
+          "hosted"
+        ],
+        "x-deployment-modes": [
+          "hosted"
+        ],
+        "x-stability": "stable",
+        "parameters": [
+          {
+            "name": "logbook_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response. Schema is endpoint-specific and additive fields are allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonObject"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "security": [
+          {
+            "bearerSession": []
+          }
+        ]
+      }
+    },
+    "/api/v1/providers/{id}": {
+      "get": {
+        "operationId": "get_api_v1_providers_id",
+        "summary": "GET /api/v1/providers/{id}",
+        "tags": [
+          "hosted"
+        ],
+        "x-deployment-modes": [
+          "hosted"
+        ],
+        "x-stability": "stable",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "UUID or stable route identifier as implemented by the server."
+          },
+          {
+            "name": "logbook_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response. Schema is endpoint-specific and additive fields are allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonObject"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "security": [
+          {
+            "bearerSession": []
+          }
+        ]
+      },
+      "patch": {
+        "operationId": "patch_api_v1_providers_id",
+        "summary": "PATCH /api/v1/providers/{id}",
+        "tags": [
+          "hosted"
+        ],
+        "x-deployment-modes": [
+          "hosted"
+        ],
+        "x-stability": "stable",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "UUID or stable route identifier as implemented by the server."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response. Schema is endpoint-specific and additive fields are allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonObject"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "security": [
+          {
+            "bearerSession": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonObject"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/providers/{id}/lookup": {
+      "post": {
+        "operationId": "post_api_v1_providers_id_lookup",
+        "summary": "POST /api/v1/providers/{id}/lookup",
+        "tags": [
+          "hosted"
+        ],
+        "x-deployment-modes": [
+          "hosted"
+        ],
+        "x-stability": "stable",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "UUID or stable route identifier as implemented by the server."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response. Schema is endpoint-specific and additive fields are allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonObject"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "security": [
+          {
+            "bearerSession": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonObject"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/providers/{id}/spots": {
+      "get": {
+        "operationId": "get_api_v1_providers_id_spots",
+        "summary": "GET /api/v1/providers/{id}/spots",
+        "tags": [
+          "hosted"
+        ],
+        "x-deployment-modes": [
+          "hosted"
+        ],
+        "x-stability": "stable",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "UUID or stable route identifier as implemented by the server."
+          },
+          {
+            "name": "logbook_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response. Schema is endpoint-specific and additive fields are allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonObject"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "security": [
+          {
+            "bearerSession": []
+          }
+        ]
+      }
+    },
+    "/api/v1/providers/{id}/test": {
+      "post": {
+        "operationId": "post_api_v1_providers_id_test",
+        "summary": "POST /api/v1/providers/{id}/test",
+        "tags": [
+          "hosted"
+        ],
+        "x-deployment-modes": [
+          "hosted"
+        ],
+        "x-stability": "stable",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "UUID or stable route identifier as implemented by the server."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response. Schema is endpoint-specific and additive fields are allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonObject"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "security": [
+          {
+            "bearerSession": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonObject"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/qsos": {
+      "get": {
+        "operationId": "get_api_v1_qsos",
+        "summary": "GET /api/v1/qsos",
+        "tags": [
+          "hosted"
+        ],
+        "x-deployment-modes": [
+          "hosted"
+        ],
+        "x-stability": "stable",
+        "parameters": [
+          {
+            "name": "logbook_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response. Schema is endpoint-specific and additive fields are allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonObject"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "security": [
+          {
+            "bearerSession": []
+          }
+        ]
+      },
+      "post": {
+        "operationId": "post_api_v1_qsos",
+        "summary": "POST /api/v1/qsos",
+        "tags": [
+          "hosted"
+        ],
+        "x-deployment-modes": [
+          "hosted"
+        ],
+        "x-stability": "stable",
+        "responses": {
+          "200": {
+            "description": "Successful response. Schema is endpoint-specific and additive fields are allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonObject"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "security": [
+          {
+            "bearerSession": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonObject"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/qsos/{id}": {
+      "get": {
+        "operationId": "get_api_v1_qsos_id",
+        "summary": "GET /api/v1/qsos/{id}",
+        "tags": [
+          "hosted"
+        ],
+        "x-deployment-modes": [
+          "hosted"
+        ],
+        "x-stability": "stable",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "UUID or stable route identifier as implemented by the server."
+          },
+          {
+            "name": "logbook_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response. Schema is endpoint-specific and additive fields are allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonObject"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "security": [
+          {
+            "bearerSession": []
+          }
+        ]
+      },
+      "patch": {
+        "operationId": "patch_api_v1_qsos_id",
+        "summary": "PATCH /api/v1/qsos/{id}",
+        "tags": [
+          "hosted"
+        ],
+        "x-deployment-modes": [
+          "hosted"
+        ],
+        "x-stability": "stable",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "UUID or stable route identifier as implemented by the server."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response. Schema is endpoint-specific and additive fields are allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonObject"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "security": [
+          {
+            "bearerSession": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonObject"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/qsos/{id}/delete": {
+      "post": {
+        "operationId": "post_api_v1_qsos_id_delete",
+        "summary": "POST /api/v1/qsos/{id}/delete",
+        "tags": [
+          "hosted"
+        ],
+        "x-deployment-modes": [
+          "hosted"
+        ],
+        "x-stability": "stable",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "UUID or stable route identifier as implemented by the server."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response. Schema is endpoint-specific and additive fields are allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonObject"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "security": [
+          {
+            "bearerSession": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonObject"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/qsos/{id}/notes": {
+      "post": {
+        "operationId": "post_api_v1_qsos_id_notes",
+        "summary": "POST /api/v1/qsos/{id}/notes",
+        "tags": [
+          "hosted"
+        ],
+        "x-deployment-modes": [
+          "hosted"
+        ],
+        "x-stability": "stable",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "UUID or stable route identifier as implemented by the server."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response. Schema is endpoint-specific and additive fields are allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonObject"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "security": [
+          {
+            "bearerSession": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonObject"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/qsos/{id}/restore": {
+      "post": {
+        "operationId": "post_api_v1_qsos_id_restore",
+        "summary": "POST /api/v1/qsos/{id}/restore",
+        "tags": [
+          "hosted"
+        ],
+        "x-deployment-modes": [
+          "hosted"
+        ],
+        "x-stability": "stable",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "UUID or stable route identifier as implemented by the server."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response. Schema is endpoint-specific and additive fields are allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonObject"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "security": [
+          {
+            "bearerSession": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonObject"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/reports": {
+      "post": {
+        "operationId": "post_api_v1_reports",
+        "summary": "POST /api/v1/reports",
+        "tags": [
+          "self-hosted"
+        ],
+        "x-deployment-modes": [
+          "self_hosted"
+        ],
+        "x-stability": "stable",
+        "responses": {
+          "200": {
+            "description": "Successful response. Schema is endpoint-specific and additive fields are allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonObject"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "security": [
+          {
+            "syncTokenQuery": []
+          },
+          {
+            "syncTokenBody": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonObject"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/reports/{report_id}": {
+      "get": {
+        "operationId": "get_api_v1_reports_report_id",
+        "summary": "GET /api/v1/reports/{report_id}",
+        "tags": [
+          "self-hosted"
+        ],
+        "x-deployment-modes": [
+          "self_hosted"
+        ],
+        "x-stability": "compatibility-only",
+        "parameters": [
+          {
+            "name": "report_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "UUID or stable route identifier as implemented by the server."
+          },
+          {
+            "name": "token",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response. Schema is endpoint-specific and additive fields are allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonObject"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "security": [
+          {
+            "syncTokenQuery": []
+          },
+          {
+            "syncTokenBody": []
+          }
+        ]
+      }
+    },
+    "/api/v1/routes": {
+      "get": {
+        "operationId": "get_api_v1_routes",
+        "summary": "GET /api/v1/routes",
+        "tags": [
+          "hosted"
+        ],
+        "x-deployment-modes": [
+          "hosted"
+        ],
+        "x-stability": "stable",
+        "responses": {
+          "200": {
+            "description": "Successful response. Schema is endpoint-specific and additive fields are allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonObject"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        }
+      }
+    },
+    "/api/v1/station-profiles": {
+      "get": {
+        "operationId": "get_api_v1_station_profiles",
+        "summary": "GET /api/v1/station-profiles",
+        "tags": [
+          "hosted"
+        ],
+        "x-deployment-modes": [
+          "hosted"
+        ],
+        "x-stability": "stable",
+        "parameters": [
+          {
+            "name": "logbook_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response. Schema is endpoint-specific and additive fields are allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonObject"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "security": [
+          {
+            "bearerSession": []
+          }
+        ]
+      },
+      "post": {
+        "operationId": "post_api_v1_station_profiles",
+        "summary": "POST /api/v1/station-profiles",
+        "tags": [
+          "hosted"
+        ],
+        "x-deployment-modes": [
+          "hosted"
+        ],
+        "x-stability": "stable",
+        "responses": {
+          "200": {
+            "description": "Successful response. Schema is endpoint-specific and additive fields are allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonObject"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "security": [
+          {
+            "bearerSession": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonObject"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/station-profiles/{id}": {
+      "get": {
+        "operationId": "get_api_v1_station_profiles_id",
+        "summary": "GET /api/v1/station-profiles/{id}",
+        "tags": [
+          "hosted"
+        ],
+        "x-deployment-modes": [
+          "hosted"
+        ],
+        "x-stability": "stable",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "UUID or stable route identifier as implemented by the server."
+          },
+          {
+            "name": "logbook_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response. Schema is endpoint-specific and additive fields are allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonObject"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "security": [
+          {
+            "bearerSession": []
+          }
+        ]
+      },
+      "patch": {
+        "operationId": "patch_api_v1_station_profiles_id",
+        "summary": "PATCH /api/v1/station-profiles/{id}",
+        "tags": [
+          "hosted"
+        ],
+        "x-deployment-modes": [
+          "hosted"
+        ],
+        "x-stability": "stable",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "UUID or stable route identifier as implemented by the server."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response. Schema is endpoint-specific and additive fields are allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonObject"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "security": [
+          {
+            "bearerSession": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonObject"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/station-profiles/{id}/archive": {
+      "post": {
+        "operationId": "post_api_v1_station_profiles_id_archive",
+        "summary": "POST /api/v1/station-profiles/{id}/archive",
+        "tags": [
+          "hosted"
+        ],
+        "x-deployment-modes": [
+          "hosted"
+        ],
+        "x-stability": "stable",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "UUID or stable route identifier as implemented by the server."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response. Schema is endpoint-specific and additive fields are allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonObject"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "security": [
+          {
+            "bearerSession": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonObject"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/station-profiles/{id}/set-default": {
+      "post": {
+        "operationId": "post_api_v1_station_profiles_id_set_default",
+        "summary": "POST /api/v1/station-profiles/{id}/set-default",
+        "tags": [
+          "hosted"
+        ],
+        "x-deployment-modes": [
+          "hosted"
+        ],
+        "x-stability": "stable",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "UUID or stable route identifier as implemented by the server."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response. Schema is endpoint-specific and additive fields are allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonObject"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "security": [
+          {
+            "bearerSession": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonObject"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/status": {
+      "get": {
+        "operationId": "get_api_v1_status",
+        "summary": "GET /api/v1/status",
+        "tags": [
+          "hosted"
+        ],
+        "x-deployment-modes": [
+          "hosted"
+        ],
+        "x-stability": "stable",
+        "responses": {
+          "200": {
+            "description": "Successful response. Schema is endpoint-specific and additive fields are allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonObject"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        }
+      }
+    },
+    "/api/v1/sync/divergence/review": {
+      "post": {
+        "operationId": "post_api_v1_sync_divergence_review",
+        "summary": "POST /api/v1/sync/divergence/review",
+        "tags": [
+          "hosted"
+        ],
+        "x-deployment-modes": [
+          "hosted"
+        ],
+        "x-stability": "stable",
+        "responses": {
+          "200": {
+            "description": "Successful response. Schema is endpoint-specific and additive fields are allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonObject"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "security": [
+          {
+            "bearerSession": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonObject"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/sync/divergence/{id}": {
+      "get": {
+        "operationId": "get_api_v1_sync_divergence_id",
+        "summary": "GET /api/v1/sync/divergence/{id}",
+        "tags": [
+          "hosted"
+        ],
+        "x-deployment-modes": [
+          "hosted"
+        ],
+        "x-stability": "stable",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "UUID or stable route identifier as implemented by the server."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response. Schema is endpoint-specific and additive fields are allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonObject"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "security": [
+          {
+            "bearerSession": []
+          }
+        ]
+      }
+    },
+    "/api/v1/sync/divergence/{id}/export": {
+      "post": {
+        "operationId": "post_api_v1_sync_divergence_id_export",
+        "summary": "POST /api/v1/sync/divergence/{id}/export",
+        "tags": [
+          "hosted"
+        ],
+        "x-deployment-modes": [
+          "hosted"
+        ],
+        "x-stability": "stable",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "UUID or stable route identifier as implemented by the server."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response. Schema is endpoint-specific and additive fields are allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonObject"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "security": [
+          {
+            "bearerSession": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonObject"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/sync/preview": {
+      "post": {
+        "operationId": "post_api_v1_sync_preview",
+        "summary": "POST /api/v1/sync/preview",
+        "tags": [
+          "hosted"
+        ],
+        "x-deployment-modes": [
+          "hosted"
+        ],
+        "x-stability": "stable",
+        "responses": {
+          "200": {
+            "description": "Successful response. Schema is endpoint-specific and additive fields are allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonObject"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "security": [
+          {
+            "bearerSession": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonObject"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/sync/pull": {
+      "post": {
+        "operationId": "post_api_v1_sync_pull",
+        "summary": "POST /api/v1/sync/pull",
+        "tags": [
+          "hosted"
+        ],
+        "x-deployment-modes": [
+          "hosted"
+        ],
+        "x-stability": "stable",
+        "responses": {
+          "200": {
+            "description": "Successful response. Schema is endpoint-specific and additive fields are allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonObject"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "security": [
+          {
+            "bearerSession": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonObject"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/sync/push": {
+      "post": {
+        "operationId": "post_api_v1_sync_push",
+        "summary": "POST /api/v1/sync/push",
+        "tags": [
+          "hosted"
+        ],
+        "x-deployment-modes": [
+          "hosted"
+        ],
+        "x-stability": "stable",
+        "responses": {
+          "200": {
+            "description": "Successful response. Schema is endpoint-specific and additive fields are allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonObject"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "security": [
+          {
+            "bearerSession": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonObject"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/sync/status": {
+      "get": {
+        "operationId": "get_api_v1_sync_status",
+        "summary": "GET /api/v1/sync/status",
+        "tags": [
+          "hosted"
+        ],
+        "x-deployment-modes": [
+          "hosted",
+          "self_hosted"
+        ],
+        "x-stability": "stable",
+        "responses": {
+          "200": {
+            "description": "Successful response. Schema is endpoint-specific and additive fields are allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonObject"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "security": [
+          {
+            "bearerSession": []
+          }
+        ]
+      }
+    },
+    "/api/v1/uploads": {
+      "get": {
+        "operationId": "get_api_v1_uploads",
+        "summary": "GET /api/v1/uploads",
+        "tags": [
+          "hosted"
+        ],
+        "x-deployment-modes": [
+          "hosted"
+        ],
+        "x-stability": "stable",
+        "parameters": [
+          {
+            "name": "logbook_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response. Schema is endpoint-specific and additive fields are allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonObject"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "security": [
+          {
+            "bearerSession": []
+          }
+        ]
+      }
+    },
+    "/api/v1/uploads/run": {
+      "post": {
+        "operationId": "post_api_v1_uploads_run",
+        "summary": "POST /api/v1/uploads/run",
+        "tags": [
+          "hosted"
+        ],
+        "x-deployment-modes": [
+          "hosted"
+        ],
+        "x-stability": "stable",
+        "responses": {
+          "200": {
+            "description": "Successful response. Schema is endpoint-specific and additive fields are allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonObject"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "security": [
+          {
+            "bearerSession": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonObject"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/uploads/{id}/retry": {
+      "post": {
+        "operationId": "post_api_v1_uploads_id_retry",
+        "summary": "POST /api/v1/uploads/{id}/retry",
+        "tags": [
+          "hosted"
+        ],
+        "x-deployment-modes": [
+          "hosted"
+        ],
+        "x-stability": "stable",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "UUID or stable route identifier as implemented by the server."
+          },
+          {
+            "name": "logbook_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response. Schema is endpoint-specific and additive fields are allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonObject"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "security": [
+          {
+            "bearerSession": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonObject"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/health": {
+      "get": {
+        "operationId": "get_health",
+        "summary": "GET /health",
+        "tags": [
+          "hosted"
+        ],
+        "x-deployment-modes": [
+          "hosted",
+          "self_hosted"
+        ],
+        "x-stability": "stable",
+        "responses": {
+          "200": {
+            "description": "Successful response. Schema is endpoint-specific and additive fields are allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonObject"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerSession": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "opaque session token"
+      },
+      "syncTokenQuery": {
+        "type": "apiKey",
+        "in": "query",
+        "name": "token",
+        "description": "Compatibility-only sync token transport."
+      },
+      "syncTokenBody": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-Compatibility-Body-Sync-Token",
+        "description": "Documentation marker for request-body auth.sync_token compatibility."
+      }
+    },
+    "responses": {
+      "BadRequest": {
+        "description": "Malformed or invalid request.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            }
+          }
+        }
+      },
+      "Unauthorized": {
+        "description": "Missing, invalid, inactive, or revoked credentials.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            }
+          }
+        }
+      },
+      "Forbidden": {
+        "description": "Authenticated caller lacks access; resource existence is not disclosed beyond this contract.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            }
+          }
+        }
+      },
+      "NotFound": {
+        "description": "Route or accessible resource not found.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            }
+          }
+        }
+      },
+      "UnsupportedMediaType": {
+        "description": "Unsupported request content type.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            }
+          }
+        }
+      },
+      "RateLimited": {
+        "description": "Rate limit exceeded.",
+        "headers": {
+          "Retry-After": {
+            "schema": {
+              "type": "string"
+            }
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            }
+          }
+        }
+      },
+      "InternalError": {
+        "description": "Internal failure with sanitized body.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "JsonObject": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "ErrorResponse": {
+        "type": "object",
+        "required": [
+          "error",
+          "code",
+          "request_id",
+          "retryable"
+        ],
+        "additionalProperties": true,
+        "properties": {
+          "error": {
+            "type": "string",
+            "description": "Backward-compatible user-facing message."
+          },
+          "code": {
+            "type": "string",
+            "enum": [
+              "bad_request",
+              "validation_failed",
+              "invalid_json",
+              "invalid_uuid",
+              "missing_field",
+              "missing_token",
+              "invalid_token",
+              "session_inactive",
+              "device_revoked",
+              "forbidden",
+              "not_found",
+              "unsupported_media_type",
+              "payload_too_large",
+              "rate_limited",
+              "proposal_rejected",
+              "store_unavailable",
+              "internal_error"
+            ]
+          },
+          "request_id": {
+            "type": "string",
+            "description": "Echoes X-Request-ID when supplied; otherwise generated by the server."
+          },
+          "retryable": {
+            "type": "boolean"
+          },
+          "details": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        }
+      },
+      "Pagination": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "limit": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "Uuid": {
+        "type": "string",
+        "format": "uuid"
+      },
+      "UtcTimestamp": {
+        "type": "string",
+        "format": "date-time",
+        "description": "RFC 3339 UTC timestamp."
+      }
+    }
+  }
+}

@@ -13,6 +13,9 @@ clippy:
 test:
     cargo test --workspace
 
+api-contract:
+    python scripts/check_api_contract.py
+
 build:
     cargo build --workspace
 
@@ -25,4 +28,4 @@ gui:
 sync-server:
     cargo run -p ham-sync-server --bin ham-sync-server
 
-ci: fmt-check clippy test build
+ci: fmt-check clippy test api-contract build

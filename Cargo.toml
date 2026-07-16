@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "crates/ham-api-contract",
     "crates/ham-core",
     "crates/ham-plugin-sdk",
     "crates/ham-sync",

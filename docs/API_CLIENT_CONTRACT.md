@@ -15,10 +15,36 @@ in v1.1.
 - Keep hosted and self-hosted behavior compatible.
 - Add fields in a backward-compatible way.
 - Do not remove or rename fields without a new API version.
+- Do not add required request fields to existing operations under `/api/v1`.
+- Optional response fields may be added; clients must ignore unknown fields.
+- Enum values may be added; clients must preserve and display unknown enum
+  values as unsupported instead of failing deserialization.
+- Nullable fields may become populated, but non-null fields must not become null
+  without a new major API version.
 - Unknown response fields must be ignored by clients.
 - Unknown enum values must be handled as unsupported values by clients.
+- Unknown request fields are ignored unless an endpoint explicitly validates a
+  sealed object; sealed validation must be documented in OpenAPI before use.
+- Cursor values are opaque, scoped to the requesting account/logbook, and may
+  expire. Invalid cursors return a structured validation error.
+- `X-Request-ID` is optional. When present, servers echo it in error bodies and
+  diagnostics; otherwise servers generate a request ID.
+- `Authorization: Bearer <token>` is the preferred authenticated transport.
+  Query tokens and request-body `auth.sync_token` are compatibility-only for the
+  self-hosted sync/report API.
+- Rate limits use HTTP 429, a stable error code, and `Retry-After` when a retry
+  time is known.
+- Error codes are stable. Removing or repurposing a code is breaking.
+- `/api/v1` does not negotiate minor versions. Breaking changes require a new
+  major path such as `/api/v2`, an ADR, migration guidance, and maintainer
+  approval.
 - Official log mutations must flow through validated proposals or verified
   event replication paths.
+
+The complete route inventory is in `docs/API_V1_ROUTE_INVENTORY.md`. The
+machine-readable OpenAPI contract is `openapi/api-v1.yaml`; the compatibility
+baseline is `openapi/api-v1-baseline.json` and is checked by
+`python scripts/check_api_contract.py`.
 
 ## Versioned API Strategy
 
@@ -155,9 +181,37 @@ extended backward-compatible shape:
   "error": "message",
   "code": "machine_readable_code",
   "request_id": "uuid-or-server-id",
-  "retryable": false
+  "retryable": false,
+  "details": {}
 }
 ```
+
+Hosted and self-hosted `/api/v1` handlers now use this compatible shape for
+API errors. `error` remains required for old clients. `code` is stable and
+machine-readable. `request_id` correlates client failures with diagnostics.
+`details` is optional and structured; servers must not expose secrets, raw SQL,
+filesystem paths, tokens, or raw provider bodies. Authorization failures must
+not reveal inaccessible resource existence.
+
+Validation errors should use stable codes such as `invalid_json`,
+`invalid_uuid`, `missing_field`, or `validation_failed`. Equivalent failures
+should map to equivalent codes in hosted and self-hosted modes.
+
+## Contract Development
+
+To run contract checks locally:
+
+```sh
+just api-contract
+cargo test -p ham-server route_catalog_lists_scaffolded_v0_2_api_surface
+cargo test -p ham-sync-server self_hosted_errors_keep_stable_shape
+```
+
+When adding a route, update `crates/ham-api-contract`, `openapi/api-v1.yaml`,
+the route inventory, and conformance tests. Additive changes keep all existing
+paths, methods, status codes, response fields, auth requirements, and error
+codes. Intentional breaking changes require a new API major version, an ADR,
+migration guidance, maintainer approval, and an explicit baseline update.
 
 ## Current v1 Sync API
 
