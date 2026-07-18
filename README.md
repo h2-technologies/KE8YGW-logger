@@ -1,5 +1,7 @@
 # Ham Radio Operations Platform
 
+[![OpenSSF Best Practices](https://www.bestpractices.dev/projects/13656/badge)](https://www.bestpractices.dev/projects/13656)
+
 This workspace is the first foundation for a local-first, plugin-based amateur
 radio operations platform. The MVP direction is casual logging, POTA/SOTA, and
 sync, with room for emergency communications, net control, and contesting.
