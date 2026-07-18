@@ -104,24 +104,28 @@ jobs:
 
           while IFS= read -r file; do
             [[ -z "$file" ]] && continue
-            case "$file" in
-              .github/workflows/*|Cargo.toml|Cargo.lock|rust-toolchain.toml|rust-toolchain)
-                all_expensive=true ;;
-              openapi/*|scripts/check_api_contract.py|crates/ham-api-contract/**|crates/ham-server/**)
-                api=true; rust=true ;;
-              AGENTS.md|GOVERNANCE.md|CONTRIBUTING.md|SECURITY.md|RELEASE.md|SUPPORT.md|CODE_OF_CONDUCT.md|docs/**|.github/CODEOWNERS|.github/ISSUE_TEMPLATE/**|.github/PULL_REQUEST_TEMPLATE.md|scripts/governance-check.ps1)
-                governance=true ;;
-              crates/**/*.rs|src-tauri/**|crates/*/Cargo.toml|crates/ham-gui/web/**)
-                rust=true ;;
-            esac
-            case "$file" in
-              src-tauri/**|crates/ham-desktop/**|crates/ham-gui/**|crates/ham-core/**)
-                tauri=true ;;
-              ios/**|scripts/ios/**|crates/ham-ios-ffi/**|crates/ham-core/**|crates/ham-sync/**|Cargo.toml|Cargo.lock|rust-toolchain.toml)
-                ios=true ;;
-              Dockerfile.sync-server|.dockerignore|crates/ham-sync-server/**|crates/ham-sync/**|crates/ham-core/**|crates/ham-api-contract/**|Cargo.toml|Cargo.lock|rust-toolchain.toml)
-                container=true ;;
-            esac
+            if [[ "$file" == .github/workflows/* || "$file" == Cargo.toml || "$file" == Cargo.lock || "$file" == rust-toolchain.toml || "$file" == rust-toolchain ]]; then
+              all_expensive=true
+            fi
+            if [[ "$file" == openapi/* || "$file" == scripts/check_api_contract.py || "$file" == crates/ham-api-contract/* || "$file" == crates/ham-server/* ]]; then
+              api=true
+              rust=true
+            fi
+            if [[ "$file" == AGENTS.md || "$file" == GOVERNANCE.md || "$file" == CONTRIBUTING.md || "$file" == SECURITY.md || "$file" == RELEASE.md || "$file" == SUPPORT.md || "$file" == CODE_OF_CONDUCT.md || "$file" == docs/* || "$file" == .github/CODEOWNERS || "$file" == .github/ISSUE_TEMPLATE/* || "$file" == .github/PULL_REQUEST_TEMPLATE.md || "$file" == scripts/governance-check.ps1 ]]; then
+              governance=true
+            fi
+            if [[ "$file" == crates/* || "$file" == src-tauri/* ]]; then
+              rust=true
+            fi
+            if [[ "$file" == src-tauri/* || "$file" == crates/ham-desktop/* || "$file" == crates/ham-gui/* || "$file" == crates/ham-core/* ]]; then
+              tauri=true
+            fi
+            if [[ "$file" == ios/* || "$file" == scripts/ios/* || "$file" == crates/ham-ios-ffi/* || "$file" == crates/ham-core/* || "$file" == crates/ham-sync/* || "$file" == Cargo.toml || "$file" == Cargo.lock || "$file" == rust-toolchain.toml ]]; then
+              ios=true
+            fi
+            if [[ "$file" == Dockerfile.sync-server || "$file" == .dockerignore || "$file" == crates/ham-sync-server/* || "$file" == crates/ham-sync/* || "$file" == crates/ham-core/* || "$file" == crates/ham-api-contract/* || "$file" == Cargo.toml || "$file" == Cargo.lock || "$file" == rust-toolchain.toml ]]; then
+              container=true
+            fi
           done <<< "$files"
 
           if [[ "$all_expensive" == true ]]; then
