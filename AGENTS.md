@@ -103,18 +103,18 @@ When sources disagree:
 | `README.md` | Contributor and product overview | Current high-level behavior and entry docs | Detailed operating rules better suited to `AGENTS.md` | Start-here guide | Manual review | Docs only |
 | `PROJECT_STATE.md` | Implementation-state ledger | Verified state, debt, recent validation history | Aspirational claims not proven by code | Current milestone snapshot | Manual review | Docs only |
 | `ROADMAP.md` | Root milestone summary | High-level milestone direction | Detailed architecture | Milestone summary | Manual review | Docs only |
-| `.github/workflows/` | CI and release automation | Actual enforced validation and release steps | Local-only experiments | `ci.yml`, `release.yml` | GitHub Actions | Cargo / just |
+| `.github/workflows/` | CI, security, scorecard, iOS, and release automation | Actual enforced validation and release steps | Local-only experiments | `ci.yml`, `security.yml`, `ios.yml`, `release.yml`, `scorecard.yml` | GitHub Actions | Cargo / just / Semgrep / actionlint |
+| `.github/dependabot.yml` | Dependency update automation | Scheduled update policy for Cargo, GitHub Actions, and Docker | Auto-merge policy or invented labels | Weekly updates targeting `dev` | Dependabot | N/A |
 | `docs/` | Architecture, security, protocols, release plans | Stable subsystem docs | Runtime code, generated outputs | See sections below | Manual review | N/A |
 | `crates/` | Workspace crates | Rust implementation | Generated assets | See crate table below | Cargo tests/builds | Inter-crate deps only |
 | `src-tauri/` | Tauri v2 desktop runtime wrapper | Tauri config, command bridge, packaging assets | Domain logic | `src-tauri/src/main.rs`, `tauri.conf.json` | `cargo tauri info`, `cargo tauri build` | `ham-desktop` |
 | `.env.example` | Runtime env reference | Supported server env vars | Secrets | Sync/server env names | Manual review | N/A |
-| `Dockerfile.sync-server` | Sync-server container build | Self-hosted sync packaging | Hosted API containerization for unrelated services | `ham-sync-server` release binary | `docker build -f Dockerfile.sync-server .` | `ham-sync-server` |
+| `Dockerfile.sync-server` | Sync-server container build | Self-hosted sync packaging with digest-pinned base images | Hosted API containerization for unrelated services | `ham-sync-server` release binary | `docker build -f Dockerfile.sync-server .` | `ham-sync-server` |
+| `deny.toml` | Cargo advisory policy | Narrow, documented advisory exceptions with review dates | Broad vulnerability suppressions or dependency hiding | `cargo deny check advisories` | cargo-deny | N/A |
 | `target/` | Generated build artifacts | Nothing by hand | Source, docs, fixtures | None | Ignore in reviews unless build artifact debugging is requested | N/A |
 
 Repository absences that matter:
-- No `scripts/` directory is present.
 - No `migrations/` directory is present.
-- No native iOS, Swift, Xcode, FFI, or bridge source directories are present.
 
 ### Workspace Crates And Runtime Directories
 
@@ -565,6 +565,9 @@ node --check crates\ham-gui\web\app.js
 git diff --check
 cargo tauri info
 cargo tauri build
+cargo audit --ignore RUSTSEC-2023-0071
+cargo deny check advisories
+actionlint .github/workflows/*.yml
 ```
 
 ### Mandatory Baseline By Change Type
@@ -781,9 +784,10 @@ This section is a verified snapshot of the repository as inspected on July 16, 2
   - Browser-level GUI tests.
   - Remaining production provider adapters and confirmation reconciliation.
 - Validation currently supported by CI:
-  - `just ci` on `ubuntu-latest`, `windows-latest`, and `macos-latest`.
-  - CI runs formatting check, Clippy, tests, and debug build through `just ci`.
-  - The tagged release workflow builds release `ham-gui` archives; it does not build Tauri packages.
+  - Change-aware CI on `ubuntu-latest`, `windows-latest`, and `macos-latest` runs formatting, API contract, governance, Clippy, tests, JavaScript syntax, platform builds, Tauri checks, and sync-server container validation as applicable.
+  - The Security scanning workflow runs Cargo advisory checks, checked-in Semgrep rules with SARIF upload, and actionlint on pull requests and pushes to `dev`/`main`, weekly, and manually.
+  - The Scorecard workflow publishes Scorecard SARIF from `main`.
+  - The tagged release workflow builds release `ham-gui` archives and adds GitHub artifact attestations for future release archives and checksums before publishing assets.
 - Current release blockers:
   - Production provider completeness and validation.
   - LAN trust pairing.

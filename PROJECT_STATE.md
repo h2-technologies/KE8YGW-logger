@@ -4,9 +4,20 @@ Current milestone: v0.2 almost-v1 beta
 
 Current version: 0.2.0
 
-Last update timestamp: 2026-07-16T04:00:00-04:00
+Last update timestamp: 2026-07-18T16:15:00-04:00
 
-Repository health status: Healthy for this v0.2 provider validation-hardening slice. Hosted QRZ XML/HamQTH lookup, POTA spot fetch, DX Cluster bounded runtime controls, and Club Log/QRZ Logbook/eQSL uploads remain fake/offline by default, with ignored live validation hooks gated by explicit environment variables and credentials. Runtime responses and persisted provider health now carry stable redacted error codes for common credential, auth, malformed-response, provider-rejection, rate-limit, timeout, and transport failures. SOTAWatch and LoTW remain explicitly deferred where provider/API safety requires it. Formatting, Rust check, Clippy with warnings denied, full workspace tests, GUI JavaScript syntax check, package builds, diff whitespace check, and Tauri package build passed after this slice. The Rust test suite currently reports 212 passed tests and 7 ignored live validation hooks.
+Repository health status: Security automation remediation is in progress on the `security/code-scanning-majority` branch. Workflow actions and sync-server Docker bases are now immutably pinned in source, release publishing is split from read-only validation/build jobs, Dependabot is configured for `dev`, and a dedicated Security scanning workflow runs Cargo advisory checks, checked-in Semgrep rules with SARIF upload, and actionlint. `quick-xml 0.39.4` has been removed from the dependency graph by updating and narrowing the `rfd` desktop-dialog dependency. Remaining RustSec findings are documented in `docs/security/DEPENDENCY_ADVISORIES.md` and must not be treated as fixed until upstream dependencies or architecture change.
+
+Current security/code-scanning pass:
+
+- Starting live code-scanning state on 2026-07-18: 39 open Scorecard alerts, including 30 Pinned-Dependencies findings, one Token-Permissions finding, and one Vulnerabilities finding.
+- Starting live Dependabot state: one open `glib` / GHSA-wrw7-89jp-8q8g alert in `Cargo.lock`.
+- Starting live secret-scanning state: zero open alerts returned by the GitHub API; no secret payloads were printed.
+- Updated `rfd` to `0.17.2` with `default-features = false` and `features = ["xdg-portal"]`, updated SurrealDB to `3.2.1`, and updated `spin` to `0.9.9`.
+- Added `deny.toml` with advisory-specific residual exceptions and review dates; no `quick-xml` advisory is ignored.
+- Added `.github/dependabot.yml`, `.github/workflows/security.yml`, `.semgrep/security.yml`, `docs/security/DEPENDENCY_ADVISORIES.md`, and `docs/security/REPOSITORY_SECURITY_SETTINGS.md`.
+- Updated `SECURITY.md` with a direct private vulnerability reporting link, supported-versions table, response timelines, and plaintext-sensitive-data submission guidance.
+- Future tagged release archives and checksums are now attested through GitHub artifact attestations. Historical releases are unchanged and remain a residual provenance finding.
 
 Current iOS Rust-authority pass:
 
