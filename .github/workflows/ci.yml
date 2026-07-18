@@ -2,33 +2,205 @@ name: CI
 
 on:
   pull_request:
+    branches:
+      - dev
+      - main
   push:
     branches:
+      - dev
       - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_INCREMENTAL: "0"
+  CARGO_PROFILE_DEV_DEBUG: "1"
+  CARGO_PROFILE_TEST_DEBUG: "1"
 
 jobs:
-  ci:
-    name: Rust CI (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os:
-          - ubuntu-latest
-          - windows-latest
-          - macos-latest
+  promotion-policy:
+    name: Main promotion policy
+    if: github.event_name == 'pull_request' && github.base_ref == 'main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require dev promotion or documented hotfix
+        shell: bash
+        env:
+          PR_HEAD_REF: ${{ github.head_ref }}
+        run: |
+          set -euo pipefail
+          head_ref="$PR_HEAD_REF"
+          body_file="$GITHUB_EVENT_PATH"
+          if [[ "$head_ref" == "dev" ]]; then
+            echo "Main promotion originates from dev."
+            exit 0
+          fi
 
+          if [[ "$head_ref" == hotfix/* ]]; then
+            body="$(jq -r '.pull_request.body // ""' "$body_file")"
+            if grep -Eiq 'sync(ing)? (back )?(to|into) dev|follow-up.*dev|backport.*dev' <<<"$body"; then
+              echo "Documented hotfix exception accepted for $head_ref."
+              exit 0
+            fi
+            echo "Hotfix PRs to main must document the immediate follow-up sync back into dev." >&2
+            exit 1
+          fi
+
+          echo "Normal PRs targeting main must originate from dev. Use hotfix/* only for documented emergency fixes." >&2
+          exit 1
+
+  changes:
+    name: Detect changed areas
+    runs-on: ubuntu-latest
+    outputs:
+      rust: ${{ steps.detect.outputs.rust }}
+      api: ${{ steps.detect.outputs.api }}
+      governance: ${{ steps.detect.outputs.governance }}
+      tauri: ${{ steps.detect.outputs.tauri }}
+      ios: ${{ steps.detect.outputs.ios }}
+      container: ${{ steps.detect.outputs.container }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Classify changed files
+        id: detect
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            base="${{ github.event.pull_request.base.sha }}"
+            head="${{ github.event.pull_request.head.sha }}"
+          else
+            base="${{ github.event.before }}"
+            head="${{ github.sha }}"
+            if [[ "$base" =~ ^0+$ ]]; then
+              base="$(git rev-parse "$head^" 2>/dev/null || true)"
+            fi
+          fi
+
+          if [[ -z "${base:-}" ]]; then
+            files="$(git ls-files)"
+          else
+            files="$(git diff --name-only "$base" "$head")"
+          fi
+
+          rust=false
+          api=false
+          governance=false
+          tauri=false
+          ios=false
+          container=false
+          all_expensive=false
+
+          while IFS= read -r file; do
+            [[ -z "$file" ]] && continue
+            case "$file" in
+              .github/workflows/*|Cargo.toml|Cargo.lock|rust-toolchain.toml|rust-toolchain)
+                all_expensive=true ;;
+              openapi/*|scripts/check_api_contract.py|crates/ham-api-contract/**|crates/ham-server/**)
+                api=true; rust=true ;;
+              AGENTS.md|GOVERNANCE.md|CONTRIBUTING.md|SECURITY.md|RELEASE.md|SUPPORT.md|CODE_OF_CONDUCT.md|docs/**|.github/CODEOWNERS|.github/ISSUE_TEMPLATE/**|.github/PULL_REQUEST_TEMPLATE.md|scripts/governance-check.ps1)
+                governance=true ;;
+              crates/**/*.rs|src-tauri/**|crates/*/Cargo.toml|crates/ham-gui/web/**)
+                rust=true ;;
+            esac
+            case "$file" in
+              src-tauri/**|crates/ham-desktop/**|crates/ham-gui/**|crates/ham-core/**)
+                tauri=true ;;
+              ios/**|scripts/ios/**|crates/ham-ios-ffi/**|crates/ham-core/**|crates/ham-sync/**|Cargo.toml|Cargo.lock|rust-toolchain.toml)
+                ios=true ;;
+              Dockerfile.sync-server|.dockerignore|crates/ham-sync-server/**|crates/ham-sync/**|crates/ham-core/**|crates/ham-api-contract/**|Cargo.toml|Cargo.lock|rust-toolchain.toml)
+                container=true ;;
+            esac
+          done <<< "$files"
+
+          if [[ "$all_expensive" == true ]]; then
+            rust=true
+            api=true
+            governance=true
+            tauri=true
+            ios=true
+            container=true
+          fi
+
+          {
+            echo "rust=$rust"
+            echo "api=$api"
+            echo "governance=$governance"
+            echo "tauri=$tauri"
+            echo "ios=$ios"
+            echo "container=$container"
+          } >> "$GITHUB_OUTPUT"
+
+          printf '%s\n' "$files"
+
+  preflight:
+    name: Ubuntu preflight and policy
+    runs-on: ubuntu-latest
+    needs: changes
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        if: needs.changes.outputs.rust == 'true'
+        uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: 1.96.0
+          components: rustfmt, clippy
+
+      - name: Cache Cargo
+        if: needs.changes.outputs.rust == 'true'
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: linux-debug
+          save-if: ${{ github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/main' }}
+
+      - name: Format
+        if: needs.changes.outputs.rust == 'true'
+        run: cargo fmt --all -- --check
+
+      - name: API contract
+        if: needs.changes.outputs.api == 'true'
+        run: python scripts/check_api_contract.py
+
+      - name: Governance
+        if: needs.changes.outputs.governance == 'true'
+        shell: pwsh
+        run: ./scripts/governance-check.ps1
+
+      - name: No expensive work selected
+        if: needs.changes.outputs.rust != 'true' && needs.changes.outputs.api != 'true' && needs.changes.outputs.governance != 'true'
+        run: echo "Only files outside CI validation scopes changed."
+
+  rust-quality:
+    name: Ubuntu Rust quality
+    runs-on: ubuntu-latest
+    needs:
+      - changes
+      - preflight
+    if: needs.changes.outputs.rust == 'true'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.96.0
           components: rustfmt, clippy
 
       - name: Install Linux desktop dependencies
-        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -39,11 +211,208 @@ jobs:
 
       - name: Cache Cargo
         uses: Swatinem/rust-cache@v2
-
-      - name: Install just
-        uses: taiki-e/install-action@v2
         with:
-          tool: just
+          shared-key: linux-debug
+          save-if: ${{ github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/main' }}
 
-      - name: Run CI checks
-        run: just ci
+      - name: Clippy
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings
+
+      - name: Test
+        run: cargo test --locked --workspace
+
+      - name: JavaScript syntax
+        run: node --check crates/ham-gui/web/app.js
+
+  platform-validation:
+    name: Platform validation (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    needs:
+      - changes
+      - preflight
+    if: needs.changes.outputs.rust == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - windows-latest
+          - macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.96.0
+          components: rustfmt, clippy
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ${{ runner.os }}-debug
+          save-if: ${{ github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/main' }}
+
+      - name: Compile platform binaries
+        run: cargo build --locked -p ham-gui --bin ham-gui -p ham-sync-server --bin ham-sync-server
+
+      - name: Platform credential tests
+        run: cargo test --locked -p ham-core credential
+
+      - name: Runtime log and filesystem tests
+        run: cargo test --locked -p ham-core diagnostics
+
+  tauri-validation:
+    name: Tauri validation
+    runs-on: ubuntu-latest
+    needs:
+      - changes
+      - preflight
+    if: needs.changes.outputs.tauri == 'true'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.96.0
+          components: rustfmt, clippy
+
+      - name: Install Linux desktop dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: linux-debug
+          save-if: ${{ github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/main' }}
+
+      - name: Check Tauri runtime crate
+        run: cargo check --locked -p ke8ygw-logger-desktop --all-targets
+
+  container-validation:
+    name: Sync server container
+    runs-on: ubuntu-latest
+    needs:
+      - changes
+      - preflight
+    if: needs.changes.outputs.container == 'true'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build image
+        run: docker build -f Dockerfile.sync-server -t ham-sync-server:ci .
+
+      - name: Smoke image
+        shell: bash
+        run: |
+          set -euo pipefail
+          container_id="$(docker run -d ham-sync-server:ci)"
+          trap 'docker rm -f "$container_id" >/dev/null 2>&1 || true' EXIT
+          for _ in {1..10}; do
+            if docker logs "$container_id" 2>&1 | grep -q "ham-sync-server listening"; then
+              exit 0
+            fi
+            if ! docker inspect -f '{{.State.Running}}' "$container_id" | grep -q true; then
+              docker logs "$container_id" >&2
+              exit 1
+            fi
+            sleep 1
+          done
+          docker logs "$container_id" >&2
+          exit 1
+
+  ci-result:
+    name: CI result
+    if: always()
+    runs-on: ubuntu-latest
+    needs:
+      - promotion-policy
+      - preflight
+      - rust-quality
+      - platform-validation
+      - tauri-validation
+      - container-validation
+    steps:
+      - name: Check required job results
+        shell: bash
+        env:
+          PROMOTION_RESULT: ${{ needs.promotion-policy.result }}
+          PREFLIGHT_RESULT: ${{ needs.preflight.result }}
+          RUST_RESULT: ${{ needs.rust-quality.result }}
+          PLATFORM_RESULT: ${{ needs.platform-validation.result }}
+          TAURI_RESULT: ${{ needs.tauri-validation.result }}
+          CONTAINER_RESULT: ${{ needs.container-validation.result }}
+        run: |
+          set -euo pipefail
+          for result in "$PROMOTION_RESULT" "$PREFLIGHT_RESULT" "$RUST_RESULT" "$PLATFORM_RESULT" "$TAURI_RESULT" "$CONTAINER_RESULT"; do
+            case "$result" in
+              success|skipped) ;;
+              *)
+                echo "A required CI job did not pass: $result" >&2
+                exit 1
+                ;;
+            esac
+          done
+
+  internal-artifact:
+    name: Internal dev artifact
+    if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
+    needs: ci-result
+    runs-on: ubuntu-latest
+    steps:
+      - name: Write internal build manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/internal
+          {
+            echo "channel=internal-dev"
+            echo "sha=${GITHUB_SHA}"
+            echo "run_number=${GITHUB_RUN_NUMBER}"
+            echo "run_id=${GITHUB_RUN_ID}"
+            echo "artifact=internal-dev-build-${GITHUB_SHA}-${GITHUB_RUN_NUMBER}"
+            echo "note=Internal validation artifact only. Not a beta or production release."
+          } > dist/internal/BUILD-MANIFEST.txt
+
+      - name: Upload internal build manifest
+        uses: actions/upload-artifact@v4
+        with:
+          name: internal-dev-${{ github.sha }}-${{ github.run_number }}
+          path: dist/internal
+          retention-days: 7
+
+  beta-artifact:
+    name: Beta build manifest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: ci-result
+    runs-on: ubuntu-latest
+    steps:
+      - name: Write beta build manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/beta
+          {
+            echo "channel=beta-main"
+            echo "sha=${GITHUB_SHA}"
+            echo "run_number=${GITHUB_RUN_NUMBER}"
+            echo "run_id=${GITHUB_RUN_ID}"
+            echo "artifact=beta-main-build-${GITHUB_SHA}-${GITHUB_RUN_NUMBER}"
+            echo "note=Beta tester artifact metadata only. Not a production release."
+          } > dist/beta/BUILD-MANIFEST.txt
+
+      - name: Upload beta build manifest
+        uses: actions/upload-artifact@v4
+        with:
+          name: beta-main-${{ github.sha }}-${{ github.run_number }}
+          path: dist/beta
+          retention-days: 30

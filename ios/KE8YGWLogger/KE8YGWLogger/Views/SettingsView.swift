@@ -2,6 +2,13 @@ import SwiftData
 import SwiftUI
 
 struct SettingsView: View {
+    private enum LoadState: Equatable {
+        case loading
+        case missing
+        case loaded
+        case failed(String)
+    }
+
     @Environment(\.modelContext) private var modelContext
     @EnvironmentObject private var bridge: RustBridgeStore
     @Query private var settings: [AppSettings]
@@ -10,14 +17,84 @@ struct SettingsView: View {
     @StateObject private var notifications = NotificationCoordinator()
     @StateObject private var location = LocationCoordinator()
     @State private var locationMessage: String?
+    @State private var loadState: LoadState = .loading
+    @State private var createInProgress = false
+    @State private var saveInProgress = false
+    @State private var pendingSave = false
+    @State private var saveStatus: String?
+    @State private var saveError: String?
+    @State private var fieldErrors: [String: String] = [:]
+    @State private var didInitialLoad = false
 
     private var appSettings: AppSettings? { settings.first }
     private var visibleProfiles: [StationProfile] { profiles.filter { !$0.isTombstoned } }
     private var visibleEquipment: [StationEquipment] { equipment.filter { !$0.isTombstoned } }
 
+    @ViewBuilder
+    private var statusSection: some View {
+        if saveInProgress || saveStatus != nil || saveError != nil || !fieldErrors.isEmpty {
+            Section("Status") {
+                if saveInProgress {
+                    Label("Saving", systemImage: "arrow.triangle.2.circlepath")
+                } else if let saveStatus {
+                    Label(saveStatus, systemImage: "checkmark.circle")
+                        .foregroundStyle(.green)
+                }
+                if let saveError {
+                    Text(saveError)
+                        .foregroundStyle(.red)
+                }
+                ForEach(fieldErrors.keys.sorted(), id: \.self) { key in
+                    if let error = fieldErrors[key] {
+                        Text(error)
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                    }
+                }
+            }
+        }
+    }
+
     var body: some View {
         Form {
-            if let appSettings {
+            switch loadState {
+            case .loading:
+                Section {
+                    ProgressView("Loading settings")
+                }
+            case .failed(let message):
+                Section("Settings Unavailable") {
+                    Text(message)
+                        .foregroundStyle(.red)
+                    Button("Retry") {
+                        Task { await loadSettingsFromRust() }
+                    }
+                }
+            case .missing:
+                Section("Settings") {
+                    Text("No application settings record exists yet.")
+                        .foregroundStyle(.secondary)
+                    Button {
+                        Task { await createDefaultSettings() }
+                    } label: {
+                        if createInProgress {
+                            ProgressView()
+                        } else {
+                            Text("Create Default Settings")
+                        }
+                    }
+                    .disabled(createInProgress)
+                    .accessibilityLabel("Create Default Settings")
+                    .accessibilityHint("Creates the canonical Rust-backed settings record and opens the editable Settings page.")
+                    if let saveError {
+                        Text(saveError)
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                    }
+                }
+            case .loaded:
+                if let appSettings {
+                    statusSection
                 Section("General") {
                     Picker("Theme", selection: bind(appSettings, \.appearance)) {
                         Text("System").tag("system")
@@ -28,12 +105,17 @@ struct SettingsView: View {
                         .textInputAutocapitalization(.never)
                     TextField("Operator Callsign", text: uppercaseBind(appSettings, \.operatorCallsign))
                         .textInputAutocapitalization(.characters)
+                    validationText("operatorCallsign")
+                    TextField("Additional Callsigns", text: additionalCallsignsBind(appSettings))
+                        .textInputAutocapitalization(.characters)
+                        .accessibilityHint("Separate multiple callsigns with commas.")
                     TextField("Operator Name", text: optionalBind(appSettings, \.operatorName))
                     TextField("Operator Email", text: optionalBind(appSettings, \.operatorEmail))
                         .textInputAutocapitalization(.never)
                         .keyboardType(.emailAddress)
                     TextField("Station Callsign", text: uppercaseBind(appSettings, \.stationCallsign))
                         .textInputAutocapitalization(.characters)
+                    validationText("stationCallsign")
                 }
 
                 Section("Station Defaults") {
@@ -75,6 +157,7 @@ struct SettingsView: View {
                     })
                     TextField("Manual Maidenhead Grid", text: gridBind(appSettings))
                         .textInputAutocapitalization(.characters)
+                    validationText("maidenheadGrid")
                     TextField("Location Name / QTH", text: optionalBind(appSettings, \.manualLocationName))
                     TextField("County", text: optionalBind(appSettings, \.manualCounty))
                     TextField("State", text: uppercaseOptionalBind(appSettings, \.manualState))
@@ -132,6 +215,15 @@ struct SettingsView: View {
                     TextField("Server URL", text: optionalBind(appSettings, \.serverURL))
                         .textInputAutocapitalization(.never)
                         .keyboardType(.URL)
+                    validationText("serverURL")
+                    Text("Changing the sync server changes future sync traffic only. Existing local log data and device identity are preserved.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    TextField("Device Name", text: optionalBind(appSettings, \.syncDeviceName))
+                    TextField("Account Label", text: optionalBind(appSettings, \.syncAccountLabel))
+                    NavigationLink("Manage Sync Credentials") {
+                        SyncCredentialFormView(settings: appSettings)
+                    }
                     Toggle("Background Sync", isOn: bind(appSettings, \.backgroundSyncEnabled))
                     Toggle("Prefer LAN Sync", isOn: optionalBoolBind(appSettings, \.preferLANSync, defaultValue: true))
                     Toggle("Auto Push", isOn: optionalBoolBind(appSettings, \.autoPushSync, defaultValue: false))
@@ -150,6 +242,8 @@ struct SettingsView: View {
                     Stepper("Credential Validation TTL: \(appSettings.validationTTLHours ?? 24) h", value: optionalIntBind(appSettings, \.validationTTLHours, defaultValue: 24), in: 1...720)
                     TextField("Activation Notes Template", text: optionalBind(appSettings, \.activationNotesTemplate), axis: .vertical)
                         .lineLimit(2...5)
+                    Toggle("POTA Uploads Enabled", isOn: optionalBoolBind(appSettings, \.potaUploadEnabled, defaultValue: false))
+                    Toggle("SOTA Uploads Enabled", isOn: optionalBoolBind(appSettings, \.sotaUploadEnabled, defaultValue: false))
                 }
 
                 Section("Net Control") {
@@ -158,10 +252,19 @@ struct SettingsView: View {
                         .keyboardType(.decimalPad)
                     TextField("Default Mode", text: uppercaseOptionalBind(appSettings, \.netDefaultMode))
                         .textInputAutocapitalization(.characters)
+                    Toggle("Sort Roster by Traffic Priority", isOn: optionalBoolBind(appSettings, \.sortNetRosterByTrafficPriority, defaultValue: true))
                     NavigationLink("Open Net Control", destination: NetControlView())
                 }
 
+                Section("Maps and Display") {
+                    TextField("Default Map Layer", text: optionalBind(appSettings, \.mapDefaultLayer))
+                    Toggle("Show QSO Map Objects", isOn: optionalBoolBind(appSettings, \.showQSOMapObjects, defaultValue: true))
+                    Toggle("Show Station Markers", isOn: optionalBoolBind(appSettings, \.showStationMapMarkers, defaultValue: true))
+                    NavigationLink("Open Maps", destination: MapWorkspaceView())
+                }
+
                 Section("Privacy and Diagnostics") {
+                    Toggle("Include Diagnostics in Backups", isOn: optionalBoolBind(appSettings, \.includeDiagnosticsInBackups, defaultValue: false))
                     Toggle("Include Logs in Diagnostics", isOn: bind(appSettings, \.shareDiagnosticsWithLogs))
                     NavigationLink("Diagnostics", destination: DiagnosticsView())
                     NavigationLink("Backup & Restore", destination: BackupRestoreView())
@@ -177,18 +280,16 @@ struct SettingsView: View {
                     DetailRow(title: "App", value: "KE8YGW Logger")
                     DetailRow(title: "Version", value: "0.2.0")
                 }
-            } else {
-                Button("Create Default Settings") {
-                    modelContext.insert(AppSettings())
-                    try? modelContext.save()
                 }
             }
         }
         .navigationTitle("Settings")
         .task {
-            if let appSettings {
-                appSettings.migrateIfNeeded()
-                try? modelContext.save()
+            if !didInitialLoad {
+                didInitialLoad = true
+                await loadSettingsFromRust()
+            }
+            if let appSettings, loadState == .loaded {
                 if appSettings.effectiveUseDeviceLocation {
                     location.requestCurrentGrid(useDeviceLocation: true)
                 }
@@ -253,14 +354,30 @@ struct SettingsView: View {
             if trimmed.isEmpty {
                 settings.maidenheadGrid = ""
                 locationMessage = nil
+                fieldErrors.removeValue(forKey: "maidenheadGrid")
             } else if let normalized = HamRadioUtilities.normalizedMaidenhead(trimmed) {
                 settings.maidenheadGrid = normalized
                 settings.lastLocationSource = MaidenheadLocationSource.manual.rawValue
                 locationMessage = nil
+                fieldErrors.removeValue(forKey: "maidenheadGrid")
             } else {
                 settings.maidenheadGrid = trimmed.uppercased()
                 locationMessage = "Enter a valid 4- or 6-character Maidenhead grid."
+                fieldErrors["maidenheadGrid"] = "Enter a valid 4- or 6-character Maidenhead grid."
             }
+            save(settings)
+        }
+    }
+
+    private func additionalCallsignsBind(_ settings: AppSettings) -> Binding<String> {
+        Binding {
+            settings.additionalCallsigns.joined(separator: ", ")
+        } set: { value in
+            let callsigns = value
+                .split(separator: ",")
+                .map { HamRadioUtilities.normalizeCallsign(String($0)) }
+                .filter { !$0.isEmpty }
+            settings.setAdditionalCallsigns(callsigns)
             save(settings)
         }
     }
@@ -293,7 +410,131 @@ struct SettingsView: View {
     }
 
     private func save(_ settings: AppSettings) {
+        guard validate(settings) else { return }
         settings.updatedAt = Date()
+        try? modelContext.save()
+        pendingSave = true
+        drainSaveQueue(settings)
+    }
+
+    @discardableResult
+    private func validate(_ settings: AppSettings) -> Bool {
+        if HamRadioUtilities.isValidCallsign(settings.operatorCallsign) {
+            fieldErrors.removeValue(forKey: "operatorCallsign")
+        } else {
+            fieldErrors["operatorCallsign"] = "Enter a valid primary callsign."
+        }
+        if HamRadioUtilities.isValidCallsign(settings.stationCallsign) {
+            fieldErrors.removeValue(forKey: "stationCallsign")
+        } else {
+            fieldErrors["stationCallsign"] = "Enter a valid station callsign."
+        }
+        let invalidAdditional = settings.additionalCallsigns.first { !HamRadioUtilities.isValidCallsign($0) }
+        if let invalidAdditional {
+            fieldErrors["additionalCallsigns"] = "Additional callsign \(invalidAdditional) is not valid."
+        } else {
+            fieldErrors.removeValue(forKey: "additionalCallsigns")
+        }
+        if let grid = settings.maidenheadGrid, !grid.isEmpty, HamRadioUtilities.normalizedMaidenhead(grid) == nil {
+            fieldErrors["maidenheadGrid"] = "Enter a valid 4- or 6-character Maidenhead grid."
+        } else if fieldErrors["maidenheadGrid"] != nil {
+            fieldErrors.removeValue(forKey: "maidenheadGrid")
+        }
+        if isValidSyncURL(settings.serverURL ?? "") {
+            fieldErrors.removeValue(forKey: "serverURL")
+        } else {
+            fieldErrors["serverURL"] = "Enter an http or https sync server URL with a host."
+        }
+        return fieldErrors.isEmpty
+    }
+
+    private func isValidSyncURL(_ value: String) -> Bool {
+        guard let url = URL(string: value.trimmingCharacters(in: .whitespacesAndNewlines)),
+              let scheme = url.scheme?.lowercased(),
+              ["http", "https"].contains(scheme),
+              url.host?.isEmpty == false else {
+            return false
+        }
+        return true
+    }
+
+    @ViewBuilder
+    private func validationText(_ key: String) -> some View {
+        if let error = fieldErrors[key] {
+            Text(error)
+                .font(.caption)
+                .foregroundStyle(.red)
+        }
+    }
+
+    private func drainSaveQueue(_ settings: AppSettings) {
+        guard !saveInProgress else { return }
+        saveInProgress = true
+        saveStatus = nil
+        saveError = nil
+        Task {
+            while pendingSave {
+                pendingSave = false
+                do {
+                    let result = try await bridge.saveSettings(settings.rustSettingsPayload())
+                    if let persisted = result.settings {
+                        settings.apply(rust: persisted)
+                        try? modelContext.save()
+                    }
+                    saveStatus = "Saved"
+                    saveError = nil
+                } catch {
+                    saveError = error.localizedDescription
+                }
+            }
+            saveInProgress = false
+        }
+    }
+
+    private func loadSettingsFromRust() async {
+        loadState = .loading
+        saveError = nil
+        do {
+            let result = try await bridge.loadSettings()
+            if result.exists, let rustSettings = result.settings {
+                upsertCachedSettings(rustSettings)
+                loadState = .loaded
+            } else {
+                loadState = .missing
+            }
+        } catch {
+            loadState = .failed(error.localizedDescription)
+        }
+    }
+
+    private func createDefaultSettings() async {
+        guard !createInProgress else { return }
+        createInProgress = true
+        saveError = nil
+        defer { createInProgress = false }
+        do {
+            _ = try await bridge.createDefaultSettings()
+            let reloaded = try await bridge.loadSettings()
+            guard reloaded.exists, let rustSettings = reloaded.settings else {
+                throw RustBridgeError.invalidResponse
+            }
+            upsertCachedSettings(rustSettings)
+            loadState = .loaded
+        } catch {
+            saveError = error.localizedDescription
+            loadState = .missing
+        }
+    }
+
+    private func upsertCachedSettings(_ rustSettings: RustApplicationSettings) {
+        let cache = appSettings ?? AppSettings()
+        if appSettings == nil {
+            modelContext.insert(cache)
+        }
+        cache.apply(rust: rustSettings)
+        for duplicate in settings.dropFirst() {
+            modelContext.delete(duplicate)
+        }
         try? modelContext.save()
     }
 
@@ -337,8 +578,114 @@ private struct ProviderStatusBadge: View {
     }
 }
 
+struct SyncCredentialFormView: View {
+    @Environment(\.modelContext) private var modelContext
+    @EnvironmentObject private var bridge: RustBridgeStore
+    @Bindable var settings: AppSettings
+
+    @State private var accountLabel = ""
+    @State private var newToken = ""
+    @State private var message: String?
+    @State private var configured = false
+    @State private var confirmRemoval = false
+    private let vault = KeychainCredentialVault()
+
+    var body: some View {
+        Form {
+            Section("Status") {
+                DetailRow(title: "Token", value: configured ? "Configured" : "Not configured")
+                DetailRow(title: "Account", value: settings.syncAccountLabel ?? "")
+            }
+
+            Section("Credentials") {
+                TextField("Account Label", text: $accountLabel)
+                    .textInputAutocapitalization(.never)
+                    .accessibilityHint("A non-secret label for the sync account.")
+                SecureField("Sync Token", text: $newToken)
+                    .textInputAutocapitalization(.never)
+                    .textContentType(.password)
+                    .accessibilityHint("Existing sync tokens are never displayed. Enter a new token to add or replace it.")
+                Text("The sync token is saved in iOS Keychain. The Rust settings record stores only the account label.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section("Actions") {
+                Button(configured ? "Replace Sync Token" : "Save Sync Token", action: saveToken)
+                    .disabled(newToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                Button("Validate Stored Token", action: validateToken)
+                    .disabled(!configured)
+                Button("Remove Sync Token", role: .destructive) {
+                    confirmRemoval = true
+                }
+                .disabled(!configured)
+                if let message {
+                    Text(message)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+        .navigationTitle("Sync Credentials")
+        .onAppear(perform: loadState)
+        .confirmationDialog("Remove sync token?", isPresented: $confirmRemoval, titleVisibility: .visible) {
+            Button("Remove Sync Token", role: .destructive, action: removeToken)
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("The Keychain token will be deleted. Settings, QSOs, activations, and local sync data are preserved.")
+        }
+    }
+
+    private func loadState() {
+        accountLabel = settings.syncAccountLabel ?? ""
+        configured = (try? vault.read(account: "sync_token", providerId: "sync")) != nil
+    }
+
+    private func saveToken() {
+        do {
+            try vault.save(secret: newToken, account: "sync_token", providerId: "sync")
+            newToken = ""
+            configured = true
+            settings.syncAccountLabel = accountLabel.trimmingCharacters(in: .whitespacesAndNewlines)
+            persistSettings()
+            message = "Saved sync token in Keychain."
+        } catch {
+            message = error.localizedDescription
+        }
+    }
+
+    private func validateToken() {
+        configured = (try? vault.read(account: "sync_token", providerId: "sync")) != nil
+        message = configured ? "Stored sync token is available in Keychain." : "Sync token is missing from Keychain."
+    }
+
+    private func removeToken() {
+        try? vault.delete(account: "sync_token", providerId: "sync")
+        configured = false
+        newToken = ""
+        message = "Removed sync token from Keychain."
+    }
+
+    private func persistSettings() {
+        settings.updatedAt = Date()
+        try? modelContext.save()
+        Task {
+            do {
+                let result = try await bridge.saveSettings(settings.rustSettingsPayload())
+                if let persisted = result.settings {
+                    settings.apply(rust: persisted)
+                    try? modelContext.save()
+                }
+            } catch {
+                message = error.localizedDescription
+            }
+        }
+    }
+}
+
 struct ProviderCredentialFormView: View {
     @Environment(\.modelContext) private var modelContext
+    @EnvironmentObject private var bridge: RustBridgeStore
     @Bindable var settings: AppSettings
     var definition: ProviderCredentialDefinition
 
@@ -354,7 +701,7 @@ struct ProviderCredentialFormView: View {
                     settings.isProviderEnabled(definition.id)
                 } set: { value in
                     settings.setProviderEnabled(definition.id, enabled: value)
-                    try? modelContext.save()
+                    persistSettings()
                 })
                 let validation = settings.providerValidationRecord(definition.id)
                 DetailRow(title: "Configured", value: validation.configured ? "Yes" : "No")
@@ -449,6 +796,7 @@ struct ProviderCredentialFormView: View {
                 message: "Saved. Validate before online provider use."
             ))
             try modelContext.save()
+            persistSettings()
             message = "Saved \(definition.displayName) credentials."
         } catch {
             message = error.localizedDescription
@@ -480,7 +828,7 @@ struct ProviderCredentialFormView: View {
             ))
             message = "Missing required fields."
         }
-        try? modelContext.save()
+        persistSettings()
     }
 
     private func removeCredentials() {
@@ -488,8 +836,24 @@ struct ProviderCredentialFormView: View {
             try? vault.delete(account: field.id, providerId: definition.id)
         }
         settings.clearProviderCredentialMetadata(definition.id)
-        try? modelContext.save()
+        persistSettings()
         fieldValues = [:]
         message = "Removed \(definition.displayName) credentials."
+    }
+
+    private func persistSettings() {
+        settings.updatedAt = Date()
+        try? modelContext.save()
+        Task {
+            do {
+                let result = try await bridge.saveSettings(settings.rustSettingsPayload())
+                if let persisted = result.settings {
+                    settings.apply(rust: persisted)
+                    try? modelContext.save()
+                }
+            } catch {
+                message = error.localizedDescription
+            }
+        }
     }
 }

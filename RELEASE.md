@@ -5,9 +5,9 @@ repository policy from automation that already exists.
 
 ## Channels
 
-- Stable: public releases intended for normal users.
-- Beta: pre-release builds for broader validation before stable.
-- Internal: maintainer or CI-produced builds used for development and validation.
+- Production: public releases built only from valid `vMAJOR.MINOR.PATCH` tags on commits contained in `main`.
+- Beta: pre-release builds produced from `main` for broader validation before production.
+- Internal: maintainer or CI-produced builds from `dev` used for development and validation.
 
 Pre-1.0 releases may change faster than stable releases, but compatibility risks
 must still be documented when user data, APIs, or sync behavior are affected.
@@ -23,12 +23,20 @@ pre-release identifiers may be used for beta releases when needed.
 
 ## Branches And Tags
 
-`main` is the active integration branch. Release branches may be created when a
-release line needs stabilization or security fixes separate from `main`.
+`dev` is the active internal integration branch. Normal feature and fix pull
+requests target `dev`. `main` is the beta channel and is updated by promotion
+pull requests from `dev`.
+
+Emergency hotfixes may branch from `main` and target `main` only when the pull
+request documents the follow-up synchronization back into `dev`.
 
 The existing GitHub release workflow runs on tags matching `v*.*.*` and builds
 release binaries for Linux, Windows, and macOS. It packages the `ham-gui` binary
-and uploads archives to the GitHub Release.
+and uploads archives to the GitHub Release after validating that the tagged
+commit is contained in `main` and that the workspace version matches the tag.
+
+See [docs/BRANCHING_AND_RELEASE_CHANNELS.md](docs/BRANCHING_AND_RELEASE_CHANNELS.md)
+for the full branch, artifact, environment, and rollback policy.
 
 ## Required Gates
 

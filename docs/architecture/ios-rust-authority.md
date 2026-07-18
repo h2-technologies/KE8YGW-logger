@@ -38,6 +38,7 @@ Projection/cache rows include:
 
 Current Rust-routed iOS mutations:
 
+- application settings load/create/update through Rust versioned support storage
 - QSO create/delete
 - station profile create/select
 - station equipment create
@@ -54,4 +55,4 @@ Known remaining Swift-local behavior:
 - provider upload queue actions
 - full sync push/pull/merge/conflict resolution
 - JSON/ZIP backup inspect/dry-run/apply restore
-- some local app settings
+- local draft fields that are not shared application settings

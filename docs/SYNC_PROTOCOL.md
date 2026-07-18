@@ -109,7 +109,7 @@ Current REST surface:
 - `POST /api/v1/logbooks/{logbook_id}/push`
 - `GET /api/v1/sync/status`
 
-The current self-hosted server uses durable local storage by default: embedded SurrealDB metadata/support state, append-only JSONL official-event storage, and filesystem-backed diagnostic report payloads. The in-memory backend remains for deterministic tests.
+The current self-hosted server uses durable local storage by default: embedded SurrealDB metadata/support state, append-only JSONL official-event storage, and filesystem-backed diagnostic report payloads. Durable SurrealDB storage is exposed through the `ham-sync` `surreal-storage` feature so GUI, iOS, and other protocol-only clients can avoid the database dependency. The in-memory backend remains for deterministic tests.
 
 ## Deferred Work
 

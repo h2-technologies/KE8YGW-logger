@@ -5,13 +5,17 @@ fmt-check:
     cargo fmt --all -- --check
 
 check:
-    cargo check --workspace --all-targets
+    cargo check --locked --workspace --all-targets
 
 clippy:
-    cargo clippy --workspace --all-targets -- -D warnings
+    cargo clippy --locked --workspace --all-targets -- -D warnings
 
 test:
-    cargo test --workspace
+    cargo test --locked --workspace
+
+feature-matrix:
+    cargo check --locked -p ham-sync --no-default-features --all-targets
+    cargo test --locked -p ham-sync --features surreal-storage
 
 api-contract:
     python scripts/check_api_contract.py
@@ -20,10 +24,10 @@ governance-check:
     pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/governance-check.ps1
 
 build:
-    cargo build --workspace
+    cargo build --locked --workspace
 
 release:
-    cargo build --release --workspace
+    cargo build --locked --release --workspace
 
 gui:
     cargo run -p ham-gui --bin ham-gui
@@ -31,4 +35,4 @@ gui:
 sync-server:
     cargo run -p ham-sync-server --bin ham-sync-server
 
-ci: fmt-check clippy test api-contract build governance-check
+ci: fmt-check clippy test feature-matrix api-contract governance-check

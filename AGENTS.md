@@ -49,7 +49,7 @@ Planned but not implemented end-to-end:
 - LAN trust pairing and real peer-to-peer HTTP transport.
 - Conflict resolution UI and automatic merge policy.
 - Full production provider coverage for LoTW/TQSL, SOTAWatch live access, NOAA/Open-Meteo, FCC ULS, RBN, and other placeholder providers.
-- Native iOS application code, Rust FFI/UniFFI bridge, Swift projection cache, and Xcode project.
+- Swift projection cache and production App Store packaging.
 - Interactive tile/vector map renderer.
 - Full EmComm and contesting product surfaces.
 
@@ -70,8 +70,8 @@ Provider reality check:
 - Many map, weather, propagation, and spotting providers are metadata-only, mock, or placeholder implementations.
 
 Native iOS status:
-- No native iOS, Swift, Xcode, UniFFI, or Rust FFI source trees are present in this repository as of July 16, 2026.
-- iOS currently exists only as planning and release-readiness documentation under `docs/`.
+- Native SwiftUI, Rust FFI, Xcode project, Apple build scripts, and iOS workflow files are present as of July 16, 2026.
+- iOS release hardening, signing, TestFlight/App Store distribution, and full production validation remain incomplete.
 
 ## 3. Source-Of-Truth Hierarchy
 
@@ -122,7 +122,7 @@ Repository absences that matter:
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `crates/ham-core` | Authoritative domain and infrastructure core | Official events, proposal validation, projections, ADIF, lookup, rig, diagnostics, permissions, service framework, credentials, maps, stations, Net Control, upload queue, support storage, JSONL official store | GUI-only behavior, Tauri commands, hosted account/session ownership, JS business rules | `src/lib.rs`; modules `proposal.rs`, `store.rs`, `projection.rs`, `service.rs`, `credential.rs`, `online.rs` | `ham-plugin-sdk`, `tokio`, `serde`, `sha2`, `ureq`, OS credential APIs/tools | Module tests plus `src/tests.rs` | `ham-plugin-sdk` only |
 | `crates/ham-plugin-sdk` | Stable public SDK vocabulary | Plugin manifests, permission enums, proposal envelopes, official/proposal event constants, service-type vocabulary | Plugin loading, domain validation, app-specific logic | `src/lib.rs` | `serde`, `chrono`, `uuid` | Inline tests via downstream crates; compile-time usage across workspace | No app crates |
-| `crates/ham-sync` | Sync protocol and durable sync/report backend logic | Discovery, handshake, head comparison, preview/pull/push, pairing auth, durable sync/report metadata, report-upload models | GUI shell behavior, hosted account logic, domain rule duplication | `src/lib.rs` | `ham-core`, `surrealdb`, `serde`, `tokio`, `sha2` | Inline tests in `src/lib.rs` | `ham-core` |
+| `crates/ham-sync` | Sync protocol and sync/report backend logic | Discovery, handshake, head comparison, preview/pull/push, pairing auth, report-upload models, optional durable sync/report metadata | GUI shell behavior, hosted account logic, domain rule duplication | `src/lib.rs` | `ham-core`, `serde`, `tokio`; optional `surreal-storage` enables `surrealdb` and `sha2` | Inline tests in `src/lib.rs` | `ham-core` |
 | `crates/ham-sync-server` | Self-hosted sync/report binary | Process startup, env loading, serving the `ham-sync` backend | Core sync protocol models, GUI, hosted logbook business rules | `src/main.rs` | `ham-sync` | Build/run validation; behavior mostly tested in `ham-sync` | `ham-sync` |
 | `crates/ham-server` | Hosted web/server API boundary | Auth/session/device/logbook metadata, role checks, thin routes, hosted support metadata persistence, proposal delegation, backup/divergence/sync endpoints | Reimplementing domain validation already in `ham-core`, Tauri UI code | `src/lib.rs`, `src/main.rs` | `ham-core`, `ham-sync`, `surrealdb`, `serde`, `tokio` | Large inline route/integration tests in `src/lib.rs` | `ham-core`, `ham-sync` |
 | `crates/ham-cli` | CLI operations on local data | ADIF import/export, chain verification, projection rebuild | New domain rules, hosted route logic, desktop-only behaviors | `src/main.rs` | `ham-core`, `ham-plugin-sdk` | Build/run validation | `ham-core` |
@@ -282,7 +282,7 @@ Platform-specific code is acceptable when:
 | Saved searches | `ham-core::search` | Local JSON saved-search store | No | Search-store APIs |
 | Runtime events and runtime logs | `ham-core::bus` + `runtime_log` | Rotating JSONL files and replay buffer | No | Runtime bridge publishing only |
 | Hosted users, sessions, devices, memberships, invites, API tokens | `ham-server` | SurrealDB | N/A server auth state | Hosted auth and admin routes |
-| Sync pairing sessions, relay refs, sync heads, report metadata | `ham-sync` durable server backend | SurrealDB + filesystem payloads + JSONL official log | N/A infrastructure state | Sync server methods only |
+| Sync pairing sessions, relay refs, sync heads, report metadata | `ham-sync` durable server backend behind `surreal-storage` | SurrealDB + filesystem payloads + JSONL official log | N/A infrastructure state | Sync server methods only |
 | Diagnostic reports and bundles | `ham-core::diagnostics` bundle model; `ham-sync` report upload storage | ZIP/filesystem local export; server metadata + filesystem payloads | Uploaded only by user action | Build bundle -> optional upload through sync/report API |
 | iOS cache / projection records | No current source implementation | N/A | N/A | N/A; iOS is planning-only today |
 
@@ -554,6 +554,8 @@ cargo fmt --all -- --check
 cargo check --workspace --all-targets
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
+cargo check --locked -p ham-sync --no-default-features --all-targets
+cargo test --locked -p ham-sync --features surreal-storage
 cargo build --workspace
 cargo build --release --workspace
 cargo run -p ham-gui --bin ham-gui
@@ -581,7 +583,7 @@ cargo tauri build
 | --- | --- |
 | `ham-core` | `cargo test -p ham-core`, optionally `cargo build -p ham-core` |
 | `ham-server` | `cargo test -p ham-server`, `cargo build -p ham-server` |
-| `ham-sync` | `cargo test -p ham-sync`, `cargo build -p ham-sync` |
+| `ham-sync` | `cargo test -p ham-sync`, `cargo check --locked -p ham-sync --no-default-features --all-targets`, `cargo test --locked -p ham-sync --features surreal-storage`, `cargo build -p ham-sync` |
 | `ham-sync-server` | `cargo build -p ham-sync-server` |
 | `ham-gui` | `cargo build -p ham-gui`, `node --check crates\ham-gui\web\app.js` |
 | `ham-desktop` | `cargo test -p ham-desktop`, `cargo build -p ham-desktop` |

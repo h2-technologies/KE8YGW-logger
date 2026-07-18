@@ -40,6 +40,17 @@ struct ProviderStatusView: View {
                                 guard let appSettings else { return }
                                 appSettings.setProviderEnabled(canonicalProviderID(provider), enabled: enabled)
                                 try? modelContext.save()
+                                Task {
+                                    do {
+                                        let result = try await bridge.saveSettings(appSettings.rustSettingsPayload())
+                                        if let persisted = result.settings {
+                                            appSettings.apply(rust: persisted)
+                                            try? modelContext.save()
+                                        }
+                                    } catch {
+                                        bridge.lastError = error.localizedDescription
+                                    }
+                                }
                             }
                         )
                     }

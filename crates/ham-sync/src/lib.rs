@@ -2,22 +2,25 @@
 
 use std::{
     collections::{HashMap, HashSet},
-    fs,
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, UdpSocket},
-    path::PathBuf,
     sync::Arc,
-    thread,
     time::Duration,
 };
+#[cfg(feature = "surreal-storage")]
+use std::{fs, path::PathBuf, thread};
 
 use chrono::{DateTime, Utc};
+#[cfg(feature = "surreal-storage")]
+use ham_core::{default_log_directory, JsonlLogbookEventStore};
 use ham_core::{
-    default_log_directory, validate_supported_remote_event, CoreEventEnvelope,
-    InMemoryLogbookEventStore, JsonlLogbookEventStore, LogbookEventStore, StoreError,
+    validate_supported_remote_event, CoreEventEnvelope, InMemoryLogbookEventStore,
+    LogbookEventStore, StoreError,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
+#[cfg(feature = "surreal-storage")]
 use sha2::{Digest, Sha256};
+#[cfg(feature = "surreal-storage")]
 use surrealdb::{
     engine::{
         any::Any,
@@ -28,6 +31,7 @@ use surrealdb::{
     Surreal,
 };
 use thiserror::Error;
+#[cfg(feature = "surreal-storage")]
 use tokio::runtime::Runtime;
 use tokio::sync::RwLock;
 use uuid::Uuid;
@@ -977,6 +981,7 @@ pub struct InMemoryCloudSyncServer {
     auth: Arc<RwLock<CloudAuthState>>,
 }
 
+#[cfg(feature = "surreal-storage")]
 #[derive(Debug, Clone)]
 pub struct DurableCloudSyncServer {
     config: CloudServerConfig,
@@ -985,6 +990,7 @@ pub struct DurableCloudSyncServer {
     reports_dir: PathBuf,
 }
 
+#[cfg(feature = "surreal-storage")]
 #[derive(Debug, Clone)]
 pub struct DurableCloudSyncPaths {
     pub metadata_store_path: PathBuf,
@@ -992,6 +998,7 @@ pub struct DurableCloudSyncPaths {
     pub report_dir: PathBuf,
 }
 
+#[cfg(feature = "surreal-storage")]
 impl DurableCloudSyncPaths {
     pub fn from_env() -> Self {
         Self {
@@ -1042,12 +1049,14 @@ pub struct UploadQueueMetadata {
     pub updated_at: DateTime<Utc>,
 }
 
+#[cfg(feature = "surreal-storage")]
 #[derive(Debug, Clone)]
 struct StoredReportRef {
     metadata: DiagnosticReportMetadata,
     bundle_path: PathBuf,
 }
 
+#[cfg(feature = "surreal-storage")]
 #[derive(Debug, Clone)]
 pub enum SurrealCloudEndpoint {
     LocalSurrealKv {
@@ -1060,6 +1069,7 @@ pub enum SurrealCloudEndpoint {
     },
 }
 
+#[cfg(feature = "surreal-storage")]
 #[derive(Debug, Clone)]
 pub struct SurrealCloudConfig {
     pub endpoint: SurrealCloudEndpoint,
@@ -1067,6 +1077,7 @@ pub struct SurrealCloudConfig {
     pub database: String,
 }
 
+#[cfg(feature = "surreal-storage")]
 impl SurrealCloudConfig {
     pub fn local(path: impl Into<PathBuf>) -> Self {
         Self {
@@ -1102,12 +1113,14 @@ impl SurrealCloudConfig {
     }
 }
 
+#[cfg(feature = "surreal-storage")]
 #[derive(Clone)]
 enum SurrealCloudClient {
     Local(Surreal<Db>),
     Remote(Surreal<Any>),
 }
 
+#[cfg(feature = "surreal-storage")]
 impl std::fmt::Debug for SurrealCloudClient {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -1117,17 +1130,20 @@ impl std::fmt::Debug for SurrealCloudClient {
     }
 }
 
+#[cfg(feature = "surreal-storage")]
 #[derive(Debug, Clone)]
 struct SurrealCloudMetadataStore {
     runtime: Arc<std::sync::Mutex<Option<Runtime>>>,
     client: Arc<std::sync::Mutex<Option<SurrealCloudClient>>>,
 }
 
+#[cfg(feature = "surreal-storage")]
 #[derive(Debug, Serialize, Deserialize)]
 struct CloudPayloadRow<T> {
     payload: T,
 }
 
+#[cfg(feature = "surreal-storage")]
 impl SurrealCloudMetadataStore {
     fn open(config: SurrealCloudConfig) -> Result<Self, CloudSyncError> {
         let (runtime, client) = thread::spawn({
@@ -1454,6 +1470,7 @@ impl SurrealCloudMetadataStore {
     }
 }
 
+#[cfg(feature = "surreal-storage")]
 impl Drop for SurrealCloudMetadataStore {
     fn drop(&mut self) {
         let client = self
@@ -1476,6 +1493,7 @@ impl Drop for SurrealCloudMetadataStore {
     }
 }
 
+#[cfg(feature = "surreal-storage")]
 async fn connect_cloud_surreal(
     config: &SurrealCloudConfig,
 ) -> Result<SurrealCloudClient, CloudSyncError> {
@@ -1515,6 +1533,7 @@ async fn connect_cloud_surreal(
     }
 }
 
+#[cfg(feature = "surreal-storage")]
 async fn initialize_cloud_schema(client: &SurrealCloudClient) -> Result<(), CloudSyncError> {
     let schema = r#"
         DEFINE TABLE IF NOT EXISTS schema_migrations SCHEMALESS;
@@ -1548,6 +1567,7 @@ async fn initialize_cloud_schema(client: &SurrealCloudClient) -> Result<(), Clou
     query_cloud_checked(client, schema).await
 }
 
+#[cfg(feature = "surreal-storage")]
 async fn query_cloud_checked(
     client: &SurrealCloudClient,
     query: &str,
@@ -1571,6 +1591,7 @@ async fn query_cloud_checked(
     Ok(())
 }
 
+#[cfg(feature = "surreal-storage")]
 async fn create_cloud_record(
     client: &SurrealCloudClient,
     table: &'static str,
@@ -1596,6 +1617,7 @@ async fn create_cloud_record(
     Ok(())
 }
 
+#[cfg(feature = "surreal-storage")]
 async fn merge_cloud_record(
     client: &SurrealCloudClient,
     table: &'static str,
@@ -1621,6 +1643,7 @@ async fn merge_cloud_record(
     Ok(())
 }
 
+#[cfg(feature = "surreal-storage")]
 async fn select_cloud_rows(
     client: &SurrealCloudClient,
     table: &'static str,
@@ -1641,6 +1664,7 @@ async fn select_cloud_rows(
         .collect()
 }
 
+#[cfg(feature = "surreal-storage")]
 async fn select_cloud_payloads<T: for<'de> Deserialize<'de>>(
     client: &SurrealCloudClient,
     table: &'static str,
@@ -1655,6 +1679,7 @@ async fn select_cloud_payloads<T: for<'de> Deserialize<'de>>(
         .collect()
 }
 
+#[cfg(feature = "surreal-storage")]
 fn sync_token_hash(token: &str) -> String {
     format!("{:x}", Sha256::digest(token.as_bytes()))
 }
@@ -2010,6 +2035,7 @@ impl InMemoryCloudSyncServer {
     }
 }
 
+#[cfg(feature = "surreal-storage")]
 impl DurableCloudSyncServer {
     pub fn open(
         config: CloudServerConfig,
@@ -2593,6 +2619,7 @@ mod tests {
         client
     }
 
+    #[cfg(feature = "surreal-storage")]
     fn durable_paths(label: &str) -> DurableCloudSyncPaths {
         let root = std::env::temp_dir().join(format!("ke8ygw-ham-sync-{label}-{}", Uuid::new_v4()));
         DurableCloudSyncPaths {
@@ -2602,6 +2629,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "surreal-storage")]
     fn durable_server(paths: &DurableCloudSyncPaths) -> DurableCloudSyncServer {
         let mut last_error = None;
         for _ in 0..20 {
@@ -2619,6 +2647,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "surreal-storage")]
     fn pair_request(logbook_id: Uuid, device_id: Uuid) -> PairDeviceRequest {
         PairDeviceRequest {
             pairing_code: "local-dev-pairing-code".to_owned(),
@@ -3186,6 +3215,7 @@ mod tests {
         assert_eq!(push.status, ReplicationStatus::Diverged);
     }
 
+    #[cfg(feature = "surreal-storage")]
     #[tokio::test]
     async fn durable_sync_state_survives_store_reload() {
         let paths = durable_paths("state-survives-restart");
@@ -3233,6 +3263,7 @@ mod tests {
         assert_eq!(duplicate.ignored_duplicate_count, 2);
     }
 
+    #[cfg(feature = "surreal-storage")]
     #[tokio::test]
     async fn durable_sync_rejects_revoked_device_after_store_reload() {
         let paths = durable_paths("revoked-device");
@@ -3254,6 +3285,7 @@ mod tests {
         assert_eq!(error, CloudSyncError::Unauthenticated);
     }
 
+    #[cfg(feature = "surreal-storage")]
     #[tokio::test]
     async fn durable_sync_rejects_invalid_chain_after_store_reload() {
         let paths = durable_paths("invalid-chain");
@@ -3291,6 +3323,7 @@ mod tests {
         assert_eq!(push.accepted_count, 0);
     }
 
+    #[cfg(feature = "surreal-storage")]
     #[tokio::test]
     async fn durable_report_metadata_and_payload_survive_store_reload() {
         let paths = durable_paths("reports");
@@ -3323,6 +3356,7 @@ mod tests {
         assert!(!String::from_utf8_lossy(&payload).contains("super-secret"));
     }
 
+    #[cfg(feature = "surreal-storage")]
     #[test]
     fn durable_provider_setting_survives_store_reload_without_secrets() {
         let paths = durable_paths("provider-setting");
@@ -3350,6 +3384,7 @@ mod tests {
         assert!(!serialized.contains("password"));
     }
 
+    #[cfg(feature = "surreal-storage")]
     #[test]
     fn durable_upload_queue_history_survives_store_reload() {
         let paths = durable_paths("upload-history");

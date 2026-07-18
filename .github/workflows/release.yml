@@ -4,13 +4,85 @@ on:
   push:
     tags:
       - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing production tag to validate without publishing"
+        required: true
+        type: string
 
 permissions:
   contents: write
+  actions: read
 
 jobs:
+  validate-production-tag:
+    name: Validate production tag
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+      sha: ${{ steps.tag.outputs.sha }}
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Checkout full history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve and validate tag
+        id: tag
+        shell: bash
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          tag="${INPUT_TAG:-${GITHUB_REF_NAME}}"
+          if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Production tags must match vMAJOR.MINOR.PATCH: $tag" >&2
+            exit 1
+          fi
+          git fetch --force origin main "refs/tags/$tag:refs/tags/$tag"
+          sha="$(git rev-list -n 1 "$tag")"
+          if ! git merge-base --is-ancestor "$sha" origin/main; then
+            echo "Tagged commit $sha is not contained in origin/main." >&2
+            exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+      - name: Validate workspace version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${{ steps.tag.outputs.tag }}"
+          version="$(python -c 'import re; text=open("Cargo.toml", encoding="utf-8").read(); m=re.search(r"(?m)^\[workspace\.package\][\s\S]*?^version\s*=\s*\"([^\"]+)\"", text); print(m.group(1) if m else "")')"
+          if [[ -z "$version" ]]; then
+            echo "workspace package version not found" >&2
+            exit 1
+          fi
+          if [[ "v$version" != "$tag" ]]; then
+            echo "Tag $tag does not match workspace version $version." >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Verify main CI passed for tagged commit
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          sha="${{ steps.tag.outputs.sha }}"
+          status="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow CI --commit "$sha" --branch main --limit 1 --json status,conclusion --jq '.[0] | "\(.status) \(.conclusion)"')"
+          if [[ "$status" != "completed success" ]]; then
+            echo "No successful completed main CI run found for $sha; got '${status:-none}'." >&2
+            exit 1
+          fi
+
   release:
     name: Release (${{ matrix.os }})
+    needs: validate-production-tag
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -32,15 +104,20 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.validate-production-tag.outputs.sha }}
+          fetch-depth: 0
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.96.0
 
       - name: Cache Cargo
         uses: Swatinem/rust-cache@v2
 
       - name: Build release binary
-        run: cargo build --release --workspace --bin ham-gui
+        run: cargo build --locked --release -p ham-gui --bin ham-gui
 
       - name: Package artifact
         id: package
@@ -81,14 +158,28 @@ jobs:
           "artifact=$archive" >> $env:GITHUB_OUTPUT
           "artifact_name=$(Split-Path $archive -Leaf)" >> $env:GITHUB_OUTPUT
 
+      - name: Generate checksum
+        shell: pwsh
+        run: |
+          $artifact = "${{ steps.package.outputs.artifact }}"
+          $hash = (Get-FileHash -Algorithm SHA256 $artifact).Hash.ToLowerInvariant()
+          "$hash  $(Split-Path $artifact -Leaf)" | Set-Content -NoNewline "$artifact.sha256"
+
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.package.outputs.artifact_name }}
-          path: ${{ steps.package.outputs.artifact }}
+          path: |
+            ${{ steps.package.outputs.artifact }}
+            ${{ steps.package.outputs.artifact }}.sha256
+          compression-level: 0
 
       - name: Upload GitHub Release asset
+        if: github.event_name == 'push'
         uses: softprops/action-gh-release@v2
         with:
-          files: ${{ steps.package.outputs.artifact }}
+          tag_name: ${{ needs.validate-production-tag.outputs.tag }}
+          files: |
+            ${{ steps.package.outputs.artifact }}
+            ${{ steps.package.outputs.artifact }}.sha256
           fail_on_unmatched_files: true

@@ -30,11 +30,27 @@ echo "Rust:"
 rustc --version
 cargo --version
 
-rustup target add aarch64-apple-ios
-rustup target add aarch64-apple-ios-sim
-
-if rustup target add x86_64-apple-ios; then
-  echo "Installed Intel simulator target x86_64-apple-ios."
+if [[ -n "${IOS_RUST_TARGETS:-}" ]]; then
+  read -r -a requested_targets <<<"$IOS_RUST_TARGETS"
 else
-  echo "warning: x86_64-apple-ios target is unavailable for this Rust toolchain; Apple Silicon simulator builds will still be produced." >&2
+  requested_targets=(aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios)
 fi
+
+for target in "${requested_targets[@]}"; do
+  case "$target" in
+    aarch64-apple-ios|aarch64-apple-ios-sim)
+      rustup target add "$target"
+      ;;
+    x86_64-apple-ios)
+      if rustup target add "$target"; then
+        echo "Installed Intel simulator target x86_64-apple-ios."
+      else
+        echo "warning: x86_64-apple-ios target is unavailable for this Rust toolchain; Apple Silicon simulator builds will still be produced." >&2
+      fi
+      ;;
+    *)
+      echo "error: unsupported iOS Rust target '$target'." >&2
+      exit 1
+      ;;
+  esac
+done
