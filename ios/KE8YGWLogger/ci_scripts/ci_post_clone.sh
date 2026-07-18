@@ -10,8 +10,36 @@ export CARGO_HOME RUSTUP_HOME
 export PATH="$CARGO_HOME/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
 
 if ! command -v rustup >/dev/null 2>&1; then
-  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
-    | sh -s -- -y --profile minimal --default-toolchain stable
+  RUSTUP_VERSION="1.29.0"
+  case "$(uname -m)" in
+    arm64)
+      rustup_arch="aarch64-apple-darwin"
+      rustup_sha256="aeb4105778ca1bd3c6b0e75768f581c656633cd51368fa61289b6a71696ac7e1"
+      ;;
+    x86_64)
+      rustup_arch="x86_64-apple-darwin"
+      rustup_sha256="33cf85df9142bc6d29cbc62fa5ca1d4c29622cddb55213a4c1a43c457fb9b2d7"
+      ;;
+    *)
+      echo "unsupported macOS architecture for rustup-init: $(uname -m)" >&2
+      exit 1
+      ;;
+  esac
+
+  rustup_init="$(mktemp "${TMPDIR:-/tmp}/rustup-init.XXXXXX")"
+  trap 'rm -f "$rustup_init"' EXIT
+  curl --proto '=https' --tlsv1.2 -fL \
+    "https://static.rust-lang.org/rustup/archive/${RUSTUP_VERSION}/${rustup_arch}/rustup-init" \
+    -o "$rustup_init"
+  actual_sha256="$(shasum -a 256 "$rustup_init" | awk '{print $1}')"
+  if [[ "$actual_sha256" != "$rustup_sha256" ]]; then
+    echo "rustup-init checksum mismatch for ${rustup_arch}" >&2
+    exit 1
+  fi
+  chmod +x "$rustup_init"
+  "$rustup_init" -y --profile minimal --default-toolchain 1.96.0
+  rm -f "$rustup_init"
+  trap - EXIT
 fi
 
 # shellcheck source=/dev/null
