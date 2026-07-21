@@ -34,7 +34,7 @@ outside issue #2.
      reports, and durable LAN trust records with single-use tokens, replay nonce
      rejection, and revocation.
    - Remaining: real LAN peer-to-peer HTTP transport, production pairing UX,
-     manual conflict-resolution commands, full cross-client reconciliation UI,
+     corrective-event conflict-resolution UX, full cross-client reconciliation UI,
      release-device iOS background retry qualification, and multi-device
      migration/recovery scenarios.
    - Blockers: local network permission behavior on iOS, trust-pairing UX,
@@ -125,7 +125,7 @@ outside issue #2.
 ## Next Three Goals
 
 1. Finish sync/reconciliation hardening: real LAN peer-to-peer HTTP transport,
-   production pairing UX, manual conflict-resolution commands, and iOS
+   production pairing UX, corrective-event conflict-resolution UX, and iOS
    background retry validation on release devices.
 2. Complete production provider qualification and release-runner live validation
    for the issue #2 provider set.

@@ -780,7 +780,7 @@ This section is a verified snapshot of the repository as inspected on July 21, 2
 - Workspace members: `crates/ham-api-contract`, `crates/ham-core`, `crates/ham-plugin-sdk`, `crates/ham-sync`, `crates/ham-sync-server`, `crates/ham-server`, `crates/ham-cli`, `crates/ham-gui`, `crates/ham-desktop`, `crates/ham-ios-ffi`, and `src-tauri`.
 - Actual desktop state: a real Tauri v2 wrapper exists, bundles `crates/ham-gui/web`, exposes native dialog commands plus a restricted `/api/*` proxy, and packages desktop installers. The local backend is not yet embedded in-process or sidecar-launched automatically.
 - Actual hosted-server state: `ham-server` is the hosted API boundary with durable SurrealDB metadata, route tests, role-scoped logbook access, provider settings, upload execution foundation, backups, divergence review, and sync endpoints. It is still beta, not production-hardened.
-- Actual synchronization state: `ham-sync` implements LAN discovery and verification models, preview/pull/push logic, cloud/self-hosted sync models, durable self-hosted sync/report storage, guarded replay rules, durable offline mutation queue models, desktop/iOS queue hooks, queue-aware cloud push acknowledgment, structured conflict reports, and durable LAN trust records. Real LAN peer-to-peer HTTP transport, production pairing UX, manual conflict-resolution commands, and release-device iOS background retry validation are still missing.
+- Actual synchronization state: `ham-sync` implements LAN discovery and verification models, preview/pull/push logic, cloud/self-hosted sync models, durable self-hosted sync/report storage, guarded replay rules, durable offline mutation queue models, desktop/iOS queue hooks, queue-aware cloud push acknowledgment, structured conflict reports, durable manual conflict-review records, explicit recovery-path decisions, and durable LAN trust records. Real LAN peer-to-peer HTTP transport, production pairing UX, corrective-event conflict-resolution UX, and release-device iOS background retry validation are still missing.
 - Actual iOS state: native SwiftUI, SwiftData cache/projection models, Rust FFI bridge, Xcode project, Apple build/link scripts, shared scheme, unit tests, and iOS CI are present. App Store signing, TestFlight/App Store distribution, full offline/sync reconciliation, and production validation remain incomplete.
 - Real versus mock providers:
   - Real but gated live transports: Club Log upload, QRZ Logbook upload, eQSL upload, QRZ XML lookup, HamQTH lookup, POTA spot fetch, DX Cluster bounded runtime controls.
@@ -788,7 +788,7 @@ This section is a verified snapshot of the repository as inspected on July 21, 2
   - Placeholder or fake-first providers remain for many map, weather, propagation, and other online-service categories.
 - Known critical and high-priority gaps:
   - Consistent permission-scope enforcement across all workflows.
-  - Real peer-to-peer LAN transport, production pairing UX, and manual sync conflict-resolution commands.
+  - Real peer-to-peer LAN transport, production pairing UX, and corrective-event sync conflict-resolution UX.
   - Cross-OS Tauri package validation and release hardening.
   - Clean release-runner validation for OS credential backends.
   - Browser-level GUI tests.

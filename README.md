@@ -895,8 +895,11 @@ rebuilds QSO projections.
 If chains diverge, the MVP does not merge automatically. Divergence is stored in
 sync UI state, shown in the Sync Status panel, and emitted as
 `sync.divergence.detected`. Structured conflict reports are exposed for client
-review, but branch review UI, manual conflict-resolution commands, signed
-events, and real LAN peer-to-peer transport are still deferred.
+review. Desktop can save a durable manual review from the current preview and
+record explicit recovery-path decisions; iOS can create, resolve, and snapshot
+the same Rust-owned review records through the bridge. Corrective-event conflict
+UX, full cross-client branch review, signed events, and real LAN peer-to-peer
+transport are still deferred.
 
 ## Durable Offline Queue And LAN Trust
 
@@ -921,6 +924,10 @@ operator approval, expire quickly, are single use, and are stored only as
 hashes. Trusted devices are scoped to logbooks, replay nonces are rejected, and
 revocation is immediate. Mutating LAN pull rejects untrusted, revoked,
 wrong-logbook, or replayed peers before appending remote official events.
+Manual conflict-review records are also durable support state. They store
+structured conflict reports and the operator-selected recovery path without
+rewriting official history. Unsafe divergent pulls are rejected by the shared
+Rust validator; corrective-event resolutions require event hashes as evidence.
 
 Replication runtime events include:
 
@@ -934,6 +941,8 @@ Replication runtime events include:
 - `sync.pull.completed`
 - `sync.pull.failed`
 - `sync.divergence.detected`
+- `sync.conflict_review.created`
+- `sync.conflict_review.resolved`
 - `projection.qso.rebuilt`
 
 To try the current GUI workflow locally:

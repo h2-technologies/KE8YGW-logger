@@ -132,6 +132,29 @@ are present. Queue entries are marked `sending` before transport and `accepted`
 only after the cloud/self-hosted receiver accepts or ignores the matching event
 hashes. Divergence blocks the queued operations for manual review.
 
+### Manual Conflict Review
+
+`ham-sync::offline` defines durable conflict-review records persisted as
+`conflict-reviews.json` by desktop and exposed through the iOS FFI bridge.
+Review records capture the structured conflict report, a stable fingerprint,
+open/resolved status, timestamps, and the operator-selected recovery path.
+
+Allowed recovery decisions are explicit:
+
+- `keep_local_history`
+- `pull_remote_after_review`
+- `create_corrective_events`
+- `retry_after_dependency_arrives`
+- `mark_user_action_required`
+
+The shared validator rejects `pull_remote_after_review` when a report is
+`diverged` or contains any non-auto-merge-safe conflict. It also requires
+corrective event hashes before a review can be resolved as
+`create_corrective_events`. Desktop endpoints can create a review from the
+latest LAN/cloud preview, resolve it, and mark related queued mutations as
+`user_action_required`; iOS can create, resolve, and snapshot the same records
+through Rust bridge commands.
+
 ## LAN Trust
 
 `ham-sync::offline` includes durable LAN trust records persisted as
@@ -174,5 +197,5 @@ The current self-hosted server uses durable local storage by default: embedded S
 - Signed official events.
 - End-to-end encrypted relay.
 - Real peer-to-peer HTTP transport for LAN replication.
-- Manual divergence branch review and conflict-resolution commands.
+- Corrective-event conflict-resolution UX and full cross-client branch review.
 - Durable cloud server database.

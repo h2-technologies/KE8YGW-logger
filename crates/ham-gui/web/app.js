@@ -33,6 +33,7 @@ const state = {
   importSummary: null,
   backupState: { lastBackup: null, dryRun: null, importResult: null },
   divergenceReview: null,
+  conflictReview: null,
   reportPreview: null,
   lastReport: null,
   syncState: null,
@@ -1079,9 +1080,13 @@ function renderDivergenceReviewScreen() {
   return `<div class="stack">
     <div class="monitor-actions">
       <button id="divergence-refresh" class="toolbar-button" type="button">Refresh Review</button>
+      <button id="divergence-save-review" class="toolbar-button" type="button">Save Manual Review</button>
+      <button id="divergence-mark-action" class="toolbar-button" type="button">Mark User Action</button>
+      <button id="divergence-keep-local" class="toolbar-button" type="button">Keep Local</button>
       <button id="divergence-export" class="toolbar-button" type="button">Export Report</button>
     </div>
     ${state.divergenceReview ? renderDivergenceReview(state.divergenceReview) : `<p class="muted">Refresh to inspect current sync head state.</p>`}
+    ${state.conflictReview ? renderConflictReviewRecord(state.conflictReview) : ""}
   </div>`;
 }
 
@@ -1096,11 +1101,23 @@ function renderDivergenceReview(review) {
     <p>Revoked device state: ${review.revoked_device_state || "unknown"}</p>
     <p><strong>Recommended action:</strong> ${escapeHtml(review.recommended_action || "No action available.")}</p>
     ${review.divergence_detected ? `<p class="event-error">Automatic merge is intentionally unavailable. Export this report for manual review.</p>` : ""}
+    ${review.conflict_report ? `<pre class="path-block">${JSON.stringify(review.conflict_report, null, 2)}</pre>` : ""}
+  </div>`;
+}
+
+function renderConflictReviewRecord(review) {
+  return `<div class="sync-summary">
+    <p><strong>Saved review:</strong> ${review.status} / <small>${review.review_id}</small></p>
+    <p>Resolution: ${review.selected_resolution?.choice || "not selected"}</p>
+    <p>Created: ${review.created_at || "unknown"} / resolved: ${review.resolved_at || "open"}</p>
   </div>`;
 }
 
 function bindDivergenceControls() {
   byId("divergence-refresh")?.addEventListener("click", refreshDivergenceReview);
+  byId("divergence-save-review")?.addEventListener("click", saveConflictReview);
+  byId("divergence-mark-action")?.addEventListener("click", () => resolveConflictReview("mark_user_action_required"));
+  byId("divergence-keep-local")?.addEventListener("click", () => resolveConflictReview("keep_local_history"));
   byId("divergence-export")?.addEventListener("click", exportDivergenceReportFromScreen);
 }
 
@@ -2967,6 +2984,42 @@ async function exportDivergenceReportFromScreen() {
   openScreen("divergence-review");
 }
 
+async function saveConflictReview() {
+  const result = await syncPost("/api/sync/conflict-reviews/create");
+  state.conflictReview = result.conflict_review || state.conflictReview;
+  state.importSummary = state.conflictReview || result;
+  openScreen("divergence-review");
+}
+
+async function resolveConflictReview(choice) {
+  const review = await ensureOpenConflictReview();
+  if (!review) return;
+  const note = window.prompt("Review note", choice === "keep_local_history" ? "Keep local append-only history; do not merge remote branch automatically." : "Queue mutations require operator action before retry.");
+  const result = await syncPost("/api/sync/conflict-reviews/resolve", {
+    review_id: review.review_id,
+    resolution: {
+      choice,
+      operator_note: note || "",
+      corrective_event_hashes: [],
+      resolved_by_device_id: state.syncState?.identity?.device_id || null,
+    },
+  });
+  state.conflictReview = result.conflict_review || state.conflictReview;
+  state.importSummary = state.conflictReview || result;
+  openScreen("divergence-review");
+}
+
+async function ensureOpenConflictReview() {
+  if (state.conflictReview?.status === "open") return state.conflictReview;
+  const openReview = (state.syncState?.conflict_reviews?.reviews || []).find((review) => review.status === "open");
+  if (openReview) {
+    state.conflictReview = openReview;
+    return openReview;
+  }
+  await saveConflictReview();
+  return state.conflictReview?.status === "open" ? state.conflictReview : null;
+}
+
 async function verifyLogChain() {
   state.importSummary = await fetch("/api/log/verify").then((response) => response.json());
   openScreen("import-summary");
@@ -2982,6 +3035,7 @@ function renderSyncStatus() {
   const sync = state.syncState;
   if (!sync) return `<p class="muted">Sync state loading.</p>`;
   const queue = sync.offline_queue?.health || {};
+  const reviews = sync.conflict_reviews?.health || {};
   const trustedDevices = sync.lan_trust?.trusted_devices || [];
   const trustedCount = trustedDevices.filter((device) => !device.revoked_at).length;
   return `<div class="sync-panel">
@@ -3004,6 +3058,13 @@ function renderSyncStatus() {
       ${sync.offline_queue_error ? `<p class="event-error">${sync.offline_queue_error}</p>` : ""}
       <div class="monitor-actions">
         <button id="sync-recover-queue" class="toolbar-button" type="button">Recover Queue</button>
+      </div>
+    </div>
+    <div class="sync-summary">
+      <p><strong>Conflict reviews:</strong> open ${reviews.open || 0} / resolved ${reviews.resolved || 0} / total ${reviews.total || 0}</p>
+      ${sync.conflict_reviews_error ? `<p class="event-error">${sync.conflict_reviews_error}</p>` : ""}
+      <div class="monitor-actions">
+        <button class="toolbar-button" type="button" onclick="openDivergenceReview()">Open Review</button>
       </div>
     </div>
     <div class="sync-summary">

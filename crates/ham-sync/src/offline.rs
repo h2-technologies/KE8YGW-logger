@@ -20,6 +20,8 @@ use crate::{PreviewPullResponse, ReplicationStatus};
 pub const OFFLINE_MUTATION_SCHEMA_VERSION: u32 = 1;
 pub const OFFLINE_QUEUE_FILE_VERSION: u32 = 1;
 pub const LAN_TRUST_FILE_VERSION: u32 = 1;
+pub const CONFLICT_REVIEW_SCHEMA_VERSION: u32 = 1;
+pub const CONFLICT_REVIEW_FILE_VERSION: u32 = 1;
 pub const DEFAULT_PAIRING_TOKEN_TTL_SECONDS: i64 = 10 * 60;
 pub const DEFAULT_REPLAY_NONCE_TTL_SECONDS: i64 = 10 * 60;
 
@@ -41,6 +43,7 @@ pub const OFFLINE_OP_STATION_EQUIPMENT_CREATE: &str = "station.equipment.create"
 const DEFAULT_MAX_ATTEMPTS: u32 = 8;
 const DEFAULT_BACKOFF_SECONDS: u64 = 5;
 const DEFAULT_MAX_BACKOFF_SECONDS: u64 = 15 * 60;
+const MAX_CONFLICT_REVIEW_NOTE_BYTES: usize = 4096;
 
 #[derive(Debug, Error)]
 pub enum OfflineQueueError {
@@ -913,6 +916,323 @@ pub struct SyncConflictReport {
     pub recommended_action: String,
 }
 
+#[derive(Debug, Error)]
+pub enum ConflictReviewError {
+    #[error("conflict review I/O error: {0}")]
+    Io(#[from] io::Error),
+    #[error("conflict review serialization error: {0}")]
+    Serde(#[from] serde_json::Error),
+    #[error("conflict review file version {0} is not supported")]
+    UnsupportedFileVersion(u32),
+    #[error("conflict review {0} was not found")]
+    ReviewNotFound(Uuid),
+    #[error("conflict review note exceeds {MAX_CONFLICT_REVIEW_NOTE_BYTES} bytes")]
+    OperatorNoteTooLarge,
+    #[error("corrective event hashes are required for corrective-event resolution")]
+    MissingCorrectiveEvents,
+    #[error("resolution {resolution:?} is unsafe for report status {status:?}")]
+    UnsafeResolution {
+        resolution: ManualConflictResolutionChoice,
+        status: ReplicationStatus,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConflictReviewStatus {
+    Open,
+    Resolved,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ManualConflictResolutionChoice {
+    KeepLocalHistory,
+    PullRemoteAfterReview,
+    CreateCorrectiveEvents,
+    RetryAfterDependencyArrives,
+    MarkUserActionRequired,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ManualConflictResolution {
+    pub choice: ManualConflictResolutionChoice,
+    pub operator_note: Option<String>,
+    #[serde(default)]
+    pub corrective_event_hashes: Vec<String>,
+    pub resolved_by_device_id: Option<Uuid>,
+}
+
+impl ManualConflictResolution {
+    pub fn new(choice: ManualConflictResolutionChoice) -> Self {
+        Self {
+            choice,
+            operator_note: None,
+            corrective_event_hashes: Vec::new(),
+            resolved_by_device_id: None,
+        }
+    }
+
+    pub fn with_note(mut self, note: impl Into<String>) -> Self {
+        self.operator_note = Some(note.into());
+        self
+    }
+
+    pub fn with_corrective_event_hashes(mut self, hashes: Vec<String>) -> Self {
+        self.corrective_event_hashes = hashes;
+        self
+    }
+
+    pub fn with_resolved_by_device_id(mut self, device_id: Uuid) -> Self {
+        self.resolved_by_device_id = Some(device_id);
+        self
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ManualConflictReview {
+    pub schema_version: u32,
+    pub review_id: Uuid,
+    pub report_fingerprint: String,
+    pub report: SyncConflictReport,
+    pub status: ConflictReviewStatus,
+    pub selected_resolution: Option<ManualConflictResolution>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub resolved_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ConflictReviewFile {
+    version: u32,
+    reviews: Vec<ManualConflictReview>,
+}
+
+impl Default for ConflictReviewFile {
+    fn default() -> Self {
+        Self {
+            version: CONFLICT_REVIEW_FILE_VERSION,
+            reviews: Vec::new(),
+        }
+    }
+}
+
+impl ConflictReviewFile {
+    fn validate(&self) -> Result<(), ConflictReviewError> {
+        if self.version != CONFLICT_REVIEW_FILE_VERSION {
+            return Err(ConflictReviewError::UnsupportedFileVersion(self.version));
+        }
+        Ok(())
+    }
+
+    fn sorted(mut self) -> Self {
+        self.reviews.sort_by_key(|review| {
+            (
+                review.report.logbook_id,
+                review.created_at,
+                review.review_id,
+            )
+        });
+        self
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct JsonConflictReviewStore {
+    path: PathBuf,
+}
+
+impl JsonConflictReviewStore {
+    pub fn new(path: impl Into<PathBuf>) -> Self {
+        Self { path: path.into() }
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub fn load_snapshot(&self) -> Result<ConflictReviewSnapshot, ConflictReviewError> {
+        let file = self.load_file()?;
+        Ok(snapshot_from_reviews(file.reviews))
+    }
+
+    pub fn create_review(
+        &self,
+        report: SyncConflictReport,
+        now: DateTime<Utc>,
+    ) -> Result<ManualConflictReview, ConflictReviewError> {
+        let mut file = self.load_file()?;
+        let fingerprint = conflict_report_fingerprint(&report)?;
+        if let Some(existing) = file.reviews.iter().find(|review| {
+            review.report.logbook_id == report.logbook_id
+                && review.report_fingerprint == fingerprint
+                && review.status == ConflictReviewStatus::Open
+        }) {
+            return Ok(existing.clone());
+        }
+        let review = ManualConflictReview {
+            schema_version: CONFLICT_REVIEW_SCHEMA_VERSION,
+            review_id: Uuid::new_v4(),
+            report_fingerprint: fingerprint,
+            report,
+            status: ConflictReviewStatus::Open,
+            selected_resolution: None,
+            created_at: now,
+            updated_at: now,
+            resolved_at: None,
+        };
+        file.reviews.push(review.clone());
+        self.save_file(&file.sorted())?;
+        Ok(review)
+    }
+
+    pub fn resolve_review(
+        &self,
+        review_id: Uuid,
+        resolution: ManualConflictResolution,
+        now: DateTime<Utc>,
+    ) -> Result<ManualConflictReview, ConflictReviewError> {
+        let mut file = self.load_file()?;
+        let review = file
+            .reviews
+            .iter_mut()
+            .find(|review| review.review_id == review_id)
+            .ok_or(ConflictReviewError::ReviewNotFound(review_id))?;
+        validate_resolution_for_report(&review.report, &resolution)?;
+        review.status = ConflictReviewStatus::Resolved;
+        review.selected_resolution = Some(resolution);
+        review.resolved_at = Some(now);
+        review.updated_at = now;
+        let review = review.clone();
+        self.save_file(&file.sorted())?;
+        Ok(review)
+    }
+
+    fn load_file(&self) -> Result<ConflictReviewFile, ConflictReviewError> {
+        if !self.path.exists() {
+            return Ok(ConflictReviewFile::default());
+        }
+        let bytes = fs::read(&self.path)?;
+        if bytes.iter().all(u8::is_ascii_whitespace) {
+            return Ok(ConflictReviewFile::default());
+        }
+        let file: ConflictReviewFile = serde_json::from_slice(&bytes)?;
+        file.validate()?;
+        Ok(file.sorted())
+    }
+
+    fn save_file(&self, file: &ConflictReviewFile) -> Result<(), ConflictReviewError> {
+        file.validate()?;
+        write_json_atomically(&self.path, file)?;
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct ConflictReviewHealth {
+    pub total: usize,
+    pub open: usize,
+    pub resolved: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ConflictReviewSnapshot {
+    pub file_version: u32,
+    pub review_schema_version: u32,
+    pub health: ConflictReviewHealth,
+    pub reviews: Vec<ManualConflictReview>,
+}
+
+fn snapshot_from_reviews(reviews: Vec<ManualConflictReview>) -> ConflictReviewSnapshot {
+    let mut health = ConflictReviewHealth {
+        total: reviews.len(),
+        ..ConflictReviewHealth::default()
+    };
+    for review in &reviews {
+        match review.status {
+            ConflictReviewStatus::Open => health.open += 1,
+            ConflictReviewStatus::Resolved => health.resolved += 1,
+        }
+    }
+    ConflictReviewSnapshot {
+        file_version: CONFLICT_REVIEW_FILE_VERSION,
+        review_schema_version: CONFLICT_REVIEW_SCHEMA_VERSION,
+        health,
+        reviews,
+    }
+}
+
+fn validate_resolution_for_report(
+    report: &SyncConflictReport,
+    resolution: &ManualConflictResolution,
+) -> Result<(), ConflictReviewError> {
+    if resolution
+        .operator_note
+        .as_ref()
+        .is_some_and(|note| note.len() > MAX_CONFLICT_REVIEW_NOTE_BYTES)
+    {
+        return Err(ConflictReviewError::OperatorNoteTooLarge);
+    }
+    if resolution.choice == ManualConflictResolutionChoice::CreateCorrectiveEvents
+        && resolution
+            .corrective_event_hashes
+            .iter()
+            .all(|hash| hash.trim().is_empty())
+    {
+        return Err(ConflictReviewError::MissingCorrectiveEvents);
+    }
+    if resolution.choice == ManualConflictResolutionChoice::PullRemoteAfterReview
+        && (report.status == ReplicationStatus::Diverged
+            || report
+                .conflicts
+                .iter()
+                .any(|conflict| !conflict.safe_auto_merge))
+    {
+        return Err(ConflictReviewError::UnsafeResolution {
+            resolution: resolution.choice,
+            status: report.status,
+        });
+    }
+    if resolution.choice == ManualConflictResolutionChoice::RetryAfterDependencyArrives
+        && !report
+            .conflicts
+            .iter()
+            .any(|conflict| conflict.kind == SyncConflictKind::MissingDependency)
+    {
+        return Err(ConflictReviewError::UnsafeResolution {
+            resolution: resolution.choice,
+            status: report.status,
+        });
+    }
+    Ok(())
+}
+
+#[derive(Serialize)]
+struct ConflictReportFingerprint<'a> {
+    logbook_id: Uuid,
+    peer_id: &'a str,
+    status: ReplicationStatus,
+    local_head_hash: &'a Option<String>,
+    remote_head_hash: &'a Option<String>,
+    missing_event_count: usize,
+    pending_operation_count: usize,
+    conflicts: &'a [SyncConflict],
+}
+
+fn conflict_report_fingerprint(report: &SyncConflictReport) -> Result<String, serde_json::Error> {
+    let input = ConflictReportFingerprint {
+        logbook_id: report.logbook_id,
+        peer_id: &report.peer_id,
+        status: report.status,
+        local_head_hash: &report.local_head_hash,
+        remote_head_hash: &report.remote_head_hash,
+        missing_event_count: report.missing_event_count,
+        pending_operation_count: report.pending_operation_count,
+        conflicts: &report.conflicts,
+    };
+    serde_json::to_vec(&input).map(|bytes| hex_sha256(&bytes))
+}
+
 pub fn conflict_report_from_preview(
     preview: &PreviewPullResponse,
     local_pending: &[OfflineMutationEnvelope],
@@ -1408,6 +1728,14 @@ mod tests {
         (JsonLanTrustStore::new(dir.join("lan-trust.json")), dir)
     }
 
+    fn review_store() -> (JsonConflictReviewStore, PathBuf) {
+        let dir = std::env::temp_dir().join(format!("ham-sync-review-{}", Uuid::new_v4()));
+        (
+            JsonConflictReviewStore::new(dir.join("conflict-reviews.json")),
+            dir,
+        )
+    }
+
     fn input(logbook_id: Uuid, device_id: Uuid, operation_type: &str) -> OfflineMutationInput {
         OfflineMutationInput::new(
             logbook_id,
@@ -1439,6 +1767,36 @@ mod tests {
         };
         event.event_hash = event.calculate_hash();
         event
+    }
+
+    fn diverged_report(logbook_id: Uuid) -> SyncConflictReport {
+        let preview = PreviewPullResponse {
+            peer_id: "peer".to_owned(),
+            logbook_id,
+            status: ReplicationStatus::Diverged,
+            local_head_hash: Some("local".to_owned()),
+            remote_head_hash: Some("remote".to_owned()),
+            missing_event_count: 0,
+            remote_event_count: 2,
+            events: Vec::new(),
+            message: "Remote chain does not contain the local head".to_owned(),
+        };
+        conflict_report_from_preview(&preview, &[], Utc::now())
+    }
+
+    fn remote_ahead_report(logbook_id: Uuid) -> SyncConflictReport {
+        let preview = PreviewPullResponse {
+            peer_id: "peer".to_owned(),
+            logbook_id,
+            status: ReplicationStatus::RemoteAhead,
+            local_head_hash: Some("local".to_owned()),
+            remote_head_hash: Some("remote".to_owned()),
+            missing_event_count: 1,
+            remote_event_count: 3,
+            events: Vec::new(),
+            message: "1 remote event is available to pull".to_owned(),
+        };
+        conflict_report_from_preview(&preview, &[], Utc::now())
     }
 
     #[test]
@@ -1623,6 +1981,108 @@ mod tests {
         assert_eq!(report.conflicts.len(), 1);
         assert!(!report.conflicts[0].safe_auto_merge);
         assert!(report.conflicts[0].requires_user_action);
+    }
+
+    #[test]
+    fn conflict_review_is_idempotent_and_resolves_with_explicit_path() {
+        let (store, dir) = review_store();
+        let now = Utc::now();
+        let report = diverged_report(Uuid::new_v4());
+        let first = store.create_review(report.clone(), now).unwrap();
+        let duplicate = store.create_review(report, now).unwrap();
+        assert_eq!(first.review_id, duplicate.review_id);
+        assert_eq!(store.load_snapshot().unwrap().health.open, 1);
+
+        let resolved = store
+            .resolve_review(
+                first.review_id,
+                ManualConflictResolution::new(ManualConflictResolutionChoice::KeepLocalHistory)
+                    .with_note("Operator chose to keep local history and create a follow-up later")
+                    .with_resolved_by_device_id(Uuid::new_v4()),
+                now,
+            )
+            .unwrap();
+        assert_eq!(resolved.status, ConflictReviewStatus::Resolved);
+        assert_eq!(store.load_snapshot().unwrap().health.resolved, 1);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn conflict_review_rejects_silent_pull_for_divergent_report() {
+        let (store, dir) = review_store();
+        let now = Utc::now();
+        let review = store
+            .create_review(diverged_report(Uuid::new_v4()), now)
+            .unwrap();
+        assert!(matches!(
+            store.resolve_review(
+                review.review_id,
+                ManualConflictResolution::new(
+                    ManualConflictResolutionChoice::PullRemoteAfterReview
+                ),
+                now,
+            ),
+            Err(ConflictReviewError::UnsafeResolution { .. })
+        ));
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn conflict_review_requires_hashes_for_corrective_events() {
+        let (store, dir) = review_store();
+        let now = Utc::now();
+        let review = store
+            .create_review(diverged_report(Uuid::new_v4()), now)
+            .unwrap();
+        assert!(matches!(
+            store.resolve_review(
+                review.review_id,
+                ManualConflictResolution::new(
+                    ManualConflictResolutionChoice::CreateCorrectiveEvents
+                ),
+                now,
+            ),
+            Err(ConflictReviewError::MissingCorrectiveEvents)
+        ));
+        let resolved = store
+            .resolve_review(
+                review.review_id,
+                ManualConflictResolution::new(
+                    ManualConflictResolutionChoice::CreateCorrectiveEvents,
+                )
+                .with_corrective_event_hashes(vec!["corrective-hash".to_owned()]),
+                now,
+            )
+            .unwrap();
+        assert_eq!(
+            resolved
+                .selected_resolution
+                .as_ref()
+                .unwrap()
+                .corrective_event_hashes,
+            vec!["corrective-hash".to_owned()]
+        );
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn conflict_review_allows_safe_remote_pull_after_clean_preview() {
+        let (store, dir) = review_store();
+        let now = Utc::now();
+        let review = store
+            .create_review(remote_ahead_report(Uuid::new_v4()), now)
+            .unwrap();
+        let resolved = store
+            .resolve_review(
+                review.review_id,
+                ManualConflictResolution::new(
+                    ManualConflictResolutionChoice::PullRemoteAfterReview,
+                ),
+                now,
+            )
+            .unwrap();
+        assert_eq!(resolved.status, ConflictReviewStatus::Resolved);
+        let _ = fs::remove_dir_all(dir);
     }
 
     #[test]

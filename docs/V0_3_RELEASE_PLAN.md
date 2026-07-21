@@ -19,6 +19,9 @@ Last audited: 2026-07-21
 - Queue-aware cloud push acknowledgment for queued official events.
 - Structured conflict reports for divergent previews and dependency-blocked
   queued mutations.
+- Durable manual conflict-review records for desktop and iOS bridge clients,
+  with explicit recovery-path decisions and validation that rejects unsafe
+  divergent pulls.
 - Durable LAN trust store with explicit approval, hashed short-lived single-use
   pairing tokens, logbook-scoped trusted devices, replay nonce rejection, and
   immediate revocation.
@@ -27,8 +30,8 @@ Last audited: 2026-07-21
 
 - Real LAN peer-to-peer HTTP transport.
 - Production pairing UX across desktop and iOS.
-- Manual conflict-resolution commands that create corrective official events or
-  select an explicit recovery path.
+- Corrective-event conflict-resolution UX on top of the durable manual review
+  commands.
 - Release-device iOS background retry and local-network permission validation.
 - Full cross-client recovery/migration scenarios across hosted web, desktop,
   iOS, and self-hosted sync.

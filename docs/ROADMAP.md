@@ -107,7 +107,7 @@ The dependency-ordered v1 critical path is tracked in
 rewrites:
 
 1. Finish the remaining sync/reconciliation hardening: real LAN peer-to-peer
-   HTTP transport, production pairing UX, manual conflict-resolution commands,
+   HTTP transport, production pairing UX, corrective-event conflict-resolution UX,
    and release-device iOS background retry qualification before unattended
    desktop/iOS operation.
 2. Complete provider runtime hardening and production provider qualification

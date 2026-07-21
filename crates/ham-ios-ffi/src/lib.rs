@@ -31,11 +31,12 @@ use ham_plugin_sdk::{
     PROPOSAL_QSO_CREATE, PROPOSAL_QSO_DELETE,
 };
 use ham_sync::{
-    CloudConnectionState, CloudSyncConfig, JsonOfflineMutationQueue, LocalPeerIdentity,
-    OfflineMutationEnvelope, OfflineMutationInput, SyncConfig, OFFLINE_OP_ACTIVATION_END,
-    OFFLINE_OP_ACTIVATION_START, OFFLINE_OP_NET_CHECKIN_CREATE, OFFLINE_OP_NET_SESSION_END,
-    OFFLINE_OP_NET_SESSION_START, OFFLINE_OP_NET_TRAFFIC_CREATE, OFFLINE_OP_QSO_CREATE,
-    OFFLINE_OP_QSO_DELETE, OFFLINE_OP_STATION_EQUIPMENT_CREATE, OFFLINE_OP_STATION_PROFILE_CREATE,
+    CloudConnectionState, CloudSyncConfig, JsonConflictReviewStore, JsonOfflineMutationQueue,
+    LocalPeerIdentity, ManualConflictResolution, OfflineMutationEnvelope, OfflineMutationInput,
+    SyncConfig, SyncConflictReport, OFFLINE_OP_ACTIVATION_END, OFFLINE_OP_ACTIVATION_START,
+    OFFLINE_OP_NET_CHECKIN_CREATE, OFFLINE_OP_NET_SESSION_END, OFFLINE_OP_NET_SESSION_START,
+    OFFLINE_OP_NET_TRAFFIC_CREATE, OFFLINE_OP_QSO_CREATE, OFFLINE_OP_QSO_DELETE,
+    OFFLINE_OP_STATION_EQUIPMENT_CREATE, OFFLINE_OP_STATION_PROFILE_CREATE,
     OFFLINE_OP_STATION_PROFILE_SELECT,
 };
 use serde::{Deserialize, Serialize};
@@ -244,6 +245,19 @@ struct SyncSnapshotRequest {
 }
 
 #[derive(Debug, Deserialize)]
+struct ConflictReviewCreateRequest {
+    app_support_dir: String,
+    report: SyncConflictReport,
+}
+
+#[derive(Debug, Deserialize)]
+struct ConflictReviewResolveRequest {
+    app_support_dir: String,
+    review_id: Uuid,
+    resolution: ManualConflictResolution,
+}
+
+#[derive(Debug, Deserialize)]
 struct ApplicationSettingsUpdateRequest {
     app_support_dir: String,
     settings: ApplicationSettings,
@@ -441,6 +455,9 @@ fn dispatch_call(call: BridgeCall, correlation_id: Uuid) -> Result<Value, Bridge
         "sync.snapshot" => sync_snapshot_command(payload),
         "sync.offline_queue.snapshot" => sync_snapshot_command(payload),
         "sync.offline_queue.recover" => sync_offline_queue_recover_command(payload),
+        "sync.conflict_reviews.snapshot" => sync_snapshot_command(payload),
+        "sync.conflict_reviews.create" => sync_conflict_review_create_command(payload),
+        "sync.conflict_reviews.resolve" => sync_conflict_review_resolve_command(payload),
         "diagnostics.snapshot" => diagnostics_command_payload(payload),
         "settings.get" => settings_get_command(payload),
         "settings.create_default" => settings_create_default_command(payload),
@@ -877,6 +894,44 @@ fn sync_offline_queue_recover_command(payload: Value) -> Result<Value, BridgeFau
     Ok(snapshot)
 }
 
+fn sync_conflict_review_create_command(payload: Value) -> Result<Value, BridgeFault> {
+    let request: ConflictReviewCreateRequest =
+        serde_json::from_value(payload).map_err(|error| {
+            BridgeFault::invalid_json(format!("invalid conflict review create payload: {error}"))
+        })?;
+    let store = conflict_review_store(&request.app_support_dir)?;
+    let review = store
+        .create_review(request.report, Utc::now())
+        .map_err(|error| BridgeFault::storage(error.to_string()))?;
+    let snapshot = store
+        .load_snapshot()
+        .map_err(|error| BridgeFault::storage(error.to_string()))?;
+    Ok(json!({
+        "conflict_review": review,
+        "conflict_reviews": snapshot
+    }))
+}
+
+fn sync_conflict_review_resolve_command(payload: Value) -> Result<Value, BridgeFault> {
+    let request: ConflictReviewResolveRequest =
+        serde_json::from_value(payload).map_err(|error| {
+            BridgeFault::invalid_json(format!(
+                "invalid conflict review resolution payload: {error}"
+            ))
+        })?;
+    let store = conflict_review_store(&request.app_support_dir)?;
+    let review = store
+        .resolve_review(request.review_id, request.resolution, Utc::now())
+        .map_err(|error| BridgeFault::storage(error.to_string()))?;
+    let snapshot = store
+        .load_snapshot()
+        .map_err(|error| BridgeFault::storage(error.to_string()))?;
+    Ok(json!({
+        "conflict_review": review,
+        "conflict_reviews": snapshot
+    }))
+}
+
 fn sync_snapshot_for_support(
     app_support_dir: Option<&str>,
     logbook_id: Uuid,
@@ -887,6 +942,17 @@ fn sync_snapshot_for_support(
             Some(
                 queue
                     .load_snapshot(Utc::now())
+                    .map_err(|error| BridgeFault::storage(error.to_string()))?,
+            )
+        }
+        None => None,
+    };
+    let conflict_reviews = match app_support_dir {
+        Some(dir) => {
+            let store = conflict_review_store(dir)?;
+            Some(
+                store
+                    .load_snapshot()
                     .map_err(|error| BridgeFault::storage(error.to_string()))?,
             )
         }
@@ -924,6 +990,7 @@ fn sync_snapshot_for_support(
         "pending_changes": pending_changes,
         "pending_events": pending_events,
         "offline_queue": queue_snapshot,
+        "conflict_reviews": conflict_reviews,
         "conflicts": Vec::<Value>::new(),
         "history": Vec::<Value>::new(),
         "retry_policy": {
@@ -1703,6 +1770,12 @@ fn offline_queue(app_support_dir: &str) -> Result<JsonOfflineMutationQueue, Brid
     ))
 }
 
+fn conflict_review_store(app_support_dir: &str) -> Result<JsonConflictReviewStore, BridgeFault> {
+    Ok(JsonConflictReviewStore::new(
+        rust_support_dir(app_support_dir)?.join("conflict-reviews.json"),
+    ))
+}
+
 fn enqueue_ios_mutation(
     app_support_dir: &str,
     logbook_id: Uuid,
@@ -2211,6 +2284,79 @@ mod tests {
         }));
         assert_eq!(snapshot["ok"], true);
         assert_eq!(snapshot["data"]["offline_queue"]["health"]["accepted"], 1);
+        let _ = std::fs::remove_dir_all(app_support_dir);
+    }
+
+    #[test]
+    fn conflict_review_create_and_resolve_use_rust_store() {
+        let app_support_dir = std::env::temp_dir().join(format!("ham-ios-{}", Uuid::new_v4()));
+        let logbook_id = Uuid::new_v4();
+        let preview = ham_sync::PreviewPullResponse {
+            peer_id: "ios-peer".to_owned(),
+            logbook_id,
+            status: ham_sync::ReplicationStatus::Diverged,
+            local_head_hash: Some("local".to_owned()),
+            remote_head_hash: Some("remote".to_owned()),
+            missing_event_count: 0,
+            remote_event_count: 2,
+            events: Vec::new(),
+            message: "Remote chain does not contain the local head".to_owned(),
+        };
+        let report = ham_sync::conflict_report_from_preview(&preview, &[], Utc::now());
+        let created = call_json(json!({
+            "command": "sync.conflict_reviews.create",
+            "payload": {
+                "app_support_dir": app_support_dir.to_string_lossy(),
+                "report": report
+            }
+        }));
+        assert_eq!(created["ok"], true);
+        assert_eq!(created["data"]["conflict_reviews"]["health"]["open"], 1);
+        let review_id = created["data"]["conflict_review"]["review_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let unsafe_pull = call_json(json!({
+            "command": "sync.conflict_reviews.resolve",
+            "payload": {
+                "app_support_dir": app_support_dir.to_string_lossy(),
+                "review_id": review_id,
+                "resolution": {
+                    "choice": "pull_remote_after_review",
+                    "operator_note": "unsafe attempt",
+                    "corrective_event_hashes": [],
+                    "resolved_by_device_id": Uuid::new_v4()
+                }
+            }
+        }));
+        assert_eq!(unsafe_pull["ok"], false);
+        assert_eq!(unsafe_pull["error"]["code"], "storage_error");
+
+        let resolved = call_json(json!({
+            "command": "sync.conflict_reviews.resolve",
+            "payload": {
+                "app_support_dir": app_support_dir.to_string_lossy(),
+                "review_id": review_id,
+                "resolution": {
+                    "choice": "keep_local_history",
+                    "operator_note": "Keep local append-only history",
+                    "corrective_event_hashes": [],
+                    "resolved_by_device_id": Uuid::new_v4()
+                }
+            }
+        }));
+        assert_eq!(resolved["ok"], true);
+        assert_eq!(resolved["data"]["conflict_review"]["status"], "resolved");
+        let snapshot = call_json(json!({
+            "command": "sync.snapshot",
+            "payload": {
+                "app_support_dir": app_support_dir.to_string_lossy()
+            }
+        }));
+        assert_eq!(
+            snapshot["data"]["conflict_reviews"]["health"]["resolved"],
+            1
+        );
         let _ = std::fs::remove_dir_all(app_support_dir);
     }
 

@@ -45,18 +45,19 @@ use ham_sync::{
     preview_pull_from_events, pull_missing_events, CloudAuth, CloudConnectionState,
     CloudPreviewPullRequest, CloudPullEventsRequest, CloudPullEventsResponse,
     CloudPushEventsRequest, CloudPushEventsResponse, CloudServerConfig, CloudSyncConfig,
-    CloudSyncStatusResponse, DiagnosticReportUploadRequest, DiagnosticReportUploadResponse,
-    DiagnosticReportUploadType, DiscoveryPacket, GetEventMetadataResponse, GetEventRangeResponse,
-    HandshakeRequest, InMemoryCloudSyncServer, JsonLanTrustStore, JsonOfflineMutationQueue,
-    LanPairingAcceptance, LanTrustSnapshot, ListLogbooksResponse, LocalPeerIdentity,
-    LogbookHeadSummary, OfflineMutationEnvelope, OfflineMutationInput, OfflineQueueSnapshot,
-    PairDeviceRequest, PeerObservation, PeerRecord, PeerRegistry, PreviewPullRequest,
-    PreviewPullResponse, PullEventsRequest, PullEventsResponse, ReplicationStatus, SyncConfig,
-    OFFLINE_OP_ACTIVATION_END, OFFLINE_OP_ACTIVATION_START, OFFLINE_OP_NET_CHECKIN_CREATE,
-    OFFLINE_OP_NET_CHECKIN_DELETE, OFFLINE_OP_NET_SESSION_END, OFFLINE_OP_NET_SESSION_START,
-    OFFLINE_OP_NET_TRAFFIC_CREATE, OFFLINE_OP_QSO_CREATE, OFFLINE_OP_QSO_DELETE,
-    OFFLINE_OP_QSO_NOTE_ADD, OFFLINE_OP_QSO_RESTORE, OFFLINE_OP_STATION_PROFILE_SELECT,
-    PROTOCOL_VERSION,
+    CloudSyncStatusResponse, ConflictReviewSnapshot, DiagnosticReportUploadRequest,
+    DiagnosticReportUploadResponse, DiagnosticReportUploadType, DiscoveryPacket,
+    GetEventMetadataResponse, GetEventRangeResponse, HandshakeRequest, InMemoryCloudSyncServer,
+    JsonConflictReviewStore, JsonLanTrustStore, JsonOfflineMutationQueue, LanPairingAcceptance,
+    LanTrustSnapshot, ListLogbooksResponse, LocalPeerIdentity, LogbookHeadSummary,
+    ManualConflictResolution, ManualConflictResolutionChoice, OfflineMutationEnvelope,
+    OfflineMutationInput, OfflineQueueSnapshot, PairDeviceRequest, PeerObservation, PeerRecord,
+    PeerRegistry, PreviewPullRequest, PreviewPullResponse, PullEventsRequest, PullEventsResponse,
+    ReplicationStatus, SyncConfig, SyncConflictReport, OFFLINE_OP_ACTIVATION_END,
+    OFFLINE_OP_ACTIVATION_START, OFFLINE_OP_NET_CHECKIN_CREATE, OFFLINE_OP_NET_CHECKIN_DELETE,
+    OFFLINE_OP_NET_SESSION_END, OFFLINE_OP_NET_SESSION_START, OFFLINE_OP_NET_TRAFFIC_CREATE,
+    OFFLINE_OP_QSO_CREATE, OFFLINE_OP_QSO_DELETE, OFFLINE_OP_QSO_NOTE_ADD, OFFLINE_OP_QSO_RESTORE,
+    OFFLINE_OP_STATION_PROFILE_SELECT, PROTOCOL_VERSION,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -117,6 +118,8 @@ fn main() {
     let online_support_store =
         JsonSupportStore::<OnlineSupportState>::new(support_dir.join("online-support.json"));
     let offline_queue = JsonOfflineMutationQueue::new(support_dir.join("offline-mutations.json"));
+    let conflict_review_store =
+        JsonConflictReviewStore::new(support_dir.join("conflict-reviews.json"));
     let lan_trust_store = JsonLanTrustStore::new(support_dir.join("lan-trust.json"));
     let mut station_book = station_store.load().unwrap_or_default();
     if station_book.profiles.is_empty() {
@@ -339,6 +342,7 @@ fn main() {
         proposal_runtime,
         sync: Mutex::new(SyncUiState::new(bound_addr.clone())),
         offline_queue,
+        conflict_review_store,
         lan_trust_store,
         cloud_server: InMemoryCloudSyncServer::new(CloudServerConfig::default()),
         lookup_cache: LookupCache::new(),
@@ -381,6 +385,7 @@ struct AppState {
     proposal_runtime: tokio::runtime::Runtime,
     sync: Mutex<SyncUiState>,
     offline_queue: JsonOfflineMutationQueue,
+    conflict_review_store: JsonConflictReviewStore,
     lan_trust_store: JsonLanTrustStore,
     cloud_server: InMemoryCloudSyncServer,
     lookup_cache: LookupCache,
@@ -696,6 +701,11 @@ fn handle_client(state: Arc<AppState>, mut stream: TcpStream) {
         ("POST", "/api/sync/pull-events") => handle_sync_pull_events(&state, &request.body),
         ("GET", "/api/sync/offline-queue") => handle_offline_queue_state(&state),
         ("POST", "/api/sync/offline-queue/recover") => handle_offline_queue_recover(&state),
+        ("GET", "/api/sync/conflict-reviews") => handle_conflict_reviews_state(&state),
+        ("POST", "/api/sync/conflict-reviews/create") => handle_conflict_review_create(&state),
+        ("POST", "/api/sync/conflict-reviews/resolve") => {
+            handle_conflict_review_resolve(&state, &request.body)
+        }
         ("GET", "/api/sync/lan/trust") => handle_lan_trust_state(&state),
         ("POST", "/api/sync/lan/pairing-token") => handle_lan_pairing_token(&state, &request.body),
         ("POST", "/api/sync/lan/pairing-accept") => {
@@ -1075,6 +1085,12 @@ struct LanTrustRevokeRequest {
 }
 
 #[derive(Debug, Deserialize)]
+struct ConflictReviewResolveRequest {
+    review_id: uuid::Uuid,
+    resolution: ManualConflictResolution,
+}
+
+#[derive(Debug, Deserialize)]
 struct CloudConnectRequest {
     server_url: Option<String>,
     device_name: Option<String>,
@@ -1103,6 +1119,8 @@ struct SyncStatePayload {
     divergence: Option<String>,
     offline_queue: Option<OfflineQueueSnapshot>,
     offline_queue_error: Option<String>,
+    conflict_reviews: Option<ConflictReviewSnapshot>,
+    conflict_reviews_error: Option<String>,
     lan_trust: Option<LanTrustSnapshot>,
     lan_trust_error: Option<String>,
     cloud_config: CloudSyncConfig,
@@ -4424,7 +4442,26 @@ fn handle_local_divergence_export(state: &AppState, body: &[u8]) -> Vec<u8> {
     json_response(&json!({"ok": true, "path": request.path, "report": report}))
 }
 
+fn current_conflict_report(state: &AppState) -> Option<SyncConflictReport> {
+    let offline_mutations = state
+        .offline_queue
+        .load_snapshot(chrono::Utc::now())
+        .map(|snapshot| snapshot.mutations)
+        .unwrap_or_default();
+    let sync = state
+        .sync
+        .lock()
+        .expect("sync mutex should not be poisoned");
+    sync.latest_preview
+        .as_ref()
+        .or(sync.latest_cloud_preview.as_ref())
+        .map(|preview| {
+            conflict_report_from_preview(preview, &offline_mutations, chrono::Utc::now())
+        })
+}
+
 fn local_divergence_review_payload(state: &AppState) -> Value {
+    let conflict_report = current_conflict_report(state);
     let local_head = state
         .proposal_runtime
         .block_on(state.store.get_head(state.logbook_id))
@@ -4443,18 +4480,6 @@ fn local_divergence_review_payload(state: &AppState) -> Value {
         .divergence
         .clone()
         .or_else(|| sync.cloud_divergence.clone());
-    let offline_mutations = state
-        .offline_queue
-        .load_snapshot(chrono::Utc::now())
-        .map(|snapshot| snapshot.mutations)
-        .unwrap_or_default();
-    let conflict_report = sync
-        .latest_preview
-        .as_ref()
-        .or(sync.latest_cloud_preview.as_ref())
-        .map(|preview| {
-            conflict_report_from_preview(preview, &offline_mutations, chrono::Utc::now())
-        });
     json!({
         "created_at": chrono::Utc::now(),
         "logbook_id": state.logbook_id,
@@ -4642,6 +4667,11 @@ fn sync_state_payload(state: &AppState) -> SyncStatePayload {
         Ok(snapshot) => (Some(snapshot), None),
         Err(error) => (None, Some(error.to_string())),
     };
+    let (conflict_reviews, conflict_reviews_error) =
+        match state.conflict_review_store.load_snapshot() {
+            Ok(snapshot) => (Some(snapshot), None),
+            Err(error) => (None, Some(error.to_string())),
+        };
     let (lan_trust, lan_trust_error) = match state.lan_trust_store.snapshot() {
         Ok(snapshot) => (Some(snapshot), None),
         Err(error) => (None, Some(error.to_string())),
@@ -4669,6 +4699,8 @@ fn sync_state_payload(state: &AppState) -> SyncStatePayload {
         divergence: sync.divergence.clone(),
         offline_queue,
         offline_queue_error,
+        conflict_reviews,
+        conflict_reviews_error,
         lan_trust,
         lan_trust_error,
         cloud_config: sync.cloud_config.clone(),
@@ -4719,6 +4751,129 @@ fn handle_offline_queue_recover(state: &AppState) -> Vec<u8> {
             json_response_with_status(400, &json!({"ok": false, "error": error.to_string()}))
         }
     }
+}
+
+fn handle_conflict_reviews_state(state: &AppState) -> Vec<u8> {
+    match state.conflict_review_store.load_snapshot() {
+        Ok(snapshot) => json_response(&json!({"ok": true, "conflict_reviews": snapshot})),
+        Err(error) => {
+            json_response_with_status(400, &json!({"ok": false, "error": error.to_string()}))
+        }
+    }
+}
+
+fn handle_conflict_review_create(state: &AppState) -> Vec<u8> {
+    let Some(report) = current_conflict_report(state) else {
+        return json_response_with_status(
+            409,
+            &json!({"ok": false, "error": "no sync conflict report is available; run preview first"}),
+        );
+    };
+    let now = chrono::Utc::now();
+    match state.conflict_review_store.create_review(report, now) {
+        Ok(review) => {
+            let snapshot = state.conflict_review_store.load_snapshot().ok();
+            let _ = publish_gui_runtime(
+                state,
+                "sync.conflict_review.created",
+                RuntimeEventSeverity::Warn,
+                "Manual sync conflict review recorded",
+                Some(json!({
+                    "review_id": review.review_id,
+                    "logbook_id": review.report.logbook_id,
+                    "status": review.report.status,
+                    "conflict_count": review.report.conflicts.len()
+                })),
+                None,
+            );
+            json_response(&json!({
+                "ok": true,
+                "conflict_review": review,
+                "conflict_reviews": snapshot
+            }))
+        }
+        Err(error) => {
+            json_response_with_status(400, &json!({"ok": false, "error": error.to_string()}))
+        }
+    }
+}
+
+fn handle_conflict_review_resolve(state: &AppState, body: &[u8]) -> Vec<u8> {
+    let Ok(request) = serde_json::from_slice::<ConflictReviewResolveRequest>(body) else {
+        return json_error(400, "invalid conflict review resolution JSON");
+    };
+    let now = chrono::Utc::now();
+    match state
+        .conflict_review_store
+        .resolve_review(request.review_id, request.resolution, now)
+    {
+        Ok(review) => {
+            let marked_user_action = mark_conflict_review_user_action(state, &review, now);
+            let snapshot = state.conflict_review_store.load_snapshot().ok();
+            let choice = review
+                .selected_resolution
+                .as_ref()
+                .map(|resolution| resolution.choice);
+            let _ = publish_gui_runtime(
+                state,
+                "sync.conflict_review.resolved",
+                RuntimeEventSeverity::Info,
+                "Manual sync conflict review resolved",
+                Some(json!({
+                    "review_id": review.review_id,
+                    "choice": choice,
+                    "marked_user_action_count": marked_user_action
+                })),
+                None,
+            );
+            json_response(&json!({
+                "ok": true,
+                "conflict_review": review,
+                "marked_user_action_count": marked_user_action,
+                "conflict_reviews": snapshot
+            }))
+        }
+        Err(error) => {
+            json_response_with_status(400, &json!({"ok": false, "error": error.to_string()}))
+        }
+    }
+}
+
+fn mark_conflict_review_user_action(
+    state: &AppState,
+    review: &ham_sync::ManualConflictReview,
+    now: chrono::DateTime<chrono::Utc>,
+) -> usize {
+    if !review
+        .selected_resolution
+        .as_ref()
+        .is_some_and(|resolution| {
+            resolution.choice == ManualConflictResolutionChoice::MarkUserActionRequired
+        })
+    {
+        return 0;
+    }
+    let mut marked = 0;
+    for operation_id in review
+        .report
+        .conflicts
+        .iter()
+        .flat_map(|conflict| conflict.related_operation_ids.iter().copied())
+    {
+        if state
+            .offline_queue
+            .mark_user_action_required(
+                operation_id,
+                format!("manual conflict review {}", review.review_id),
+                Some("manual_conflict_review".to_owned()),
+                now,
+            )
+            .is_ok()
+        {
+            marked += 1;
+        }
+    }
+    marked
 }
 
 fn handle_lan_trust_state(state: &AppState) -> Vec<u8> {

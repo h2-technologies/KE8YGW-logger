@@ -444,6 +444,9 @@ The hosted `/api/v1` surface uses bearer sessions and currently implements:
 - Sync divergence review routes. Reviews report local/client head,
   remote/server head, missing local/remote events, safe pull/push booleans, and
   recommended action. The server does not auto-merge divergent histories.
+  Desktop and native clients persist manual conflict-review records as support
+  state and must use explicit recovery-path decisions rather than hidden merge
+  behavior.
 
 ### Diagnostic Reports
 
@@ -505,7 +508,8 @@ must define and test endpoints or equivalent proposal APIs for:
   session rotation, device revocation, and account deletion routes.
 - Provider-specific credential setup flows and server-side secret-vault design
   if hosted deployments need to resolve provider credentials directly.
-- Native-client divergence report presentation.
+- Native-client divergence report presentation, durable conflict-review
+  snapshots, and explicit recovery-path decisions.
 
 Those endpoints must use the same semantics as the Rust proposal pipeline and
 official event model. They must not bypass append-only official history.
