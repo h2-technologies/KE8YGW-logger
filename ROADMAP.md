@@ -24,10 +24,12 @@ This root roadmap summarizes the current implementation plan. Detailed architect
 - Native iOS functional parity pass: repository gap analysis, Rust `ham-ios-ffi` bridge crate, Swift bridge client, iPhone/iPad split-view shell, Dashboard, expanded QSO logging, station/equipment management, provider/callsign/credential screens, MapKit screen, POTA/SOTA workspaces, Net Control, Emergency, Sync, Backup/Restore, Diagnostics, Keychain plumbing, local notification plumbing, and bridge fallback tests.
 - Native iOS Rust-authority bridge pass: hardened byte-buffer FFI command ABI, public header/module map, Apple target build scripts, deterministic XCFramework packaging path, Xcode framework reference/build phase, typed Swift bridge wrappers, QSO/station/activation/Net Control Rust mutation routes, SwiftData projection metadata, Diagnostics self-test, and macOS CI workflow scaffolding.
 - Offline Sync v0.3 foundation: durable versioned mutation envelopes, JSON queue
-  store, desktop and iOS queue hooks for implemented mutations, queue-aware
-  cloud push acknowledgments, structured conflict reports, and durable LAN trust
-  records with single-use pairing tokens, HMAC-SHA256 signed LAN read endpoint
-  authorization, replay nonce rejection, and revocation.
+  store, desktop and iOS queue hooks for implemented mutations, optional target
+  entity metadata, queue-aware cloud push acknowledgments, structured conflict
+  reports for unsupported schemas/concurrent QSO corrections/tombstone-restore
+  overlaps, and durable LAN trust records with single-use pairing tokens,
+  HMAC-SHA256 signed LAN read endpoint authorization, replay nonce rejection,
+  and revocation.
 
 ## Current Milestone
 

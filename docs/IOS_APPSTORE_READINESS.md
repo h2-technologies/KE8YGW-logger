@@ -58,6 +58,9 @@ Prepare and maintain the app privacy manifest before TestFlight:
 - Store auth tokens and provider secrets in Keychain.
 - Do not store raw secrets in UserDefaults, logs, crash reports, diagnostics, or
   offline queue records.
+- Offline queue records may include operation IDs, logbook IDs, and target
+  entity IDs for recovery/conflict diagnostics; they must still exclude
+  credential values, pairing codes, and provider secrets.
 - Encrypt or otherwise protect local app data where appropriate.
 - Redact callsign/provider/account tokens from diagnostic exports.
 - Explain cloud/self-hosted sync behavior in privacy text.

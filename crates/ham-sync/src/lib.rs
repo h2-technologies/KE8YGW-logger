@@ -391,6 +391,7 @@ pub struct GetEventRangeRequest {
 pub struct EventMetadata {
     pub event_id: Uuid,
     pub logbook_id: Uuid,
+    pub entity_id: Option<Uuid>,
     pub previous_hash: Option<String>,
     pub event_hash: String,
     pub timestamp: DateTime<Utc>,
@@ -492,6 +493,7 @@ pub fn metadata_for_event(event: &CoreEventEnvelope) -> EventMetadata {
     EventMetadata {
         event_id: event.event_id,
         logbook_id: event.logbook_id,
+        entity_id: event.entity_id,
         previous_hash: event.previous_hash.clone(),
         event_hash: event.event_hash.clone(),
         timestamp: event.timestamp,

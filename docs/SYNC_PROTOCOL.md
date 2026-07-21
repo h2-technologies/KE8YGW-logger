@@ -80,7 +80,8 @@ clients.
 Each mutation envelope records:
 
 - queue schema version
-- operation, correlation, client, device, and logbook IDs
+- operation, correlation, client, device, logbook, and optional target entity
+  IDs
 - deterministic per-logbook sequence number
 - operation type and idempotency key
 - dependencies on accepted operation IDs, event hashes, or minimum schema
@@ -115,7 +116,10 @@ are not official logbook history.
 
 ### Preview Pull
 
-Preview pull compares local and remote chain metadata and reports how many events would be fetched. It writes nothing.
+Preview pull compares local and remote chain metadata and reports how many
+events would be fetched. Event metadata includes the official event ID, logbook
+ID, optional entity ID, previous/event hashes, timestamp, event type, and schema
+version. It writes nothing.
 
 ### Pull Missing Events
 
@@ -152,6 +156,11 @@ manual review.
 `conflict-reviews.json` by desktop and exposed through the iOS FFI bridge.
 Review records capture the structured conflict report, a stable fingerprint,
 open/resolved status, timestamps, and the operator-selected recovery path.
+Conflict reports now classify divergent heads, missing queue dependencies,
+unsupported remote event schema versions, concurrent QSO corrections, and remote
+QSO tombstone/restore events that affect QSOs with local pending mutations.
+Those report classes are advisory client diagnostics; pull/push still rely on
+the shared event-chain verifier before any append.
 
 Allowed recovery decisions are explicit:
 

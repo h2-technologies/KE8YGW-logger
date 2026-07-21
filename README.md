@@ -899,20 +899,24 @@ rebuilds QSO projections.
 If chains diverge, the MVP does not merge automatically. Divergence is stored in
 sync UI state, shown in the Sync Status panel, and emitted as
 `sync.divergence.detected`. Structured conflict reports are exposed for client
-review. Desktop can save a durable manual review from the current preview and
-record explicit recovery-path decisions; iOS can create, resolve, and snapshot
-the same Rust-owned review records through the bridge. Corrective-event conflict
-UX, full cross-client branch review, signed events, production reciprocal LAN
-pairing UX, LAN auth credential rotation/recovery, and physical-device LAN/iOS
-local-network validation are still deferred.
+review and classify divergent heads, missing queue dependencies, unsupported
+remote schemas, concurrent QSO corrections, and remote QSO tombstone/restore
+events that overlap local pending mutations. Desktop can save a durable manual
+review from the current preview and record explicit recovery-path decisions;
+iOS can create, resolve, and snapshot the same Rust-owned review records through
+the bridge. Corrective-event conflict UX, full cross-client branch review,
+signed events, production reciprocal LAN pairing UX, LAN auth credential
+rotation/recovery, and physical-device LAN/iOS local-network validation are
+still deferred.
 
 ## Durable Offline Queue And LAN Trust
 
 `ham-sync` now defines the v0.3 offline mutation queue used by desktop and iOS
 mutation paths. Queue entries are persisted before local acknowledgment and
-record operation/device/client/logbook IDs, deterministic per-logbook order,
-idempotency keys, dependencies, retry/backoff state, queue health, and the local
-official event hash when a mutation creates official history.
+record operation/device/client/logbook IDs, optional target entity IDs,
+deterministic per-logbook order, idempotency keys, dependencies, retry/backoff
+state, queue health, and the local official event hash when a mutation creates
+official history.
 
 Desktop queues QSO, activation, Net Control, and station-profile support-state
 mutations. iOS queues QSO, activation, Net Control, station-profile, and

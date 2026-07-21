@@ -17,7 +17,7 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 use uuid::Uuid;
 
-use crate::{PreviewPullResponse, ReplicationStatus};
+use crate::{EventMetadata, PreviewPullResponse, ReplicationStatus};
 
 pub const OFFLINE_MUTATION_SCHEMA_VERSION: u32 = 1;
 pub const OFFLINE_QUEUE_FILE_VERSION: u32 = 1;
@@ -30,6 +30,7 @@ pub const DEFAULT_PAIRING_TOKEN_TTL_SECONDS: i64 = 10 * 60;
 pub const DEFAULT_REPLAY_NONCE_TTL_SECONDS: i64 = 10 * 60;
 
 pub const OFFLINE_OP_QSO_CREATE: &str = "qso.create";
+pub const OFFLINE_OP_QSO_CORRECT: &str = "qso.correct";
 pub const OFFLINE_OP_QSO_DELETE: &str = "qso.delete";
 pub const OFFLINE_OP_QSO_RESTORE: &str = "qso.restore";
 pub const OFFLINE_OP_QSO_NOTE_ADD: &str = "qso.note.add";
@@ -48,6 +49,14 @@ const DEFAULT_MAX_ATTEMPTS: u32 = 8;
 const DEFAULT_BACKOFF_SECONDS: u64 = 5;
 const DEFAULT_MAX_BACKOFF_SECONDS: u64 = 15 * 60;
 const MAX_CONFLICT_REVIEW_NOTE_BYTES: usize = 4096;
+const SUPPORTED_OFFICIAL_EVENT_SCHEMA_VERSION: u32 = 1;
+const OFFICIAL_LOG_QSO_CORRECTED: &str = "official.log.qso.corrected";
+const OFFICIAL_LOG_QSO_DELETED: &str = "official.log.qso.deleted";
+const OFFICIAL_LOG_QSO_RESTORED: &str = "official.log.qso.restored";
+const PROPOSAL_QSO_CORRECT: &str = "proposal.qso.correct";
+const PROPOSAL_QSO_DELETE: &str = "proposal.qso.delete";
+const PROPOSAL_QSO_RESTORE: &str = "proposal.qso.restore";
+const PROPOSAL_QSO_NOTE_ADD: &str = "proposal.qso.note.add";
 
 #[derive(Debug, Error)]
 pub enum OfflineQueueError {
@@ -149,6 +158,8 @@ pub struct OfflineMutationEnvelope {
     pub client_id: Uuid,
     pub device_id: Uuid,
     pub logbook_id: Uuid,
+    #[serde(default)]
+    pub entity_id: Option<Uuid>,
     pub sequence: u64,
     pub operation_type: String,
     pub idempotency_key: String,
@@ -186,6 +197,7 @@ impl OfflineMutationEnvelope {
             client_id: input.client_id,
             device_id: input.device_id,
             logbook_id: input.logbook_id,
+            entity_id: input.entity_id,
             sequence,
             operation_type: input.operation_type,
             idempotency_key,
@@ -255,6 +267,9 @@ impl OfflineMutationEnvelope {
     pub fn attach_local_event(&mut self, event: &CoreEventEnvelope, now: DateTime<Utc>) {
         self.official_event_id = Some(event.event_id);
         self.local_event_hash = Some(event.event_hash.clone());
+        if self.entity_id.is_none() {
+            self.entity_id = event.entity_id;
+        }
         self.updated_at = now;
         self.failure_reason = None;
         self.last_error_code = None;
@@ -276,6 +291,7 @@ pub struct OfflineMutationInput {
     pub client_id: Uuid,
     pub operation_type: String,
     pub payload: JsonValue,
+    pub entity_id: Option<Uuid>,
     pub idempotency_key: Option<String>,
     pub operation_id: Option<Uuid>,
     pub correlation_id: Option<Uuid>,
@@ -296,6 +312,7 @@ impl OfflineMutationInput {
             client_id,
             operation_type: operation_type.into(),
             payload,
+            entity_id: None,
             idempotency_key: None,
             operation_id: None,
             correlation_id: None,
@@ -315,6 +332,11 @@ impl OfflineMutationInput {
 
     pub fn with_idempotency_key(mut self, idempotency_key: impl Into<String>) -> Self {
         self.idempotency_key = Some(idempotency_key.into());
+        self
+    }
+
+    pub fn with_entity_id(mut self, entity_id: Option<Uuid>) -> Self {
+        self.entity_id = entity_id;
         self
     }
 
@@ -418,6 +440,8 @@ struct LegacyOfflineMutationV0 {
     client_id: Option<Uuid>,
     device_id: Uuid,
     logbook_id: Uuid,
+    #[serde(default)]
+    entity_id: Option<Uuid>,
     #[serde(default)]
     sequence: Option<u64>,
     operation_type: String,
@@ -1021,6 +1045,48 @@ fn recover_interrupted_writes_in_file(file: &mut OfflineQueueFile, now: DateTime
     recovered
 }
 
+fn entity_id_from_payload_for_operation(operation_type: &str, payload: &JsonValue) -> Option<Uuid> {
+    let fields: &[&str] = match operation_type {
+        OFFLINE_OP_QSO_CREATE
+        | OFFLINE_OP_QSO_CORRECT
+        | OFFLINE_OP_QSO_DELETE
+        | OFFLINE_OP_QSO_RESTORE
+        | OFFLINE_OP_QSO_NOTE_ADD
+        | PROPOSAL_QSO_CORRECT
+        | PROPOSAL_QSO_DELETE
+        | PROPOSAL_QSO_RESTORE
+        | PROPOSAL_QSO_NOTE_ADD
+        | OFFICIAL_LOG_QSO_CORRECTED
+        | OFFICIAL_LOG_QSO_DELETED
+        | OFFICIAL_LOG_QSO_RESTORED => &["entity_id", "qso_id"],
+        OFFLINE_OP_ACTIVATION_START | OFFLINE_OP_ACTIVATION_END => &["entity_id", "activation_id"],
+        OFFLINE_OP_NET_SESSION_START | OFFLINE_OP_NET_SESSION_END => {
+            &["entity_id", "net_session_id"]
+        }
+        OFFLINE_OP_NET_CHECKIN_CREATE | OFFLINE_OP_NET_CHECKIN_DELETE => {
+            &["entity_id", "checkin_id"]
+        }
+        OFFLINE_OP_NET_TRAFFIC_CREATE => &["entity_id", "traffic_id"],
+        OFFLINE_OP_STATION_PROFILE_CREATE | OFFLINE_OP_STATION_PROFILE_SELECT => {
+            &["entity_id", "station_profile_id"]
+        }
+        OFFLINE_OP_STATION_EQUIPMENT_CREATE => &["entity_id", "equipment_id"],
+        value if value.starts_with("proposal.activation.") => &["entity_id", "activation_id"],
+        value if value.starts_with("proposal.net.session.") => &["entity_id", "net_session_id"],
+        value if value.starts_with("proposal.net.checkin.") => &["entity_id", "checkin_id"],
+        value if value.starts_with("proposal.net.traffic.") => &["entity_id", "traffic_id"],
+        value if value.starts_with("station.profile.") => &["entity_id", "station_profile_id"],
+        value if value.starts_with("station.equipment.") => &["entity_id", "equipment_id"],
+        _ => &["entity_id"],
+    };
+    fields.iter().find_map(|field| {
+        payload
+            .get(*field)
+            .and_then(JsonValue::as_str)
+            .and_then(|value| Uuid::parse_str(value).ok())
+    })
+}
+
 fn migrate_legacy_v0_2_queue(
     bytes: &[u8],
     now: DateTime<Utc>,
@@ -1065,6 +1131,9 @@ fn migrate_legacy_v0_2_queue(
             .entry(record.logbook_id)
             .and_modify(|next| *next = (*next).max(sequence.saturating_add(1)))
             .or_insert(sequence.saturating_add(1));
+        let entity_id = record.entity_id.or_else(|| {
+            entity_id_from_payload_for_operation(&record.operation_type, &record.payload)
+        });
         let mut envelope = OfflineMutationEnvelope {
             schema_version: OFFLINE_MUTATION_SCHEMA_VERSION,
             operation_id: record.operation_id,
@@ -1072,6 +1141,7 @@ fn migrate_legacy_v0_2_queue(
             client_id: record.client_id.unwrap_or(record.device_id),
             device_id: record.device_id,
             logbook_id: record.logbook_id,
+            entity_id,
             sequence,
             operation_type: record.operation_type,
             idempotency_key: record.idempotency_key.unwrap_or_else(|| {
@@ -1482,6 +1552,86 @@ fn conflict_report_fingerprint(report: &SyncConflictReport) -> Result<String, se
     serde_json::to_vec(&input).map(|bytes| hex_sha256(&bytes))
 }
 
+fn mutation_entity_id(mutation: &OfflineMutationEnvelope) -> Option<Uuid> {
+    mutation.entity_id.or_else(|| {
+        entity_id_from_payload_for_operation(&mutation.operation_type, &mutation.payload)
+    })
+}
+
+fn is_qso_correction_operation(operation_type: &str) -> bool {
+    matches!(
+        operation_type,
+        OFFLINE_OP_QSO_CORRECT | PROPOSAL_QSO_CORRECT | OFFICIAL_LOG_QSO_CORRECTED
+    )
+}
+
+fn is_qso_entity_operation(operation_type: &str) -> bool {
+    matches!(
+        operation_type,
+        OFFLINE_OP_QSO_CORRECT
+            | OFFLINE_OP_QSO_DELETE
+            | OFFLINE_OP_QSO_RESTORE
+            | OFFLINE_OP_QSO_NOTE_ADD
+            | PROPOSAL_QSO_CORRECT
+            | PROPOSAL_QSO_DELETE
+            | PROPOSAL_QSO_RESTORE
+            | PROPOSAL_QSO_NOTE_ADD
+            | OFFICIAL_LOG_QSO_CORRECTED
+            | OFFICIAL_LOG_QSO_DELETED
+            | OFFICIAL_LOG_QSO_RESTORED
+    )
+}
+
+fn push_schema_conflict(conflicts: &mut Vec<SyncConflict>, events: &[&EventMetadata]) {
+    if events.is_empty() {
+        return;
+    }
+    conflicts.push(SyncConflict {
+        kind: SyncConflictKind::UnsupportedSchema,
+        message: format!(
+            "{} remote events use unsupported schema versions; upgrade or inspect before pulling",
+            events.len()
+        ),
+        related_operation_ids: Vec::new(),
+        related_event_hashes: events
+            .iter()
+            .map(|event| event.event_hash.clone())
+            .collect(),
+        safe_auto_merge: false,
+        requires_user_action: true,
+        resolution_options: vec![
+            "upgrade_client".to_owned(),
+            "export_divergence_report".to_owned(),
+            "mark_user_action_required".to_owned(),
+        ],
+    });
+}
+
+fn push_entity_conflict(
+    conflicts: &mut Vec<SyncConflict>,
+    kind: SyncConflictKind,
+    message: impl Into<String>,
+    events: &[&EventMetadata],
+    operations: &[Uuid],
+    resolution_options: Vec<String>,
+) {
+    if events.is_empty() || operations.is_empty() {
+        return;
+    }
+    conflicts.push(SyncConflict {
+        kind,
+        message: message.into(),
+        related_operation_ids: operations.to_vec(),
+        related_event_hashes: events
+            .iter()
+            .map(|event| event.event_hash.clone())
+            .collect(),
+        safe_auto_merge: false,
+        requires_user_action: true,
+        resolution_options,
+    });
+}
+
 pub fn conflict_report_from_preview(
     preview: &PreviewPullResponse,
     local_pending: &[OfflineMutationEnvelope],
@@ -1519,6 +1669,94 @@ pub fn conflict_report_from_preview(
             ],
         });
     }
+
+    let unsupported_schema_events = preview
+        .events
+        .iter()
+        .filter(|event| event.schema_version != SUPPORTED_OFFICIAL_EVENT_SCHEMA_VERSION)
+        .collect::<Vec<_>>();
+    push_schema_conflict(&mut conflicts, &unsupported_schema_events);
+
+    let mut concurrent_correction_events = Vec::new();
+    let mut concurrent_correction_operations = Vec::new();
+    for event in preview
+        .events
+        .iter()
+        .filter(|event| event.event_type == OFFICIAL_LOG_QSO_CORRECTED)
+    {
+        let Some(entity_id) = event.entity_id else {
+            continue;
+        };
+        let related_operations = pending
+            .iter()
+            .filter(|mutation| {
+                mutation_entity_id(mutation) == Some(entity_id)
+                    && is_qso_correction_operation(&mutation.operation_type)
+            })
+            .map(|mutation| mutation.operation_id)
+            .collect::<Vec<_>>();
+        if !related_operations.is_empty() {
+            concurrent_correction_events.push(event);
+            for operation_id in related_operations {
+                if !concurrent_correction_operations.contains(&operation_id) {
+                    concurrent_correction_operations.push(operation_id);
+                }
+            }
+        }
+    }
+    push_entity_conflict(
+        &mut conflicts,
+        SyncConflictKind::ConcurrentCorrection,
+        "Remote and local queues both contain corrections for the same QSO; manual review is required before replay",
+        &concurrent_correction_events,
+        &concurrent_correction_operations,
+        vec![
+            "review_remote_events".to_owned(),
+            "create_new_corrective_events".to_owned(),
+            "mark_user_action_required".to_owned(),
+        ],
+    );
+
+    let mut tombstone_restore_events = Vec::new();
+    let mut tombstone_restore_operations = Vec::new();
+    for event in preview.events.iter().filter(|event| {
+        matches!(
+            event.event_type.as_str(),
+            OFFICIAL_LOG_QSO_DELETED | OFFICIAL_LOG_QSO_RESTORED
+        )
+    }) {
+        let Some(entity_id) = event.entity_id else {
+            continue;
+        };
+        let related_operations = pending
+            .iter()
+            .filter(|mutation| {
+                mutation_entity_id(mutation) == Some(entity_id)
+                    && is_qso_entity_operation(&mutation.operation_type)
+            })
+            .map(|mutation| mutation.operation_id)
+            .collect::<Vec<_>>();
+        if !related_operations.is_empty() {
+            tombstone_restore_events.push(event);
+            for operation_id in related_operations {
+                if !tombstone_restore_operations.contains(&operation_id) {
+                    tombstone_restore_operations.push(operation_id);
+                }
+            }
+        }
+    }
+    push_entity_conflict(
+        &mut conflicts,
+        SyncConflictKind::TombstoneRestore,
+        "Remote tombstone or restore events affect QSOs with local pending mutations; manual review is required before replay",
+        &tombstone_restore_events,
+        &tombstone_restore_operations,
+        vec![
+            "review_remote_events".to_owned(),
+            "create_new_corrective_events".to_owned(),
+            "mark_user_action_required".to_owned(),
+        ],
+    );
 
     for mutation in &pending {
         let missing_dependencies = mutation
@@ -2169,6 +2407,25 @@ mod tests {
         event
     }
 
+    fn event_metadata(
+        logbook_id: Uuid,
+        entity_id: Option<Uuid>,
+        event_type: &str,
+        schema_version: u32,
+        event_hash: &str,
+    ) -> EventMetadata {
+        EventMetadata {
+            event_id: Uuid::new_v4(),
+            logbook_id,
+            entity_id,
+            previous_hash: None,
+            event_hash: event_hash.to_owned(),
+            timestamp: Utc::now(),
+            event_type: event_type.to_owned(),
+            schema_version,
+        }
+    }
+
     fn diverged_report(logbook_id: Uuid) -> SyncConflictReport {
         let preview = PreviewPullResponse {
             peer_id: "peer".to_owned(),
@@ -2230,6 +2487,53 @@ mod tests {
         assert_eq!(first.sequence, 1);
         assert_eq!(second.sequence, 2);
         assert_eq!(queue.load_snapshot(now).unwrap().health.pending, 2);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn queued_mutation_entity_id_persists_and_backfills_from_local_event() {
+        let (queue, dir) = queue();
+        let now = Utc::now();
+        let logbook_id = Uuid::new_v4();
+        let device_id = Uuid::new_v4();
+        let qso_id = Uuid::new_v4();
+        let explicit = queue
+            .enqueue_input(
+                input(logbook_id, device_id, OFFLINE_OP_QSO_DELETE).with_entity_id(Some(qso_id)),
+                now,
+            )
+            .unwrap();
+        assert_eq!(explicit.entity_id, Some(qso_id));
+
+        let created_qso_id = Uuid::new_v4();
+        let created = queue
+            .enqueue_input(input(logbook_id, device_id, OFFLINE_OP_QSO_CREATE), now)
+            .unwrap();
+        let mut event = event_for(&created);
+        event.entity_id = Some(created_qso_id);
+        event.event_hash = event.calculate_hash();
+        let updated = queue
+            .record_local_event(created.operation_id, &event, now)
+            .unwrap();
+        assert_eq!(updated.entity_id, Some(created_qso_id));
+
+        let snapshot = queue.load_snapshot(now).unwrap();
+        assert_eq!(
+            snapshot
+                .mutations
+                .iter()
+                .find(|mutation| mutation.operation_id == explicit.operation_id)
+                .and_then(|mutation| mutation.entity_id),
+            Some(qso_id)
+        );
+        assert_eq!(
+            snapshot
+                .mutations
+                .iter()
+                .find(|mutation| mutation.operation_id == created.operation_id)
+                .and_then(|mutation| mutation.entity_id),
+            Some(created_qso_id)
+        );
         let _ = fs::remove_dir_all(dir);
     }
 
@@ -2539,6 +2843,134 @@ mod tests {
         let report = conflict_report_from_preview(&preview, &[], Utc::now());
         assert_eq!(report.conflicts.len(), 1);
         assert!(!report.conflicts[0].safe_auto_merge);
+        assert!(report.conflicts[0].requires_user_action);
+    }
+
+    #[test]
+    fn conflict_report_flags_unsupported_remote_schema() {
+        let logbook_id = Uuid::new_v4();
+        let preview = PreviewPullResponse {
+            peer_id: "peer".to_owned(),
+            logbook_id,
+            status: ReplicationStatus::RemoteAhead,
+            local_head_hash: Some("local".to_owned()),
+            remote_head_hash: Some("remote".to_owned()),
+            missing_event_count: 1,
+            remote_event_count: 2,
+            events: vec![event_metadata(
+                logbook_id,
+                Some(Uuid::new_v4()),
+                "official.log.qso.created",
+                2,
+                "future-schema-event",
+            )],
+            message: "1 remote event is available to pull".to_owned(),
+        };
+
+        let report = conflict_report_from_preview(&preview, &[], Utc::now());
+
+        assert_eq!(report.conflicts.len(), 1);
+        assert_eq!(
+            report.conflicts[0].kind,
+            SyncConflictKind::UnsupportedSchema
+        );
+        assert!(report.conflicts[0].requires_user_action);
+        assert_eq!(
+            report.conflicts[0].related_event_hashes,
+            vec!["future-schema-event".to_owned()]
+        );
+    }
+
+    #[test]
+    fn conflict_report_detects_concurrent_qso_corrections() {
+        let logbook_id = Uuid::new_v4();
+        let device_id = Uuid::new_v4();
+        let qso_id = Uuid::new_v4();
+        let now = Utc::now();
+        let local_pending = OfflineMutationEnvelope::new(
+            input(logbook_id, device_id, OFFLINE_OP_QSO_CORRECT).with_entity_id(Some(qso_id)),
+            1,
+            now,
+        );
+        let preview = PreviewPullResponse {
+            peer_id: "peer".to_owned(),
+            logbook_id,
+            status: ReplicationStatus::RemoteAhead,
+            local_head_hash: Some("local".to_owned()),
+            remote_head_hash: Some("remote".to_owned()),
+            missing_event_count: 1,
+            remote_event_count: 2,
+            events: vec![event_metadata(
+                logbook_id,
+                Some(qso_id),
+                OFFICIAL_LOG_QSO_CORRECTED,
+                1,
+                "remote-correction",
+            )],
+            message: "1 remote event is available to pull".to_owned(),
+        };
+
+        let report =
+            conflict_report_from_preview(&preview, std::slice::from_ref(&local_pending), now);
+
+        assert_eq!(report.conflicts.len(), 1);
+        assert_eq!(
+            report.conflicts[0].kind,
+            SyncConflictKind::ConcurrentCorrection
+        );
+        assert_eq!(
+            report.conflicts[0].related_operation_ids,
+            vec![local_pending.operation_id]
+        );
+        assert_eq!(
+            report.conflicts[0].related_event_hashes,
+            vec!["remote-correction".to_owned()]
+        );
+        assert!(!report.conflicts[0].safe_auto_merge);
+    }
+
+    #[test]
+    fn conflict_report_detects_tombstone_restore_against_pending_qso_mutation() {
+        let logbook_id = Uuid::new_v4();
+        let device_id = Uuid::new_v4();
+        let qso_id = Uuid::new_v4();
+        let now = Utc::now();
+        let local_pending = OfflineMutationEnvelope::new(
+            input(logbook_id, device_id, OFFLINE_OP_QSO_NOTE_ADD).with_entity_id(Some(qso_id)),
+            1,
+            now,
+        );
+        let preview = PreviewPullResponse {
+            peer_id: "peer".to_owned(),
+            logbook_id,
+            status: ReplicationStatus::RemoteAhead,
+            local_head_hash: Some("local".to_owned()),
+            remote_head_hash: Some("remote".to_owned()),
+            missing_event_count: 1,
+            remote_event_count: 2,
+            events: vec![event_metadata(
+                logbook_id,
+                Some(qso_id),
+                OFFICIAL_LOG_QSO_DELETED,
+                1,
+                "remote-delete",
+            )],
+            message: "1 remote event is available to pull".to_owned(),
+        };
+
+        let report =
+            conflict_report_from_preview(&preview, std::slice::from_ref(&local_pending), now);
+
+        assert_eq!(report.conflicts.len(), 1);
+        assert_eq!(report.conflicts[0].kind, SyncConflictKind::TombstoneRestore);
+        assert_eq!(
+            report.conflicts[0].related_operation_ids,
+            vec![local_pending.operation_id]
+        );
+        assert_eq!(
+            report.conflicts[0].related_event_hashes,
+            vec!["remote-delete".to_owned()]
+        );
         assert!(report.conflicts[0].requires_user_action);
     }
 

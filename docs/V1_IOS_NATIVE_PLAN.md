@@ -41,9 +41,10 @@ wrapper.
 - iOS ADIF export prefers the Rust bridge and falls back to Swift export when
   the bridge is unavailable; import/restore still need broader Rust-backed
   native flows.
-- Sync views consume Rust snapshots; Rust-owned offline queue and durable
-  conflict-review create/resolve commands are exposed through the bridge. Full
-  push/pull/reconciliation workflows are not exposed end-to-end to iOS.
+- Sync views consume Rust snapshots; Rust-owned offline queue records include
+  optional target entity metadata, and durable conflict-review create/resolve
+  commands are exposed through the bridge. Full push/pull/reconciliation
+  workflows are not exposed end-to-end to iOS.
 - MapKit surfaces exist, but cached/offline map regions and production map
   provider integration are not complete.
 - Keychain plumbing exists, but production provider credential setup and App

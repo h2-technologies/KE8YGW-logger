@@ -309,7 +309,11 @@ Returns a single logbook head summary with `logbook_id`, `head_hash`, and
 `GET /api/v1/logbooks/{logbook_id}/events?token=<sync_token>&after_hash=<hash>`
 
 Returns event metadata for events after the optional hash. This endpoint is for
-comparison and preview flows; full event bodies are returned by pull.
+comparison and preview flows; full event bodies are returned by pull. Metadata
+records include `event_id`, `logbook_id`, optional `entity_id`,
+`previous_hash`, `event_hash`, `timestamp`, `event_type`, and
+`schema_version`. `entity_id` is additive and may be null for older or
+non-entity-specific records.
 
 ### Preview Pull
 

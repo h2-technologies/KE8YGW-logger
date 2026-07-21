@@ -8,8 +8,8 @@ Last audited: 2026-07-21
 ## Implemented In v0.3.0
 
 - Versioned offline mutation envelopes in `ham-sync` with operation, device,
-  client, logbook, ordering, dependency, idempotency, correlation, retry, and
-  queue-health metadata.
+  client, logbook, optional target entity, ordering, dependency, idempotency,
+  correlation, retry, and queue-health metadata.
 - Crash-recoverable JSON queue support store with safe rejection of unsupported
   queue and mutation schema versions.
 - Shared queue recovery report for desktop and iOS that initializes absent
@@ -24,8 +24,9 @@ Last audited: 2026-07-21
 - Deterministic desktop restart/reconnect queue-drain coverage for interrupted
   sends, ordered queued official events, accepted-by-hash handling, and
   duplicate cloud replay.
-- Structured conflict reports for divergent previews and dependency-blocked
-  queued mutations.
+- Structured conflict reports for divergent previews, dependency-blocked queued
+  mutations, unsupported remote schema versions, concurrent QSO corrections, and
+  remote QSO tombstone/restore events that overlap local pending mutations.
 - Durable manual conflict-review records for desktop and iOS bridge clients,
   with explicit recovery-path decisions and validation that rejects unsafe
   divergent pulls.
@@ -60,6 +61,7 @@ Last audited: 2026-07-21
 cargo test -p ham-sync
 cargo test -p ham-sync desktop_queue_recovers_restart_and_drains_to_cloud_without_duplicates
 cargo test -p ham-sync recover_or_initialize
+cargo test -p ham-sync conflict_report
 cargo test -p ham-gui
 cargo test -p ham-ios-ffi
 just version-check

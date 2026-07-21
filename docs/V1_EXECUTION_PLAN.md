@@ -32,12 +32,15 @@ outside issue #2.
      interrupted-send recovery, deterministic desktop restart/reconnect
      queue-drain coverage, v0.2 absent/legacy queue migration, corrupt queue
      quarantine, interrupted atomic-write promotion, desktop/iOS queue hooks for
-     implemented mutations, queue-aware cloud push acknowledgments, structured
-     conflict reports, durable manual conflict-review records, manual direct LAN
-     HTTP preview/pull transport, automatic IPv4/IPv6 multicast LAN discovery
-     with reachable identity probing, durable LAN trust records with single-use
-     tokens, replay nonce rejection, revocation, and HMAC-SHA256 signed LAN read
-     endpoint authorization.
+     implemented mutations, optional queued target-entity metadata, queue-aware
+     cloud push acknowledgments, structured conflict reports for divergent
+     heads, missing dependencies, unsupported schemas, concurrent QSO
+     corrections, and tombstone/restore overlaps, durable manual
+     conflict-review records, manual direct LAN HTTP preview/pull transport,
+     automatic IPv4/IPv6 multicast LAN discovery with reachable identity
+     probing, durable LAN trust records with single-use tokens, replay nonce
+     rejection, revocation, and HMAC-SHA256 signed LAN read endpoint
+     authorization.
    - Remaining: production reciprocal pairing UX, LAN auth credential
      rotation/recovery, corrective-event conflict-resolution UX, full
      cross-client reconciliation UI, physical-device LAN/iOS local-network

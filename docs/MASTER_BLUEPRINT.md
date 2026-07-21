@@ -201,13 +201,15 @@ Sync is local-first. LAN discovery and replication are preferred when reachable;
 - Push: upload local official events to a server or peer, preserving original event metadata and hashes.
 - Offline Queue: desktop and iOS persist versioned mutation envelopes before
   local acknowledgment; queued official mutations drain in deterministic
-  per-logbook order and record accepted local event hashes for transport
-  acknowledgment.
+  per-logbook order and record accepted local event hashes plus optional target
+  entity IDs for transport acknowledgment and conflict diagnostics.
 - LAN Trust: mutating LAN replication requires durable trust records,
   short-lived single-use pairing tokens, logbook scoping, HMAC-SHA256 signed
   LAN read endpoint authorization, replay nonce checks, credential references,
   and immediate revocation.
-- Divergence: detect and report; do not auto-merge in MVP.
+- Divergence: detect and report divergent heads, missing dependencies,
+  unsupported schemas, concurrent corrections, and tombstone/restore overlaps;
+  do not auto-merge in MVP.
 
 ## GUI Architecture
 

@@ -100,10 +100,12 @@ wrapper is not the iOS client. See `V1_RELEASE_PLAN.md`,
 17. **Offline Mutation Queue + Reconciliation Foundation**
    - Versioned offline mutation envelopes, deterministic per-logbook queue
      ordering, idempotency keys, dependency checks, retry/backoff state,
-     interrupted-send recovery, desktop/iOS mutation hooks, queue health
-     snapshots, structured conflict reports, durable manual conflict-review
-     records, direct LAN HTTP preview/pull, automatic LAN discovery, and durable
-     LAN trust state.
+     interrupted-send recovery, desktop/iOS mutation hooks, optional target
+     entity metadata, queue health snapshots, structured conflict reports for
+     divergent heads, missing dependencies, unsupported schemas, concurrent QSO
+     corrections, and tombstone/restore overlaps, durable manual
+     conflict-review records, direct LAN HTTP preview/pull, automatic LAN
+     discovery, and durable LAN trust state.
    - Status: implemented as a v0.3 foundation with HMAC-SHA256 signed LAN read
      endpoint authorization. Production reciprocal pairing UX, LAN auth
      credential rotation/recovery, corrective-event conflict UX,

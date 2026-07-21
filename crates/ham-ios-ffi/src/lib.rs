@@ -1223,6 +1223,7 @@ fn delete_qso_command(payload: Value, correlation_id: Uuid) -> Result<Value, Bri
             .unwrap_or_else(|| correlation_id.to_string());
         let store = event_store(&request.app_support_dir)?;
         let payload = json!({
+            "qso_id": request.qso_id,
             "reason": "ios_delete",
             "client_operation_id": operation_id
         });
@@ -1788,15 +1789,40 @@ fn enqueue_ios_mutation(
 ) -> Result<OfflineMutationEnvelope, BridgeFault> {
     let queue = offline_queue(app_support_dir)?;
     let operation_id = Uuid::parse_str(external_operation_id).unwrap_or(correlation_id);
+    let entity_id = payload_entity_id(operation_type, &payload);
     queue
         .enqueue_input(
             OfflineMutationInput::new(logbook_id, device_id, device_id, operation_type, payload)
                 .with_operation_id(operation_id)
                 .with_correlation_id(correlation_id)
+                .with_entity_id(entity_id)
                 .with_idempotency_key(format!("{operation_type}:{external_operation_id}")),
             Utc::now(),
         )
         .map_err(|error| BridgeFault::storage(error.to_string()))
+}
+
+fn payload_entity_id(operation_type: &str, payload: &Value) -> Option<Uuid> {
+    let fields: &[&str] = match operation_type {
+        OFFLINE_OP_QSO_CREATE | OFFLINE_OP_QSO_DELETE => &["entity_id", "qso_id"],
+        OFFLINE_OP_ACTIVATION_START | OFFLINE_OP_ACTIVATION_END => &["entity_id", "activation_id"],
+        OFFLINE_OP_NET_SESSION_START | OFFLINE_OP_NET_SESSION_END => {
+            &["entity_id", "net_session_id"]
+        }
+        OFFLINE_OP_NET_CHECKIN_CREATE => &["entity_id", "checkin_id"],
+        OFFLINE_OP_NET_TRAFFIC_CREATE => &["entity_id", "traffic_id"],
+        OFFLINE_OP_STATION_PROFILE_CREATE | OFFLINE_OP_STATION_PROFILE_SELECT => {
+            &["entity_id", "station_profile_id"]
+        }
+        OFFLINE_OP_STATION_EQUIPMENT_CREATE => &["entity_id", "equipment_id"],
+        _ => &["entity_id"],
+    };
+    fields.iter().find_map(|field| {
+        payload
+            .get(*field)
+            .and_then(Value::as_str)
+            .and_then(|value| Uuid::parse_str(value).ok())
+    })
 }
 
 fn record_ios_official_event(
@@ -2241,6 +2267,10 @@ mod tests {
         assert_eq!(
             first["data"]["qso"]["qso_id"],
             second["data"]["qso"]["qso_id"]
+        );
+        assert_eq!(
+            first["data"]["offline_mutation"]["entity_id"],
+            first["data"]["official_event"]["entity_id"]
         );
         let snapshot = call_json(json!({
             "command": "sync.snapshot",

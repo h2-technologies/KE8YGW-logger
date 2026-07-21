@@ -37,8 +37,8 @@ use ham_plugin_sdk::{
     PluginCapability, PluginManifest, ProposalEnvelope, ServiceType, PROPOSAL_ACTIVATION_END,
     PROPOSAL_ACTIVATION_START, PROPOSAL_NET_CHECKIN_CREATE, PROPOSAL_NET_CHECKIN_DELETE,
     PROPOSAL_NET_REPORT_EXPORT, PROPOSAL_NET_SESSION_END, PROPOSAL_NET_SESSION_START,
-    PROPOSAL_NET_TRAFFIC_CREATE, PROPOSAL_QSO_ACTIVATION_LINK, PROPOSAL_QSO_CREATE,
-    PROPOSAL_QSO_DELETE, PROPOSAL_QSO_NOTE_ADD, PROPOSAL_QSO_RESTORE,
+    PROPOSAL_NET_TRAFFIC_CREATE, PROPOSAL_QSO_ACTIVATION_LINK, PROPOSAL_QSO_CORRECT,
+    PROPOSAL_QSO_CREATE, PROPOSAL_QSO_DELETE, PROPOSAL_QSO_NOTE_ADD, PROPOSAL_QSO_RESTORE,
 };
 use ham_sync::{
     build_handshake_response, conflict_report_from_preview, lan_auth_signature, metadata_for_event,
@@ -57,9 +57,9 @@ use ham_sync::{
     ReplicationStatus, SyncConfig, SyncConflictReport, LAN_AUTH_SIGNATURE_VERSION,
     OFFLINE_OP_ACTIVATION_END, OFFLINE_OP_ACTIVATION_START, OFFLINE_OP_NET_CHECKIN_CREATE,
     OFFLINE_OP_NET_CHECKIN_DELETE, OFFLINE_OP_NET_SESSION_END, OFFLINE_OP_NET_SESSION_START,
-    OFFLINE_OP_NET_TRAFFIC_CREATE, OFFLINE_OP_QSO_CREATE, OFFLINE_OP_QSO_DELETE,
-    OFFLINE_OP_QSO_NOTE_ADD, OFFLINE_OP_QSO_RESTORE, OFFLINE_OP_STATION_PROFILE_SELECT,
-    PROTOCOL_NAME, PROTOCOL_VERSION,
+    OFFLINE_OP_NET_TRAFFIC_CREATE, OFFLINE_OP_QSO_CORRECT, OFFLINE_OP_QSO_CREATE,
+    OFFLINE_OP_QSO_DELETE, OFFLINE_OP_QSO_NOTE_ADD, OFFLINE_OP_QSO_RESTORE,
+    OFFLINE_OP_STATION_PROFILE_SELECT, PROTOCOL_NAME, PROTOCOL_VERSION,
 };
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -3915,6 +3915,7 @@ fn apply_active_station_defaults(state: &AppState, payload: &mut Value) {
 fn offline_operation_type_for_proposal(proposal_type: &str) -> String {
     match proposal_type {
         PROPOSAL_QSO_CREATE => OFFLINE_OP_QSO_CREATE,
+        PROPOSAL_QSO_CORRECT => OFFLINE_OP_QSO_CORRECT,
         PROPOSAL_QSO_DELETE => OFFLINE_OP_QSO_DELETE,
         PROPOSAL_QSO_RESTORE => OFFLINE_OP_QSO_RESTORE,
         PROPOSAL_QSO_NOTE_ADD => OFFLINE_OP_QSO_NOTE_ADD,
@@ -3954,6 +3955,7 @@ fn submit_offline_tracked_proposal(
             )
             .with_operation_id(operation_id)
             .with_correlation_id(operation_id)
+            .with_entity_id(entity_id)
             .with_idempotency_key(format!("{proposal_type}:{operation_id}")),
             now,
         )
