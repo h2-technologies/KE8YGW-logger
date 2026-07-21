@@ -3364,6 +3364,123 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn desktop_queue_recovers_restart_and_drains_to_cloud_without_duplicates() {
+        let logbook_id = Uuid::new_v4();
+        let device_id = Uuid::new_v4();
+        let root =
+            std::env::temp_dir().join(format!("ke8ygw-ham-sync-desktop-drain-{}", Uuid::new_v4()));
+        let queue_path = root.join("offline-mutations.json");
+        let queue = JsonOfflineMutationQueue::new(&queue_path);
+        let local_store = InMemoryLogbookEventStore::new();
+        let local_events = remote_chain(logbook_id, 2);
+        let now = Utc::now();
+        let mut operation_ids = Vec::new();
+
+        for (index, event) in local_events.iter().enumerate() {
+            local_store
+                .append_verified_remote_event(event.clone())
+                .await
+                .unwrap();
+            let operation_id = Uuid::new_v4();
+            let mutation = queue
+                .enqueue_input(
+                    OfflineMutationInput::new(
+                        logbook_id,
+                        device_id,
+                        device_id,
+                        OFFLINE_OP_QSO_CREATE,
+                        json!({
+                            "contacted_callsign": format!("K1DRAIN{index}"),
+                            "mode": "SSB"
+                        }),
+                    )
+                    .with_operation_id(operation_id)
+                    .with_correlation_id(operation_id)
+                    .with_idempotency_key(format!("desktop-qso-create-{index}")),
+                    now + chrono::Duration::seconds(index as i64),
+                )
+                .unwrap();
+            queue
+                .record_local_event(mutation.operation_id, event, now)
+                .unwrap();
+            operation_ids.push(mutation.operation_id);
+        }
+
+        queue
+            .mark_sending(operation_ids[0], now + chrono::Duration::seconds(10))
+            .unwrap();
+
+        let restarted_queue = JsonOfflineMutationQueue::new(&queue_path);
+        let restart_time = now + chrono::Duration::seconds(20);
+        assert_eq!(
+            restarted_queue
+                .recover_interrupted_writes(restart_time)
+                .unwrap(),
+            1
+        );
+        let recovered = restarted_queue.load_snapshot(restart_time).unwrap();
+        assert_eq!(recovered.health.retrying, 1);
+        assert_eq!(recovered.health.pending, 1);
+        assert_eq!(recovered.health.ready_to_send, 2);
+
+        let client = paired_client(cloud_server(), logbook_id).await;
+        let listed_local_events = local_store.list_events(logbook_id).await.unwrap();
+        let batch = restarted_queue
+            .ready_event_batch(logbook_id, &listed_local_events, restart_time)
+            .unwrap();
+        assert_eq!(batch.operation_ids, operation_ids);
+        assert_eq!(batch.events, local_events);
+        assert!(batch.missing_local_event_operation_ids.is_empty());
+
+        for operation_id in &batch.operation_ids {
+            restarted_queue
+                .mark_sending(*operation_id, restart_time)
+                .unwrap();
+        }
+        let push = client
+            .push_events(logbook_id, batch.events.clone())
+            .await
+            .unwrap();
+        assert_eq!(push.status, ReplicationStatus::Pulled);
+        assert_eq!(push.accepted_count, 2);
+        assert_eq!(push.ignored_duplicate_count, 0);
+
+        let accepted_hashes = batch
+            .events
+            .iter()
+            .map(|event| event.event_hash.clone())
+            .collect::<std::collections::HashSet<_>>();
+        assert_eq!(
+            restarted_queue
+                .mark_accepted_by_event_hashes(&accepted_hashes, restart_time)
+                .unwrap(),
+            2
+        );
+
+        let after_drain = JsonOfflineMutationQueue::new(&queue_path)
+            .load_snapshot(restart_time)
+            .unwrap();
+        assert_eq!(after_drain.health.accepted, 2);
+        assert_eq!(after_drain.health.ready_to_send, 0);
+        assert_eq!(
+            local_store.list_events(logbook_id).await.unwrap().len(),
+            2,
+            "desktop local official log must not gain duplicate events while draining"
+        );
+
+        let duplicate_push = client
+            .push_events(logbook_id, batch.events.clone())
+            .await
+            .unwrap();
+        assert_eq!(duplicate_push.accepted_count, 0);
+        assert_eq!(duplicate_push.ignored_duplicate_count, 2);
+        let cloud_pull = client.pull_events(logbook_id, None).await.unwrap();
+        assert_eq!(cloud_pull.events.len(), 2);
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
     async fn cloud_pull_missing_events() {
         let logbook_id = Uuid::new_v4();
         let server = cloud_server();

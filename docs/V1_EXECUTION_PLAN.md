@@ -29,13 +29,14 @@ outside issue #2.
 3. Offline-first sync and reconciliation
    - Implemented foundation: durable versioned mutation queue, deterministic
      per-logbook order, idempotency/dependency checks, retry/backoff state,
-     interrupted-send recovery, desktop/iOS queue hooks for implemented
-     mutations, queue-aware cloud push acknowledgments, structured conflict
-     reports, durable manual conflict-review records, manual direct LAN HTTP
-     preview/pull transport, automatic IPv4/IPv6 multicast LAN discovery with
-     reachable identity probing, durable LAN trust records with single-use
-     tokens, replay nonce rejection, revocation, and HMAC-SHA256 signed LAN
-     read endpoint authorization.
+     interrupted-send recovery, deterministic desktop restart/reconnect
+     queue-drain coverage, desktop/iOS queue hooks for implemented mutations,
+     queue-aware cloud push acknowledgments, structured conflict reports,
+     durable manual conflict-review records, manual direct LAN HTTP preview/pull
+     transport, automatic IPv4/IPv6 multicast LAN discovery with reachable
+     identity probing, durable LAN trust records with single-use tokens, replay
+     nonce rejection, revocation, and HMAC-SHA256 signed LAN read endpoint
+     authorization.
    - Remaining: production reciprocal pairing UX, LAN auth credential
      rotation/recovery, corrective-event conflict-resolution UX, full
      cross-client reconciliation UI, physical-device LAN/iOS local-network

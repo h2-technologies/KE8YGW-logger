@@ -130,7 +130,12 @@ Push sends local official events to a peer or cloud server. The receiver applies
 Desktop cloud push now uses the offline queue when queued local official events
 are present. Queue entries are marked `sending` before transport and `accepted`
 only after the cloud/self-hosted receiver accepts or ignores the matching event
-hashes. Divergence blocks the queued operations for manual review.
+hashes. The deterministic
+`desktop_queue_recovers_restart_and_drains_to_cloud_without_duplicates` test
+covers recovery of an interrupted desktop send, reconnect drain ordering,
+accepted-by-hash queue cleanup, duplicate cloud replay handling, and local
+official-log duplicate prevention. Divergence blocks the queued operations for
+manual review.
 
 ### Manual Conflict Review
 

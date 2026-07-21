@@ -17,6 +17,9 @@ Last audited: 2026-07-21
 - iOS FFI queue integration for QSO, activation, Net Control, station-profile,
   and equipment commands.
 - Queue-aware cloud push acknowledgment for queued official events.
+- Deterministic desktop restart/reconnect queue-drain coverage for interrupted
+  sends, ordered queued official events, accepted-by-hash handling, and
+  duplicate cloud replay.
 - Structured conflict reports for divergent previews and dependency-blocked
   queued mutations.
 - Durable manual conflict-review records for desktop and iOS bridge clients,
@@ -51,6 +54,7 @@ Last audited: 2026-07-21
 
 ```powershell
 cargo test -p ham-sync
+cargo test -p ham-sync desktop_queue_recovers_restart_and_drains_to_cloud_without_duplicates
 cargo test -p ham-gui
 cargo test -p ham-ios-ffi
 just version-check

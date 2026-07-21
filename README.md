@@ -922,7 +922,10 @@ support state rather than official synced history.
 The GUI cloud push path uses queued official events when available and marks
 queue entries accepted only after the cloud/self-hosted sync receiver accepts or
 ignores the matching event hashes. Interrupted sends recover to retrying on
-startup or through the Sync panel recovery action.
+startup or through the Sync panel recovery action. A deterministic `ham-sync`
+regression test covers a desktop-style restart/reconnect drain path, including
+ordered queued official events, accepted-by-hash cleanup, duplicate cloud replay,
+and local official-log duplicate prevention.
 
 LAN trust records are durable support state. Pairing tokens require explicit
 operator approval, expire quickly, are single use, and are stored only as
