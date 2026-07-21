@@ -17,8 +17,8 @@ governance, and cross-platform automation needed to start full v1
 implementation.
 
 Open baseline items after this branch merges should move to the remaining v1
-epics for accounts, sync, providers, hosted web, desktop, iOS, maps, contesting,
-EmComm, operations, and release qualification.
+epics for sync, providers, hosted web, desktop, iOS, maps, contesting, EmComm,
+operations, and release qualification.
 
 ## Implemented
 
@@ -31,11 +31,15 @@ EmComm, operations, and release qualification.
   maps/GIS foundations, diagnostics, runtime JSONL logs, and support storage.
 - POTA/SOTA activation proposals/projections and Net Control official events,
   proposals, projection, and report export events.
-- Hosted `/api/v1` route slices for auth/session/device/logbook, QSO,
-  station/equipment, ADIF, providers, uploads, activations, Net Control, maps,
-  backups, divergence review, and sync.
-- Durable hosted SurrealDB metadata and durable self-hosted sync/report metadata,
-  JSONL official-event storage, and filesystem diagnostic report payloads.
+- Hosted `/api/v1` route slices for server-admin bootstrap, hosting
+  configuration, invitation management, registration, verified email, recovery,
+  session/device/logbook, QSO, station/equipment, ADIF, providers, uploads,
+  activations, Net Control, maps, backups, divergence review, and sync.
+- Durable hosted SurrealDB metadata for server admins, users, token hashes,
+  sessions, devices, logbooks, memberships, invites, verification/recovery
+  tokens, rate limits, audits, and support state; durable self-hosted
+  sync/report metadata, JSONL official-event storage, and filesystem diagnostic
+  report payloads.
 - Tauri v2 desktop wrapper with bundled web assets, native dialog commands, and
   restricted `/api/*` proxying.
 - Native iOS SwiftUI project, SwiftData cache/projection models, Rust FFI bridge,
@@ -51,9 +55,14 @@ EmComm, operations, and release qualification.
 
 ## Partial
 
-- Hosted accounts exist as beta metadata and session/device/logbook route
-  scaffolding; production invite/open registration, verified email, Turnstile,
-  account deletion/recovery, and operational policy are incomplete.
+- Hosted accounts have a v1 foundation for personal/public/self-hosted modes:
+  invite-only registration by default, administrator open/disabled switches,
+  hashed expiring single-use invite/verification/recovery tokens, verified
+  email gating, Turnstile fail-closed public registration, secure-cookie/bearer
+  sessions, refresh rotation, logout-all, device revocation, account deletion,
+  request IDs, audits, and durable configurable rate limits. Production hosted
+  web UI wiring, external email deliverability, infrastructure sizing,
+  retention, monitoring, and deployment secrets remain incomplete.
 - Sync has discovery, handshake, preview/pull/push verification models, and
   durable self-hosted backend; real LAN peer-to-peer HTTP transport, trust
   pairing, automatic/user-directed merge policy, and full desktop/iOS
@@ -85,8 +94,6 @@ EmComm, operations, and release qualification.
 
 ## Deferred Or Unimplemented For v1
 
-- Production account registration modes, verified email, Turnstile, and hosting
-  operations.
 - LAN trust pairing and real peer-to-peer LAN transport.
 - Full desktop/iOS offline queue, reconciliation, and conflict review.
 - LoTW/TQSL managed certificate/signing mode, SOTAWatch approved live access,
@@ -148,9 +155,19 @@ Known manual repository/external settings remain in
 | #18 Governance/license | Already closed by PR #88; still verified | `LICENSE`, `GOVERNANCE.md`, `CONTRIBUTING.md`, `SECURITY.md`, `SUPPORT.md`, `.github/CODEOWNERS`, templates, `scripts/governance-check.ps1` |
 | #19 Cross-platform CI baseline | Satisfied for baseline automation when this branch merges with PR #101 work | CI, iOS, security, scorecard, release workflows; dependency/security docs; version/docs-link/governance checks; container smoke; Tauri/platform validation |
 
+## v1 Account Foundation Issue Audit
+
+| Issue | Status after this branch merges | Evidence |
+| --- | --- | --- |
+| #21 Registration and hosting modes | Satisfied for server foundation | `HostingConfig`, `RegistrationMode`, one-time `POST /api/v1/admin/bootstrap`, `GET/PATCH /api/v1/admin/hosting`, invitation create/list/inspect/resend/expire/revoke routes, Surreal `hosting_config`, `server_admins`, `server_invites`, `tests::bootstrap_admin_is_single_use_and_stores_only_token_hashes`, `tests::invite_only_registration_requires_single_use_invite_and_email_verification` |
+| #22 Verified email and Turnstile | Satisfied for server foundation | `EmailDeliveryConfig`, deterministic test outbox, webhook boundary, `EmailVerificationRecord`, `verify_turnstile_token`, Turnstile Siteverify path with official test-key behavior, `tests::open_registration_turnstile_fails_closed_and_replays_tokens` |
+| #23 Session/token/device hardening | Satisfied for server foundation | Hashed session/refresh/API token persistence, session/refresh expiry fields, secure cookie header, logout/logout-all/session rotate/account delete/device revoke/revoke-all routes, reload tests in `tests::sessions_rotate_revoke_and_survive_reload_with_hashes_only` |
+| #24 Hosted authorization boundaries | Satisfied for server foundation | Central `authorize`, `require_instance_admin`, `require_logbook_role`, cross-account/logbook negative tests, provider/backup/sync scoping tests in `crates/ham-server/src/lib.rs` |
+| #25 Operational limits, request IDs, audits, safe errors | Satisfied for server foundation | `HostedLimitConfig`, `RateLimitRecord`, request ID success/error propagation, `AuditRecord`, provider/sync/account limit enforcement, stable error codes in `ham-api-contract`, `tests::request_ids_limits_and_audits_are_durable_and_redacted` |
+
 ## Next Recommended Goal
 
-Implement v1 accounts and deployment-mode hardening for personal hosted, public
-hosted, and self-hosted operation. That goal unblocks production web flows,
-native iOS authentication/session behavior, provider credential setup, and
-release operations.
+Implement desktop/iOS sync and offline reconciliation, including LAN trust
+pairing and user-directed divergence handling. That goal unblocks unattended
+desktop/iOS operation, cached map/offline work, contesting, EmComm, and release
+qualification.

@@ -80,11 +80,20 @@ tombstone events and are hidden by projections by default.
 
 ## Authentication
 
-MVP cloud sync and support upload use pairing-code/token sessions. This is intentionally temporary but keeps hosted and self-hosted modes usable.
+Hosted `/api/v1` account authentication uses explicit registration modes,
+verified email, bearer sessions, and secure session cookies. The first server
+administrator is created only through one-time bootstrap. Registration is
+invite-only by default; public open registration is administrator-enabled and
+fails closed behind Cloudflare Turnstile when configured. Raw session, refresh,
+invite, email-verification, recovery, and API tokens are returned only at
+creation/consumption time and are persisted by hash in hosted SurrealDB
+metadata.
+
+Self-hosted sync and support upload routes still use pairing-code/token
+sessions for compatibility-only sync/report flows.
 
 Future work:
 
-- stronger account authentication
 - device pairing with explicit trust
 - signed official events
 - end-to-end encrypted relay

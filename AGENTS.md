@@ -281,10 +281,10 @@ Platform-specific code is acceptable when:
 | Map preferences / layer settings | `ham-core::map` support models; hosted map settings for hosted mode | Local support JSON; hosted SurrealDB | No by default | Approved GUI/server APIs |
 | Saved searches | `ham-core::search` | Local JSON saved-search store | No | Search-store APIs |
 | Runtime events and runtime logs | `ham-core::bus` + `runtime_log` | Rotating JSONL files and replay buffer | No | Runtime bridge publishing only |
-| Hosted users, sessions, devices, memberships, invites, API tokens | `ham-server` | SurrealDB | N/A server auth state | Hosted auth and admin routes |
+| Hosted users, server admins, sessions, devices, memberships, invites, API token hashes, verification/recovery token hashes, rate limits, audits | `ham-server` | SurrealDB | N/A server auth state | Hosted auth and admin routes |
 | Sync pairing sessions, relay refs, sync heads, report metadata | `ham-sync` durable server backend behind `surreal-storage` | SurrealDB + filesystem payloads + JSONL official log | N/A infrastructure state | Sync server methods only |
 | Diagnostic reports and bundles | `ham-core::diagnostics` bundle model; `ham-sync` report upload storage | ZIP/filesystem local export; server metadata + filesystem payloads | Uploaded only by user action | Build bundle -> optional upload through sync/report API |
-| iOS cache / projection records | No current source implementation | N/A | N/A | N/A; iOS is planning-only today |
+| iOS cache / projection records | Native iOS SwiftData cache models backed by Rust/API refresh paths | SwiftData / app container | Rebuildable, not directly official sync | Rust bridge/API refresh; SwiftData remains cache/projection state |
 
 ## 8. Event And Proposal Conventions
 

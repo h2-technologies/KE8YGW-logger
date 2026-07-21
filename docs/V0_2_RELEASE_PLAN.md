@@ -158,8 +158,9 @@ is not the v1 product checklist and must not override issue #2 or
 
 ## v1 Delta After v0.2
 
-- Complete hosted web account/registration modes, verified email, Turnstile,
-  and deployment hardening.
+- Wire hosted web account/registration/verification/recovery/device/admin UX to
+  the implemented server APIs, configure production email/Turnstile, and finish
+  deployment operations hardening.
 - Complete native iOS offline/reconciliation, signing, TestFlight/App Store,
   maps, provider, contesting, and EmComm release requirements.
 - Validate production credential backends on release runners.

@@ -15,12 +15,16 @@ outside issue #2.
    - Status: completed by the v1 baseline PR when merged.
 
 2. Accounts, registration, and hosting modes
-   - Finish personal hosted, public hosted, and self-hosted deployment behavior.
-   - Add invite-only registration by default, administrator open-registration
-     switch, verified email, Cloudflare Turnstile, account deletion/recovery
-     expectations, and production session/device policies.
-   - Blockers: email provider, Turnstile site/secret keys, production domain,
-     privacy/support URLs, and deployment secrets.
+   - Status: server foundation completed when the account-foundation PR merges.
+   - Implemented: personal/public/self-hosted hosting config; invite-only
+     registration by default; administrator open/disabled switches; verified
+     email; provider-neutral test/webhook email boundary; Cloudflare Turnstile
+     fail-closed public registration; account recovery/deletion; session
+     expiry/rotation/logout-all; device revocation; request IDs; audits; and
+     durable rate limits.
+   - Remaining: hosted web, desktop, and iOS UX wiring; production email
+     provider/domain validation; Turnstile site/secret keys; privacy/support
+     URLs; infrastructure sizing; retention/monitoring; and deployment secrets.
 
 3. Offline-first sync and reconciliation
    - Finish desktop/iOS offline operation, queued mutations, replay, safe
@@ -86,8 +90,8 @@ outside issue #2.
 
 ## Parallel Workstreams
 
-- Accounts/API/deployment can proceed in parallel with provider adapter work
-  once shared auth/session contracts are fixed.
+- Hosted web, desktop, and iOS account UX can proceed in parallel now that the
+  shared auth/session contracts are fixed.
 - Desktop signing/updater can proceed in parallel with iOS signing/TestFlight
   after version/artifact validation is stable.
 - Maps/provider licensing can proceed in parallel with contesting and EmComm
@@ -113,8 +117,9 @@ outside issue #2.
 
 ## Next Three Goals
 
-1. Implement v1 accounts and deployment-mode hardening.
-2. Implement desktop/iOS sync and offline reconciliation, including LAN trust
+1. Implement desktop/iOS sync and offline reconciliation, including LAN trust
    pairing.
-3. Complete production provider qualification and release-runner live validation
+2. Complete production provider qualification and release-runner live validation
    for the issue #2 provider set.
+3. Wire hosted web, desktop, and iOS UI flows to the implemented account,
+   session, recovery, device, and admin APIs.

@@ -16,16 +16,20 @@ desktop and native iOS clients.
 
 ## Current Status
 
-The new `ham-server` crate introduces the hosted API boundary, account/session
-models, device registration/revocation, logbook membership roles, and
-proposal-backed QSO routes. It now also exposes hosted station/equipment
+The `ham-server` crate owns the hosted API boundary, account/session models,
+device registration/revocation, logbook membership roles, and proposal-backed
+QSO routes. It now also exposes one-time server-admin bootstrap, durable hosting
+configuration, invite-only/open/disabled registration modes, hashed expiring
+single-use invite/email-verification/recovery tokens, Turnstile verification
+for public registration, secure-cookie/bearer session transport, session
+rotation, logout-all, account deletion, audit records, station/equipment
 support metadata routes, ADIF import/export, provider settings/test routes,
 upload queue execution foundation, activation routes, Net Control routes, map
 summary/settings routes, backup export/dry-run/import routes, sync pull, and
-divergence review. Hosted metadata now has a SurrealDB-backed durable store for
-beta server use, with the in-memory store retained only for focused unit tests
-and development fixtures. Surreal-backed hosted server mode now also opens a
-JSONL official event store so official history remains append-only and durable.
+divergence review. Hosted metadata has a SurrealDB-backed durable store for
+server use, with the in-memory store retained only for focused unit tests and
+development fixtures. Surreal-backed hosted server mode also opens a JSONL
+official event store so official history remains append-only and durable.
 
 The self-hosted sync/report service now uses durable local storage by default:
 SurrealDB for sync/support metadata, append-only JSONL for official replicated
@@ -35,8 +39,25 @@ events, and filesystem-backed diagnostic report payloads.
 
 - `GET /health`
 - `GET /api/v1/status`
+- `POST /api/v1/admin/bootstrap`
+- `GET /api/v1/admin/hosting`
+- `PATCH /api/v1/admin/hosting`
+- `GET /api/v1/admin/invitations`
+- `POST /api/v1/admin/invitations`
+- `GET /api/v1/admin/invitations/:id`
+- `POST /api/v1/admin/invitations/:id/resend`
+- `POST /api/v1/admin/invitations/:id/expire`
+- `POST /api/v1/admin/invitations/:id/revoke`
+- `GET /api/v1/admin/audits`
+- `POST /api/v1/auth/register`
+- `POST /api/v1/auth/verify-email`
+- `POST /api/v1/auth/recovery/start`
+- `POST /api/v1/auth/recovery/complete`
 - `POST /api/v1/auth/login`
 - `POST /api/v1/auth/logout`
+- `POST /api/v1/auth/logout-all`
+- `POST /api/v1/auth/session/rotate`
+- `POST /api/v1/auth/account/delete`
 - `GET /api/v1/auth/session`
 - `GET /api/v1/logbooks`
 - `POST /api/v1/logbooks`
@@ -111,6 +132,7 @@ events, and filesystem-backed diagnostic report payloads.
 - `POST /api/v1/sync/divergence/:id/export`
 - `GET /api/v1/devices`
 - `POST /api/v1/devices`
+- `POST /api/v1/devices/revoke-all`
 - `POST /api/v1/devices/:id/revoke`
 
 The previous scaffolded workflow routes now have beta implementations. Future
@@ -154,11 +176,14 @@ performs automatic merge.
 
 ## Required Before Production Hosted Use
 
-- Token expiry/refresh/revocation policies.
-- Hosted deployment configuration.
-- Rate limiting and request IDs.
+- Production email provider/domain configuration and deliverability validation.
+- Cloudflare Turnstile site/secret keys for public open registration.
+- Hosted web UI wiring for registration, verification, recovery, session
+  rotation, device revocation, and account deletion.
 - Provider adapter hardening.
-- Full contract tests against hosted and self-hosted modes.
+- Infrastructure rate-limit sizing, audit retention, monitoring, backups, DNS,
+  TLS, and protected deployment environments.
+- Full contract tests against deployed hosted and self-hosted modes.
 
 ## Local Server Startup
 
@@ -186,13 +211,29 @@ The local development defaults use the platform log/data directory returned by
 the path.
 
 - `HAM_SERVER_BIND`: hosted API bind address, default `127.0.0.1:9750`.
+- `HAM_SERVER_OPERATION_MODE`: `personal_hosted`, `public_hosted`, or
+  `self_hosted`; default `personal_hosted`.
+- `HAM_SERVER_REGISTRATION_MODE`: `invite_only`, `open`, or `disabled`; default
+  `invite_only`.
+- `HAM_SERVER_EMAIL_MODE`: `test`, `webhook`, or `disabled`; default `test`.
+- `HAM_SERVER_EMAIL_FROM`, `HAM_SERVER_EMAIL_VERIFICATION_BASE_URL`,
+  `HAM_SERVER_EMAIL_RECOVERY_BASE_URL`, `HAM_SERVER_EMAIL_WEBHOOK_URL`, and
+  `HAM_SERVER_EMAIL_CREDENTIAL_ID`: hosted email delivery settings. Production
+  deployments must not use the test outbox as their delivery mechanism.
+- `HAM_SERVER_TURNSTILE_SITE_KEY`, `HAM_SERVER_TURNSTILE_SECRET_KEY`, and
+  `HAM_SERVER_TURNSTILE_SITEVERIFY_URL`: Turnstile configuration. Open public
+  registration fails closed when Turnstile is enabled and the secret is missing
+  or verification fails.
+- `HAM_SERVER_SESSION_TTL_SECONDS`: session lifetime override.
 - `HAM_SERVER_EVENT_LOG_PATH`: append-only JSONL official event log for
   `ham-server` hosted mode.
 - `HAM_SERVER_SURREAL_PATH`: embedded local SurrealDB path. Stores users,
-  login sessions, devices, logbooks, memberships, API tokens, invites, station
-  profiles, equipment profiles, provider settings without secrets, upload
-  queue/history metadata, map settings, backup records, divergence reports,
-  and schema migrations.
+  server admins, login sessions with token hashes only, devices, logbooks,
+  memberships, API tokens with hashes only, invites with token hashes only,
+  email verification and recovery token hashes, rate-limit buckets, Turnstile
+  replay hashes, audit records, station profiles, equipment profiles, provider
+  settings without secrets, upload queue/history metadata, map settings, backup
+  records, divergence reports, and schema migrations.
 - `HAM_SERVER_SURREAL_ENDPOINT`: optional remote SurrealDB WebSocket endpoint
   for hosted deployments.
 - `HAM_SERVER_SURREAL_USER`, `HAM_SERVER_SURREAL_PASS`,

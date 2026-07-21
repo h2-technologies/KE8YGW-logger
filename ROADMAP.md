@@ -37,23 +37,24 @@ workflows, Tauri desktop wrapper, native iOS SwiftUI/Rust bridge, provider
 framework, maps/GIS foundation, diagnostics, governance, version validation,
 and cross-platform CI/security automation.
 
-Partial or incomplete v1 areas include hosted registration modes, real LAN
-trust pairing, full offline/reconciliation on desktop and iOS, production
-provider qualification, cached/offline maps, contesting, EmComm forms, signed
-desktop updater, Apple signing/TestFlight/App Store distribution, operations,
-and release-candidate qualification.
+Partial or incomplete v1 areas include hosted web/desktop/iOS account UX,
+production email/Turnstile deployment configuration, real LAN trust pairing,
+full offline/reconciliation on desktop and iOS, production provider
+qualification, cached/offline maps, contesting, EmComm forms, signed desktop
+updater, Apple signing/TestFlight/App Store distribution, operations, and
+release-candidate qualification.
 
 ## Recommended Next Milestone
 
 See [docs/V1_EXECUTION_PLAN.md](docs/V1_EXECUTION_PLAN.md) for the
 dependency-ordered critical path. The next three implementation goals are:
 
-- Accounts and deployment-mode hardening for personal hosted, public hosted,
-  and self-hosted operation.
 - Sync/offline reconciliation across desktop and iOS, including LAN trust
   pairing and conflict review.
 - Production provider qualification for QRZ, QRZ Logbook, LoTW, eQSL, Club
   Log, POTA, SOTAWatch, DX Cluster/RBN, maps, and propagation.
+- Hosted web, desktop, and iOS UI flows for the implemented account/session,
+  recovery, device, and admin APIs.
 
 ## Future Milestones
 

@@ -2332,6 +2332,7 @@ dependencies = [
  "surrealdb",
  "thiserror 1.0.69",
  "tokio",
+ "ureq",
  "uuid",
 ]
 

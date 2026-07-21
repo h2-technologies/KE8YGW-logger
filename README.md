@@ -108,9 +108,10 @@ passes should start with these documents:
 - `ham-plugin-sdk`: public plugin manifest, capability, proposal, and event constant types.
 - `ham-sync`: local-first discovery, handshake, head comparison, and safe pull replication models.
 - `ham-sync-server`: self-hostable cloud relay/sync service binary using the shared safe replication protocol.
-- `ham-server`: hosted web/server API boundary with beta account, session,
-  device, logbook, QSO, station/equipment, ADIF, provider, upload, sync, and
-  device routes.
+- `ham-server`: hosted web/server API boundary with server-admin bootstrap,
+  hosting modes, registration, verified email, recovery, session/device,
+  logbook, QSO, station/equipment, ADIF, provider, upload, sync, and audit
+  routes.
 - `ham-cli`: placeholder command-line entry point.
 - `ham-gui`: initial GUI shell, workspace model, panel registry, command registry,
   and static web shell served by a small Rust binary.
@@ -121,17 +122,22 @@ passes should start with these documents:
 ## v0.2 Almost-v1 Beta Status
 
 The current `0.2.0` workspace is the v1 foundation baseline, not the complete
-v1 product. The `ham-server` crate exposes `/api/v1` hosted routes, bearer
-login/session handling, device identity/revocation, logbook membership roles,
-proposal-backed QSO create/edit/delete/restore/note flows, hosted
+v1 product. The `ham-server` crate exposes `/api/v1` hosted routes, one-time
+server-admin bootstrap, personal/public/self-hosted configuration, invite-only
+registration by default, administrator open/disabled registration switches,
+verified email, Turnstile fail-closed public registration, recovery, bearer and
+secure-cookie session handling, rotation/logout-all, account deletion, device
+identity/revocation, durable request IDs/audits/rate limits, logbook membership
+roles, proposal-backed QSO create/edit/delete/restore/note flows, hosted
 station/equipment support metadata, ADIF import/export, provider settings/test
 routes, upload queue execution foundation, activation and Net Control workflow
 routes, map summaries/settings, backup export/dry-run/import, divergence review,
 and sync preview/push/pull.
 
 This is not yet a production hosted release. Server account/session/device
-metadata is now durable SurrealDB beta storage and sync/report storage is
-durable. Production OS credential backend wiring now exists for Windows
+metadata is now durable SurrealDB storage with raw account tokens stored only as
+hashes, and sync/report storage is durable. Production OS credential backend
+wiring now exists for Windows
 Credential Manager, macOS Keychain, and Linux Secret Service/libsecret tooling,
 but release-runner validation is still pending. Tier 1 provider adapter
 metadata/contracts now cover QRZ XML, HamQTH, POTA spots, SOTAWatch, Club Log,
@@ -1016,10 +1022,11 @@ docker build -f Dockerfile.sync-server -t ke8ygw-sync-server .
 docker run --rm -p 9740:9740 -e HAM_SYNC_PAIRING_CODE=change-me ke8ygw-sync-server
 ```
 
-Current limitations: pairing is token-based MVP auth, events are not signed,
-end-to-end encryption is not implemented, automatic merge/conflict resolution is
-deferred, and production deployment hardening such as rate limits, token
-rotation, and hosted observability is still pending.
+Current limitations: self-hosted sync pairing is token-based MVP auth, events
+are not signed, end-to-end encryption is not implemented, automatic
+merge/conflict resolution is deferred, and production deployment hardening such
+as hosted observability, retention, infrastructure sizing, and external
+email/Turnstile/provider credentials is still pending.
 
 Run the hosted beta API:
 
@@ -1031,11 +1038,16 @@ Default hosted API settings:
 
 ```text
 HAM_SERVER_BIND=127.0.0.1:9750
+HAM_SERVER_OPERATION_MODE=personal_hosted
+HAM_SERVER_REGISTRATION_MODE=invite_only
+HAM_SERVER_EMAIL_MODE=test
 HAM_SERVER_SURREAL_PATH=<platform-data-dir>/server/surrealdb
 ```
 
-`ham-server` persists account, login session, device, logbook, membership, API
-token, invite, and schema migration metadata in SurrealDB. Set
+`ham-server` persists server admins, accounts, login sessions with token hashes,
+devices, logbooks, memberships, API token hashes, invite/verification/recovery
+token hashes, rate-limit buckets, audits, support metadata, and schema migration
+metadata in SurrealDB. Set
 `HAM_SERVER_SURREAL_ENDPOINT`, `HAM_SERVER_SURREAL_USER`,
 `HAM_SERVER_SURREAL_PASS`, `HAM_SERVER_SURREAL_NAMESPACE`, and
 `HAM_SERVER_SURREAL_DATABASE` to use remote SurrealDB. Official QSO mutations

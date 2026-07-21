@@ -4,9 +4,10 @@ use std::{
     path::PathBuf,
     sync::{Arc, Mutex},
     thread,
+    time::Duration as StdDuration,
 };
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration, Utc};
 use ham_api_contract::{hosted_route_strings, ApiErrorBody, ApiErrorCode};
 use ham_core::{
     adif_for_upload_job, default_credential_store, default_log_directory, default_service_registry,
@@ -58,6 +59,10 @@ pub struct UserAccount {
     pub email: String,
     pub display_name: String,
     pub created_at: DateTime<Utc>,
+    #[serde(default)]
+    pub email_verified_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub deleted_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -66,9 +71,20 @@ pub struct LoginSession {
     pub account_id: Uuid,
     pub user_id: Uuid,
     pub device_id: Uuid,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub token: String,
+    #[serde(default)]
+    pub token_hash: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub refresh_token: String,
+    #[serde(default)]
+    pub refresh_token_hash: String,
     pub issued_at: DateTime<Utc>,
     pub expires_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub refresh_expires_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub rotated_at: Option<DateTime<Utc>>,
     pub active: bool,
 }
 
@@ -150,9 +166,22 @@ pub struct ServerInvite {
     pub logbook_id: Uuid,
     pub invited_email: String,
     pub role: LogbookRole,
-    pub token: String,
+    #[serde(default)]
+    pub token_hash: String,
+    #[serde(default, rename = "token", skip_serializing_if = "String::is_empty")]
+    pub legacy_token: String,
+    #[serde(default)]
+    pub created_by_user_id: Option<Uuid>,
+    #[serde(default)]
+    pub created_at: Option<DateTime<Utc>>,
     pub expires_at: DateTime<Utc>,
     pub accepted_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub revoked_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub last_sent_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub resend_count: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -161,10 +190,250 @@ pub struct ApiToken {
     pub account_id: Uuid,
     pub user_id: Uuid,
     pub device_id: Uuid,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub token: String,
+    #[serde(default)]
+    pub token_hash: String,
     pub scopes: Vec<String>,
     pub revoked: bool,
     pub issued_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HostingOperationMode {
+    PersonalHosted,
+    PublicHosted,
+    SelfHosted,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RegistrationMode {
+    InviteOnly,
+    Open,
+    Disabled,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EmailDeliveryMode {
+    Test,
+    Webhook,
+    Disabled,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EmailDeliveryConfig {
+    pub mode: EmailDeliveryMode,
+    pub from_address: String,
+    pub verification_base_url: String,
+    pub recovery_base_url: String,
+    #[serde(default)]
+    pub webhook_url: Option<String>,
+    #[serde(default)]
+    pub credential_id: Option<String>,
+}
+
+impl Default for EmailDeliveryConfig {
+    fn default() -> Self {
+        Self {
+            mode: EmailDeliveryMode::Test,
+            from_address: "noreply@example.test".to_owned(),
+            verification_base_url: "http://127.0.0.1:9750/verify-email".to_owned(),
+            recovery_base_url: "http://127.0.0.1:9750/recover-account".to_owned(),
+            webhook_url: None,
+            credential_id: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TurnstileConfig {
+    pub enabled_for_open_registration: bool,
+    #[serde(default)]
+    pub site_key: Option<String>,
+    #[serde(default)]
+    pub secret_key: Option<String>,
+    pub siteverify_url: String,
+    pub timeout_seconds: u64,
+}
+
+impl Default for TurnstileConfig {
+    fn default() -> Self {
+        Self {
+            enabled_for_open_registration: true,
+            site_key: None,
+            secret_key: None,
+            siteverify_url: "https://challenges.cloudflare.com/turnstile/v0/siteverify".to_owned(),
+            timeout_seconds: 5,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HostedLimitConfig {
+    pub window_seconds: i64,
+    pub registrations_per_window: u32,
+    pub logins_per_window: u32,
+    pub verifications_per_window: u32,
+    pub recovery_per_window: u32,
+    pub invitations_per_window: u32,
+    pub provider_ops_per_window: u32,
+    pub sync_ops_per_window: u32,
+}
+
+impl Default for HostedLimitConfig {
+    fn default() -> Self {
+        Self {
+            window_seconds: 900,
+            registrations_per_window: 10,
+            logins_per_window: 30,
+            verifications_per_window: 20,
+            recovery_per_window: 10,
+            invitations_per_window: 25,
+            provider_ops_per_window: 120,
+            sync_ops_per_window: 240,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HostingConfig {
+    pub operation_mode: HostingOperationMode,
+    pub registration_mode: RegistrationMode,
+    pub bootstrap_admin_completed: bool,
+    pub session_ttl_seconds: i64,
+    pub refresh_ttl_seconds: i64,
+    pub invitation_ttl_seconds: i64,
+    pub verification_ttl_seconds: i64,
+    pub recovery_ttl_seconds: i64,
+    pub limits: HostedLimitConfig,
+    pub email: EmailDeliveryConfig,
+    pub turnstile: TurnstileConfig,
+    pub updated_at: DateTime<Utc>,
+}
+
+impl Default for HostingConfig {
+    fn default() -> Self {
+        Self {
+            operation_mode: HostingOperationMode::PersonalHosted,
+            registration_mode: RegistrationMode::InviteOnly,
+            bootstrap_admin_completed: false,
+            session_ttl_seconds: 60 * 60 * 24 * 30,
+            refresh_ttl_seconds: 60 * 60 * 24 * 90,
+            invitation_ttl_seconds: 60 * 60 * 24 * 7,
+            verification_ttl_seconds: 60 * 60 * 24,
+            recovery_ttl_seconds: 60 * 60,
+            limits: HostedLimitConfig::default(),
+            email: EmailDeliveryConfig::default(),
+            turnstile: TurnstileConfig::default(),
+            updated_at: Utc::now(),
+        }
+    }
+}
+
+impl HostingConfig {
+    fn from_env() -> Self {
+        let mut config = Self::default();
+        if let Ok(value) = std::env::var("HAM_SERVER_OPERATION_MODE") {
+            config.operation_mode = match value.as_str() {
+                "public_hosted" => HostingOperationMode::PublicHosted,
+                "self_hosted" => HostingOperationMode::SelfHosted,
+                _ => HostingOperationMode::PersonalHosted,
+            };
+        }
+        if let Ok(value) = std::env::var("HAM_SERVER_REGISTRATION_MODE") {
+            config.registration_mode = match value.as_str() {
+                "open" => RegistrationMode::Open,
+                "disabled" => RegistrationMode::Disabled,
+                _ => RegistrationMode::InviteOnly,
+            };
+        }
+        if let Ok(value) = std::env::var("HAM_SERVER_EMAIL_MODE") {
+            config.email.mode = match value.as_str() {
+                "webhook" => EmailDeliveryMode::Webhook,
+                "disabled" => EmailDeliveryMode::Disabled,
+                _ => EmailDeliveryMode::Test,
+            };
+        }
+        if let Ok(value) = std::env::var("HAM_SERVER_EMAIL_FROM") {
+            config.email.from_address = value;
+        }
+        if let Ok(value) = std::env::var("HAM_SERVER_EMAIL_VERIFICATION_BASE_URL") {
+            config.email.verification_base_url = value;
+        }
+        if let Ok(value) = std::env::var("HAM_SERVER_EMAIL_RECOVERY_BASE_URL") {
+            config.email.recovery_base_url = value;
+        }
+        config.email.webhook_url = std::env::var("HAM_SERVER_EMAIL_WEBHOOK_URL").ok();
+        config.email.credential_id = std::env::var("HAM_SERVER_EMAIL_CREDENTIAL_ID").ok();
+        config.turnstile.site_key = std::env::var("HAM_SERVER_TURNSTILE_SITE_KEY").ok();
+        config.turnstile.secret_key = std::env::var("HAM_SERVER_TURNSTILE_SECRET_KEY").ok();
+        if let Ok(value) = std::env::var("HAM_SERVER_TURNSTILE_SITEVERIFY_URL") {
+            config.turnstile.siteverify_url = value;
+        }
+        if let Ok(value) = std::env::var("HAM_SERVER_SESSION_TTL_SECONDS") {
+            if let Ok(parsed) = value.parse() {
+                config.session_ttl_seconds = parsed;
+            }
+        }
+        config
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EmailVerificationRecord {
+    pub verification_id: Uuid,
+    pub account_id: Uuid,
+    pub user_id: Uuid,
+    pub email: String,
+    pub token_hash: String,
+    pub created_at: DateTime<Utc>,
+    pub expires_at: DateTime<Utc>,
+    pub used_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RecoveryTokenRecord {
+    pub recovery_id: Uuid,
+    pub account_id: Uuid,
+    pub user_id: Uuid,
+    pub email: String,
+    pub token_hash: String,
+    pub created_at: DateTime<Utc>,
+    pub expires_at: DateTime<Utc>,
+    pub used_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RateLimitRecord {
+    pub key: String,
+    pub window_started_at: DateTime<Utc>,
+    pub count: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AuditRecord {
+    pub audit_id: Uuid,
+    pub occurred_at: DateTime<Utc>,
+    pub request_id: String,
+    pub actor_account_id: Option<Uuid>,
+    pub actor_user_id: Option<Uuid>,
+    pub action: String,
+    pub outcome: String,
+    pub target: Option<String>,
+    #[serde(default)]
+    pub details: Map<String, Value>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TestEmailMessage {
+    to: String,
+    purpose: String,
+    token: String,
+    token_hash: String,
+    sent_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -228,8 +497,22 @@ pub enum ApiError {
     Unauthenticated,
     #[error("session is inactive")]
     InactiveSession,
+    #[error("session expired")]
+    SessionExpired,
     #[error("device is revoked")]
     RevokedDevice,
+    #[error("email is not verified")]
+    EmailUnverified,
+    #[error("registration is closed")]
+    RegistrationClosed,
+    #[error("token expired or invalid")]
+    TokenExpired,
+    #[error("token already used")]
+    TokenReplayed,
+    #[error("turnstile verification failed")]
+    TurnstileFailed,
+    #[error("rate limit exceeded")]
+    RateLimited,
     #[error("forbidden")]
     Forbidden,
     #[error("not found")]
@@ -266,11 +549,89 @@ pub struct LoginRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BootstrapAdminRequest {
+    pub email: String,
+    pub display_name: Option<String>,
+    pub device_name: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RegistrationRequest {
+    pub email: String,
+    pub display_name: Option<String>,
+    pub device_name: Option<String>,
+    #[serde(default)]
+    pub invitation_token: Option<String>,
+    #[serde(default)]
+    pub turnstile_token: Option<String>,
+    #[serde(default)]
+    pub turnstile_remote_ip: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VerifyEmailRequest {
+    pub token: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RecoveryStartRequest {
+    pub email: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RecoveryCompleteRequest {
+    pub token: String,
+    pub device_name: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HostingConfigPatchRequest {
+    pub operation_mode: Option<HostingOperationMode>,
+    pub registration_mode: Option<RegistrationMode>,
+    pub session_ttl_seconds: Option<i64>,
+    pub refresh_ttl_seconds: Option<i64>,
+    pub invitation_ttl_seconds: Option<i64>,
+    pub verification_ttl_seconds: Option<i64>,
+    pub recovery_ttl_seconds: Option<i64>,
+    pub limits: Option<HostedLimitConfig>,
+    pub email: Option<EmailDeliveryConfig>,
+    pub turnstile: Option<TurnstileConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateInvitationRequest {
+    pub logbook_id: Uuid,
+    pub email: String,
+    pub role: LogbookRole,
+    pub expires_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InvitationActionRequest {
+    #[serde(default)]
+    pub expires_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionRotateRequest {
+    #[serde(default)]
+    pub refresh_token: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AccountDeleteRequest {
+    pub confirm: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LoginResponse {
     pub account: UserAccount,
     pub session: LoginSession,
     pub device: DeviceIdentity,
     pub logbooks: Vec<ApiLogbook>,
+    #[serde(default)]
+    pub refresh_token: String,
+    pub session_cookie: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -645,8 +1006,10 @@ pub struct RouteCatalogResponse {
     pub scaffolded: Vec<String>,
 }
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Clone)]
 struct ServerState {
+    hosting_config: HostingConfig,
+    server_admin_user_ids: HashSet<Uuid>,
     users_by_email: HashMap<String, Uuid>,
     accounts: HashMap<Uuid, UserAccount>,
     logbooks: HashMap<Uuid, ApiLogbook>,
@@ -655,6 +1018,11 @@ struct ServerState {
     devices: HashMap<Uuid, DeviceIdentity>,
     invites: HashMap<Uuid, ServerInvite>,
     api_tokens: HashMap<Uuid, ApiToken>,
+    email_verifications: HashMap<Uuid, EmailVerificationRecord>,
+    recovery_tokens: HashMap<Uuid, RecoveryTokenRecord>,
+    rate_limits: HashMap<String, RateLimitRecord>,
+    turnstile_token_hashes: HashSet<String>,
+    audit_log: Vec<AuditRecord>,
     station_profiles: HashMap<Uuid, HostedStationProfile>,
     equipment_profiles: HashMap<Uuid, HostedEquipmentProfile>,
     provider_settings: HashMap<String, HostedProviderSetting>,
@@ -662,6 +1030,35 @@ struct ServerState {
     map_settings: HashMap<Uuid, HostedMapSettings>,
     backups: HashMap<Uuid, HostedBackupRecord>,
     divergence_reports: HashMap<Uuid, HostedDivergenceReport>,
+}
+
+impl Default for ServerState {
+    fn default() -> Self {
+        Self {
+            hosting_config: HostingConfig::from_env(),
+            server_admin_user_ids: HashSet::new(),
+            users_by_email: HashMap::new(),
+            accounts: HashMap::new(),
+            logbooks: HashMap::new(),
+            memberships: Vec::new(),
+            sessions_by_token: HashMap::new(),
+            devices: HashMap::new(),
+            invites: HashMap::new(),
+            api_tokens: HashMap::new(),
+            email_verifications: HashMap::new(),
+            recovery_tokens: HashMap::new(),
+            rate_limits: HashMap::new(),
+            turnstile_token_hashes: HashSet::new(),
+            audit_log: Vec::new(),
+            station_profiles: HashMap::new(),
+            equipment_profiles: HashMap::new(),
+            provider_settings: HashMap::new(),
+            upload_jobs: HashMap::new(),
+            map_settings: HashMap::new(),
+            backups: HashMap::new(),
+            divergence_reports: HashMap::new(),
+        }
+    }
 }
 
 trait HostedMetadataStore: Send + Sync + std::fmt::Debug {
@@ -910,16 +1307,34 @@ impl HostedMetadataStore for SurrealHostedMetadataStore {
         self.run(|client| async move {
             let mut state = ServerState::default();
 
+            if let Some(config) = select_payloads::<HostingConfig>(&client, "hosting_config")
+                .await?
+                .into_iter()
+                .next()
+            {
+                state.hosting_config = config;
+            }
+            for user_id in select_payloads::<Uuid>(&client, "server_admins").await? {
+                state.server_admin_user_ids.insert(user_id);
+            }
             for account in select_payloads::<UserAccount>(&client, "users").await? {
                 state
                     .users_by_email
                     .insert(account.email.clone(), account.account_id);
                 state.accounts.insert(account.account_id, account);
             }
-            for session in select_payloads::<LoginSession>(&client, "login_sessions").await? {
+            for mut session in select_payloads::<LoginSession>(&client, "login_sessions").await? {
+                if session.token_hash.is_empty() && !session.token.is_empty() {
+                    session.token_hash = session_token_hash(&session.token);
+                }
+                if session.refresh_token_hash.is_empty() && !session.refresh_token.is_empty() {
+                    session.refresh_token_hash = session_token_hash(&session.refresh_token);
+                }
+                session.token.clear();
+                session.refresh_token.clear();
                 state
                     .sessions_by_token
-                    .insert(session.token.clone(), session);
+                    .insert(session.token_hash.clone(), session);
             }
             for device in select_payloads::<DeviceIdentity>(&client, "devices").await? {
                 state.devices.insert(device.device_id, device);
@@ -929,12 +1344,38 @@ impl HostedMetadataStore for SurrealHostedMetadataStore {
             }
             state.memberships =
                 select_payloads::<LogbookMembership>(&client, "logbook_memberships").await?;
-            for token in select_payloads::<ApiToken>(&client, "api_tokens").await? {
+            for mut token in select_payloads::<ApiToken>(&client, "api_tokens").await? {
+                if token.token_hash.is_empty() && !token.token.is_empty() {
+                    token.token_hash = session_token_hash(&token.token);
+                }
+                token.token.clear();
                 state.api_tokens.insert(token.token_id, token);
             }
-            for invite in select_payloads::<ServerInvite>(&client, "server_invites").await? {
+            for mut invite in select_payloads::<ServerInvite>(&client, "server_invites").await? {
+                if invite.token_hash.is_empty() && !invite.legacy_token.is_empty() {
+                    invite.token_hash = session_token_hash(&invite.legacy_token);
+                }
+                invite.legacy_token.clear();
                 state.invites.insert(invite.invite_id, invite);
             }
+            for record in
+                select_payloads::<EmailVerificationRecord>(&client, "email_verifications").await?
+            {
+                state
+                    .email_verifications
+                    .insert(record.verification_id, record);
+            }
+            for record in select_payloads::<RecoveryTokenRecord>(&client, "recovery_tokens").await?
+            {
+                state.recovery_tokens.insert(record.recovery_id, record);
+            }
+            for record in select_payloads::<RateLimitRecord>(&client, "rate_limits").await? {
+                state.rate_limits.insert(record.key.clone(), record);
+            }
+            for value in select_payloads::<String>(&client, "turnstile_replay_tokens").await? {
+                state.turnstile_token_hashes.insert(value);
+            }
+            state.audit_log = select_payloads::<AuditRecord>(&client, "audit_log").await?;
             for profile in
                 select_payloads::<HostedStationProfile>(&client, "station_profiles").await?
             {
@@ -980,6 +1421,8 @@ impl HostedMetadataStore for SurrealHostedMetadataStore {
         let state = state.clone();
         self.run(move |client| async move {
             for table in [
+                "hosting_config",
+                "server_admins",
                 "users",
                 "login_sessions",
                 "devices",
@@ -987,6 +1430,11 @@ impl HostedMetadataStore for SurrealHostedMetadataStore {
                 "logbook_memberships",
                 "api_tokens",
                 "server_invites",
+                "email_verifications",
+                "recovery_tokens",
+                "rate_limits",
+                "turnstile_replay_tokens",
+                "audit_log",
                 "station_profiles",
                 "equipment_profiles",
                 "provider_settings",
@@ -998,6 +1446,29 @@ impl HostedMetadataStore for SurrealHostedMetadataStore {
                 delete_table(&client, table).await?;
             }
 
+            create_record(
+                &client,
+                "hosting_config",
+                "current".to_owned(),
+                json!({
+                    "component": "ham-server",
+                    "payload": state.hosting_config,
+                }),
+            )
+            .await?;
+
+            for user_id in &state.server_admin_user_ids {
+                create_record(
+                    &client,
+                    "server_admins",
+                    user_id.to_string(),
+                    json!({
+                        "user_id": user_id,
+                        "payload": user_id,
+                    }),
+                )
+                .await?;
+            }
             for account in state.accounts.values() {
                 create_record(
                     &client,
@@ -1013,17 +1484,20 @@ impl HostedMetadataStore for SurrealHostedMetadataStore {
                 .await?;
             }
             for session in state.sessions_by_token.values() {
+                let mut payload = session.clone();
+                payload.token.clear();
+                payload.refresh_token.clear();
                 create_record(
                     &client,
                     "login_sessions",
-                    session_token_hash(&session.token),
+                    session.token_hash.clone(),
                     json!({
                         "account_id": session.account_id,
                         "user_id": session.user_id,
                         "device_id": session.device_id,
                         "active": session.active,
-                        "token_hash": session_token_hash(&session.token),
-                        "payload": session,
+                        "token_hash": session.token_hash,
+                        "payload": payload,
                     }),
                 )
                 .await?;
@@ -1072,6 +1546,8 @@ impl HostedMetadataStore for SurrealHostedMetadataStore {
                 .await?;
             }
             for token in state.api_tokens.values() {
+                let mut payload = token.clone();
+                payload.token.clear();
                 create_record(
                     &client,
                     "api_tokens",
@@ -1081,12 +1557,15 @@ impl HostedMetadataStore for SurrealHostedMetadataStore {
                         "user_id": token.user_id,
                         "device_id": token.device_id,
                         "revoked": token.revoked,
-                        "payload": token,
+                        "token_hash": token.token_hash,
+                        "payload": payload,
                     }),
                 )
                 .await?;
             }
             for invite in state.invites.values() {
+                let mut payload = invite.clone();
+                payload.legacy_token.clear();
                 create_record(
                     &client,
                     "server_invites",
@@ -1094,8 +1573,80 @@ impl HostedMetadataStore for SurrealHostedMetadataStore {
                     json!({
                         "account_id": invite.account_id,
                         "logbook_id": invite.logbook_id,
-                        "token": invite.token,
-                        "payload": invite,
+                        "token_hash": invite.token_hash,
+                        "payload": payload,
+                    }),
+                )
+                .await?;
+            }
+            for record in state.email_verifications.values() {
+                create_record(
+                    &client,
+                    "email_verifications",
+                    record.verification_id.to_string(),
+                    json!({
+                        "account_id": record.account_id,
+                        "user_id": record.user_id,
+                        "token_hash": record.token_hash,
+                        "used_at": record.used_at,
+                        "payload": record,
+                    }),
+                )
+                .await?;
+            }
+            for record in state.recovery_tokens.values() {
+                create_record(
+                    &client,
+                    "recovery_tokens",
+                    record.recovery_id.to_string(),
+                    json!({
+                        "account_id": record.account_id,
+                        "user_id": record.user_id,
+                        "token_hash": record.token_hash,
+                        "used_at": record.used_at,
+                        "payload": record,
+                    }),
+                )
+                .await?;
+            }
+            for record in state.rate_limits.values() {
+                create_record(
+                    &client,
+                    "rate_limits",
+                    record.key.clone(),
+                    json!({
+                        "key": record.key,
+                        "window_started_at": record.window_started_at,
+                        "count": record.count,
+                        "payload": record,
+                    }),
+                )
+                .await?;
+            }
+            for token_hash in &state.turnstile_token_hashes {
+                create_record(
+                    &client,
+                    "turnstile_replay_tokens",
+                    token_hash.clone(),
+                    json!({
+                        "token_hash": token_hash,
+                        "payload": token_hash,
+                    }),
+                )
+                .await?;
+            }
+            for record in &state.audit_log {
+                create_record(
+                    &client,
+                    "audit_log",
+                    record.audit_id.to_string(),
+                    json!({
+                        "account_id": record.actor_account_id,
+                        "user_id": record.actor_user_id,
+                        "action": record.action,
+                        "outcome": record.outcome,
+                        "request_id": record.request_id,
+                        "payload": record,
                     }),
                 )
                 .await?;
@@ -1218,6 +1769,8 @@ impl HostedMetadataStore for SurrealHostedMetadataStore {
 async fn initialize_hosted_schema(client: &SurrealHostedClient) -> Result<(), MetadataStoreError> {
     let schema = r#"
         DEFINE TABLE IF NOT EXISTS schema_migrations SCHEMALESS;
+        DEFINE TABLE IF NOT EXISTS hosting_config SCHEMALESS;
+        DEFINE TABLE IF NOT EXISTS server_admins SCHEMALESS;
         DEFINE TABLE IF NOT EXISTS users SCHEMALESS;
         DEFINE TABLE IF NOT EXISTS login_sessions SCHEMALESS;
         DEFINE TABLE IF NOT EXISTS devices SCHEMALESS;
@@ -1225,6 +1778,11 @@ async fn initialize_hosted_schema(client: &SurrealHostedClient) -> Result<(), Me
         DEFINE TABLE IF NOT EXISTS logbook_memberships SCHEMALESS;
         DEFINE TABLE IF NOT EXISTS api_tokens SCHEMALESS;
         DEFINE TABLE IF NOT EXISTS server_invites SCHEMALESS;
+        DEFINE TABLE IF NOT EXISTS email_verifications SCHEMALESS;
+        DEFINE TABLE IF NOT EXISTS recovery_tokens SCHEMALESS;
+        DEFINE TABLE IF NOT EXISTS rate_limits SCHEMALESS;
+        DEFINE TABLE IF NOT EXISTS turnstile_replay_tokens SCHEMALESS;
+        DEFINE TABLE IF NOT EXISTS audit_log SCHEMALESS;
         DEFINE TABLE IF NOT EXISTS station_profiles SCHEMALESS;
         DEFINE TABLE IF NOT EXISTS equipment_profiles SCHEMALESS;
         DEFINE TABLE IF NOT EXISTS provider_settings SCHEMALESS;
@@ -1234,6 +1792,7 @@ async fn initialize_hosted_schema(client: &SurrealHostedClient) -> Result<(), Me
         DEFINE TABLE IF NOT EXISTS divergence_reports SCHEMALESS;
         DEFINE INDEX IF NOT EXISTS users_email_idx ON TABLE users COLUMNS email UNIQUE;
         DEFINE INDEX IF NOT EXISTS users_account_idx ON TABLE users COLUMNS account_id;
+        DEFINE INDEX IF NOT EXISTS server_admins_user_idx ON TABLE server_admins COLUMNS user_id UNIQUE;
         DEFINE INDEX IF NOT EXISTS sessions_token_hash_idx ON TABLE login_sessions COLUMNS token_hash UNIQUE;
         DEFINE INDEX IF NOT EXISTS sessions_account_idx ON TABLE login_sessions COLUMNS account_id;
         DEFINE INDEX IF NOT EXISTS sessions_device_idx ON TABLE login_sessions COLUMNS device_id;
@@ -1244,6 +1803,13 @@ async fn initialize_hosted_schema(client: &SurrealHostedClient) -> Result<(), Me
         DEFINE INDEX IF NOT EXISTS memberships_logbook_idx ON TABLE logbook_memberships COLUMNS logbook_id;
         DEFINE INDEX IF NOT EXISTS api_tokens_account_idx ON TABLE api_tokens COLUMNS account_id;
         DEFINE INDEX IF NOT EXISTS invites_account_idx ON TABLE server_invites COLUMNS account_id;
+        DEFINE INDEX IF NOT EXISTS invites_token_hash_idx ON TABLE server_invites COLUMNS token_hash UNIQUE;
+        DEFINE INDEX IF NOT EXISTS email_verifications_token_hash_idx ON TABLE email_verifications COLUMNS token_hash UNIQUE;
+        DEFINE INDEX IF NOT EXISTS email_verifications_account_idx ON TABLE email_verifications COLUMNS account_id;
+        DEFINE INDEX IF NOT EXISTS recovery_tokens_token_hash_idx ON TABLE recovery_tokens COLUMNS token_hash UNIQUE;
+        DEFINE INDEX IF NOT EXISTS recovery_tokens_account_idx ON TABLE recovery_tokens COLUMNS account_id;
+        DEFINE INDEX IF NOT EXISTS audit_log_action_idx ON TABLE audit_log COLUMNS action;
+        DEFINE INDEX IF NOT EXISTS audit_log_request_idx ON TABLE audit_log COLUMNS request_id;
         DEFINE INDEX IF NOT EXISTS station_profiles_account_idx ON TABLE station_profiles COLUMNS account_id;
         DEFINE INDEX IF NOT EXISTS station_profiles_logbook_idx ON TABLE station_profiles COLUMNS logbook_id;
         DEFINE INDEX IF NOT EXISTS equipment_profiles_account_idx ON TABLE equipment_profiles COLUMNS account_id;
@@ -1260,7 +1826,7 @@ async fn initialize_hosted_schema(client: &SurrealHostedClient) -> Result<(), Me
         DEFINE INDEX IF NOT EXISTS backup_records_logbook_idx ON TABLE backup_records COLUMNS logbook_id;
         DEFINE INDEX IF NOT EXISTS divergence_reports_account_idx ON TABLE divergence_reports COLUMNS account_id;
         DEFINE INDEX IF NOT EXISTS divergence_reports_logbook_idx ON TABLE divergence_reports COLUMNS logbook_id;
-        UPSERT schema_migrations:hosted_v3 SET version = 3, component = 'ham-server', applied_at = time::now();
+        UPSERT schema_migrations:hosted_v4 SET version = 4, component = 'ham-server', applied_at = time::now();
     "#;
     query_checked(client, schema).await
 }
@@ -1342,6 +1908,362 @@ fn session_token_hash(token: &str) -> String {
     format!("{:x}", Sha256::digest(token.as_bytes()))
 }
 
+fn opaque_token(prefix: &str, subject: Uuid) -> String {
+    format!("ke8ygw-{prefix}-{subject}-{}", Uuid::new_v4())
+}
+
+fn normalize_email(email: &str) -> Result<String, ApiError> {
+    let email = email.trim().to_ascii_lowercase();
+    if email.is_empty() || !email.contains('@') || email.contains(char::is_whitespace) {
+        return Err(ApiError::BadRequest("valid email is required".to_owned()));
+    }
+    Ok(email)
+}
+
+fn positive_seconds(value: i64, field_name: &str) -> Result<i64, ApiError> {
+    if value <= 0 {
+        return Err(ApiError::BadRequest(format!(
+            "{field_name} must be positive"
+        )));
+    }
+    Ok(value)
+}
+
+fn client_identity(request: &ApiRequest) -> String {
+    request
+        .headers
+        .get("x-forwarded-for")
+        .or_else(|| request.headers.get("X-Forwarded-For"))
+        .or_else(|| request.headers.get("x-real-ip"))
+        .or_else(|| request.headers.get("X-Real-IP"))
+        .map(|value| value.split(',').next().unwrap_or(value).trim().to_owned())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "local".to_owned())
+}
+
+fn enforce_rate_limit(state: &mut ServerState, key: String, limit: u32) -> Result<(), ApiError> {
+    if limit == 0 {
+        return Err(ApiError::RateLimited);
+    }
+    let now = Utc::now();
+    let window_seconds = state.hosting_config.limits.window_seconds.max(1);
+    let category = key.split(':').next().unwrap_or("limit");
+    let key = format!("{category}:{}", session_token_hash(&key));
+    let record = state
+        .rate_limits
+        .entry(key.clone())
+        .or_insert_with(|| RateLimitRecord {
+            key,
+            window_started_at: now,
+            count: 0,
+        });
+    if now
+        .signed_duration_since(record.window_started_at)
+        .num_seconds()
+        >= window_seconds
+    {
+        record.window_started_at = now;
+        record.count = 0;
+    }
+    if record.count >= limit {
+        return Err(ApiError::RateLimited);
+    }
+    record.count += 1;
+    Ok(())
+}
+
+fn create_account_only(
+    state: &mut ServerState,
+    email: String,
+    display_name: Option<String>,
+    email_verified_at: Option<DateTime<Utc>>,
+    now: DateTime<Utc>,
+) -> Result<UserAccount, ApiError> {
+    if state.users_by_email.contains_key(&email) {
+        return Err(ApiError::BadRequest("account already exists".to_owned()));
+    }
+    let account = UserAccount {
+        account_id: Uuid::new_v4(),
+        user_id: Uuid::new_v4(),
+        email: email.clone(),
+        display_name: display_name.unwrap_or_else(|| email.clone()),
+        created_at: now,
+        email_verified_at,
+        deleted_at: None,
+    };
+    state.users_by_email.insert(email, account.account_id);
+    state.accounts.insert(account.account_id, account.clone());
+    Ok(account)
+}
+
+fn create_default_logbook_for_account(
+    state: &mut ServerState,
+    account: &UserAccount,
+    now: DateTime<Utc>,
+) -> ApiLogbook {
+    let logbook = ApiLogbook {
+        logbook_id: Uuid::new_v4(),
+        account_id: account.account_id,
+        name: format!("{} Logbook", account.display_name),
+        description: Some("Hosted v1 default logbook".to_owned()),
+        station_callsign: None,
+        created_at: now,
+        updated_at: now,
+    };
+    state.logbooks.insert(logbook.logbook_id, logbook.clone());
+    state.memberships.push(LogbookMembership {
+        account_id: account.account_id,
+        logbook_id: logbook.logbook_id,
+        user_id: account.user_id,
+        role: LogbookRole::Owner,
+        created_at: now,
+    });
+    logbook
+}
+
+fn create_account_with_logbook(
+    state: &mut ServerState,
+    email: String,
+    display_name: Option<String>,
+    email_verified_at: Option<DateTime<Utc>>,
+    now: DateTime<Utc>,
+) -> Result<(UserAccount, ApiLogbook), ApiError> {
+    let account = create_account_only(state, email, display_name, email_verified_at, now)?;
+    let logbook = create_default_logbook_for_account(state, &account, now);
+    Ok((account, logbook))
+}
+
+fn create_email_verification(
+    state: &mut ServerState,
+    account: &UserAccount,
+    now: DateTime<Utc>,
+) -> String {
+    let token = opaque_token("verify", account.account_id);
+    let record = EmailVerificationRecord {
+        verification_id: Uuid::new_v4(),
+        account_id: account.account_id,
+        user_id: account.user_id,
+        email: account.email.clone(),
+        token_hash: session_token_hash(&token),
+        created_at: now,
+        expires_at: now + Duration::seconds(state.hosting_config.verification_ttl_seconds),
+        used_at: None,
+    };
+    state
+        .email_verifications
+        .insert(record.verification_id, record);
+    token
+}
+
+fn create_recovery_token(
+    state: &mut ServerState,
+    account: &UserAccount,
+    now: DateTime<Utc>,
+) -> String {
+    let token = opaque_token("recovery", account.account_id);
+    let record = RecoveryTokenRecord {
+        recovery_id: Uuid::new_v4(),
+        account_id: account.account_id,
+        user_id: account.user_id,
+        email: account.email.clone(),
+        token_hash: session_token_hash(&token),
+        created_at: now,
+        expires_at: now + Duration::seconds(state.hosting_config.recovery_ttl_seconds),
+        used_at: None,
+    };
+    state.recovery_tokens.insert(record.recovery_id, record);
+    token
+}
+
+fn issue_session_response(
+    state: &mut ServerState,
+    account: &UserAccount,
+    device_name: Option<String>,
+    reuse_device_id: Option<Uuid>,
+    now: DateTime<Utc>,
+) -> Result<LoginResponse, ApiError> {
+    let device = if let Some(device_id) = reuse_device_id {
+        state
+            .devices
+            .get(&device_id)
+            .filter(|device| device.account_id == account.account_id && !device.revoked)
+            .cloned()
+            .ok_or(ApiError::RevokedDevice)?
+    } else {
+        let device = DeviceIdentity {
+            device_id: Uuid::new_v4(),
+            account_id: account.account_id,
+            user_id: account.user_id,
+            device_name: device_name.unwrap_or_else(|| "Hosted web session".to_owned()),
+            fingerprint: format!("dev-{}", Uuid::new_v4()),
+            trusted: true,
+            revoked: false,
+            registered_at: now,
+            revoked_at: None,
+        };
+        state.devices.insert(device.device_id, device.clone());
+        device
+    };
+    let token = opaque_token("session", account.account_id);
+    let refresh_token = opaque_token("refresh", account.account_id);
+    let session = LoginSession {
+        session_id: Uuid::new_v4(),
+        account_id: account.account_id,
+        user_id: account.user_id,
+        device_id: device.device_id,
+        token: token.clone(),
+        token_hash: session_token_hash(&token),
+        refresh_token: refresh_token.clone(),
+        refresh_token_hash: session_token_hash(&refresh_token),
+        issued_at: now,
+        expires_at: Some(now + Duration::seconds(state.hosting_config.session_ttl_seconds)),
+        refresh_expires_at: Some(now + Duration::seconds(state.hosting_config.refresh_ttl_seconds)),
+        rotated_at: None,
+        active: true,
+    };
+    let mut stored = session.clone();
+    stored.token.clear();
+    stored.refresh_token.clear();
+    state
+        .sessions_by_token
+        .insert(stored.token_hash.clone(), stored);
+    let logbooks = visible_logbooks(state, account.user_id);
+    Ok(LoginResponse {
+        account: account.clone(),
+        session,
+        device,
+        logbooks,
+        refresh_token,
+        session_cookie: session_cookie_header(&token, false),
+    })
+}
+
+fn session_cookie_header(token: &str, expire: bool) -> String {
+    if expire {
+        return "ke8ygw_session=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0".to_owned();
+    }
+    format!("ke8ygw_session={token}; HttpOnly; Secure; SameSite=Lax; Path=/")
+}
+
+fn hosting_config_response(config: &HostingConfig) -> Value {
+    json!({
+        "operation_mode": config.operation_mode,
+        "registration_mode": config.registration_mode,
+        "bootstrap_admin_completed": config.bootstrap_admin_completed,
+        "session_ttl_seconds": config.session_ttl_seconds,
+        "refresh_ttl_seconds": config.refresh_ttl_seconds,
+        "invitation_ttl_seconds": config.invitation_ttl_seconds,
+        "verification_ttl_seconds": config.verification_ttl_seconds,
+        "recovery_ttl_seconds": config.recovery_ttl_seconds,
+        "limits": config.limits,
+        "email": {
+            "mode": config.email.mode,
+            "from_address": config.email.from_address,
+            "verification_base_url": config.email.verification_base_url,
+            "recovery_base_url": config.email.recovery_base_url,
+            "webhook_configured": config.email.webhook_url.is_some(),
+            "credential_reference_configured": config.email.credential_id.is_some(),
+        },
+        "turnstile": {
+            "enabled_for_open_registration": config.turnstile.enabled_for_open_registration,
+            "site_key": config.turnstile.site_key,
+            "secret_configured": config.turnstile.secret_key.is_some(),
+            "siteverify_url": config.turnstile.siteverify_url,
+            "timeout_seconds": config.turnstile.timeout_seconds,
+        },
+        "updated_at": config.updated_at,
+    })
+}
+
+fn sanitized_invitation(invite: &ServerInvite) -> Value {
+    json!({
+        "invite_id": invite.invite_id,
+        "account_id": invite.account_id,
+        "logbook_id": invite.logbook_id,
+        "invited_email": invite.invited_email,
+        "role": invite.role,
+        "created_by_user_id": invite.created_by_user_id,
+        "created_at": invite.created_at,
+        "expires_at": invite.expires_at,
+        "accepted_at": invite.accepted_at,
+        "revoked_at": invite.revoked_at,
+        "last_sent_at": invite.last_sent_at,
+        "resend_count": invite.resend_count,
+    })
+}
+
+fn push_audit(
+    state: &mut ServerState,
+    request_id: String,
+    actor: Option<&LoginSession>,
+    action: &str,
+    outcome: &str,
+    target: Option<String>,
+    details: Map<String, Value>,
+) {
+    state.audit_log.push(AuditRecord {
+        audit_id: Uuid::new_v4(),
+        occurred_at: Utc::now(),
+        request_id,
+        actor_account_id: actor.map(|session| session.account_id),
+        actor_user_id: actor.map(|session| session.user_id),
+        action: action.to_owned(),
+        outcome: outcome.to_owned(),
+        target,
+        details,
+    });
+}
+
+fn send_account_email(
+    outbox: &Arc<Mutex<Vec<TestEmailMessage>>>,
+    config: &EmailDeliveryConfig,
+    email: &str,
+    purpose: &str,
+    token: &str,
+) -> Result<(), ApiError> {
+    match config.mode {
+        EmailDeliveryMode::Test => {
+            outbox
+                .lock()
+                .expect("test email outbox mutex should not be poisoned")
+                .push(TestEmailMessage {
+                    to: email.to_owned(),
+                    purpose: purpose.to_owned(),
+                    token: token.to_owned(),
+                    token_hash: session_token_hash(token),
+                    sent_at: Utc::now(),
+                });
+            Ok(())
+        }
+        EmailDeliveryMode::Webhook => {
+            let webhook_url = config
+                .webhook_url
+                .as_ref()
+                .ok_or_else(|| ApiError::BadRequest("email webhook URL is required".to_owned()))?;
+            let payload = json!({
+                "to": email,
+                "from": config.from_address,
+                "purpose": purpose,
+                "token": token,
+            });
+            ureq::post(webhook_url)
+                .set("content-type", "application/json")
+                .timeout(StdDuration::from_secs(10))
+                .send_string(&payload.to_string())
+                .map_err(|_| ApiError::Store("email delivery failed".to_owned()))?;
+            Ok(())
+        }
+        EmailDeliveryMode::Disabled => Err(ApiError::BadRequest(
+            "email delivery is disabled".to_owned(),
+        )),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct TurnstileSiteverifyResponse {
+    success: bool,
+}
+
 #[derive(Clone)]
 pub struct HostedServer {
     state: Arc<RwLock<ServerState>>,
@@ -1349,6 +2271,7 @@ pub struct HostedServer {
     store: Arc<dyn LogbookEventStore>,
     bus: Arc<InMemoryEventBus>,
     credential_store: Arc<Mutex<Box<dyn CredentialStore>>>,
+    email_outbox: Arc<Mutex<Vec<TestEmailMessage>>>,
 }
 
 pub fn default_metadata_store_path() -> PathBuf {
@@ -1436,6 +2359,7 @@ impl HostedServer {
             store: Arc::new(InMemoryLogbookEventStore::new()),
             bus: Arc::new(InMemoryEventBus::new(256)),
             credential_store: Arc::new(Mutex::new(default_server_credential_store())),
+            email_outbox: Arc::new(Mutex::new(Vec::new())),
         })
     }
 
@@ -1450,6 +2374,7 @@ impl HostedServer {
             store,
             bus: Arc::new(InMemoryEventBus::new(256)),
             credential_store: Arc::new(Mutex::new(default_server_credential_store())),
+            email_outbox: Arc::new(Mutex::new(Vec::new())),
         })
     }
 
@@ -1464,9 +2389,41 @@ impl HostedServer {
     }
 
     pub async fn handle(&self, request: ApiRequest) -> ApiResponse {
+        let mut request = request;
         let request_id = request_id(&request);
+        request
+            .headers
+            .entry("x-request-id".to_owned())
+            .or_insert_with(|| request_id.clone());
+        let path = request.path.clone();
         match self.route(request).await {
-            Ok(response) => json_response(200, &response),
+            Ok(response) => {
+                let mut api_response = json_response(200, &response);
+                api_response
+                    .headers
+                    .insert("x-request-id".to_owned(), request_id.clone());
+                if let Some(token) = response
+                    .get("session")
+                    .and_then(|session| session.get("token"))
+                    .and_then(Value::as_str)
+                    .filter(|token| !token.is_empty())
+                {
+                    api_response
+                        .headers
+                        .insert("set-cookie".to_owned(), session_cookie_header(token, false));
+                } else if matches!(
+                    path.as_str(),
+                    "/api/v1/auth/logout"
+                        | "/api/v1/auth/logout-all"
+                        | "/api/v1/auth/account/delete"
+                        | "/api/v1/devices/revoke-all"
+                ) {
+                    api_response
+                        .headers
+                        .insert("set-cookie".to_owned(), session_cookie_header("", true));
+                }
+                api_response
+            }
             Err(error) => api_error_response(error, request_id),
         }
     }
@@ -1481,8 +2438,45 @@ impl HostedServer {
             })),
             ("GET", ["api", "v1", "status"]) => self.status().await,
             ("GET", ["api", "v1", "routes"]) => Ok(json!(route_catalog())),
-            ("POST", ["api", "v1", "auth", "login"]) => self.login(&request.body).await,
+            ("POST", ["api", "v1", "admin", "bootstrap"]) => self.bootstrap_admin(&request).await,
+            ("GET", ["api", "v1", "admin", "hosting"]) => self.hosting_config(&request).await,
+            ("PATCH", ["api", "v1", "admin", "hosting"]) => {
+                self.patch_hosting_config(&request).await
+            }
+            ("GET", ["api", "v1", "admin", "invitations"]) => self.list_invitations(&request).await,
+            ("POST", ["api", "v1", "admin", "invitations"]) => {
+                self.create_invitation(&request).await
+            }
+            ("GET", ["api", "v1", "admin", "invitations", invite_id]) => {
+                self.get_invitation(&request, invite_id).await
+            }
+            ("POST", ["api", "v1", "admin", "invitations", invite_id, "resend"]) => {
+                self.resend_invitation(&request, invite_id).await
+            }
+            ("POST", ["api", "v1", "admin", "invitations", invite_id, "expire"]) => {
+                self.expire_invitation(&request, invite_id).await
+            }
+            ("POST", ["api", "v1", "admin", "invitations", invite_id, "revoke"]) => {
+                self.revoke_invitation(&request, invite_id).await
+            }
+            ("GET", ["api", "v1", "admin", "audits"]) => self.audit_records(&request).await,
+            ("POST", ["api", "v1", "auth", "register"]) => self.register(&request).await,
+            ("POST", ["api", "v1", "auth", "verify-email"]) => self.verify_email(&request).await,
+            ("POST", ["api", "v1", "auth", "recovery", "start"]) => {
+                self.start_recovery(&request).await
+            }
+            ("POST", ["api", "v1", "auth", "recovery", "complete"]) => {
+                self.complete_recovery(&request).await
+            }
+            ("POST", ["api", "v1", "auth", "login"]) => self.login(&request).await,
             ("POST", ["api", "v1", "auth", "logout"]) => self.logout(&request).await,
+            ("POST", ["api", "v1", "auth", "logout-all"]) => self.logout_all(&request).await,
+            ("POST", ["api", "v1", "auth", "session", "rotate"]) => {
+                self.rotate_session(&request).await
+            }
+            ("POST", ["api", "v1", "auth", "account", "delete"]) => {
+                self.delete_account(&request).await
+            }
             ("GET", ["api", "v1", "auth", "session"]) => self.session(&request).await,
             ("GET", ["api", "v1", "logbooks"]) => self.list_logbooks(&request).await,
             ("POST", ["api", "v1", "logbooks"]) => self.create_logbook(&request).await,
@@ -1647,6 +2641,9 @@ impl HostedServer {
                 self.export_divergence_report(&request, report_id).await
             }
             ("GET", ["api", "v1", "devices"]) => self.devices(&request).await,
+            ("POST", ["api", "v1", "devices", "revoke-all"]) => {
+                self.revoke_all_devices(&request).await
+            }
             ("POST", ["api", "v1", "devices"]) => self.register_device(&request).await,
             ("POST", ["api", "v1", "devices", device_id, "revoke"]) => {
                 self.revoke_device(&request, device_id).await
@@ -1661,7 +2658,10 @@ impl HostedServer {
         Ok(json!({
             "ok": true,
             "api_version": "v1",
-            "mode": "hosted_beta",
+            "mode": "hosted_v1_foundation",
+            "operation_mode": state.hosting_config.operation_mode,
+            "registration_mode": state.hosting_config.registration_mode,
+            "bootstrap_admin_completed": state.hosting_config.bootstrap_admin_completed,
             "accounts": state.accounts.len(),
             "logbooks": state.logbooks.len(),
             "sessions": state.sessions_by_token.values().filter(|session| session.active).count(),
@@ -1669,106 +2669,748 @@ impl HostedServer {
             "api_tokens": state.api_tokens.len(),
             "durable_server_storage": self.metadata_store.is_durable(),
             "metadata_store": self.metadata_store.label(),
-            "ios_release_target": "v1.1_native_swiftui"
+            "ios_release_target": "v1_native_swiftui"
         }))
     }
 
-    async fn login(&self, body: &[u8]) -> Result<Value, ApiError> {
-        let request: LoginRequest = parse_json(body)?;
-        let email = request.email.trim().to_ascii_lowercase();
-        if email.is_empty() {
-            return Err(ApiError::BadRequest("email is required".to_owned()));
+    async fn bootstrap_admin(&self, request: &ApiRequest) -> Result<Value, ApiError> {
+        let input: BootstrapAdminRequest = parse_json(&request.body)?;
+        let email = normalize_email(&input.email)?;
+        let mut state = self.state.write().await;
+        if state.hosting_config.bootstrap_admin_completed
+            || !state.server_admin_user_ids.is_empty()
+            || !state.accounts.is_empty()
+        {
+            push_audit(
+                &mut state,
+                request_id(request),
+                None,
+                "admin.bootstrap",
+                "denied",
+                None,
+                Map::new(),
+            );
+            self.persist_metadata(&state)?;
+            return Err(ApiError::Forbidden);
         }
 
-        let mut state = self.state.write().await;
         let now = Utc::now();
-        let account = if let Some(account_id) = state.users_by_email.get(&email).copied() {
-            state
-                .accounts
-                .get(&account_id)
-                .cloned()
-                .ok_or(ApiError::NotFound)?
-        } else {
-            let account = UserAccount {
-                account_id: Uuid::new_v4(),
-                user_id: Uuid::new_v4(),
-                email: email.clone(),
-                display_name: request
-                    .display_name
-                    .clone()
-                    .unwrap_or_else(|| email.clone()),
-                created_at: now,
-            };
-            let logbook = ApiLogbook {
-                logbook_id: Uuid::new_v4(),
-                account_id: account.account_id,
-                name: format!("{} Logbook", account.display_name),
-                description: Some("Hosted beta default logbook".to_owned()),
-                station_callsign: None,
-                created_at: now,
-                updated_at: now,
-            };
-            state
-                .users_by_email
-                .insert(email.clone(), account.account_id);
-            state.logbooks.insert(logbook.logbook_id, logbook.clone());
+        let (account, _) =
+            create_account_with_logbook(&mut state, email, input.display_name, Some(now), now)?;
+        state.server_admin_user_ids.insert(account.user_id);
+        state.hosting_config.bootstrap_admin_completed = true;
+        state.hosting_config.updated_at = now;
+        let response = issue_session_response(&mut state, &account, input.device_name, None, now)?;
+        push_audit(
+            &mut state,
+            request_id(request),
+            Some(&response.session),
+            "admin.bootstrap",
+            "succeeded",
+            Some(account.account_id.to_string()),
+            Map::new(),
+        );
+        self.persist_metadata(&state)?;
+        Ok(json!(response))
+    }
+
+    async fn hosting_config(&self, request: &ApiRequest) -> Result<Value, ApiError> {
+        self.require_instance_admin(request).await?;
+        let state = self.state.read().await;
+        Ok(json!({"hosting": hosting_config_response(&state.hosting_config)}))
+    }
+
+    async fn patch_hosting_config(&self, request: &ApiRequest) -> Result<Value, ApiError> {
+        let auth = self.require_instance_admin(request).await?;
+        let input: HostingConfigPatchRequest = parse_json(&request.body)?;
+        let mut state = self.state.write().await;
+        if let Some(mode) = input.operation_mode {
+            state.hosting_config.operation_mode = mode;
+        }
+        if let Some(mode) = input.registration_mode {
+            state.hosting_config.registration_mode = mode;
+        }
+        if let Some(value) = input.session_ttl_seconds {
+            state.hosting_config.session_ttl_seconds =
+                positive_seconds(value, "session_ttl_seconds")?;
+        }
+        if let Some(value) = input.refresh_ttl_seconds {
+            state.hosting_config.refresh_ttl_seconds =
+                positive_seconds(value, "refresh_ttl_seconds")?;
+        }
+        if let Some(value) = input.invitation_ttl_seconds {
+            state.hosting_config.invitation_ttl_seconds =
+                positive_seconds(value, "invitation_ttl_seconds")?;
+        }
+        if let Some(value) = input.verification_ttl_seconds {
+            state.hosting_config.verification_ttl_seconds =
+                positive_seconds(value, "verification_ttl_seconds")?;
+        }
+        if let Some(value) = input.recovery_ttl_seconds {
+            state.hosting_config.recovery_ttl_seconds =
+                positive_seconds(value, "recovery_ttl_seconds")?;
+        }
+        if let Some(limits) = input.limits {
+            if limits.window_seconds <= 0 {
+                return Err(ApiError::BadRequest(
+                    "limits.window_seconds must be positive".to_owned(),
+                ));
+            }
+            state.hosting_config.limits = limits;
+        }
+        if let Some(email) = input.email {
+            state.hosting_config.email = email;
+        }
+        if let Some(turnstile) = input.turnstile {
+            state.hosting_config.turnstile = turnstile;
+        }
+        state.hosting_config.updated_at = Utc::now();
+        let mut details = Map::new();
+        details.insert(
+            "operation_mode".to_owned(),
+            json!(state.hosting_config.operation_mode),
+        );
+        details.insert(
+            "registration_mode".to_owned(),
+            json!(state.hosting_config.registration_mode),
+        );
+        push_audit(
+            &mut state,
+            request_id(request),
+            Some(&auth.session),
+            "admin.hosting.update",
+            "succeeded",
+            None,
+            details,
+        );
+        let hosting = hosting_config_response(&state.hosting_config);
+        self.persist_metadata(&state)?;
+        Ok(json!({"hosting": hosting}))
+    }
+
+    async fn list_invitations(&self, request: &ApiRequest) -> Result<Value, ApiError> {
+        self.require_instance_admin(request).await?;
+        let state = self.state.read().await;
+        let mut invitations = state
+            .invites
+            .values()
+            .map(sanitized_invitation)
+            .collect::<Vec<_>>();
+        invitations.sort_by_key(|invite| {
+            std::cmp::Reverse(
+                invite
+                    .get("created_at")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned),
+            )
+        });
+        Ok(json!({"invitations": invitations}))
+    }
+
+    async fn create_invitation(&self, request: &ApiRequest) -> Result<Value, ApiError> {
+        let auth = self.require_instance_admin(request).await?;
+        let input: CreateInvitationRequest = parse_json(&request.body)?;
+        let email = normalize_email(&input.email)?;
+        let mut state = self.state.write().await;
+        let invitation_limit = state.hosting_config.limits.invitations_per_window;
+        enforce_rate_limit(
+            &mut state,
+            format!(
+                "invitation:{}:{}",
+                auth.session.account_id,
+                client_identity(request)
+            ),
+            invitation_limit,
+        )?;
+        let logbook = state
+            .logbooks
+            .get(&input.logbook_id)
+            .cloned()
+            .ok_or(ApiError::NotFound)?;
+        let now = Utc::now();
+        let invitation_ttl_seconds = state.hosting_config.invitation_ttl_seconds;
+        let token = opaque_token("invite", logbook.logbook_id);
+        let invite = ServerInvite {
+            invite_id: Uuid::new_v4(),
+            account_id: logbook.account_id,
+            logbook_id: logbook.logbook_id,
+            invited_email: email.clone(),
+            role: input.role,
+            token_hash: session_token_hash(&token),
+            legacy_token: String::new(),
+            created_by_user_id: Some(auth.session.user_id),
+            created_at: Some(now),
+            expires_at: input
+                .expires_at
+                .unwrap_or_else(|| now + Duration::seconds(invitation_ttl_seconds)),
+            accepted_at: None,
+            revoked_at: None,
+            last_sent_at: Some(now),
+            resend_count: 0,
+        };
+        send_account_email(
+            &self.email_outbox,
+            &state.hosting_config.email,
+            &email,
+            "invitation",
+            &token,
+        )?;
+        state.invites.insert(invite.invite_id, invite.clone());
+        push_audit(
+            &mut state,
+            request_id(request),
+            Some(&auth.session),
+            "admin.invitation.create",
+            "succeeded",
+            Some(invite.invite_id.to_string()),
+            Map::new(),
+        );
+        self.persist_metadata(&state)?;
+        Ok(json!({
+            "invitation": sanitized_invitation(&invite),
+            "invitation_token": token
+        }))
+    }
+
+    async fn get_invitation(
+        &self,
+        request: &ApiRequest,
+        invite_id: &str,
+    ) -> Result<Value, ApiError> {
+        self.require_instance_admin(request).await?;
+        let invite_id = parse_uuid(invite_id)?;
+        let state = self.state.read().await;
+        let invite = state.invites.get(&invite_id).ok_or(ApiError::NotFound)?;
+        Ok(json!({"invitation": sanitized_invitation(invite)}))
+    }
+
+    async fn resend_invitation(
+        &self,
+        request: &ApiRequest,
+        invite_id: &str,
+    ) -> Result<Value, ApiError> {
+        let auth = self.require_instance_admin(request).await?;
+        let invite_id = parse_uuid(invite_id)?;
+        let mut state = self.state.write().await;
+        let invitation_limit = state.hosting_config.limits.invitations_per_window;
+        let invitation_ttl_seconds = state.hosting_config.invitation_ttl_seconds;
+        enforce_rate_limit(
+            &mut state,
+            format!(
+                "invitation:{}:{}",
+                auth.session.account_id,
+                client_identity(request)
+            ),
+            invitation_limit,
+        )?;
+        let now = Utc::now();
+        let token = opaque_token("invite", invite_id);
+        let email_config = state.hosting_config.email.clone();
+        let (email, response) = {
+            let invite = state
+                .invites
+                .get_mut(&invite_id)
+                .ok_or(ApiError::NotFound)?;
+            if invite.accepted_at.is_some() || invite.revoked_at.is_some() {
+                return Err(ApiError::TokenExpired);
+            }
+            invite.token_hash = session_token_hash(&token);
+            invite.expires_at = now + Duration::seconds(invitation_ttl_seconds);
+            invite.last_sent_at = Some(now);
+            invite.resend_count = invite.resend_count.saturating_add(1);
+            (invite.invited_email.clone(), sanitized_invitation(invite))
+        };
+        send_account_email(
+            &self.email_outbox,
+            &email_config,
+            &email,
+            "invitation",
+            &token,
+        )?;
+        push_audit(
+            &mut state,
+            request_id(request),
+            Some(&auth.session),
+            "admin.invitation.resend",
+            "succeeded",
+            Some(invite_id.to_string()),
+            Map::new(),
+        );
+        self.persist_metadata(&state)?;
+        Ok(json!({"invitation": response, "invitation_token": token}))
+    }
+
+    async fn expire_invitation(
+        &self,
+        request: &ApiRequest,
+        invite_id: &str,
+    ) -> Result<Value, ApiError> {
+        let auth = self.require_instance_admin(request).await?;
+        let invite_id = parse_uuid(invite_id)?;
+        let input: InvitationActionRequest = serde_json::from_slice(&request.body)
+            .unwrap_or(InvitationActionRequest { expires_at: None });
+        let mut state = self.state.write().await;
+        let invite = state
+            .invites
+            .get_mut(&invite_id)
+            .ok_or(ApiError::NotFound)?;
+        invite.expires_at = input.expires_at.unwrap_or_else(Utc::now);
+        let response = sanitized_invitation(invite);
+        push_audit(
+            &mut state,
+            request_id(request),
+            Some(&auth.session),
+            "admin.invitation.expire",
+            "succeeded",
+            Some(invite_id.to_string()),
+            Map::new(),
+        );
+        self.persist_metadata(&state)?;
+        Ok(json!({"invitation": response}))
+    }
+
+    async fn revoke_invitation(
+        &self,
+        request: &ApiRequest,
+        invite_id: &str,
+    ) -> Result<Value, ApiError> {
+        let auth = self.require_instance_admin(request).await?;
+        let invite_id = parse_uuid(invite_id)?;
+        let mut state = self.state.write().await;
+        let invite = state
+            .invites
+            .get_mut(&invite_id)
+            .ok_or(ApiError::NotFound)?;
+        invite.revoked_at = Some(Utc::now());
+        let response = sanitized_invitation(invite);
+        push_audit(
+            &mut state,
+            request_id(request),
+            Some(&auth.session),
+            "admin.invitation.revoke",
+            "succeeded",
+            Some(invite_id.to_string()),
+            Map::new(),
+        );
+        self.persist_metadata(&state)?;
+        Ok(json!({"invitation": response}))
+    }
+
+    async fn audit_records(&self, request: &ApiRequest) -> Result<Value, ApiError> {
+        self.require_instance_admin(request).await?;
+        let state = self.state.read().await;
+        let mut audits = state.audit_log.clone();
+        audits.sort_by_key(|record| std::cmp::Reverse(record.occurred_at));
+        Ok(json!({"audits": audits}))
+    }
+
+    async fn register(&self, request: &ApiRequest) -> Result<Value, ApiError> {
+        let input: RegistrationRequest = parse_json(&request.body)?;
+        let email = normalize_email(&input.email)?;
+        self.verify_registration_gate(&input, &email).await?;
+        let mut state = self.state.write().await;
+        let registration_limit = state.hosting_config.limits.registrations_per_window;
+        enforce_rate_limit(
+            &mut state,
+            format!("registration:{}:{}", email, client_identity(request)),
+            registration_limit,
+        )?;
+        if state.users_by_email.contains_key(&email) {
+            return Err(ApiError::BadRequest("account already exists".to_owned()));
+        }
+        let now = Utc::now();
+        let mut logbooks = Vec::new();
+        let registration_mode = state.hosting_config.registration_mode;
+        let invite_membership = match registration_mode {
+            RegistrationMode::InviteOnly => {
+                let token = input
+                    .invitation_token
+                    .as_deref()
+                    .filter(|token| !token.trim().is_empty())
+                    .ok_or(ApiError::RegistrationClosed)?;
+                let token_hash = session_token_hash(token);
+                let invite = state
+                    .invites
+                    .values()
+                    .find(|invite| invite.token_hash == token_hash)
+                    .ok_or(ApiError::TokenExpired)?;
+                if invite.invited_email != email || invite.revoked_at.is_some() {
+                    return Err(ApiError::TokenExpired);
+                }
+                if invite.accepted_at.is_some() {
+                    return Err(ApiError::TokenReplayed);
+                }
+                if invite.expires_at <= now {
+                    return Err(ApiError::TokenExpired);
+                }
+                Some((
+                    invite.invite_id,
+                    invite.account_id,
+                    invite.logbook_id,
+                    invite.role,
+                ))
+            }
+            RegistrationMode::Open => None,
+            RegistrationMode::Disabled => return Err(ApiError::RegistrationClosed),
+        };
+        let account =
+            create_account_only(&mut state, email.clone(), input.display_name, None, now)?;
+        if let Some((invite_id, invite_account_id, invite_logbook_id, invite_role)) =
+            invite_membership
+        {
+            let invite = state
+                .invites
+                .get_mut(&invite_id)
+                .ok_or(ApiError::TokenExpired)?;
+            invite.accepted_at = Some(now);
             state.memberships.push(LogbookMembership {
-                account_id: account.account_id,
-                logbook_id: logbook.logbook_id,
+                account_id: invite_account_id,
+                logbook_id: invite_logbook_id,
                 user_id: account.user_id,
-                role: LogbookRole::Owner,
+                role: invite_role,
                 created_at: now,
             });
-            state.accounts.insert(account.account_id, account.clone());
-            account
-        };
-
-        let device = DeviceIdentity {
-            device_id: Uuid::new_v4(),
-            account_id: account.account_id,
-            user_id: account.user_id,
-            device_name: request
-                .device_name
-                .unwrap_or_else(|| "Hosted web session".to_owned()),
-            fingerprint: format!("dev-{}", Uuid::new_v4()),
-            trusted: true,
-            revoked: false,
-            registered_at: now,
-            revoked_at: None,
-        };
-        let token = format!("api-{}-{}", account.account_id, Uuid::new_v4());
-        let session = LoginSession {
-            session_id: Uuid::new_v4(),
-            account_id: account.account_id,
-            user_id: account.user_id,
-            device_id: device.device_id,
-            token,
-            issued_at: now,
-            expires_at: None,
-            active: true,
-        };
-        state.devices.insert(device.device_id, device.clone());
-        state
-            .sessions_by_token
-            .insert(session.token.clone(), session.clone());
-        let logbooks = visible_logbooks(&state, account.user_id);
+            if let Some(logbook) = state.logbooks.get(&invite_logbook_id).cloned() {
+                logbooks.push(logbook);
+            }
+        } else {
+            let logbook = create_default_logbook_for_account(&mut state, &account, now);
+            logbooks.push(logbook);
+        }
+        let verification_token = create_email_verification(&mut state, &account, now);
+        send_account_email(
+            &self.email_outbox,
+            &state.hosting_config.email,
+            &email,
+            "verification",
+            &verification_token,
+        )?;
+        push_audit(
+            &mut state,
+            request_id(request),
+            None,
+            "auth.register",
+            "succeeded",
+            Some(account.account_id.to_string()),
+            Map::new(),
+        );
         self.persist_metadata(&state)?;
-        Ok(json!(LoginResponse {
-            account,
-            session,
-            device,
-            logbooks
+        Ok(json!({
+            "ok": true,
+            "account": account,
+            "logbooks": logbooks,
+            "email_verification_required": true
         }))
+    }
+
+    async fn verify_email(&self, request: &ApiRequest) -> Result<Value, ApiError> {
+        let input: VerifyEmailRequest = parse_json(&request.body)?;
+        let token_hash = session_token_hash(&input.token);
+        let mut state = self.state.write().await;
+        let verification_limit = state.hosting_config.limits.verifications_per_window;
+        enforce_rate_limit(
+            &mut state,
+            format!("verification:{}", client_identity(request)),
+            verification_limit,
+        )?;
+        let now = Utc::now();
+        let record_id = state
+            .email_verifications
+            .iter()
+            .find(|(_, record)| record.token_hash == token_hash)
+            .map(|(record_id, _)| *record_id)
+            .ok_or(ApiError::TokenExpired)?;
+        let account_id = {
+            let record = state
+                .email_verifications
+                .get_mut(&record_id)
+                .ok_or(ApiError::TokenExpired)?;
+            if record.used_at.is_some() {
+                return Err(ApiError::TokenReplayed);
+            }
+            if record.expires_at <= now {
+                return Err(ApiError::TokenExpired);
+            }
+            record.used_at = Some(now);
+            record.account_id
+        };
+        let account = state
+            .accounts
+            .get_mut(&account_id)
+            .ok_or(ApiError::TokenExpired)?;
+        account.email_verified_at = Some(now);
+        let account = account.clone();
+        push_audit(
+            &mut state,
+            request_id(request),
+            None,
+            "auth.email.verify",
+            "succeeded",
+            Some(account.account_id.to_string()),
+            Map::new(),
+        );
+        self.persist_metadata(&state)?;
+        Ok(json!({"ok": true, "account": account}))
+    }
+
+    async fn start_recovery(&self, request: &ApiRequest) -> Result<Value, ApiError> {
+        let input: RecoveryStartRequest = parse_json(&request.body)?;
+        let email = normalize_email(&input.email)?;
+        let mut state = self.state.write().await;
+        let recovery_limit = state.hosting_config.limits.recovery_per_window;
+        enforce_rate_limit(
+            &mut state,
+            format!("recovery:{}:{}", email, client_identity(request)),
+            recovery_limit,
+        )?;
+        if let Some(account_id) = state.users_by_email.get(&email).copied() {
+            if let Some(account) = state
+                .accounts
+                .get(&account_id)
+                .filter(|account| {
+                    account.deleted_at.is_none() && account.email_verified_at.is_some()
+                })
+                .cloned()
+            {
+                let token = create_recovery_token(&mut state, &account, Utc::now());
+                send_account_email(
+                    &self.email_outbox,
+                    &state.hosting_config.email,
+                    &email,
+                    "recovery",
+                    &token,
+                )?;
+                push_audit(
+                    &mut state,
+                    request_id(request),
+                    None,
+                    "auth.recovery.start",
+                    "succeeded",
+                    Some(account.account_id.to_string()),
+                    Map::new(),
+                );
+            }
+        }
+        self.persist_metadata(&state)?;
+        Ok(json!({"ok": true}))
+    }
+
+    async fn complete_recovery(&self, request: &ApiRequest) -> Result<Value, ApiError> {
+        let input: RecoveryCompleteRequest = parse_json(&request.body)?;
+        let token_hash = session_token_hash(&input.token);
+        let mut state = self.state.write().await;
+        let now = Utc::now();
+        let record_id = state
+            .recovery_tokens
+            .iter()
+            .find(|(_, record)| record.token_hash == token_hash)
+            .map(|(record_id, _)| *record_id)
+            .ok_or(ApiError::TokenExpired)?;
+        let account_id = {
+            let record = state
+                .recovery_tokens
+                .get_mut(&record_id)
+                .ok_or(ApiError::TokenExpired)?;
+            if record.used_at.is_some() {
+                return Err(ApiError::TokenReplayed);
+            }
+            if record.expires_at <= now {
+                return Err(ApiError::TokenExpired);
+            }
+            record.used_at = Some(now);
+            record.account_id
+        };
+        let account = state
+            .accounts
+            .get(&account_id)
+            .filter(|account| account.deleted_at.is_none() && account.email_verified_at.is_some())
+            .cloned()
+            .ok_or(ApiError::TokenExpired)?;
+        let response = issue_session_response(&mut state, &account, input.device_name, None, now)?;
+        push_audit(
+            &mut state,
+            request_id(request),
+            Some(&response.session),
+            "auth.recovery.complete",
+            "succeeded",
+            Some(account.account_id.to_string()),
+            Map::new(),
+        );
+        self.persist_metadata(&state)?;
+        Ok(json!(response))
+    }
+
+    async fn login(&self, request: &ApiRequest) -> Result<Value, ApiError> {
+        let input: LoginRequest = parse_json(&request.body)?;
+        let email = normalize_email(&input.email)?;
+        let mut state = self.state.write().await;
+        let login_limit = state.hosting_config.limits.logins_per_window;
+        enforce_rate_limit(
+            &mut state,
+            format!("login:{}:{}", email, client_identity(request)),
+            login_limit,
+        )?;
+        let account_id = state
+            .users_by_email
+            .get(&email)
+            .copied()
+            .ok_or(ApiError::Unauthenticated)?;
+        let account = state
+            .accounts
+            .get(&account_id)
+            .cloned()
+            .ok_or(ApiError::Unauthenticated)?;
+        if account.deleted_at.is_some() {
+            return Err(ApiError::Unauthenticated);
+        }
+        if account.email_verified_at.is_none() {
+            return Err(ApiError::EmailUnverified);
+        }
+        let response =
+            issue_session_response(&mut state, &account, input.device_name, None, Utc::now())?;
+        push_audit(
+            &mut state,
+            request_id(request),
+            Some(&response.session),
+            "auth.login",
+            "succeeded",
+            Some(account.account_id.to_string()),
+            Map::new(),
+        );
+        self.persist_metadata(&state)?;
+        Ok(json!(response))
     }
 
     async fn logout(&self, request: &ApiRequest) -> Result<Value, ApiError> {
         let token = bearer_token(request).ok_or(ApiError::Unauthenticated)?;
+        let token_hash = session_token_hash(&token);
         let mut state = self.state.write().await;
         let session = state
             .sessions_by_token
-            .get_mut(&token)
+            .get_mut(&token_hash)
             .ok_or(ApiError::Unauthenticated)?;
         session.active = false;
+        let session = session.clone();
+        push_audit(
+            &mut state,
+            request_id(request),
+            Some(&session),
+            "auth.logout",
+            "succeeded",
+            Some(session.session_id.to_string()),
+            Map::new(),
+        );
+        self.persist_metadata(&state)?;
+        Ok(json!({"ok": true}))
+    }
+
+    async fn logout_all(&self, request: &ApiRequest) -> Result<Value, ApiError> {
+        let auth = self.authorize(request).await?;
+        let mut state = self.state.write().await;
+        let mut count = 0usize;
+        for session in state.sessions_by_token.values_mut() {
+            if session.account_id == auth.session.account_id && session.active {
+                session.active = false;
+                count += 1;
+            }
+        }
+        push_audit(
+            &mut state,
+            request_id(request),
+            Some(&auth.session),
+            "auth.logout_all",
+            "succeeded",
+            Some(auth.session.account_id.to_string()),
+            Map::new(),
+        );
+        self.persist_metadata(&state)?;
+        Ok(json!({"ok": true, "revoked_sessions": count}))
+    }
+
+    async fn rotate_session(&self, request: &ApiRequest) -> Result<Value, ApiError> {
+        let auth = self.authorize(request).await?;
+        let input: SessionRotateRequest = parse_json(&request.body)?;
+        let refresh_token = input
+            .refresh_token
+            .as_deref()
+            .filter(|token| !token.trim().is_empty())
+            .ok_or(ApiError::TokenExpired)?;
+        let refresh_hash = session_token_hash(refresh_token);
+        let mut state = self.state.write().await;
+        let stored = state
+            .sessions_by_token
+            .get_mut(&auth.session.token_hash)
+            .ok_or(ApiError::Unauthenticated)?;
+        if stored.refresh_token_hash != refresh_hash {
+            return Err(ApiError::TokenExpired);
+        }
+        if stored
+            .refresh_expires_at
+            .is_some_and(|expires_at| expires_at <= Utc::now())
+        {
+            return Err(ApiError::TokenExpired);
+        }
+        stored.active = false;
+        stored.rotated_at = Some(Utc::now());
+        let account = state
+            .accounts
+            .get(&auth.session.account_id)
+            .cloned()
+            .ok_or(ApiError::Unauthenticated)?;
+        let response = issue_session_response(
+            &mut state,
+            &account,
+            None,
+            Some(auth.session.device_id),
+            Utc::now(),
+        )?;
+        push_audit(
+            &mut state,
+            request_id(request),
+            Some(&response.session),
+            "auth.session.rotate",
+            "succeeded",
+            Some(auth.session.session_id.to_string()),
+            Map::new(),
+        );
+        self.persist_metadata(&state)?;
+        Ok(json!(response))
+    }
+
+    async fn delete_account(&self, request: &ApiRequest) -> Result<Value, ApiError> {
+        let auth = self.authorize(request).await?;
+        let input: AccountDeleteRequest = parse_json(&request.body)?;
+        if !input.confirm {
+            return Err(ApiError::BadRequest("confirm must be true".to_owned()));
+        }
+        let mut state = self.state.write().await;
+        let now = Utc::now();
+        let account = state
+            .accounts
+            .get_mut(&auth.session.account_id)
+            .ok_or(ApiError::Unauthenticated)?;
+        account.deleted_at = Some(now);
+        for session in state.sessions_by_token.values_mut() {
+            if session.account_id == auth.session.account_id {
+                session.active = false;
+            }
+        }
+        for device in state.devices.values_mut() {
+            if device.account_id == auth.session.account_id {
+                device.revoked = true;
+                device.revoked_at.get_or_insert(now);
+            }
+        }
+        state.server_admin_user_ids.remove(&auth.session.user_id);
+        push_audit(
+            &mut state,
+            request_id(request),
+            Some(&auth.session),
+            "auth.account.delete",
+            "succeeded",
+            Some(auth.session.account_id.to_string()),
+            Map::new(),
+        );
         self.persist_metadata(&state)?;
         Ok(json!({"ok": true}))
     }
@@ -2959,6 +4601,8 @@ impl HostedServer {
         let auth = self
             .require_logbook_role(request, input.logbook_id, LogbookAccess::Read)
             .await?;
+        self.enforce_sync_operation_limit(request, &auth.session)
+            .await?;
         let events = self
             .store
             .list_events(input.logbook_id)
@@ -3153,6 +4797,8 @@ impl HostedServer {
         let auth = self
             .require_logbook_role(request, input.logbook_id, LogbookAccess::Admin)
             .await?;
+        self.enforce_provider_operation_limit(request, &auth.session)
+            .await?;
         let provider = provider_metadata(provider_id).ok_or(ApiError::NotFound)?;
         let mut state = self.state.write().await;
         let setting = state
@@ -3230,6 +4876,8 @@ impl HostedServer {
         let input: ProviderLookupRequest = parse_json(&request.body)?;
         let auth = self
             .require_logbook_role(request, input.logbook_id, LogbookAccess::Read)
+            .await?;
+        self.enforce_provider_operation_limit(request, &auth.session)
             .await?;
         if !matches!(provider_id, "qrz-xml" | "hamqth") {
             return Err(ApiError::NotFound);
@@ -3309,6 +4957,8 @@ impl HostedServer {
         let auth = self
             .require_logbook_role(request, logbook_id, LogbookAccess::Read)
             .await?;
+        self.enforce_provider_operation_limit(request, &auth.session)
+            .await?;
         if provider_id != "pota-spots" {
             return Err(ApiError::NotFound);
         }
@@ -3361,6 +5011,8 @@ impl HostedServer {
         let auth = self
             .require_logbook_role(request, input.logbook_id, LogbookAccess::Read)
             .await?;
+        self.enforce_provider_operation_limit(request, &auth.session)
+            .await?;
         let mut state = self.state.write().await;
         let key = provider_setting_key(input.logbook_id, "dx-cluster");
         let setting = state
@@ -3391,6 +5043,8 @@ impl HostedServer {
         let input: DxClusterReadRequest = parse_json(&request.body)?;
         let auth = self
             .require_logbook_role(request, input.logbook_id, LogbookAccess::Read)
+            .await?;
+        self.enforce_provider_operation_limit(request, &auth.session)
             .await?;
         let mut state = self.state.write().await;
         let key = provider_setting_key(input.logbook_id, "dx-cluster");
@@ -3443,6 +5097,8 @@ impl HostedServer {
         let input: DxClusterConnectRequest = parse_json(&request.body)?;
         let auth = self
             .require_logbook_role(request, input.logbook_id, LogbookAccess::Read)
+            .await?;
+        self.enforce_provider_operation_limit(request, &auth.session)
             .await?;
         let mut state = self.state.write().await;
         let key = provider_setting_key(input.logbook_id, "dx-cluster");
@@ -3499,6 +5155,8 @@ impl HostedServer {
         let input: UploadRunRequest = parse_json(&request.body)?;
         let auth = self
             .require_logbook_role(request, input.logbook_id, LogbookAccess::Admin)
+            .await?;
+        self.enforce_provider_operation_limit(request, &auth.session)
             .await?;
         provider_metadata(&input.provider_id).ok_or(ApiError::NotFound)?;
         let projection = self
@@ -3577,6 +5235,8 @@ impl HostedServer {
         let auth = self
             .require_logbook_role(request, input.logbook_id, LogbookAccess::Admin)
             .await?;
+        self.enforce_provider_operation_limit(request, &auth.session)
+            .await?;
         let mut state = self.state.write().await;
         let snapshot = state.clone();
         let job = state
@@ -3600,6 +5260,8 @@ impl HostedServer {
 
     async fn sync_status(&self, request: &ApiRequest) -> Result<Value, ApiError> {
         let auth = self.authorize(request).await?;
+        self.enforce_sync_operation_limit(request, &auth.session)
+            .await?;
         let state = self.state.read().await;
         let mut logbooks = Vec::new();
         for membership in state
@@ -3621,7 +5283,10 @@ impl HostedServer {
 
     async fn sync_preview(&self, request: &ApiRequest) -> Result<Value, ApiError> {
         let input: PreviewSyncRequest = parse_json(&request.body)?;
-        self.require_logbook_role(request, input.logbook_id, LogbookAccess::Read)
+        let auth = self
+            .require_logbook_role(request, input.logbook_id, LogbookAccess::Read)
+            .await?;
+        self.enforce_sync_operation_limit(request, &auth.session)
             .await?;
         let events = self
             .store
@@ -3641,7 +5306,10 @@ impl HostedServer {
 
     async fn sync_push(&self, request: &ApiRequest) -> Result<Value, ApiError> {
         let input: CloudPushEventsRequest = parse_json(&request.body)?;
-        self.require_logbook_role(request, input.logbook_id, LogbookAccess::LogQso)
+        let auth = self
+            .require_logbook_role(request, input.logbook_id, LogbookAccess::LogQso)
+            .await?;
+        self.enforce_sync_operation_limit(request, &auth.session)
             .await?;
         let mut accepted_count = 0usize;
         let mut ignored_duplicate_count = 0usize;
@@ -3690,7 +5358,10 @@ impl HostedServer {
 
     async fn sync_pull(&self, request: &ApiRequest) -> Result<Value, ApiError> {
         let input: PreviewSyncRequest = parse_json(&request.body)?;
-        self.require_logbook_role(request, input.logbook_id, LogbookAccess::Read)
+        let auth = self
+            .require_logbook_role(request, input.logbook_id, LogbookAccess::Read)
+            .await?;
+        self.enforce_sync_operation_limit(request, &auth.session)
             .await?;
         let events = self
             .store
@@ -3746,14 +5417,55 @@ impl HostedServer {
             registered_at: now,
             revoked_at: None,
         };
-        self.state
-            .write()
-            .await
-            .devices
-            .insert(device.device_id, device.clone());
-        let state = self.state.read().await;
+        let mut state = self.state.write().await;
+        state.devices.insert(device.device_id, device.clone());
+        push_audit(
+            &mut state,
+            request_id(request),
+            Some(&auth.session),
+            "device.register",
+            "succeeded",
+            Some(device.device_id.to_string()),
+            Map::new(),
+        );
         self.persist_metadata(&state)?;
         Ok(json!({"device": device}))
+    }
+
+    async fn revoke_all_devices(&self, request: &ApiRequest) -> Result<Value, ApiError> {
+        let auth = self.authorize(request).await?;
+        let mut state = self.state.write().await;
+        let now = Utc::now();
+        let mut device_count = 0usize;
+        for device in state.devices.values_mut() {
+            if device.account_id == auth.session.account_id && !device.revoked {
+                device.revoked = true;
+                device.revoked_at = Some(now);
+                device_count += 1;
+            }
+        }
+        let mut session_count = 0usize;
+        for session in state.sessions_by_token.values_mut() {
+            if session.account_id == auth.session.account_id && session.active {
+                session.active = false;
+                session_count += 1;
+            }
+        }
+        push_audit(
+            &mut state,
+            request_id(request),
+            Some(&auth.session),
+            "device.revoke_all",
+            "succeeded",
+            Some(auth.session.account_id.to_string()),
+            Map::new(),
+        );
+        self.persist_metadata(&state)?;
+        Ok(json!({
+            "ok": true,
+            "revoked_devices": device_count,
+            "revoked_sessions": session_count
+        }))
     }
 
     async fn revoke_device(
@@ -3787,6 +5499,15 @@ impl HostedServer {
                 session.active = false;
             }
         }
+        push_audit(
+            &mut state,
+            request_id(request),
+            Some(&auth.session),
+            "device.revoke",
+            "succeeded",
+            Some(device_id.to_string()),
+            Map::new(),
+        );
         self.persist_metadata(&state)?;
         Ok(json!({"ok": true}))
     }
@@ -3802,16 +5523,166 @@ impl HostedServer {
         }))
     }
 
+    async fn verify_registration_gate(
+        &self,
+        input: &RegistrationRequest,
+        _email: &str,
+    ) -> Result<(), ApiError> {
+        let config = self.state.read().await.hosting_config.clone();
+        match config.registration_mode {
+            RegistrationMode::Disabled => Err(ApiError::RegistrationClosed),
+            RegistrationMode::InviteOnly => {
+                if input
+                    .invitation_token
+                    .as_deref()
+                    .is_none_or(|token| token.trim().is_empty())
+                {
+                    return Err(ApiError::RegistrationClosed);
+                }
+                Ok(())
+            }
+            RegistrationMode::Open => {
+                if !config.turnstile.enabled_for_open_registration {
+                    return Ok(());
+                }
+                let token = input
+                    .turnstile_token
+                    .as_deref()
+                    .filter(|token| !token.trim().is_empty())
+                    .ok_or(ApiError::TurnstileFailed)?;
+                let secret = config
+                    .turnstile
+                    .secret_key
+                    .clone()
+                    .filter(|secret| !secret.trim().is_empty())
+                    .ok_or(ApiError::TurnstileFailed)?;
+                self.verify_turnstile_token(
+                    token,
+                    input.turnstile_remote_ip.as_deref(),
+                    &config.turnstile,
+                    &secret,
+                )
+                .await
+            }
+        }
+    }
+
+    async fn verify_turnstile_token(
+        &self,
+        token: &str,
+        remote_ip: Option<&str>,
+        config: &TurnstileConfig,
+        secret: &str,
+    ) -> Result<(), ApiError> {
+        let token_hash = session_token_hash(token);
+        if self
+            .state
+            .read()
+            .await
+            .turnstile_token_hashes
+            .contains(&token_hash)
+        {
+            return Err(ApiError::TokenReplayed);
+        }
+
+        let verified = match secret {
+            "1x0000000000000000000000000000000AA" => true,
+            "2x0000000000000000000000000000000AA" => false,
+            "3x0000000000000000000000000000000AA" => return Err(ApiError::TokenReplayed),
+            _ => {
+                let mut form = vec![("secret", secret), ("response", token)];
+                if let Some(remote_ip) = remote_ip.filter(|value| !value.trim().is_empty()) {
+                    form.push(("remoteip", remote_ip));
+                }
+                let response = ureq::post(&config.siteverify_url)
+                    .timeout(StdDuration::from_secs(config.timeout_seconds.max(1)))
+                    .send_form(&form)
+                    .map_err(|_| ApiError::TurnstileFailed)?;
+                let body = response
+                    .into_string()
+                    .map_err(|_| ApiError::TurnstileFailed)?;
+                serde_json::from_str::<TurnstileSiteverifyResponse>(&body)
+                    .map_err(|_| ApiError::TurnstileFailed)?
+                    .success
+            }
+        };
+        if !verified {
+            return Err(ApiError::TurnstileFailed);
+        }
+        let mut state = self.state.write().await;
+        if !state.turnstile_token_hashes.insert(token_hash) {
+            return Err(ApiError::TokenReplayed);
+        }
+        self.persist_metadata(&state)?;
+        Ok(())
+    }
+
+    async fn require_instance_admin(
+        &self,
+        request: &ApiRequest,
+    ) -> Result<AuthorizedSession, ApiError> {
+        let auth = self.authorize(request).await?;
+        let state = self.state.read().await;
+        if state.server_admin_user_ids.contains(&auth.session.user_id) {
+            Ok(auth)
+        } else {
+            Err(ApiError::Forbidden)
+        }
+    }
+
+    async fn enforce_provider_operation_limit(
+        &self,
+        request: &ApiRequest,
+        session: &LoginSession,
+    ) -> Result<(), ApiError> {
+        let mut state = self.state.write().await;
+        let limit = state.hosting_config.limits.provider_ops_per_window;
+        enforce_rate_limit(
+            &mut state,
+            format!(
+                "provider:{}:{}",
+                session.account_id,
+                client_identity(request)
+            ),
+            limit,
+        )?;
+        self.persist_metadata(&state)?;
+        Ok(())
+    }
+
+    async fn enforce_sync_operation_limit(
+        &self,
+        request: &ApiRequest,
+        session: &LoginSession,
+    ) -> Result<(), ApiError> {
+        let mut state = self.state.write().await;
+        let limit = state.hosting_config.limits.sync_ops_per_window;
+        enforce_rate_limit(
+            &mut state,
+            format!("sync:{}:{}", session.account_id, client_identity(request)),
+            limit,
+        )?;
+        self.persist_metadata(&state)?;
+        Ok(())
+    }
+
     async fn authorize(&self, request: &ApiRequest) -> Result<AuthorizedSession, ApiError> {
         let token = bearer_token(request).ok_or(ApiError::Unauthenticated)?;
+        let token_hash = session_token_hash(&token);
         let state = self.state.read().await;
         let session = state
             .sessions_by_token
-            .get(&token)
+            .get(&token_hash)
             .cloned()
             .ok_or(ApiError::Unauthenticated)?;
         if !session.active {
             return Err(ApiError::InactiveSession);
+        }
+        if session
+            .expires_at
+            .is_some_and(|expires_at| expires_at <= Utc::now())
+        {
+            return Err(ApiError::SessionExpired);
         }
         let device = state
             .devices
@@ -3819,6 +5690,16 @@ impl HostedServer {
             .ok_or(ApiError::Unauthenticated)?;
         if device.revoked {
             return Err(ApiError::RevokedDevice);
+        }
+        let account = state
+            .accounts
+            .get(&session.account_id)
+            .ok_or(ApiError::Unauthenticated)?;
+        if account.deleted_at.is_some() {
+            return Err(ApiError::Unauthenticated);
+        }
+        if account.email_verified_at.is_none() {
+            return Err(ApiError::EmailUnverified);
         }
         Ok(AuthorizedSession { session })
     }
@@ -5534,6 +7415,7 @@ fn route_pattern(segments: &[&str]) -> String {
                             | "backups"
                             | "divergence"
                             | "devices"
+                            | "invitations"
                     )
                 }))
         {
@@ -5604,12 +7486,61 @@ fn api_error_response(error: ApiError, request_id: String) -> ApiResponse {
             request_id,
             false,
         ),
+        ApiError::SessionExpired => json_error(
+            401,
+            "unauthenticated",
+            ApiErrorCode::SessionExpired,
+            request_id,
+            false,
+        ),
         ApiError::RevokedDevice => json_error(
             401,
             "unauthenticated",
             ApiErrorCode::DeviceRevoked,
             request_id,
             false,
+        ),
+        ApiError::EmailUnverified => json_error(
+            403,
+            "email verification required",
+            ApiErrorCode::EmailUnverified,
+            request_id,
+            false,
+        ),
+        ApiError::RegistrationClosed => json_error(
+            403,
+            "registration is not available",
+            ApiErrorCode::RegistrationClosed,
+            request_id,
+            false,
+        ),
+        ApiError::TokenExpired => json_error(
+            400,
+            "token expired or invalid",
+            ApiErrorCode::TokenExpired,
+            request_id,
+            false,
+        ),
+        ApiError::TokenReplayed => json_error(
+            400,
+            "token already used",
+            ApiErrorCode::TokenReplayed,
+            request_id,
+            false,
+        ),
+        ApiError::TurnstileFailed => json_error(
+            403,
+            "turnstile verification failed",
+            ApiErrorCode::TurnstileFailed,
+            request_id,
+            false,
+        ),
+        ApiError::RateLimited => json_error(
+            429,
+            "rate limit exceeded",
+            ApiErrorCode::RateLimited,
+            request_id,
+            true,
         ),
         ApiError::Forbidden => {
             json_error(403, "forbidden", ApiErrorCode::Forbidden, request_id, false)
@@ -5713,19 +7644,27 @@ mod tests {
     }
 
     async fn login(server: &HostedServer, email: &str) -> (String, Uuid, Uuid) {
-        let response = server
-            .handle(ApiRequest::json(
-                "POST",
-                "/api/v1/auth/login",
-                &LoginRequest {
-                    email: email.to_owned(),
-                    display_name: None,
-                    device_name: Some(format!("{email} device")),
-                },
-            ))
-            .await;
-        assert_eq!(response.status, 200);
-        let login: LoginResponse = response.json();
+        let normalized = normalize_email(email).unwrap();
+        let mut state = server.state.write().await;
+        let now = Utc::now();
+        let account = if let Some(account_id) = state.users_by_email.get(&normalized).copied() {
+            let account = state.accounts.get_mut(&account_id).unwrap();
+            account.email_verified_at.get_or_insert(now);
+            account.clone()
+        } else {
+            create_account_with_logbook(&mut state, normalized, None, Some(now), now)
+                .unwrap()
+                .0
+        };
+        let login = issue_session_response(
+            &mut state,
+            &account,
+            Some(format!("{email} device")),
+            None,
+            now,
+        )
+        .unwrap();
+        server.persist_metadata(&state).unwrap();
         (
             login.session.token,
             login.logbooks[0].logbook_id,
@@ -5757,6 +7696,615 @@ mod tests {
             .await;
         assert_eq!(response.status, 200);
         response.json()
+    }
+
+    fn with_request_id(mut request: ApiRequest, request_id: &str) -> ApiRequest {
+        request
+            .headers
+            .insert("x-request-id".to_owned(), request_id.to_owned());
+        request
+    }
+
+    fn latest_email_token(server: &HostedServer, email: &str, purpose: &str) -> String {
+        server
+            .email_outbox
+            .lock()
+            .unwrap()
+            .iter()
+            .rev()
+            .find(|message| message.to == email && message.purpose == purpose)
+            .map(|message| message.token.clone())
+            .unwrap_or_else(|| panic!("expected {purpose} email for {email}"))
+    }
+
+    async fn bootstrap_admin(server: &HostedServer) -> LoginResponse {
+        let response = server
+            .handle(ApiRequest::json(
+                "POST",
+                "/api/v1/admin/bootstrap",
+                &BootstrapAdminRequest {
+                    email: "admin@example.test".to_owned(),
+                    display_name: Some("Admin".to_owned()),
+                    device_name: Some("Admin browser".to_owned()),
+                },
+            ))
+            .await;
+        assert_eq!(response.status, 200);
+        response.json()
+    }
+
+    #[tokio::test]
+    async fn bootstrap_admin_is_single_use_and_stores_only_token_hashes() {
+        let server = HostedServer::new();
+        let response = server
+            .handle(with_request_id(
+                ApiRequest::json(
+                    "POST",
+                    "/api/v1/admin/bootstrap",
+                    &BootstrapAdminRequest {
+                        email: "Admin@Example.Test".to_owned(),
+                        display_name: Some("Admin".to_owned()),
+                        device_name: Some("Admin browser".to_owned()),
+                    },
+                ),
+                "bootstrap-request",
+            ))
+            .await;
+        assert_eq!(response.status, 200);
+        assert_eq!(
+            response.headers.get("x-request-id").map(String::as_str),
+            Some("bootstrap-request")
+        );
+        assert!(response.headers.contains_key("set-cookie"));
+        let login: LoginResponse = response.json();
+        assert!(login.account.email_verified_at.is_some());
+        assert!(!login.session.token.is_empty());
+        assert!(!login.refresh_token.is_empty());
+
+        let state = server.state.read().await;
+        assert!(state.hosting_config.bootstrap_admin_completed);
+        assert!(state.server_admin_user_ids.contains(&login.account.user_id));
+        assert!(!state.sessions_by_token.contains_key(&login.session.token));
+        let stored = state
+            .sessions_by_token
+            .get(&session_token_hash(&login.session.token))
+            .unwrap();
+        assert!(stored.token.is_empty());
+        assert!(stored.refresh_token.is_empty());
+        assert_eq!(stored.token_hash, session_token_hash(&login.session.token));
+        drop(state);
+
+        let second = server
+            .handle(ApiRequest::json(
+                "POST",
+                "/api/v1/admin/bootstrap",
+                &BootstrapAdminRequest {
+                    email: "second@example.test".to_owned(),
+                    display_name: None,
+                    device_name: None,
+                },
+            ))
+            .await;
+        assert_eq!(second.status, 403);
+    }
+
+    #[tokio::test]
+    async fn invite_only_registration_requires_single_use_invite_and_email_verification() {
+        let server = HostedServer::new();
+        let admin = bootstrap_admin(&server).await;
+        let logbook_id = admin.logbooks[0].logbook_id;
+
+        let denied = server
+            .handle(ApiRequest::json(
+                "POST",
+                "/api/v1/auth/register",
+                &RegistrationRequest {
+                    email: "invitee@example.test".to_owned(),
+                    display_name: None,
+                    device_name: None,
+                    invitation_token: None,
+                    turnstile_token: None,
+                    turnstile_remote_ip: None,
+                },
+            ))
+            .await;
+        assert_eq!(denied.status, 403);
+
+        let created_invite = server
+            .handle(
+                ApiRequest::json(
+                    "POST",
+                    "/api/v1/admin/invitations",
+                    &CreateInvitationRequest {
+                        logbook_id,
+                        email: "invitee@example.test".to_owned(),
+                        role: LogbookRole::Operator,
+                        expires_at: None,
+                    },
+                )
+                .with_bearer(&admin.session.token),
+            )
+            .await;
+        assert_eq!(created_invite.status, 200);
+        let invite_body: Value = created_invite.json();
+        let invite_token = invite_body["invitation_token"].as_str().unwrap().to_owned();
+        assert!(invite_body["invitation"].get("token_hash").is_none());
+        {
+            let state = server.state.read().await;
+            let stored = state
+                .invites
+                .values()
+                .find(|invite| invite.invited_email == "invitee@example.test")
+                .unwrap();
+            assert_eq!(stored.token_hash, session_token_hash(&invite_token));
+            assert!(stored.legacy_token.is_empty());
+        }
+
+        let registered = server
+            .handle(ApiRequest::json(
+                "POST",
+                "/api/v1/auth/register",
+                &RegistrationRequest {
+                    email: "invitee@example.test".to_owned(),
+                    display_name: Some("Invitee".to_owned()),
+                    device_name: None,
+                    invitation_token: Some(invite_token.clone()),
+                    turnstile_token: None,
+                    turnstile_remote_ip: None,
+                },
+            ))
+            .await;
+        assert_eq!(registered.status, 200);
+        let body: Value = registered.json();
+        assert_eq!(body["email_verification_required"], true);
+
+        let login_before_verify = server
+            .handle(ApiRequest::json(
+                "POST",
+                "/api/v1/auth/login",
+                &LoginRequest {
+                    email: "invitee@example.test".to_owned(),
+                    display_name: None,
+                    device_name: None,
+                },
+            ))
+            .await;
+        assert_eq!(login_before_verify.status, 403);
+        let body: Value = login_before_verify.json();
+        assert_eq!(body["code"], "email_unverified");
+
+        let verification_token =
+            latest_email_token(&server, "invitee@example.test", "verification");
+        let verified = server
+            .handle(ApiRequest::json(
+                "POST",
+                "/api/v1/auth/verify-email",
+                &VerifyEmailRequest {
+                    token: verification_token.clone(),
+                },
+            ))
+            .await;
+        assert_eq!(verified.status, 200);
+
+        let replay = server
+            .handle(ApiRequest::json(
+                "POST",
+                "/api/v1/auth/verify-email",
+                &VerifyEmailRequest {
+                    token: verification_token,
+                },
+            ))
+            .await;
+        assert_eq!(replay.status, 400);
+        let body: Value = replay.json();
+        assert_eq!(body["code"], "token_replayed");
+
+        let login_after_verify = server
+            .handle(ApiRequest::json(
+                "POST",
+                "/api/v1/auth/login",
+                &LoginRequest {
+                    email: "invitee@example.test".to_owned(),
+                    display_name: None,
+                    device_name: Some("Invitee browser".to_owned()),
+                },
+            ))
+            .await;
+        assert_eq!(login_after_verify.status, 200);
+    }
+
+    #[tokio::test]
+    async fn open_registration_turnstile_fails_closed_and_replays_tokens() {
+        let server = HostedServer::new();
+        let admin = bootstrap_admin(&server).await;
+        let patch = server
+            .handle(
+                ApiRequest::json(
+                    "PATCH",
+                    "/api/v1/admin/hosting",
+                    &HostingConfigPatchRequest {
+                        operation_mode: Some(HostingOperationMode::PublicHosted),
+                        registration_mode: Some(RegistrationMode::Open),
+                        session_ttl_seconds: None,
+                        refresh_ttl_seconds: None,
+                        invitation_ttl_seconds: None,
+                        verification_ttl_seconds: None,
+                        recovery_ttl_seconds: None,
+                        limits: None,
+                        email: None,
+                        turnstile: Some(TurnstileConfig {
+                            enabled_for_open_registration: true,
+                            site_key: Some("1x00000000000000000000AA".to_owned()),
+                            secret_key: Some("2x0000000000000000000000000000000AA".to_owned()),
+                            siteverify_url:
+                                "https://challenges.cloudflare.com/turnstile/v0/siteverify"
+                                    .to_owned(),
+                            timeout_seconds: 5,
+                        }),
+                    },
+                )
+                .with_bearer(&admin.session.token),
+            )
+            .await;
+        assert_eq!(patch.status, 200);
+        let body: Value = patch.json();
+        assert_eq!(body["hosting"]["turnstile"]["secret_configured"], true);
+        assert!(body["hosting"]["turnstile"].get("secret_key").is_none());
+
+        let failed = server
+            .handle(ApiRequest::json(
+                "POST",
+                "/api/v1/auth/register",
+                &RegistrationRequest {
+                    email: "public@example.test".to_owned(),
+                    display_name: None,
+                    device_name: None,
+                    invitation_token: None,
+                    turnstile_token: Some("turnstile-a".to_owned()),
+                    turnstile_remote_ip: None,
+                },
+            ))
+            .await;
+        assert_eq!(failed.status, 403);
+        let body: Value = failed.json();
+        assert_eq!(body["code"], "turnstile_failed");
+
+        let patch = server
+            .handle(
+                ApiRequest::json(
+                    "PATCH",
+                    "/api/v1/admin/hosting",
+                    &HostingConfigPatchRequest {
+                        operation_mode: None,
+                        registration_mode: None,
+                        session_ttl_seconds: None,
+                        refresh_ttl_seconds: None,
+                        invitation_ttl_seconds: None,
+                        verification_ttl_seconds: None,
+                        recovery_ttl_seconds: None,
+                        limits: None,
+                        email: None,
+                        turnstile: Some(TurnstileConfig {
+                            enabled_for_open_registration: true,
+                            site_key: Some("1x00000000000000000000AA".to_owned()),
+                            secret_key: Some("1x0000000000000000000000000000000AA".to_owned()),
+                            siteverify_url:
+                                "https://challenges.cloudflare.com/turnstile/v0/siteverify"
+                                    .to_owned(),
+                            timeout_seconds: 5,
+                        }),
+                    },
+                )
+                .with_bearer(&admin.session.token),
+            )
+            .await;
+        assert_eq!(patch.status, 200);
+
+        let registered = server
+            .handle(ApiRequest::json(
+                "POST",
+                "/api/v1/auth/register",
+                &RegistrationRequest {
+                    email: "public@example.test".to_owned(),
+                    display_name: None,
+                    device_name: None,
+                    invitation_token: None,
+                    turnstile_token: Some("turnstile-b".to_owned()),
+                    turnstile_remote_ip: None,
+                },
+            ))
+            .await;
+        assert_eq!(registered.status, 200);
+
+        let replay = server
+            .handle(ApiRequest::json(
+                "POST",
+                "/api/v1/auth/register",
+                &RegistrationRequest {
+                    email: "public2@example.test".to_owned(),
+                    display_name: None,
+                    device_name: None,
+                    invitation_token: None,
+                    turnstile_token: Some("turnstile-b".to_owned()),
+                    turnstile_remote_ip: None,
+                },
+            ))
+            .await;
+        assert_eq!(replay.status, 400);
+        let body: Value = replay.json();
+        assert_eq!(body["code"], "token_replayed");
+    }
+
+    #[tokio::test]
+    async fn sessions_rotate_revoke_and_survive_reload_with_hashes_only() {
+        let path = surreal_test_path("session-hardening");
+        let server = open_surreal_test_server(&path);
+        let (_seed_token, logbook_id, _) = login(&server, "owner@example.test").await;
+        let login = server
+            .handle(ApiRequest::json(
+                "POST",
+                "/api/v1/auth/login",
+                &LoginRequest {
+                    email: "owner@example.test".to_owned(),
+                    display_name: None,
+                    device_name: Some("Owner browser".to_owned()),
+                },
+            ))
+            .await;
+        assert_eq!(login.status, 200);
+        let login: LoginResponse = login.json();
+        {
+            let state = server.state.read().await;
+            assert!(!state.sessions_by_token.contains_key(&login.session.token));
+            assert!(state
+                .sessions_by_token
+                .values()
+                .all(|session| session.token.is_empty() && session.refresh_token.is_empty()));
+        }
+
+        server.reload_metadata_from_store().await.unwrap();
+        let session = server
+            .handle(ApiRequest::get("/api/v1/auth/session").with_bearer(&login.session.token))
+            .await;
+        assert_eq!(session.status, 200);
+
+        let rotated = server
+            .handle(
+                ApiRequest::json(
+                    "POST",
+                    "/api/v1/auth/session/rotate",
+                    &SessionRotateRequest {
+                        refresh_token: Some(login.refresh_token.clone()),
+                    },
+                )
+                .with_bearer(&login.session.token),
+            )
+            .await;
+        assert_eq!(rotated.status, 200);
+        let rotated: LoginResponse = rotated.json();
+        let old_session = server
+            .handle(ApiRequest::get("/api/v1/auth/session").with_bearer(&login.session.token))
+            .await;
+        assert_eq!(old_session.status, 401);
+
+        let logout_all = server
+            .handle(
+                ApiRequest::json("POST", "/api/v1/auth/logout-all", &json!({}))
+                    .with_bearer(&rotated.session.token),
+            )
+            .await;
+        assert_eq!(logout_all.status, 200);
+        let denied = server
+            .handle(ApiRequest::get("/api/v1/sync/status").with_bearer(&rotated.session.token))
+            .await;
+        assert_eq!(denied.status, 401);
+
+        let fresh_login = server
+            .handle(ApiRequest::json(
+                "POST",
+                "/api/v1/auth/login",
+                &LoginRequest {
+                    email: "owner@example.test".to_owned(),
+                    display_name: None,
+                    device_name: Some("Owner after logout-all".to_owned()),
+                },
+            ))
+            .await;
+        assert_eq!(fresh_login.status, 200);
+        let fresh_login: LoginResponse = fresh_login.json();
+        let revoke_all = server
+            .handle(
+                ApiRequest::json("POST", "/api/v1/devices/revoke-all", &json!({}))
+                    .with_bearer(&fresh_login.session.token),
+            )
+            .await;
+        assert_eq!(revoke_all.status, 200);
+        let denied = server
+            .handle(
+                ApiRequest::get(format!("/api/v1/qsos?logbook_id={logbook_id}"))
+                    .with_bearer(fresh_login.session.token),
+            )
+            .await;
+        assert_eq!(denied.status, 401);
+    }
+
+    #[tokio::test]
+    async fn recovery_tokens_are_single_use_and_issue_new_sessions() {
+        let server = HostedServer::new();
+        login(&server, "owner@example.test").await;
+        let start = server
+            .handle(ApiRequest::json(
+                "POST",
+                "/api/v1/auth/recovery/start",
+                &RecoveryStartRequest {
+                    email: "owner@example.test".to_owned(),
+                },
+            ))
+            .await;
+        assert_eq!(start.status, 200);
+        let token = latest_email_token(&server, "owner@example.test", "recovery");
+        let complete = server
+            .handle(ApiRequest::json(
+                "POST",
+                "/api/v1/auth/recovery/complete",
+                &RecoveryCompleteRequest {
+                    token: token.clone(),
+                    device_name: Some("Recovered browser".to_owned()),
+                },
+            ))
+            .await;
+        assert_eq!(complete.status, 200);
+        let login: LoginResponse = complete.json();
+        assert!(!login.session.token.is_empty());
+
+        let replay = server
+            .handle(ApiRequest::json(
+                "POST",
+                "/api/v1/auth/recovery/complete",
+                &RecoveryCompleteRequest {
+                    token,
+                    device_name: None,
+                },
+            ))
+            .await;
+        assert_eq!(replay.status, 400);
+        let body: Value = replay.json();
+        assert_eq!(body["code"], "token_replayed");
+    }
+
+    #[tokio::test]
+    async fn account_delete_revokes_access_without_deleting_official_history() {
+        let server = HostedServer::new();
+        let (token, logbook_id, _) = login(&server, "owner@example.test").await;
+        create_qso(&server, &token, logbook_id).await;
+        assert_eq!(server.store.list_events(logbook_id).await.unwrap().len(), 1);
+
+        let deleted = server
+            .handle(
+                ApiRequest::json(
+                    "POST",
+                    "/api/v1/auth/account/delete",
+                    &AccountDeleteRequest { confirm: true },
+                )
+                .with_bearer(&token),
+            )
+            .await;
+        assert_eq!(deleted.status, 200);
+        assert!(deleted.headers.contains_key("set-cookie"));
+
+        let denied = server
+            .handle(ApiRequest::get("/api/v1/auth/session").with_bearer(token))
+            .await;
+        assert_eq!(denied.status, 401);
+        assert_eq!(server.store.list_events(logbook_id).await.unwrap().len(), 1);
+        let state = server.state.read().await;
+        assert!(state.logbooks.contains_key(&logbook_id));
+    }
+
+    #[tokio::test]
+    async fn request_ids_limits_and_audits_are_durable_and_redacted() {
+        let path = surreal_test_path("audits-limits");
+        let server = open_surreal_test_server(&path);
+        let admin = bootstrap_admin(&server).await;
+        let limits = HostedLimitConfig {
+            logins_per_window: 1,
+            sync_ops_per_window: 1,
+            ..HostedLimitConfig::default()
+        };
+        let patch = server
+            .handle(
+                with_request_id(
+                    ApiRequest::json(
+                        "PATCH",
+                        "/api/v1/admin/hosting",
+                        &HostingConfigPatchRequest {
+                            operation_mode: None,
+                            registration_mode: None,
+                            session_ttl_seconds: None,
+                            refresh_ttl_seconds: None,
+                            invitation_ttl_seconds: None,
+                            verification_ttl_seconds: None,
+                            recovery_ttl_seconds: None,
+                            limits: Some(limits),
+                            email: None,
+                            turnstile: None,
+                        },
+                    ),
+                    "hosting-patch-request",
+                )
+                .with_bearer(&admin.session.token),
+            )
+            .await;
+        assert_eq!(patch.status, 200);
+
+        let first = server
+            .handle(ApiRequest::json(
+                "POST",
+                "/api/v1/auth/login",
+                &LoginRequest {
+                    email: "admin@example.test".to_owned(),
+                    display_name: None,
+                    device_name: None,
+                },
+            ))
+            .await;
+        assert_eq!(first.status, 200);
+        let second = server
+            .handle(with_request_id(
+                ApiRequest::json(
+                    "POST",
+                    "/api/v1/auth/login",
+                    &LoginRequest {
+                        email: "admin@example.test".to_owned(),
+                        display_name: None,
+                        device_name: None,
+                    },
+                ),
+                "limited-login-request",
+            ))
+            .await;
+        assert_eq!(second.status, 429);
+        assert_eq!(
+            second.headers.get("x-request-id").map(String::as_str),
+            Some("limited-login-request")
+        );
+
+        let first_sync = server
+            .handle(ApiRequest::get("/api/v1/sync/status").with_bearer(&admin.session.token))
+            .await;
+        assert_eq!(first_sync.status, 200);
+        let second_sync = server
+            .handle(with_request_id(
+                ApiRequest::get("/api/v1/sync/status").with_bearer(&admin.session.token),
+                "limited-sync-request",
+            ))
+            .await;
+        assert_eq!(second_sync.status, 429);
+        assert_eq!(
+            second_sync.headers.get("x-request-id").map(String::as_str),
+            Some("limited-sync-request")
+        );
+        {
+            let state = server.state.read().await;
+            assert!(state
+                .rate_limits
+                .keys()
+                .all(|key| !key.contains("admin@example.test")));
+        }
+
+        server.reload_metadata_from_store().await.unwrap();
+        let audits = server
+            .handle(ApiRequest::get("/api/v1/admin/audits").with_bearer(&admin.session.token))
+            .await;
+        assert_eq!(audits.status, 200);
+        let body: Value = audits.json();
+        let audits = body["audits"].as_array().unwrap();
+        assert!(audits
+            .iter()
+            .any(|audit| audit["request_id"] == "hosting-patch-request"));
+        let serialized = serde_json::to_string(&body).unwrap();
+        assert!(!serialized.contains(&admin.session.token));
+        assert!(!serialized.contains(&admin.refresh_token));
     }
 
     #[tokio::test]

@@ -39,9 +39,10 @@ Implemented:
   Tauri desktop wrapper, and native iOS SwiftUI/Rust-bridge foundation.
 
 Partial:
-- Hosted account/session/device/logbook metadata, hosted backup/divergence
-  flows, provider runtime execution, cloud/self-hosted sync, desktop packaging,
-  native iOS projection/cache flows, and release automation.
+- Hosted web/desktop/iOS UX for the implemented account/session/device/admin
+  APIs, production email/Turnstile deployment configuration, hosted
+  backup/divergence UX, provider runtime execution, cloud/self-hosted sync,
+  desktop packaging, native iOS projection/cache flows, and release automation.
 
 Test-only or fake/default paths:
 - Mock lookup/rig providers, placeholder map/weather/propagation providers,
@@ -49,8 +50,7 @@ Test-only or fake/default paths:
   GUI demo peer/runtime data.
 
 Deferred or unimplemented:
-- Invite/open-registration production account flows, verified email, Turnstile,
-  real LAN trust pairing and peer-to-peer HTTP transport, LoTW/TQSL live upload,
+- Real LAN trust pairing and peer-to-peer HTTP transport, LoTW/TQSL live upload,
   SOTAWatch approved live access, RBN/background DX lifecycle, cached/offline map
   regions, full contesting, full EmComm forms, signed desktop updater, production
   signing/notarization/App Store distribution, full production provider

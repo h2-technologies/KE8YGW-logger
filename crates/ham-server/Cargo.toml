@@ -16,6 +16,7 @@ serde_json.workspace = true
 sha2.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
+ureq = { version = "2.12", default-features = false, features = ["tls"] }
 uuid.workspace = true
 
 [lib]

@@ -93,14 +93,12 @@ The dependency-ordered v1 critical path is tracked in
 `V1_EXECUTION_PLAN.md`. The next high-impact work should minimize future
 rewrites:
 
-1. Finish accounts and deployment-mode hardening before broad hosted/web/iOS
-   client workflows.
-2. Finish sync/offline reconciliation, LAN trust pairing, and conflict review
+1. Finish sync/offline reconciliation, LAN trust pairing, and conflict review
    before unattended desktop/iOS operation.
-3. Complete provider runtime hardening and production provider qualification
+2. Complete provider runtime hardening and production provider qualification
    before release-candidate data migration or operations work.
-4. Build the remaining client surfaces on top of stable account, sync, provider,
+3. Build the remaining client surfaces on top of stable account, sync, provider,
    and API contracts.
-5. Complete maps, contesting, EmComm, signed updater, signing/notarization,
+4. Complete maps, contesting, EmComm, signed updater, signing/notarization,
    App Store, operations, and release qualification after the shared foundations
    are stable.
