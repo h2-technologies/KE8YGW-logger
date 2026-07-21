@@ -5,9 +5,10 @@ pub use offline::*;
 
 use std::{
     collections::{HashMap, HashSet},
+    io::ErrorKind,
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, UdpSocket},
     sync::Arc,
-    time::Duration,
+    time::{Duration, Instant},
 };
 #[cfg(feature = "surreal-storage")]
 use std::{fs, path::PathBuf, thread};
@@ -23,6 +24,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 #[cfg(feature = "surreal-storage")]
 use sha2::{Digest, Sha256};
+use socket2::{Domain, Protocol, SockAddr, Socket, Type};
 #[cfg(feature = "surreal-storage")]
 use surrealdb::{
     engine::{
@@ -2525,6 +2527,12 @@ pub enum DiscoveryServiceError {
     Serde(#[from] serde_json::Error),
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DiscoveryObservation {
+    pub packet: DiscoveryPacket,
+    pub source: SocketAddr,
+}
+
 #[derive(Debug)]
 pub struct LanDiscoveryService {
     pub config: SyncConfig,
@@ -2543,7 +2551,7 @@ impl LanDiscoveryService {
             self.config.discovery_port,
         );
         let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0))?;
-        socket.set_multicast_loop_v4(false)?;
+        socket.set_multicast_loop_v4(true)?;
         socket.send_to(&bytes, ipv4)?;
 
         let ipv6 = SocketAddr::new(
@@ -2551,10 +2559,133 @@ impl LanDiscoveryService {
             self.config.discovery_port,
         );
         if let Ok(socket) = UdpSocket::bind((Ipv6Addr::UNSPECIFIED, 0)) {
+            let _ = socket.set_multicast_loop_v6(true);
             let _ = socket.send_to(&bytes, ipv6);
         }
         Ok(())
     }
+
+    pub fn discover_once(
+        &self,
+        listen_for: Duration,
+    ) -> Result<Vec<DiscoveryObservation>, DiscoveryServiceError> {
+        if !self.config.enable_lan_discovery {
+            return Ok(Vec::new());
+        }
+        let receivers = discovery_receiver_sockets(&self.config)?;
+        self.send_once()?;
+        receive_discovery_packets(&receivers, listen_for)
+    }
+}
+
+fn discovery_receiver_sockets(
+    config: &SyncConfig,
+) -> Result<Vec<UdpSocket>, DiscoveryServiceError> {
+    let mut sockets = Vec::new();
+    let mut last_error = None;
+
+    match bind_reusable_udp_socket(SocketAddr::new(
+        IpAddr::V4(Ipv4Addr::UNSPECIFIED),
+        config.discovery_port,
+    )) {
+        Ok(socket) => match socket
+            .join_multicast_v4(&config.ipv4_multicast_address, &Ipv4Addr::UNSPECIFIED)
+            .and_then(|()| socket.set_nonblocking(true))
+        {
+            Ok(()) => sockets.push(socket),
+            Err(error) => last_error = Some(error),
+        },
+        Err(error) => last_error = Some(error),
+    }
+
+    match bind_reusable_udp_socket(SocketAddr::new(
+        IpAddr::V6(Ipv6Addr::UNSPECIFIED),
+        config.discovery_port,
+    )) {
+        Ok(socket) => match socket
+            .join_multicast_v6(&config.ipv6_multicast_address, 0)
+            .and_then(|()| socket.set_nonblocking(true))
+        {
+            Ok(()) => sockets.push(socket),
+            Err(error) => last_error = Some(error),
+        },
+        Err(error) => last_error = Some(error),
+    }
+
+    if sockets.is_empty() {
+        return Err(DiscoveryServiceError::Io(last_error.unwrap_or_else(|| {
+            std::io::Error::new(
+                ErrorKind::AddrNotAvailable,
+                "no usable LAN discovery sockets",
+            )
+        })));
+    }
+
+    Ok(sockets)
+}
+
+fn bind_reusable_udp_socket(address: SocketAddr) -> std::io::Result<UdpSocket> {
+    let domain = if address.is_ipv4() {
+        Domain::IPV4
+    } else {
+        Domain::IPV6
+    };
+    let socket = Socket::new(domain, Type::DGRAM, Some(Protocol::UDP))?;
+    socket.set_reuse_address(true)?;
+    #[cfg(unix)]
+    socket.set_reuse_port(true)?;
+    if address.is_ipv6() {
+        socket.set_only_v6(true)?;
+    }
+    socket.bind(&SockAddr::from(address))?;
+    Ok(socket.into())
+}
+
+fn receive_discovery_packets(
+    sockets: &[UdpSocket],
+    listen_for: Duration,
+) -> Result<Vec<DiscoveryObservation>, DiscoveryServiceError> {
+    let deadline = Instant::now() + listen_for;
+    let mut observations = Vec::new();
+    let mut buf = [0_u8; 4096];
+
+    loop {
+        let mut made_progress = false;
+        for socket in sockets {
+            loop {
+                match socket.recv_from(&mut buf) {
+                    Ok((size, source)) => {
+                        made_progress = true;
+                        if let Some(observation) =
+                            discovery_observation_from_datagram(&buf[..size], source)
+                        {
+                            observations.push(observation);
+                        }
+                    }
+                    Err(error) if error.kind() == ErrorKind::WouldBlock => break,
+                    Err(error) if error.kind() == ErrorKind::TimedOut => break,
+                    Err(error) => return Err(DiscoveryServiceError::Io(error)),
+                }
+            }
+        }
+        if Instant::now() >= deadline {
+            break;
+        }
+        if !made_progress {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    Ok(observations)
+}
+
+fn discovery_observation_from_datagram(
+    bytes: &[u8],
+    source: SocketAddr,
+) -> Option<DiscoveryObservation> {
+    serde_json::from_slice::<DiscoveryPacket>(bytes)
+        .ok()
+        .map(|packet| DiscoveryObservation { packet, source })
 }
 
 #[cfg(test)]
@@ -2699,6 +2830,47 @@ mod tests {
         let decoded: DiscoveryPacket = serde_json::from_str(&encoded).unwrap();
         assert_eq!(decoded.protocol_name, PROTOCOL_NAME);
         assert_eq!(decoded.protocol_version, PROTOCOL_VERSION);
+    }
+
+    #[test]
+    fn discovery_datagram_decodes_valid_packets_and_ignores_noise() {
+        let source = "192.168.1.10:9737".parse().unwrap();
+        let packet = DiscoveryPacket::from_identity(&local());
+        let bytes = serde_json::to_vec(&packet).unwrap();
+        let observation = discovery_observation_from_datagram(&bytes, source).unwrap();
+        assert_eq!(observation.packet.device_id, packet.device_id);
+        assert_eq!(observation.source, source);
+        assert!(discovery_observation_from_datagram(b"not-json", source).is_none());
+    }
+
+    #[test]
+    fn disabled_lan_discovery_returns_no_observations() {
+        let config = SyncConfig {
+            enable_lan_discovery: false,
+            ..SyncConfig::default()
+        };
+        let service = LanDiscoveryService {
+            config,
+            identity: local(),
+        };
+        let observations = service.discover_once(Duration::from_millis(1)).unwrap();
+        assert!(observations.is_empty());
+    }
+
+    #[test]
+    fn discovery_receiver_sockets_allow_same_port_reuse() {
+        let temporary = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let port = temporary.local_addr().unwrap().port();
+        drop(temporary);
+
+        let config = SyncConfig {
+            discovery_port: port,
+            ..SyncConfig::default()
+        };
+        let first = discovery_receiver_sockets(&config).unwrap();
+        let second = discovery_receiver_sockets(&config).unwrap();
+        assert!(!first.is_empty());
+        assert!(!second.is_empty());
     }
 
     #[test]

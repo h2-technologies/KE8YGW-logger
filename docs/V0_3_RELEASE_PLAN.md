@@ -28,11 +28,13 @@ Last audited: 2026-07-21
 - Manual direct LAN HTTP peer add, handshake, preview, and trusted pull between
   GUI instances using `/api/sync/state`, `/api/sync/get-head`, and
   `/api/sync/events-since`.
+- Automatic IPv4/IPv6 multicast discovery worker that probes reachable peer
+  identity before recording peers.
 
 ## Still Incomplete For v1
 
-- Automatic LAN discovery transport.
-- Production pairing UX across desktop and iOS.
+- Production pairing UX and LAN endpoint authentication across desktop and iOS.
+- Physical-device LAN and iOS Local Network permission validation.
 - Corrective-event conflict-resolution UX on top of the durable manual review
   commands.
 - Release-device iOS background retry and local-network permission validation.

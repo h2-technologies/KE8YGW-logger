@@ -6,7 +6,7 @@ use std::{
     process,
     sync::{Arc, Mutex},
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use ham_core::{
@@ -48,16 +48,17 @@ use ham_sync::{
     CloudSyncStatusResponse, ConflictReviewSnapshot, DiagnosticReportUploadRequest,
     DiagnosticReportUploadResponse, DiagnosticReportUploadType, DiscoveryPacket,
     GetEventMetadataResponse, GetEventRangeResponse, HandshakeRequest, InMemoryCloudSyncServer,
-    JsonConflictReviewStore, JsonLanTrustStore, JsonOfflineMutationQueue, LanPairingAcceptance,
-    LanTrustSnapshot, ListLogbooksResponse, LocalPeerIdentity, LogbookHeadSummary,
-    ManualConflictResolution, ManualConflictResolutionChoice, OfflineMutationEnvelope,
-    OfflineMutationInput, OfflineQueueSnapshot, PairDeviceRequest, PeerObservation, PeerRecord,
-    PeerRegistry, PreviewPullRequest, PreviewPullResponse, PullEventsRequest, PullEventsResponse,
-    ReplicationStatus, SyncConfig, SyncConflictReport, OFFLINE_OP_ACTIVATION_END,
-    OFFLINE_OP_ACTIVATION_START, OFFLINE_OP_NET_CHECKIN_CREATE, OFFLINE_OP_NET_CHECKIN_DELETE,
-    OFFLINE_OP_NET_SESSION_END, OFFLINE_OP_NET_SESSION_START, OFFLINE_OP_NET_TRAFFIC_CREATE,
-    OFFLINE_OP_QSO_CREATE, OFFLINE_OP_QSO_DELETE, OFFLINE_OP_QSO_NOTE_ADD, OFFLINE_OP_QSO_RESTORE,
-    OFFLINE_OP_STATION_PROFILE_SELECT, PROTOCOL_VERSION,
+    JsonConflictReviewStore, JsonLanTrustStore, JsonOfflineMutationQueue, LanDiscoveryService,
+    LanPairingAcceptance, LanTrustSnapshot, ListLogbooksResponse, LocalPeerIdentity,
+    LogbookHeadSummary, ManualConflictResolution, ManualConflictResolutionChoice,
+    OfflineMutationEnvelope, OfflineMutationInput, OfflineQueueSnapshot, PairDeviceRequest,
+    PeerObservation, PeerRecord, PeerRegistry, PreviewPullRequest, PreviewPullResponse,
+    PullEventsRequest, PullEventsResponse, ReplicationStatus, SyncConfig, SyncConflictReport,
+    OFFLINE_OP_ACTIVATION_END, OFFLINE_OP_ACTIVATION_START, OFFLINE_OP_NET_CHECKIN_CREATE,
+    OFFLINE_OP_NET_CHECKIN_DELETE, OFFLINE_OP_NET_SESSION_END, OFFLINE_OP_NET_SESSION_START,
+    OFFLINE_OP_NET_TRAFFIC_CREATE, OFFLINE_OP_QSO_CREATE, OFFLINE_OP_QSO_DELETE,
+    OFFLINE_OP_QSO_NOTE_ADD, OFFLINE_OP_QSO_RESTORE, OFFLINE_OP_STATION_PROFILE_SELECT,
+    PROTOCOL_NAME, PROTOCOL_VERSION,
 };
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -65,6 +66,8 @@ use serde_json::{json, Value};
 const INDEX_HTML: &str = include_str!("../web/index.html");
 const APP_CSS: &str = include_str!("../web/styles.css");
 const APP_JS: &str = include_str!("../web/app.js");
+const LAN_DISCOVERY_LISTEN_WINDOW: Duration = Duration::from_millis(750);
+const LAN_DISCOVERY_SLEEP_SLICE: Duration = Duration::from_millis(250);
 
 fn main() {
     let addr = env::args()
@@ -478,6 +481,7 @@ struct SyncUiState {
     identity: LocalPeerIdentity,
     registry: PeerRegistry,
     discovery_running: bool,
+    discovery_generation: u64,
     latest_handshake: Option<ham_sync::HandshakeResponse>,
     latest_preview: Option<PreviewPullResponse>,
     latest_pull: Option<PullEventsResponse>,
@@ -507,6 +511,7 @@ impl SyncUiState {
             identity: LocalPeerIdentity::new("KE8YGW Logger Local", port),
             registry: PeerRegistry::default(),
             discovery_running: false,
+            discovery_generation: 0,
             latest_handshake: None,
             latest_preview: None,
             latest_pull: None,
@@ -5009,7 +5014,7 @@ fn handle_lan_trust_revoke(state: &AppState, body: &[u8]) -> Vec<u8> {
     }
 }
 
-fn handle_sync_discovery(state: &AppState, running: bool) -> Vec<u8> {
+fn handle_sync_discovery(state: &Arc<AppState>, running: bool) -> Vec<u8> {
     if let Err(response) = ensure_gui_permission(
         state,
         &core_gui_manifest(),
@@ -5018,32 +5023,77 @@ fn handle_sync_discovery(state: &AppState, running: bool) -> Vec<u8> {
     ) {
         return response;
     }
-    {
+    let worker_generation = {
         let mut sync = state
             .sync
             .lock()
             .expect("sync state mutex should not be poisoned");
-        sync.discovery_running = running;
-    }
+        if running {
+            if sync.discovery_running {
+                None
+            } else {
+                sync.discovery_generation = sync.discovery_generation.wrapping_add(1);
+                sync.discovery_running = true;
+                Some(sync.discovery_generation)
+            }
+        } else {
+            if sync.discovery_running {
+                sync.discovery_generation = sync.discovery_generation.wrapping_add(1);
+            }
+            sync.discovery_running = false;
+            None
+        }
+    };
     let event_type = if running {
         "network.discovery.started"
     } else {
         "network.discovery.stopped"
     };
-    let _ = state.bridge.publish(RuntimeEventInput {
-        event_type: event_type.to_owned(),
-        severity: RuntimeEventSeverity::Info,
-        source: "ham-sync".to_owned(),
-        source_plugin_id: None,
-        workspace_id: Some("dashboard".to_owned()),
-        payload_summary: event_type.to_owned(),
-        redacted_payload: Some(json!({"transport": "ipv4/ipv6 multicast", "mvp": true})),
-        error: None,
-    });
+    let _ = publish_gui_runtime(
+        state,
+        event_type,
+        RuntimeEventSeverity::Info,
+        event_type,
+        Some(json!({"transport": "ipv4/ipv6 multicast", "mvp": false})),
+        None,
+    );
+    if let Some(generation) = worker_generation {
+        start_lan_discovery_worker(state.clone(), generation);
+    }
     json_response(&sync_state_payload(state))
 }
 
 fn handle_sync_refresh(state: &AppState) -> Vec<u8> {
+    let discovery_snapshot = {
+        let sync = state
+            .sync
+            .lock()
+            .expect("sync state mutex should not be poisoned");
+        if sync.discovery_running {
+            Some((sync.config.clone(), sync.identity.clone()))
+        } else {
+            None
+        }
+    };
+    if let Some((config, identity)) = discovery_snapshot {
+        match run_lan_discovery_cycle(state, config, identity) {
+            Ok(observed_count) => {
+                let _ = publish_gui_runtime(
+                    state,
+                    "network.discovery.refreshed",
+                    RuntimeEventSeverity::Info,
+                    "LAN discovery refreshed",
+                    Some(json!({"observed_count": observed_count})),
+                    None,
+                );
+            }
+            Err(error) => {
+                record_lan_discovery_error(state, "network.discovery.refresh_failed", error);
+            }
+        }
+        return json_response(&sync_state_payload(state));
+    }
+
     let demo_remote_events = build_demo_remote_events(state);
     let mut sync = state
         .sync
@@ -5075,6 +5125,260 @@ fn handle_sync_refresh(state: &AppState) -> Vec<u8> {
         error: None,
     });
     json_response(&sync_state_payload(state))
+}
+
+fn start_lan_discovery_worker(state: Arc<AppState>, generation: u64) {
+    thread::spawn(move || {
+        let _ = publish_gui_runtime(
+            &state,
+            "network.discovery.worker_started",
+            RuntimeEventSeverity::Info,
+            "LAN discovery worker started",
+            None,
+            None,
+        );
+        loop {
+            let snapshot = {
+                let sync = state
+                    .sync
+                    .lock()
+                    .expect("sync state mutex should not be poisoned");
+                if !sync.discovery_running || sync.discovery_generation != generation {
+                    None
+                } else {
+                    Some((sync.config.clone(), sync.identity.clone()))
+                }
+            };
+            let Some((config, identity)) = snapshot else {
+                break;
+            };
+            if let Err(error) = run_lan_discovery_cycle(&state, config.clone(), identity) {
+                record_lan_discovery_error(&state, "network.discovery.failed", error);
+            }
+            if !wait_for_next_discovery_cycle(
+                &state,
+                generation,
+                Duration::from_secs(config.discovery_interval_seconds.max(1)),
+            ) {
+                break;
+            }
+        }
+        let _ = publish_gui_runtime(
+            &state,
+            "network.discovery.worker_stopped",
+            RuntimeEventSeverity::Info,
+            "LAN discovery worker stopped",
+            None,
+            None,
+        );
+    });
+}
+
+fn wait_for_next_discovery_cycle(state: &AppState, generation: u64, interval: Duration) -> bool {
+    let deadline = Instant::now() + interval;
+    loop {
+        if !lan_discovery_is_running(state, generation) {
+            return false;
+        }
+        let now = Instant::now();
+        if now >= deadline {
+            return true;
+        }
+        thread::sleep((deadline - now).min(LAN_DISCOVERY_SLEEP_SLICE));
+    }
+}
+
+fn lan_discovery_is_running(state: &AppState, generation: u64) -> bool {
+    let sync = state
+        .sync
+        .lock()
+        .expect("sync state mutex should not be poisoned");
+    sync.discovery_running && sync.discovery_generation == generation
+}
+
+fn run_lan_discovery_cycle(
+    state: &AppState,
+    config: SyncConfig,
+    identity: LocalPeerIdentity,
+) -> Result<usize, String> {
+    let service = LanDiscoveryService { config, identity };
+    let observations = service
+        .discover_once(LAN_DISCOVERY_LISTEN_WINDOW)
+        .map_err(|error| error.to_string())?;
+    let mut observed_count = 0usize;
+    for observation in observations {
+        if observe_discovery_packet(state, observation.packet, observation.source) {
+            observed_count += 1;
+        }
+    }
+    expire_stale_discovery_peers(state);
+    Ok(observed_count)
+}
+
+fn observe_discovery_packet(state: &AppState, packet: DiscoveryPacket, source: SocketAddr) -> bool {
+    if !is_supported_discovery_packet(&packet) {
+        publish_discovery_observation(state, &PeerObservation::IgnoredIncompatible, source);
+        return false;
+    }
+    if is_local_discovery_packet(state, &packet) {
+        return false;
+    }
+    let api_address = discovery_api_address(&packet, source);
+    if !is_usable_discovery_source(api_address) {
+        let _ = publish_gui_runtime(
+            state,
+            "network.peer.ignored_unroutable",
+            RuntimeEventSeverity::Debug,
+            "LAN discovery source is not directly routable",
+            Some(json!({"source": source.to_string(), "api_address": api_address.to_string()})),
+            None,
+        );
+        return false;
+    }
+    let identity = match fetch_lan_peer_identity(api_address) {
+        Ok(identity) => identity,
+        Err(error) => {
+            let _ = publish_gui_runtime(
+                state,
+                "network.peer.unreachable",
+                RuntimeEventSeverity::Debug,
+                "LAN discovery peer API was unreachable",
+                Some(json!({"api_address": api_address.to_string()})),
+                Some(error),
+            );
+            return false;
+        }
+    };
+    if identity.device_id != packet.device_id || identity.session_id != packet.session_id {
+        let _ = publish_gui_runtime(
+            state,
+            "network.peer.ignored_spoofed",
+            RuntimeEventSeverity::Warn,
+            "LAN discovery identity probe did not match packet",
+            Some(json!({
+                "api_address": api_address.to_string(),
+                "packet_device_id": packet.device_id,
+                "probed_device_id": identity.device_id
+            })),
+            None,
+        );
+        return false;
+    }
+    let packet = DiscoveryPacket::from_identity(&identity);
+    let observation = {
+        let mut sync = state
+            .sync
+            .lock()
+            .expect("sync state mutex should not be poisoned");
+        let local = sync.identity.clone();
+        sync.registry.observe(&local, packet, api_address)
+    };
+    publish_discovery_observation(state, &observation, api_address);
+    matches!(
+        observation,
+        PeerObservation::Discovered(_) | PeerObservation::Updated(_)
+    )
+}
+
+fn is_local_discovery_packet(state: &AppState, packet: &DiscoveryPacket) -> bool {
+    let sync = state
+        .sync
+        .lock()
+        .expect("sync state mutex should not be poisoned");
+    packet.device_id == sync.identity.device_id && packet.session_id == sync.identity.session_id
+}
+
+fn is_supported_discovery_packet(packet: &DiscoveryPacket) -> bool {
+    packet.protocol_name == PROTOCOL_NAME && packet.protocol_version == PROTOCOL_VERSION
+}
+
+fn discovery_api_address(packet: &DiscoveryPacket, source: SocketAddr) -> SocketAddr {
+    packet
+        .local_api_port
+        .map(|port| SocketAddr::new(source.ip(), port))
+        .unwrap_or(source)
+}
+
+fn is_usable_discovery_source(source: SocketAddr) -> bool {
+    match source {
+        SocketAddr::V4(_) => true,
+        SocketAddr::V6(address) => !address.ip().is_unicast_link_local() || address.scope_id() != 0,
+    }
+}
+
+fn publish_discovery_observation(
+    state: &AppState,
+    observation: &PeerObservation,
+    source: SocketAddr,
+) {
+    let (event_type, severity, summary) = match observation {
+        PeerObservation::Discovered(_) => (
+            "network.peer.discovered",
+            RuntimeEventSeverity::Info,
+            "LAN peer discovered",
+        ),
+        PeerObservation::Updated(_) => (
+            "network.peer.updated",
+            RuntimeEventSeverity::Debug,
+            "LAN peer refreshed",
+        ),
+        PeerObservation::IgnoredIncompatible => (
+            "network.peer.ignored_incompatible",
+            RuntimeEventSeverity::Warn,
+            "Incompatible LAN discovery packet ignored",
+        ),
+        PeerObservation::IgnoredSelf => return,
+    };
+    let _ = publish_gui_runtime(
+        state,
+        event_type,
+        severity,
+        summary,
+        Some(json!({
+            "source": source.to_string(),
+            "observation": format!("{observation:?}")
+        })),
+        None,
+    );
+}
+
+fn expire_stale_discovery_peers(state: &AppState) {
+    let expired = {
+        let mut sync = state
+            .sync
+            .lock()
+            .expect("sync state mutex should not be poisoned");
+        let timeout = Duration::from_secs(sync.config.peer_timeout_seconds);
+        sync.registry.expire_stale(chrono::Utc::now(), timeout)
+    };
+    for peer_id in expired {
+        let _ = publish_gui_runtime(
+            state,
+            "network.peer.expired",
+            RuntimeEventSeverity::Warn,
+            "LAN peer expired",
+            Some(json!({"peer_id": peer_id})),
+            None,
+        );
+    }
+}
+
+fn record_lan_discovery_error(state: &AppState, event_type: &str, error: String) {
+    {
+        let mut sync = state
+            .sync
+            .lock()
+            .expect("sync state mutex should not be poisoned");
+        sync.warning_count += 1;
+    }
+    let _ = publish_gui_runtime(
+        state,
+        event_type,
+        RuntimeEventSeverity::Warn,
+        "LAN discovery transport failed",
+        None,
+        Some(error),
+    );
 }
 
 fn handle_sync_add_peer(state: &AppState, body: &[u8]) -> Vec<u8> {
@@ -6005,8 +6309,8 @@ fn remote_events_for_peer(
     peer: &PeerRecord,
 ) -> Result<Vec<CoreEventEnvelope>, String> {
     let mut last_error = None;
-    for address in &peer.addresses {
-        match fetch_lan_peer_events(*address, state.logbook_id) {
+    for address in sorted_peer_api_addresses(peer) {
+        match fetch_lan_peer_events(address, state.logbook_id) {
             Ok(events) => {
                 let _ = publish_gui_runtime(
                     state,
@@ -6041,8 +6345,8 @@ fn remote_events_for_peer(
 
 fn remote_head_for_peer(state: &AppState, peer: &PeerRecord) -> Result<LogbookHeadSummary, String> {
     let mut last_error = None;
-    for address in &peer.addresses {
-        match fetch_lan_peer_head(*address, state.logbook_id) {
+    for address in sorted_peer_api_addresses(peer) {
+        match fetch_lan_peer_head(address, state.logbook_id) {
             Ok(head) => return Ok(head),
             Err(error) => last_error = Some(error),
         }
@@ -6064,6 +6368,29 @@ fn remote_head_for_peer(state: &AppState, peer: &PeerRecord) -> Result<LogbookHe
     }
 
     Err(last_error.unwrap_or_else(|| "LAN peer has no usable API addresses".to_owned()))
+}
+
+fn sorted_peer_api_addresses(peer: &PeerRecord) -> Vec<SocketAddr> {
+    let mut addresses = peer.addresses.clone();
+    addresses.sort_by_key(|address| lan_api_address_rank(*address));
+    addresses
+}
+
+fn lan_api_address_rank(address: SocketAddr) -> u8 {
+    match address {
+        SocketAddr::V4(address) if address.ip().is_loopback() => 0,
+        SocketAddr::V4(address) if address.ip().is_private() => 1,
+        SocketAddr::V4(address) if address.ip().is_link_local() => 2,
+        SocketAddr::V6(address) if is_ipv6_unique_local(address.ip()) => 3,
+        SocketAddr::V6(address)
+            if address.ip().is_unicast_link_local() && address.scope_id() != 0 =>
+        {
+            4
+        }
+        SocketAddr::V6(address) if address.ip().is_loopback() => 5,
+        SocketAddr::V6(_) => 8,
+        SocketAddr::V4(_) => 9,
+    }
 }
 
 fn fetch_lan_peer_identity(address: SocketAddr) -> Result<LocalPeerIdentity, String> {
@@ -6173,10 +6500,13 @@ fn is_allowed_lan_peer_ip(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(ip) => ip.is_loopback() || ip.is_private() || ip.is_link_local(),
         IpAddr::V6(ip) => {
-            let first_segment = ip.segments()[0];
-            ip.is_loopback() || ip.is_unicast_link_local() || (first_segment & 0xfe00) == 0xfc00
+            ip.is_loopback() || ip.is_unicast_link_local() || is_ipv6_unique_local(&ip)
         }
     }
+}
+
+fn is_ipv6_unique_local(ip: &std::net::Ipv6Addr) -> bool {
+    (ip.segments()[0] & 0xfe00) == 0xfc00
 }
 
 fn lan_host_header(address: SocketAddr) -> String {
@@ -6503,5 +6833,83 @@ mod tests {
         let rejected = b"HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\n\r\n";
         assert!(http_response_body(rejected).is_err());
         assert!(http_response_body(b"not http").is_err());
+    }
+
+    #[test]
+    fn discovery_source_requires_scoped_ipv6_link_local_addresses() {
+        assert!(is_usable_discovery_source(
+            "192.168.1.10:9737".parse().unwrap()
+        ));
+        assert!(is_usable_discovery_source(
+            "[fd00::1]:9737".parse().unwrap()
+        ));
+        assert!(!is_usable_discovery_source(
+            "[fe80::272f:463d:a6b2:5af7]:9737".parse().unwrap()
+        ));
+        assert!(is_usable_discovery_source(
+            std::net::SocketAddrV6::new("fe80::272f:463d:a6b2:5af7".parse().unwrap(), 9737, 0, 12)
+                .into()
+        ));
+    }
+
+    #[test]
+    fn discovery_api_address_uses_advertised_port() {
+        let identity = LocalPeerIdentity::new("Peer", Some(9468));
+        let packet = DiscoveryPacket::from_identity(&identity);
+        assert_eq!(
+            discovery_api_address(&packet, "192.168.1.10:50300".parse().unwrap()),
+            "192.168.1.10:9468".parse::<SocketAddr>().unwrap()
+        );
+        let mut packet_without_port = packet;
+        packet_without_port.local_api_port = None;
+        assert_eq!(
+            discovery_api_address(&packet_without_port, "192.168.1.10:50300".parse().unwrap()),
+            "192.168.1.10:50300".parse::<SocketAddr>().unwrap()
+        );
+    }
+
+    #[test]
+    fn unsupported_discovery_packets_are_detected_before_recording() {
+        let mut packet =
+            DiscoveryPacket::from_identity(&LocalPeerIdentity::new("Peer", Some(9468)));
+        assert!(is_supported_discovery_packet(&packet));
+        packet.protocol_version = PROTOCOL_VERSION + 1;
+        assert!(!is_supported_discovery_packet(&packet));
+        packet.protocol_version = PROTOCOL_VERSION;
+        packet.protocol_name = "other-sync".to_owned();
+        assert!(!is_supported_discovery_packet(&packet));
+    }
+
+    #[test]
+    fn lan_api_address_rank_prefers_ipv4_private_before_ipv6_link_local() {
+        let mut peer = PeerRecord {
+            peer_id: "peer".to_owned(),
+            device_id: uuid::Uuid::new_v4(),
+            session_id: uuid::Uuid::new_v4(),
+            display_name: "Peer".to_owned(),
+            addresses: vec![
+                std::net::SocketAddrV6::new(
+                    "fe80::272f:463d:a6b2:5af7".parse().unwrap(),
+                    9738,
+                    0,
+                    12,
+                )
+                .into(),
+                "169.254.38.39:9738".parse().unwrap(),
+                "192.168.1.25:9738".parse().unwrap(),
+            ],
+            protocol_version: PROTOCOL_VERSION,
+            capabilities: Vec::new(),
+            first_seen: chrono::Utc::now(),
+            last_seen: chrono::Utc::now(),
+            connection_state: ham_sync::PeerConnectionState::Discovered,
+            sync_state: ham_sync::PeerSyncState::Unknown,
+        };
+        let sorted = sorted_peer_api_addresses(&peer);
+        assert_eq!(sorted[0], "192.168.1.25:9738".parse().unwrap());
+        assert_eq!(sorted[1], "169.254.38.39:9738".parse().unwrap());
+        peer.addresses.push("127.0.0.1:9738".parse().unwrap());
+        let sorted = sorted_peer_api_addresses(&peer);
+        assert_eq!(sorted[0], "127.0.0.1:9738".parse().unwrap());
     }
 }

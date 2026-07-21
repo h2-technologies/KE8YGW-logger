@@ -94,7 +94,8 @@ sessions for compatibility-only sync/report flows.
 
 Future work:
 
-- device pairing with explicit trust
+- production pairing UX on top of the durable LAN trust store
+- LAN HTTP endpoint authentication
 - signed official events
 - end-to-end encrypted relay
 - organization-managed policies
@@ -106,6 +107,6 @@ Future work:
 - Grant scopes are recorded but not fully enforced across every subsystem.
 - The GUI assumes a local-admin posture for permission review.
 - The self-hosted sync/report server now uses durable local storage by default; production migration, retention, and hosted-operations hardening still remain.
-- LAN peers are not yet authenticated.
+- LAN sync writes are trust-gated, but the LAN HTTP sync endpoints are not yet mutually authenticated and must stay on trusted local networks.
 - Native OS credential backends are implemented, but clean release-runner and packaged-app validation still remain.
 - Net Control template UI and ICS-style exports are not complete.

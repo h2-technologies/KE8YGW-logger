@@ -76,8 +76,10 @@ operations, and release qualification.
   for QSO/activation/Net Control/station/equipment commands, queue-aware cloud
   push acknowledgment, LAN trust persistence/endpoints, structured divergence
   reports, durable manual conflict-review create/resolve commands, and GUI
-  manual direct LAN HTTP preview/pull transport. Automatic LAN discovery
-  transport, full trust-pairing UX, corrective-event conflict UX, iOS background
+  manual direct LAN HTTP preview/pull transport plus automatic IPv4/IPv6
+  multicast discovery that probes peer identity before recording reachable
+  peers. Full trust-pairing UX, LAN endpoint authentication, corrective-event
+  conflict UX, physical-device LAN/iOS local-network validation, iOS background
   scheduler validation, and full cross-device reconciliation UI are incomplete.
 - Providers have metadata, fake/default execution, credential references,
   hosted QRZ XML/HamQTH lookup, POTA spot fetch, bounded DX Cluster controls,
@@ -106,8 +108,8 @@ operations, and release qualification.
 
 ## Deferred Or Unimplemented For v1
 
-- Automatic peer discovery transport and production pairing UX beyond the
-  manual LAN HTTP peer path and shared durable trust store.
+- Production pairing UX and LAN endpoint authentication beyond the automatic
+  discovery/manual LAN HTTP peer paths and shared durable trust store.
 - Full cross-device reconciliation UI, corrective-event conflict-resolution UX,
   and release-device iOS background retry qualification.
 - LoTW/TQSL managed certificate/signing mode, SOTAWatch approved live access,
@@ -187,13 +189,14 @@ Known manual repository/external settings remain in
 | #27 Persistent desktop offline queue | Partially satisfied | GUI persists queue entries before QSO/activation/Net Control/station support mutations, recovers interrupted sends at startup, exposes queue state/recovery, and cloud push acknowledges queued official event hashes. Full reconnect automation and browser-level desktop recovery tests remain. |
 | #28 Persistent iOS offline queue | Partially satisfied | `ham-ios-ffi` queues QSO/activation/Net Control/station/equipment commands and exposes queue snapshots/recovery plus Rust-owned conflict-review create/resolve commands. Release-device background retry, local-network permission behavior, and termination/poor-network validation remain. |
 | #29 Push/pull/divergence/manual conflict review | Partially satisfied | Existing verified preview/pull/push remains, queue-aware cloud push was added, structured conflict reports are exposed, and durable manual conflict-review create/resolve commands reject unsafe divergent pulls while allowing explicit recovery-path decisions. Corrective-event creation UX and full cross-client conflict UI remain. |
-| #30 Device pairing/trust/revocation/LAN transport decision | Partially satisfied | `JsonLanTrustStore` provides explicit approval, hashed expiring single-use tokens, logbook-scoped trusted devices, replay nonce rejection, and immediate revocation; GUI exposes trust endpoints, manual direct LAN HTTP peer add/preview/pull, advertised API-port normalization, and LAN pull rejects untrusted/revoked/replayed peers. Automatic discovery transport and production pairing UX remain. |
+| #30 Device pairing/trust/revocation/LAN transport decision | Partially satisfied | `JsonLanTrustStore` provides explicit approval, hashed expiring single-use tokens, logbook-scoped trusted devices, replay nonce rejection, and immediate revocation; GUI exposes trust endpoints, manual direct LAN HTTP peer add/preview/pull, automatic IPv4/IPv6 multicast discovery with reachable identity probing, advertised API-port normalization, and LAN pull rejects untrusted/revoked/replayed peers. Production pairing UX, LAN endpoint authentication, and physical LAN/iOS local-network validation remain. |
 | #31 Cross-client sync recovery/migration test suite | Partially satisfied | New deterministic queue/trust/recovery/conflict-review tests and iOS FFI queue/conflict-review assertions exist. Full hosted web/desktop/iOS/self-hosted golden scenarios, physical-device tests, and migration matrix remain. |
 
 ## Next Recommended Goal
 
-Finish the remaining sync/reconciliation hardening: automatic LAN discovery
-transport, production pairing UX, corrective-event conflict-resolution UX, and
-release-device iOS background retry qualification. That goal unblocks
+Finish the remaining sync/reconciliation hardening: production pairing UX, LAN
+endpoint authentication, corrective-event conflict-resolution UX, physical
+LAN/iOS local-network validation, and release-device iOS background retry
+qualification. That goal unblocks
 unattended desktop/iOS operation, cached map/offline work, contesting, EmComm,
 and release qualification.

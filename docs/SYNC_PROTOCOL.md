@@ -172,9 +172,27 @@ endpoints. It also exposes a manual LAN peer-add endpoint that probes another
 GUI instance over a numeric loopback/private/link-local `http://ip:port`, reads
 `/api/sync/state` for the peer identity, stores the peer with its advertised API
 port, then uses `/api/sync/get-head` and `/api/sync/events-since` for direct
-preview/pull. Mutating LAN pull rejects untrusted, revoked, wrong-logbook, or
-replayed peers before appending any remote official events. Automatic multicast
-discovery transport and production pairing UX remain deferred.
+preview/pull.
+
+When LAN discovery is started, the GUI runs an IPv4/IPv6 multicast discovery
+worker. Each cycle binds reusable discovery sockets, sends the local discovery
+packet, listens for packets, ignores malformed datagrams and self packets, and
+probes the sender IP plus advertised API port at `/api/sync/state`. A peer is
+recorded only when the probed identity matches the discovery packet. Unscoped
+IPv6 link-local sources are ignored because they cannot be used for direct HTTP.
+Stale peers expire by the configured timeout. Automatic discovery requires the
+remote GUI instance to be participating in discovery and to serve its API from a
+LAN-reachable bind address; loopback-only peers remain supported through manual
+loopback URLs.
+
+Mutating LAN pull rejects untrusted, revoked, wrong-logbook, or replayed peers
+before appending any remote official events. The current threat boundary is:
+discovery packets contain no secrets or log contents; discovery identity probes
+prove reachability and reduce spoofing; official event writes remain local and
+trust-gated; but LAN HTTP sync endpoints are not yet mutually authenticated and
+must not be exposed outside trusted local networks. Production pairing UX,
+endpoint authentication, physical-device LAN validation, and iOS Local Network
+permission validation remain before unattended LAN sync is considered complete.
 
 ## Cloud Relay and Self-Hosted Sync
 
@@ -199,6 +217,7 @@ The current self-hosted server uses durable local storage by default: embedded S
 - Production LAN pairing UX over the durable trust store.
 - Signed official events.
 - End-to-end encrypted relay.
-- Automatic multicast discovery transport for LAN replication.
+- LAN endpoint authentication.
+- Physical-device LAN and iOS Local Network permission validation.
 - Corrective-event conflict-resolution UX and full cross-client branch review.
 - Durable cloud server database.

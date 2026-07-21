@@ -33,8 +33,10 @@ wrapper is not the iOS client. See `V1_RELEASE_PLAN.md`,
    - Status: implemented as protocol/model layer with MVP GUI/demo paths. A
      durable LAN trust store with single-use tokens, replay nonce checks, and
      revocation is implemented in `ham-sync` and exposed through GUI endpoints;
-     manual direct LAN HTTP preview/pull is available between GUI instances.
-     Automatic discovery transport and full pairing UX remain high priority.
+     manual direct LAN HTTP preview/pull is available between GUI instances;
+     the GUI also runs IPv4/IPv6 multicast discovery with reachable identity
+     probing. Production pairing UX, LAN endpoint authentication, and
+     physical-device LAN/iOS local-network validation remain high priority.
 
 6. **Cloud/Self-Hosted Sync**
    - Sync server/client, pairing-token MVP auth, push/pull/preview via cloud, self-hosted config/Docker, GUI cloud settings, tests.
@@ -97,10 +99,12 @@ wrapper is not the iOS client. See `V1_RELEASE_PLAN.md`,
      ordering, idempotency keys, dependency checks, retry/backoff state,
      interrupted-send recovery, desktop/iOS mutation hooks, queue health
      snapshots, structured conflict reports, durable manual conflict-review
-     records, direct LAN HTTP preview/pull, and durable LAN trust state.
-   - Status: implemented as a v0.3 foundation. Corrective-event conflict UX,
-     release-device iOS background retry qualification, and automatic LAN
-     discovery transport remain planned.
+     records, direct LAN HTTP preview/pull, automatic LAN discovery, and durable
+     LAN trust state.
+   - Status: implemented as a v0.3 foundation. Production pairing UX, LAN
+     endpoint authentication, corrective-event conflict UX, physical-device
+     LAN/iOS local-network validation, and release-device iOS background retry
+     qualification remain planned.
 
 ## Dependency Order
 
@@ -108,10 +112,10 @@ The dependency-ordered v1 critical path is tracked in
 `V1_EXECUTION_PLAN.md`. The next high-impact work should minimize future
 rewrites:
 
-1. Finish the remaining sync/reconciliation hardening: automatic LAN discovery
-   transport, production pairing UX, corrective-event conflict-resolution UX,
-   and release-device iOS background retry qualification before unattended
-   desktop/iOS operation.
+1. Finish the remaining sync/reconciliation hardening: production LAN pairing
+   UX, endpoint authentication, corrective-event conflict-resolution UX,
+   physical-device LAN/iOS local-network validation, and release-device iOS
+   background retry qualification before unattended desktop/iOS operation.
 2. Complete provider runtime hardening and production provider qualification
    before release-candidate data migration or operations work.
 3. Build the remaining client surfaces on top of stable account, sync, provider,

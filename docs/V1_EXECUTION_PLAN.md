@@ -32,12 +32,14 @@ outside issue #2.
      interrupted-send recovery, desktop/iOS queue hooks for implemented
      mutations, queue-aware cloud push acknowledgments, structured conflict
      reports, durable manual conflict-review records, manual direct LAN HTTP
-     preview/pull transport, and durable LAN trust records with single-use
+     preview/pull transport, automatic IPv4/IPv6 multicast LAN discovery with
+     reachable identity probing, and durable LAN trust records with single-use
      tokens, replay nonce rejection, and revocation.
-   - Remaining: automatic LAN discovery transport, production pairing UX,
-     corrective-event conflict-resolution UX, full cross-client reconciliation UI,
-     release-device iOS background retry qualification, and multi-device
-     migration/recovery scenarios.
+   - Remaining: production pairing UX, LAN endpoint authentication,
+     corrective-event conflict-resolution UX, full cross-client reconciliation
+     UI, physical-device LAN/iOS local-network validation, release-device iOS
+     background retry qualification, and multi-device migration/recovery
+     scenarios.
    - Blockers: local network permission behavior on iOS, trust-pairing UX,
      physical test devices, and acceptance criteria for manual conflict
      resolution.
@@ -125,9 +127,10 @@ outside issue #2.
 
 ## Next Three Goals
 
-1. Finish sync/reconciliation hardening: automatic LAN discovery transport,
-   production pairing UX, corrective-event conflict-resolution UX, and iOS
-   background retry validation on release devices.
+1. Finish sync/reconciliation hardening: production LAN pairing UX, endpoint
+   authentication, corrective-event conflict-resolution UX, physical-device
+   LAN/iOS local-network validation, and iOS background retry validation on
+   release devices.
 2. Complete production provider qualification and release-runner live validation
    for the issue #2 provider set.
 3. Wire hosted web, desktop, and iOS UI flows to the implemented account,

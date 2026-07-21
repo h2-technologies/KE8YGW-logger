@@ -837,8 +837,10 @@ with a selected peer, manually add a direct LAN HTTP peer, preview a pull, trust
 or revoke a selected peer, recover the offline queue, pull missing events from
 trusted peers, and copy the local sync identity. The current implementation
 keeps peers in memory, includes a demo refresh path for local testing, and can
-preview/pull from another GUI instance over a numeric loopback/private/link-local
-`http://ip:port`; automatic multicast discovery transport is still pending.
+discover reachable GUI peers over IPv4/IPv6 multicast or preview/pull from a
+manually entered numeric loopback/private/link-local `http://ip:port`.
+Discovered peers are recorded only after their advertised API port serves a
+matching `/api/sync/state` identity.
 
 Runtime events include:
 
@@ -852,8 +854,8 @@ Runtime events include:
 
 Security limitations for MVP: peers are untrusted until they pass the durable
 LAN trust store, no destructive commands are accepted, automatic replication is
-disabled, and the production pairing UX plus automatic LAN discovery transport
-remain TODOs before unattended LAN sync.
+disabled, and production pairing UX plus LAN endpoint authentication remain
+TODOs before unattended LAN sync.
 
 ## Safe LAN Event Replication
 
@@ -899,8 +901,9 @@ sync UI state, shown in the Sync Status panel, and emitted as
 review. Desktop can save a durable manual review from the current preview and
 record explicit recovery-path decisions; iOS can create, resolve, and snapshot
 the same Rust-owned review records through the bridge. Corrective-event conflict
-UX, full cross-client branch review, signed events, and automatic LAN discovery
-transport are still deferred.
+UX, full cross-client branch review, signed events, production LAN pairing UX,
+LAN endpoint authentication, and physical-device LAN/iOS local-network
+validation are still deferred.
 
 ## Durable Offline Queue And LAN Trust
 
@@ -959,10 +962,15 @@ To try the current GUI workflow locally:
 
 For two real local instances, run two GUI processes on different ports and set
 separate `HAM_PLATFORM_EVENT_LOG` paths so they do not share the same JSONL
-store. In the Sync Status panel for the receiving instance, enter the other
-instance URL such as `http://127.0.0.1:9468`, click `Add Peer`, trust the added
-peer, then preview and pull. Automatic discovery and production pairing UX are
-the next sync tasks.
+store. For manual same-machine testing, enter the other instance URL such as
+`http://127.0.0.1:9468`, click `Add Peer`, trust the added peer, then preview
+and pull. For automatic LAN discovery, both GUI instances must have discovery
+running and the peer being discovered must bind its GUI API to a LAN-reachable
+address such as `0.0.0.0:<port>` or a specific private interface; loopback-only
+peers can still use manual loopback URLs. Mutating LAN pull also requires the
+explicit `sync.lan.pull` permission and durable peer trust. Production pairing
+UX, endpoint authentication, and physical iOS Local Network permission
+validation remain next sync tasks.
 
 ## Cloud Relay And Self-Hosted Sync
 

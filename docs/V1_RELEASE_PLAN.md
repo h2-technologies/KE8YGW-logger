@@ -42,7 +42,8 @@ Partial:
 - Hosted web/desktop/iOS UX for the implemented account/session/device/admin
   APIs, production email/Turnstile deployment configuration, hosted
   backup/divergence UX, provider runtime execution, cloud/self-hosted sync,
-  desktop packaging, native iOS projection/cache flows, and release automation.
+  production LAN pairing/authentication, desktop packaging, native iOS
+  projection/cache flows, and release automation.
 
 Test-only or fake/default paths:
 - Mock lookup/rig providers, placeholder map/weather/propagation providers,
@@ -50,11 +51,12 @@ Test-only or fake/default paths:
   GUI demo peer/runtime data.
 
 Deferred or unimplemented:
-- Production LAN pairing UX and automatic discovery transport, LoTW/TQSL live
-  upload, SOTAWatch approved live access, RBN/background DX lifecycle,
-  cached/offline map regions, full contesting, full EmComm forms, signed
-  desktop updater, production signing/notarization/App Store distribution, full
-  production provider qualification, and release-candidate operations hardening.
+- Production LAN pairing UX, LAN endpoint authentication, physical-device
+  LAN/iOS local-network validation, LoTW/TQSL live upload, SOTAWatch approved
+  live access, RBN/background DX lifecycle, cached/offline map regions, full
+  contesting, full EmComm forms, signed desktop updater, production
+  signing/notarization/App Store distribution, full production provider
+  qualification, and release-candidate operations hardening.
 
 ## Schedule Gates
 
