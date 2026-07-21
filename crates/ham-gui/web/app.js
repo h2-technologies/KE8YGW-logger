@@ -1283,6 +1283,7 @@ function bindPanelControls() {
     byId("sync-pull-events").addEventListener("click", pullSelectedPeer);
     byId("sync-issue-pairing").addEventListener("click", issueLanPairingCode);
     byId("sync-trust-peer").addEventListener("click", trustSelectedPeer);
+    byId("sync-rotate-auth").addEventListener("click", rotateSelectedPeerAuth);
     byId("sync-revoke-peer").addEventListener("click", revokeSelectedPeer);
     byId("sync-recover-queue").addEventListener("click", recoverOfflineQueue);
     byId("sync-copy-identity").addEventListener("click", copyLocalSyncIdentity);
@@ -3058,6 +3059,7 @@ function renderSyncStatus() {
       <button id="sync-pull-events" class="toolbar-button" type="button">Pull Missing</button>
       <button id="sync-issue-pairing" class="toolbar-button" type="button">Issue Code</button>
       <button id="sync-trust-peer" class="toolbar-button" type="button">Complete Pairing</button>
+      <button id="sync-rotate-auth" class="toolbar-button" type="button">Rotate Auth</button>
       <button id="sync-revoke-peer" class="toolbar-button" type="button">Revoke Selected</button>
       <button id="sync-copy-identity" class="toolbar-button" type="button">Copy Identity</button>
     </div>
@@ -3233,6 +3235,18 @@ async function revokeSelectedPeer() {
   state.importSummary = result.trusted_device || result;
 }
 
+async function rotateSelectedPeerAuth() {
+  const trustedDevice = selectedTrustedDevice();
+  if (!trustedDevice) return;
+  const pairingCode = window.prompt("Replacement LAN auth code", "");
+  if (!pairingCode) return;
+  const result = await syncPost("/api/sync/lan/rotate-auth", {
+    device_id: trustedDevice.device_id,
+    pairing_code: pairingCode.trim(),
+  });
+  state.importSummary = result.rotation || result.trusted_device || result;
+}
+
 async function recoverOfflineQueue() {
   const result = await syncPost("/api/sync/offline-queue/recover");
   state.importSummary = result.offline_queue || result;
@@ -3241,6 +3255,12 @@ async function recoverOfflineQueue() {
 function selectedPeer() {
   const peers = state.syncState?.peers || [];
   return peers.find((peer) => peer.peer_id === state.selectedPeerId) || peers[0] || null;
+}
+
+function selectedTrustedDevice() {
+  const trustedDevices = (state.syncState?.lan_trust?.trusted_devices || []).filter((device) => !device.revoked_at);
+  const peer = selectedPeer();
+  return trustedDevices.find((device) => device.device_id === peer?.device_id) || trustedDevices[0] || null;
 }
 
 function randomNonce() {

@@ -37,9 +37,9 @@ wrapper is not the iOS client. See `V1_RELEASE_PLAN.md`,
      device ID, replay nonce, and HMAC-SHA256 signature headers;
      manual direct LAN HTTP preview/pull is available between GUI instances;
      the GUI also runs IPv4/IPv6 multicast discovery with reachable identity
-     probing. Production reciprocal pairing UX, LAN auth credential
-     rotation/recovery, and physical-device LAN/iOS local-network validation
-     remain high priority.
+     probing, plus GUI LAN auth credential rotation/recovery. Production
+     reciprocal pairing UX, stronger LAN key-exchange hardening, and
+     physical-device LAN/iOS local-network validation remain high priority.
 
 6. **Cloud/Self-Hosted Sync**
    - Sync server/client, pairing-token MVP auth, push/pull/preview via cloud, self-hosted config/Docker, GUI cloud settings, tests.
@@ -107,8 +107,9 @@ wrapper is not the iOS client. See `V1_RELEASE_PLAN.md`,
      conflict-review records, direct LAN HTTP preview/pull, automatic LAN
      discovery, and durable LAN trust state.
    - Status: implemented as a v0.3 foundation with HMAC-SHA256 signed LAN read
-     endpoint authorization. Production reciprocal pairing UX, LAN auth
-     credential rotation/recovery, corrective-event conflict UX,
+     endpoint authorization and GUI LAN auth credential rotation/recovery.
+     Production reciprocal pairing UX, stronger LAN key-exchange hardening,
+     corrective-event conflict UX,
      physical-device LAN/iOS local-network validation, and release-device iOS
      background retry qualification remain planned.
 
@@ -119,7 +120,7 @@ The dependency-ordered v1 critical path is tracked in
 rewrites:
 
 1. Finish the remaining sync/reconciliation hardening: production reciprocal
-   LAN pairing UX, LAN auth credential rotation/recovery,
+   LAN pairing UX, stronger LAN key-exchange hardening,
    corrective-event conflict-resolution UX, physical-device LAN/iOS
    local-network validation, and release-device iOS background retry
    qualification before unattended desktop/iOS operation.

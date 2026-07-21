@@ -39,15 +39,18 @@ Last audited: 2026-07-21
 - Trust-scoped LAN HTTP read endpoint authorization for logbook/head/event
   requests using requester device IDs, fresh replay nonce headers, and
   HMAC-SHA256 request signatures backed by credential-store secrets.
+- GUI LAN auth credential rotation/recovery for trusted peers, with replacement
+  secrets stored through `CredentialStore` and old credential references
+  deleted after trust state updates.
 - Automatic IPv4/IPv6 multicast discovery worker that probes reachable peer
   identity before recording peers.
 - Older trust records without an `auth_credential_id` remain readable but must
-  be re-paired before protected LAN reads can authorize.
+  be re-paired or rotated before protected LAN reads can authorize.
 
 ## Still Incomplete For v1
 
 - Production reciprocal pairing UX across desktop and iOS.
-- LAN auth credential rotation/recovery and stronger key-exchange hardening.
+- Stronger LAN key-exchange hardening.
 - Physical-device LAN and iOS Local Network permission validation.
 - Corrective-event conflict-resolution UX on top of the durable manual review
   commands.

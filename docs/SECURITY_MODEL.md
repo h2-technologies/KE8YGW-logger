@@ -98,13 +98,16 @@ HMAC-SHA256 signature headers. The serving peer verifies those headers against a
 pairing-derived credential stored through `CredentialStore`, durable LAN trust
 records, logbook scope, revocation state, and replay history before returning
 logbook or event data. LAN trust JSON stores only credential references, not raw
-pairing codes. The discovery identity endpoint remains unauthenticated and must
-stay secret-free.
+pairing codes. The GUI LAN auth-rotation endpoint stores the replacement secret
+through `CredentialStore`, updates the trust record to the new credential ID,
+and deletes the previous credential reference after the trust update succeeds.
+The discovery identity endpoint remains unauthenticated and must stay
+secret-free.
 
 Future work:
 
 - production reciprocal pairing UX on top of the durable LAN trust store
-- LAN auth credential rotation/recovery and stronger key-exchange hardening
+- stronger LAN key-exchange hardening
 - signed official events
 - end-to-end encrypted relay
 - organization-managed policies

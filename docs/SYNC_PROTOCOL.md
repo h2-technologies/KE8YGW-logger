@@ -187,15 +187,22 @@ through Rust bridge commands.
 - short-lived single-use pairing tokens stored only as hashes
 - trusted device records scoped to logbook IDs
 - `auth_credential_id` references for pairing-derived LAN request secrets
+- credential-reference rotation for recovery when a LAN auth code must change
 - optional public-key fingerprint metadata for future signed transport
 - immediate revocation
 - replay nonce hashing and rejection
 
 The GUI exposes trust-state, pairing-token, pairing-accept, pairing-complete,
-and revoke endpoints. `pairing-complete` posts the operator-entered peer token
-and pairing code to the selected peer, stores the accepted pairing code as a LAN
-auth credential through `CredentialStore`, and records only the resulting
-credential ID in durable trust state. It also exposes a manual LAN peer-add
+auth-rotation, and revoke endpoints. `pairing-complete` posts the
+operator-entered peer token and pairing code to the selected peer, stores the
+accepted pairing code as a LAN auth credential through `CredentialStore`, and
+records only the resulting credential ID in durable trust state.
+`/api/sync/lan/rotate-auth` lets an operator replace a trusted peer's LAN auth
+credential reference for the current logbook; the replacement secret is stored
+through `CredentialStore`, the trust record is updated only after the new
+credential is stored, and the previous credential reference is deleted after a
+successful rotation. This is the recovery path for missing or intentionally
+rotated LAN endpoint-auth credentials. It also exposes a manual LAN peer-add
 endpoint that probes another GUI instance over a numeric
 loopback/private/link-local `http://ip:port`, reads `/api/sync/state` for the
 peer identity, stores the peer with its advertised API port, then uses protected
@@ -218,7 +225,8 @@ and must not include secrets or log contents.
 
 Existing trust records that predate `auth_credential_id` load safely because
 the field is optional, but they cannot authorize protected LAN reads. Re-pair
-those peers to create a credential-store-backed LAN auth secret.
+those peers or rotate auth for an existing trusted record to create a
+credential-store-backed LAN auth secret.
 
 When LAN discovery is started, the GUI runs an IPv4/IPv6 multicast discovery
 worker. Each cycle binds reusable discovery sockets, sends the local discovery
@@ -240,7 +248,7 @@ reachability and reduce spoofing; official event writes remain local and
 trust-gated; protected LAN read endpoints require reciprocal trust state,
 fresh nonces, and HMAC-SHA256 request proof. The current LAN HTTP transport is
 still not encrypted and must not be exposed outside trusted local networks.
-Production reciprocal pairing UX, LAN auth credential rotation/recovery,
+Production reciprocal pairing UX, stronger LAN key-exchange hardening,
 physical-device LAN validation, and iOS Local Network permission validation
 remain before unattended LAN sync is considered complete.
 
@@ -267,7 +275,7 @@ The current self-hosted server uses durable local storage by default: embedded S
 - Production reciprocal LAN pairing UX over the durable trust store.
 - Signed official events.
 - End-to-end encrypted relay.
-- LAN auth credential rotation/recovery and stronger key-exchange hardening.
+- Stronger LAN key-exchange hardening and production reciprocal pairing UX.
 - Physical-device LAN and iOS Local Network permission validation.
 - Corrective-event conflict-resolution UX and full cross-client branch review.
 - Durable cloud server database.

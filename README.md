@@ -855,7 +855,7 @@ Runtime events include:
 Security limitations for MVP: peers are untrusted until they pass the durable
 LAN trust store, no destructive commands are accepted, automatic replication is
 disabled, protected LAN reads require HMAC-SHA256 request proof after pairing,
-and production reciprocal pairing UX, credential rotation/recovery, plus
+and production reciprocal pairing UX, stronger LAN key-exchange hardening, plus
 physical-device LAN/iOS validation remain TODOs before unattended LAN sync.
 
 ## Safe LAN Event Replication
@@ -904,10 +904,11 @@ remote schemas, concurrent QSO corrections, and remote QSO tombstone/restore
 events that overlap local pending mutations. Desktop can save a durable manual
 review from the current preview and record explicit recovery-path decisions;
 iOS can create, resolve, and snapshot the same Rust-owned review records through
-the bridge. Corrective-event conflict UX, full cross-client branch review,
-signed events, production reciprocal LAN pairing UX, LAN auth credential
-rotation/recovery, and physical-device LAN/iOS local-network validation are
-still deferred.
+the bridge. LAN auth credential rotation/recovery is available through the GUI
+trust endpoint. Corrective-event conflict UX, full cross-client branch review,
+signed events, production reciprocal LAN pairing UX, stronger LAN key-exchange
+hardening, and physical-device LAN/iOS local-network validation are still
+deferred.
 
 ## Durable Offline Queue And LAN Trust
 
@@ -990,7 +991,7 @@ discovered must bind its GUI API to a LAN-reachable address such as
 `0.0.0.0:<port>` or a specific private interface; loopback-only peers can still
 use manual loopback URLs. Mutating LAN pull also requires the explicit
 `sync.lan.pull` permission, durable peer trust, and signed remote read requests.
-Production pairing UX, LAN auth credential rotation/recovery, and physical iOS
+Production pairing UX, stronger LAN key-exchange hardening, and physical iOS
 Local Network permission validation remain next sync tasks.
 
 ## Cloud Relay And Self-Hosted Sync

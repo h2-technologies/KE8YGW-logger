@@ -726,6 +726,7 @@ fn handle_client(state: Arc<AppState>, mut stream: TcpStream) {
         ("POST", "/api/sync/lan/pairing-complete") => {
             handle_lan_pairing_complete(&state, &request.body)
         }
+        ("POST", "/api/sync/lan/rotate-auth") => handle_lan_auth_rotate(&state, &request.body),
         ("POST", "/api/sync/lan/revoke") => handle_lan_trust_revoke(&state, &request.body),
         ("POST", "/api/sync/cloud/connect") => handle_cloud_connect(&state, &request.body),
         ("POST", "/api/sync/cloud/push") => handle_cloud_push(&state),
@@ -1116,6 +1117,12 @@ struct LanPairingCompleteRequest {
 #[derive(Debug, Deserialize)]
 struct LanTrustRevokeRequest {
     device_id: uuid::Uuid,
+}
+
+#[derive(Debug, Deserialize)]
+struct LanAuthRotateRequest {
+    device_id: uuid::Uuid,
+    pairing_code: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -5118,6 +5125,82 @@ fn handle_lan_pairing_complete(state: &AppState, body: &[u8]) -> Vec<u8> {
         }
         Err(error) => {
             delete_lan_auth_credential(state, auth_credential_id);
+            json_response_with_status(400, &json!({"ok": false, "error": error.to_string()}))
+        }
+    }
+}
+
+fn handle_lan_auth_rotate(state: &AppState, body: &[u8]) -> Vec<u8> {
+    if let Err(response) = ensure_gui_permission(
+        state,
+        &core_gui_manifest(),
+        PluginCapability::SyncLanDiscovery,
+        "LAN auth credential rotation permission check",
+    ) {
+        return response;
+    }
+    let Ok(request) = serde_json::from_slice::<LanAuthRotateRequest>(body) else {
+        return json_error(400, "invalid LAN auth rotation JSON");
+    };
+    let pairing_code = request.pairing_code.trim().to_owned();
+    if pairing_code.is_empty() {
+        return json_error(400, "replacement LAN auth code is required");
+    }
+    let trusted = match state
+        .lan_trust_store
+        .trusted_peer(request.device_id, state.logbook_id)
+    {
+        Ok(trusted) => trusted,
+        Err(error) => {
+            return json_response_with_status(
+                400,
+                &json!({"ok": false, "error": error.to_string()}),
+            );
+        }
+    };
+    let new_auth_credential_id = match store_lan_auth_credential(
+        state,
+        trusted.device_id,
+        &trusted.display_name,
+        &pairing_code,
+    ) {
+        Ok(credential_id) => credential_id,
+        Err(error) => return json_response_with_status(500, &json!({"ok": false, "error": error})),
+    };
+    match state.lan_trust_store.rotate_auth_credential(
+        trusted.device_id,
+        state.logbook_id,
+        new_auth_credential_id,
+        chrono::Utc::now(),
+    ) {
+        Ok(rotation) => {
+            if let Some(previous_auth_credential_id) = rotation.previous_auth_credential_id {
+                delete_lan_auth_credential(state, previous_auth_credential_id);
+            }
+            let trusted_device = rotation.trusted_device.clone();
+            let snapshot = state.lan_trust_store.snapshot().ok();
+            let _ = publish_gui_runtime(
+                state,
+                "sync.lan.auth_credential.rotated",
+                RuntimeEventSeverity::Info,
+                "LAN peer endpoint auth credential rotated",
+                Some(json!({
+                    "device_id": rotation.trusted_device.device_id,
+                    "logbook_ids": rotation.trusted_device.logbook_ids,
+                    "auth_credential_id": rotation.trusted_device.auth_credential_id,
+                    "previous_auth_credential_replaced": rotation.previous_auth_credential_id.is_some()
+                })),
+                None,
+            );
+            json_response(&json!({
+                "ok": true,
+                "rotation": rotation,
+                "trusted_device": trusted_device,
+                "lan_trust": snapshot
+            }))
+        }
+        Err(error) => {
+            delete_lan_auth_credential(state, new_auth_credential_id);
             json_response_with_status(400, &json!({"ok": false, "error": error.to_string()}))
         }
     }

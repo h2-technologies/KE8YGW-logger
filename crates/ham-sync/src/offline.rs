@@ -1850,6 +1850,10 @@ pub enum LanTrustError {
     WrongLogbook { device_id: Uuid, logbook_id: Uuid },
     #[error("replay nonce was already used for device {0}")]
     ReplayDetected(Uuid),
+    #[error(
+        "replacement LAN auth credential for trusted device {0} matches the current credential"
+    )]
+    CredentialUnchanged(Uuid),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1883,6 +1887,8 @@ pub struct TrustedPeerDevice {
     pub public_key_fingerprint: Option<String>,
     #[serde(default)]
     pub auth_credential_id: Option<Uuid>,
+    #[serde(default)]
+    pub auth_rotated_at: Option<DateTime<Utc>>,
     pub last_seen_at: Option<DateTime<Utc>>,
 }
 
@@ -1976,6 +1982,12 @@ pub struct LanPeerTrustUpdate {
     pub pairing_token_id: Option<Uuid>,
     pub public_key_fingerprint: Option<String>,
     pub auth_credential_id: Uuid,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LanAuthCredentialRotation {
+    pub trusted_device: TrustedPeerDevice,
+    pub previous_auth_credential_id: Option<Uuid>,
 }
 
 #[derive(Debug, Clone)]
@@ -2074,6 +2086,7 @@ impl JsonLanTrustStore {
             pairing_token_id: Some(request.token_id),
             public_key_fingerprint: request.public_key_fingerprint,
             auth_credential_id: request.auth_credential_id,
+            auth_rotated_at: None,
             last_seen_at: None,
         };
         upsert_trusted_device(&mut file, device.clone());
@@ -2096,11 +2109,47 @@ impl JsonLanTrustStore {
             pairing_token_id: request.pairing_token_id,
             public_key_fingerprint: request.public_key_fingerprint,
             auth_credential_id: Some(request.auth_credential_id),
+            auth_rotated_at: None,
             last_seen_at: None,
         };
         upsert_trusted_device(&mut file, device.clone());
         self.save_file(&file)?;
         Ok(device)
+    }
+
+    pub fn rotate_auth_credential(
+        &self,
+        device_id: Uuid,
+        logbook_id: Uuid,
+        new_auth_credential_id: Uuid,
+        now: DateTime<Utc>,
+    ) -> Result<LanAuthCredentialRotation, LanTrustError> {
+        let mut file = self.load_file()?;
+        let device = file
+            .trusted_devices
+            .iter_mut()
+            .find(|device| device.device_id == device_id)
+            .ok_or(LanTrustError::DeviceNotFound(device_id))?;
+        if device.revoked_at.is_some() {
+            return Err(LanTrustError::DeviceRevoked(device_id));
+        }
+        if !device.logbook_ids.contains(&logbook_id) {
+            return Err(LanTrustError::WrongLogbook {
+                device_id,
+                logbook_id,
+            });
+        }
+        if device.auth_credential_id == Some(new_auth_credential_id) {
+            return Err(LanTrustError::CredentialUnchanged(device_id));
+        }
+        let previous_auth_credential_id = device.auth_credential_id.replace(new_auth_credential_id);
+        device.auth_rotated_at = Some(now);
+        let trusted_device = device.clone();
+        self.save_file(&file)?;
+        Ok(LanAuthCredentialRotation {
+            trusted_device,
+            previous_auth_credential_id,
+        })
     }
 
     pub fn trusted_peer(
@@ -3220,6 +3269,91 @@ mod tests {
                 .auth_credential_id,
             Some(credential_id)
         );
+        let raw = fs::read_to_string(dir.join("lan-trust.json")).unwrap();
+        assert!(!raw.contains("TEST_SECRET_SHOULD_NOT_APPEAR"));
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn lan_trust_rotates_peer_auth_credential_without_reviving_revoked_devices() {
+        let (store, dir) = trust_store();
+        let now = Utc::now();
+        let peer = Uuid::new_v4();
+        let logbook_id = Uuid::new_v4();
+        let old_credential_id = Uuid::new_v4();
+        let new_credential_id = Uuid::new_v4();
+
+        store
+            .trust_peer_with_auth_credential(
+                LanPeerTrustUpdate {
+                    peer_device_id: peer,
+                    peer_display_name: "desktop".to_owned(),
+                    logbook_id,
+                    pairing_token_id: Some(Uuid::new_v4()),
+                    public_key_fingerprint: None,
+                    auth_credential_id: old_credential_id,
+                },
+                now,
+            )
+            .unwrap();
+
+        let rotation = store
+            .rotate_auth_credential(
+                peer,
+                logbook_id,
+                new_credential_id,
+                now + ChronoDuration::seconds(30),
+            )
+            .unwrap();
+        assert_eq!(
+            rotation.previous_auth_credential_id,
+            Some(old_credential_id)
+        );
+        assert_eq!(
+            rotation.trusted_device.auth_credential_id,
+            Some(new_credential_id)
+        );
+        assert_eq!(
+            rotation.trusted_device.auth_rotated_at,
+            Some(now + ChronoDuration::seconds(30))
+        );
+        assert_eq!(
+            store
+                .trusted_peer(peer, logbook_id)
+                .unwrap()
+                .auth_credential_id,
+            Some(new_credential_id)
+        );
+        assert!(matches!(
+            store.rotate_auth_credential(
+                peer,
+                logbook_id,
+                new_credential_id,
+                now + ChronoDuration::seconds(60)
+            ),
+            Err(LanTrustError::CredentialUnchanged(device)) if device == peer
+        ));
+        assert!(matches!(
+            store.rotate_auth_credential(
+                peer,
+                Uuid::new_v4(),
+                Uuid::new_v4(),
+                now + ChronoDuration::seconds(60)
+            ),
+            Err(LanTrustError::WrongLogbook { device_id, .. }) if device_id == peer
+        ));
+        store
+            .revoke_device(peer, now + ChronoDuration::seconds(90))
+            .unwrap();
+        assert!(matches!(
+            store.rotate_auth_credential(
+                peer,
+                logbook_id,
+                Uuid::new_v4(),
+                now + ChronoDuration::seconds(120)
+            ),
+            Err(LanTrustError::DeviceRevoked(device)) if device == peer
+        ));
         let raw = fs::read_to_string(dir.join("lan-trust.json")).unwrap();
         assert!(!raw.contains("TEST_SECRET_SHOULD_NOT_APPEAR"));
         let _ = fs::remove_dir_all(dir);
