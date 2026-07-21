@@ -48,6 +48,10 @@ just fmt
 just check
 just clippy
 just test
+just feature-matrix
+just api-contract
+just version-check
+just docs-link-check
 just build
 just release
 just governance-check
@@ -65,6 +69,9 @@ cargo check --locked -p ham-sync --no-default-features --all-targets
 cargo test --locked -p ham-sync --features surreal-storage
 cargo build --workspace
 cargo build --release --workspace
+python scripts/check_api_contract.py
+python scripts/check_versions.py
+python scripts/check_docs_links.py
 pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/governance-check.ps1
 ```
 
@@ -82,13 +89,13 @@ Before considering an implementation complete:
 2. Update `README.md` if contributor-facing behavior changed.
 3. Update architecture docs when architecture, protocols, permissions, or event catalogs change.
 4. Update this developer guide when workflow expectations change.
-5. Run formatting, linting, tests, and subsystem-specific validation. `just ci` is the workspace baseline; use `cargo build --release --workspace`, `node --check crates\\ham-gui\\web\\app.js`, `cargo tauri info`, and `cargo tauri build` when the touched subsystem requires them.
+5. Run formatting, linting, tests, API/version/docs/governance checks, and subsystem-specific validation. `just ci` is the workspace baseline; use `cargo build --release --workspace`, `node --check crates\\ham-gui\\web\\app.js`, `cargo tauri info`, and `cargo tauri build` when the touched subsystem requires them.
 6. Fix every discovered issue.
 7. Report changed files, architecture decisions, risks, TODOs, and the next milestone.
 
 For governance or repository-standard changes, update the root policy files,
 GitHub templates, CODEOWNERS, and ADR process docs together when needed. Run
-`just governance-check` before opening a PR.
+`just docs-link-check` and `just governance-check` before opening a PR.
 
 ## Adding Features
 

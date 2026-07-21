@@ -63,6 +63,8 @@ jobs:
       rust: ${{ steps.detect.outputs.rust }}
       api: ${{ steps.detect.outputs.api }}
       governance: ${{ steps.detect.outputs.governance }}
+      docs_links: ${{ steps.detect.outputs.docs_links }}
+      version: ${{ steps.detect.outputs.version }}
       tauri: ${{ steps.detect.outputs.tauri }}
       ios: ${{ steps.detect.outputs.ios }}
       container: ${{ steps.detect.outputs.container }}
@@ -97,6 +99,8 @@ jobs:
           rust=false
           api=false
           governance=false
+          docs_links=false
+          version=false
           tauri=false
           ios=false
           container=false
@@ -107,12 +111,18 @@ jobs:
             if [[ "$file" == .github/workflows/* || "$file" == Cargo.toml || "$file" == Cargo.lock || "$file" == rust-toolchain.toml || "$file" == rust-toolchain ]]; then
               all_expensive=true
             fi
+            if [[ "$file" == *.md ]]; then
+              docs_links=true
+            fi
             if [[ "$file" == openapi/* || "$file" == scripts/check_api_contract.py || "$file" == crates/ham-api-contract/* || "$file" == crates/ham-server/* ]]; then
               api=true
               rust=true
             fi
-            if [[ "$file" == AGENTS.md || "$file" == GOVERNANCE.md || "$file" == CONTRIBUTING.md || "$file" == SECURITY.md || "$file" == RELEASE.md || "$file" == SUPPORT.md || "$file" == CODE_OF_CONDUCT.md || "$file" == docs/* || "$file" == .github/CODEOWNERS || "$file" == .github/ISSUE_TEMPLATE/* || "$file" == .github/PULL_REQUEST_TEMPLATE.md || "$file" == scripts/governance-check.ps1 ]]; then
+            if [[ "$file" == *.md || "$file" == .github/CODEOWNERS || "$file" == .github/ISSUE_TEMPLATE/* || "$file" == .github/PULL_REQUEST_TEMPLATE.md || "$file" == scripts/governance-check.ps1 ]]; then
               governance=true
+            fi
+            if [[ "$file" == Cargo.toml || "$file" == crates/*/Cargo.toml || "$file" == src-tauri/Cargo.toml || "$file" == src-tauri/tauri.conf.json || "$file" == ios/KE8YGWLogger/KE8YGWLogger.xcodeproj/project.pbxproj || "$file" == ios/KE8YGWLogger/KE8YGWLogger/Resources/Info.plist || "$file" == openapi/api-v1.yaml || "$file" == openapi/api-v1-baseline.json || "$file" == .github/workflows/ci.yml || "$file" == .github/workflows/release.yml || "$file" == scripts/check_versions.py || "$file" == RELEASE.md || "$file" == docs/BRANCHING_AND_RELEASE_CHANNELS.md ]]; then
+              version=true
             fi
             if [[ "$file" == crates/* || "$file" == src-tauri/* ]]; then
               rust=true
@@ -132,6 +142,8 @@ jobs:
             rust=true
             api=true
             governance=true
+            docs_links=true
+            version=true
             tauri=true
             ios=true
             container=true
@@ -141,6 +153,8 @@ jobs:
             echo "rust=$rust"
             echo "api=$api"
             echo "governance=$governance"
+            echo "docs_links=$docs_links"
+            echo "version=$version"
             echo "tauri=$tauri"
             echo "ios=$ios"
             echo "container=$container"
@@ -180,13 +194,21 @@ jobs:
         if: needs.changes.outputs.api == 'true'
         run: python scripts/check_api_contract.py
 
+      - name: Version consistency
+        if: needs.changes.outputs.version == 'true'
+        run: python scripts/check_versions.py
+
+      - name: Documentation links
+        if: needs.changes.outputs.docs_links == 'true'
+        run: python scripts/check_docs_links.py
+
       - name: Governance
         if: needs.changes.outputs.governance == 'true'
         shell: pwsh
         run: ./scripts/governance-check.ps1
 
       - name: No expensive work selected
-        if: needs.changes.outputs.rust != 'true' && needs.changes.outputs.api != 'true' && needs.changes.outputs.governance != 'true'
+        if: needs.changes.outputs.rust != 'true' && needs.changes.outputs.api != 'true' && needs.changes.outputs.governance != 'true' && needs.changes.outputs.docs_links != 'true' && needs.changes.outputs.version != 'true'
         run: echo "Only files outside CI validation scopes changed."
 
   rust-quality:
@@ -383,24 +405,31 @@ jobs:
     needs: ci-result
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+
       - name: Write internal build manifest
         shell: bash
         run: |
           set -euo pipefail
+          version="$(python scripts/check_versions.py --print-version)"
           mkdir -p dist/internal
+          artifact="internal-dev-${version}-${GITHUB_SHA}-${GITHUB_RUN_NUMBER}"
           {
             echo "channel=internal-dev"
+            echo "version=${version}"
             echo "sha=${GITHUB_SHA}"
             echo "run_number=${GITHUB_RUN_NUMBER}"
             echo "run_id=${GITHUB_RUN_ID}"
-            echo "artifact=internal-dev-build-${GITHUB_SHA}-${GITHUB_RUN_NUMBER}"
+            echo "artifact=${artifact}"
             echo "note=Internal validation artifact only. Not a beta or production release."
           } > dist/internal/BUILD-MANIFEST.txt
+          echo "ARTIFACT_NAME=${artifact}" >> "$GITHUB_ENV"
 
       - name: Upload internal build manifest
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: internal-dev-${{ github.sha }}-${{ github.run_number }}
+          name: ${{ env.ARTIFACT_NAME }}
           path: dist/internal
           retention-days: 7
 
@@ -410,23 +439,30 @@ jobs:
     needs: ci-result
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+
       - name: Write beta build manifest
         shell: bash
         run: |
           set -euo pipefail
+          version="$(python scripts/check_versions.py --print-version)"
           mkdir -p dist/beta
+          artifact="beta-main-${version}-${GITHUB_SHA}-${GITHUB_RUN_NUMBER}"
           {
             echo "channel=beta-main"
+            echo "version=${version}"
             echo "sha=${GITHUB_SHA}"
             echo "run_number=${GITHUB_RUN_NUMBER}"
             echo "run_id=${GITHUB_RUN_ID}"
-            echo "artifact=beta-main-build-${GITHUB_SHA}-${GITHUB_RUN_NUMBER}"
+            echo "artifact=${artifact}"
             echo "note=Beta tester artifact metadata only. Not a production release."
           } > dist/beta/BUILD-MANIFEST.txt
+          echo "ARTIFACT_NAME=${artifact}" >> "$GITHUB_ENV"
 
       - name: Upload beta build manifest
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: beta-main-${{ github.sha }}-${{ github.run_number }}
+          name: ${{ env.ARTIFACT_NAME }}
           path: dist/beta
           retention-days: 30

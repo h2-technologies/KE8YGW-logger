@@ -57,11 +57,8 @@ jobs:
         run: |
           set -euo pipefail
           tag="${{ steps.tag.outputs.tag }}"
-          version="$(python -c 'import re; text=open("Cargo.toml", encoding="utf-8").read(); m=re.search(r"(?m)^\[workspace\.package\][\s\S]*?^version\s*=\s*\"([^\"]+)\"", text); print(m.group(1) if m else "")')"
-          if [[ -z "$version" ]]; then
-            echo "workspace package version not found" >&2
-            exit 1
-          fi
+          python scripts/check_versions.py --release-tag "$tag"
+          version="$(python scripts/check_versions.py --print-version)"
           if [[ "v$version" != "$tag" ]]; then
             echo "Tag $tag does not match workspace version $version." >&2
             exit 1
@@ -136,15 +133,15 @@ jobs:
             }
           }
 
-          $artifactBase = "ham-platform-$platform"
+          $artifactBase = "ke8ygw-logger-${{ needs.validate-production-tag.outputs.version }}-$platform"
           $dist = "dist/$artifactBase"
           New-Item -ItemType Directory -Force -Path $dist | Out-Null
 
           $sourceBinary = "target/release/${{ matrix.binary }}"
           $destBinary = if ("${{ runner.os }}" -eq "Windows") {
-            "$dist/ham-platform.exe"
+            "$dist/ke8ygw-logger.exe"
           } else {
-            "$dist/ham-platform"
+            "$dist/ke8ygw-logger"
           }
           Copy-Item $sourceBinary $destBinary
 
@@ -193,7 +190,7 @@ jobs:
       - name: Download release artifacts
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          pattern: ham-platform-*
+          pattern: ke8ygw-logger-*
           path: dist/release-assets
           merge-multiple: true
 
@@ -220,7 +217,7 @@ jobs:
       - name: Download release artifacts
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          pattern: ham-platform-*
+          pattern: ke8ygw-logger-*
           path: dist/release-assets
           merge-multiple: true
 

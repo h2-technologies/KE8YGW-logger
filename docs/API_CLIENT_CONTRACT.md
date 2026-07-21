@@ -1,9 +1,8 @@
 # API Client Contract
 
 This document defines the stable client-facing API contract that hosted web,
-desktop, self-hosted deployments, and the future native iOS client must share.
-v1.0 must document and test this contract even though the native iOS app ships
-in v1.1.
+desktop, self-hosted deployments, and the native iOS client must share for the
+November 24, 2026 v1 release.
 
 ## Compatibility Rules
 
@@ -49,7 +48,7 @@ baseline is `openapi/api-v1-baseline.json` and is checked by
 ## Versioned API Strategy
 
 `/api/v1` is the stable beta contract for hosted web, desktop, self-hosted
-server, and the future native iOS client. Backward-compatible fields may be
+server, and the native iOS client. Backward-compatible fields may be
 added under `/api/v1`; breaking changes require a new API version.
 
 Current `ham-server` routes reserve the broader v0.2 surface while implementing
@@ -60,7 +59,7 @@ and sync preview/push/pull slices first.
 ## Authentication
 
 The current sync API uses a pairing request that returns a `sync_token`.
-Production v1.0 login may replace or supplement pairing for hosted web and
+Production v1 login may replace or supplement pairing for hosted web and
 desktop sessions, but the resulting client token contract must remain stable for
 future native clients.
 
@@ -82,7 +81,7 @@ Current token transport:
 - Some `GET` endpoints accept `?token=<sync_token>`.
 - Some `POST` endpoints include `{ "auth": { "sync_token": "..." } }`.
 
-v1.0 hardening target:
+v1 hardening target:
 
 - Prefer `Authorization: Bearer <token>` for new authenticated endpoints.
 - Keep any query-token compatibility documented if retained.
@@ -173,7 +172,7 @@ Current server errors use:
 { "error": "message" }
 ```
 
-Stable v1.0 clients must handle that shape. New endpoints should prefer an
+Stable v1 clients must handle that shape. New endpoints should prefer an
 extended backward-compatible shape:
 
 ```json
@@ -225,7 +224,7 @@ Returns:
 {
   "ok": true,
   "service": "ke8ygw-sync-server",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "mode": "self_hosted"
 }
 ```
@@ -474,11 +473,11 @@ Pulled and pushed official events use this envelope:
 Clients must treat official events as append-only history. Deletes and restores
 are events, not physical row removal.
 
-## Required Future Client API Before v1.1
+## Required Client API Before v1
 
-The current v1 sync API is enough for replication, but the native iOS app also
-needs a stable CRUD-oriented client surface. Before v1.1 starts, v1.0 must
-define and test endpoints or equivalent proposal APIs for:
+The current v1 sync API is enough for replication, but hosted web, desktop, and
+native iOS also need stable CRUD-oriented client surfaces before v1 ships. v1
+must define and test endpoints or equivalent proposal APIs for:
 
 - Hosted login/session refresh/logout.
 - Account, operator role, and permission discovery.
@@ -499,7 +498,7 @@ official event model. They must not bypass append-only official history.
 
 ## Contract Tests
 
-v1.0 acceptance requires tests that cover:
+v1 acceptance requires tests that cover:
 
 - Hosted and self-hosted servers return compatible responses.
 - Authentication rejects missing, invalid, expired, and unauthorized tokens.

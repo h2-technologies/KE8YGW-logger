@@ -3,6 +3,7 @@
   "info": {
     "title": "KE8YGW Logger API v1",
     "version": "1.0.0",
+    "x-product-version": "0.2.0",
     "description": "Stable /api/v1 contract for hosted and self-hosted deployments. JSON syntax is used so the file is valid YAML and directly parseable in CI."
   },
   "servers": [

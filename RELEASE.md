@@ -14,12 +14,20 @@ must still be documented when user data, APIs, or sync behavior are affected.
 
 ## Versioning
 
-The workspace currently uses version `0.2.0` and Rust edition 2021. Versions
-should be updated consistently across workspace metadata, crate metadata,
-release notes, tags, artifacts, and documentation.
+The workspace currently uses version `0.2.0` and Rust edition 2021.
+`Cargo.toml` `[workspace.package].version` is the canonical product version.
+Versions must be updated consistently across workspace metadata, Tauri metadata,
+iOS marketing/build settings, API product metadata, release notes, tags,
+artifacts, and documentation.
 
 Release tags should use `vMAJOR.MINOR.PATCH`, for example `v0.2.0`. Additional
 pre-release identifiers may be used for beta releases when needed.
+
+Run `just version-check` before release work. It validates Cargo crate versions,
+Tauri metadata, iOS marketing/build versions, API product metadata, release
+artifact naming, and production tag policy. The OpenAPI `info.version` remains
+`1.0.0` for the `/api/v1` contract; `info.x-product-version` tracks the product
+version.
 
 ## Branches And Tags
 
@@ -52,13 +60,19 @@ Before a public release, maintainers should confirm:
 Do not weaken CI gates to ship a release. If a gate is intentionally deferred,
 the release notes must explain the risk.
 
+The v1 release target is November 24, 2026 and includes hosted web, native iOS,
+and Windows/macOS/Linux desktop. v1.1 adds a TUI; ordinary v1 release policy
+must not move native iOS out of v1.
+
 ## Signing, Checksums, And SBOM
 
-Release artifacts should have checksums. Release signing and SBOM generation are
-expected before production-quality stable distribution, but this repository does
-not currently automate signing or SBOM publication. Until automation exists,
-release notes must clearly state which provenance, checksum, signing, and SBOM
-steps were completed manually.
+Production release archives are named
+`ke8ygw-logger-<version>-<platform>.<ext>` and have `.sha256` checksum files.
+Future release archives and checksums receive GitHub artifact attestations.
+Release signing and SBOM generation are expected before production-quality
+stable distribution, but this repository does not currently automate signing or
+SBOM publication. Until automation exists, release notes must clearly state
+which provenance, checksum, signing, and SBOM steps were completed manually.
 
 ## Migrations And Rollback
 

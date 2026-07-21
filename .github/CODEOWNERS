@@ -65,7 +65,7 @@ docs/DESKTOP_RELEASE.md @ahadley1124
 docs/HOSTED_WEB_RELEASE.md @ahadley1124
 
 # iOS and FFI planning areas.
-docs/V1_1_IOS_NATIVE_PLAN.md @ahadley1124
+docs/V1_IOS_NATIVE_PLAN.md @ahadley1124
 docs/IOS_APPSTORE_READINESS.md @ahadley1124
 ios/ @ahadley1124
 ffi/ @ahadley1124

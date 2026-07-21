@@ -6,6 +6,9 @@ This repository uses three long-lived channels:
 - `main` is the beta-tester branch. It is updated by promotion pull requests from `dev`.
 - `production` is a release channel represented by immutable `vMAJOR.MINOR.PATCH` tags on commits contained in `main`.
 
+The locked v1 release ships on November 24, 2026 with hosted web, native iOS,
+and Windows/macOS/Linux desktop. v1.1 adds a TUI.
+
 ## Normal Flow
 
 1. Create a feature or fix branch from the latest `dev`.
@@ -23,7 +26,7 @@ Emergency hotfixes may branch from `main` and open a pull request to `main` only
 
 ## Pull Requests To `dev`
 
-Pull requests targeting `dev` run repository validation without publishing beta or production releases. The expected checks include formatting, Clippy, tests, API contract validation, governance validation, and targeted platform checks when those workflows are enabled.
+Pull requests targeting `dev` run repository validation without publishing beta or production releases. The expected checks include formatting, Clippy, tests, API contract validation, version consistency, documentation-link validation, governance/license validation, and targeted platform checks when those workflows are enabled.
 Security scanning also runs for pull requests into `dev` and uploads SARIF only
 when the event is allowed to use repository code-scanning permissions.
 
@@ -77,11 +80,13 @@ Do not copy production secrets into internal or beta environments. Production sh
 
 ## Artifact Naming
 
-- Internal: `internal-dev-<sha>-<run_number>`
-- Beta: `beta-main-<sha>-<run_number>`
-- Production: `ham-platform-<platform>` release archives attached to a validated production tag
+- Internal: `internal-dev-<version>-<sha>-<run_number>`
+- Beta: `beta-main-<version>-<sha>-<run_number>`
+- Production: `ke8ygw-logger-<version>-<platform>` release archives attached to a validated production tag
 
-Production archives keep their existing names for compatibility. Internal and beta artifacts are deliberately prefixed by channel.
+Internal and beta artifacts are deliberately prefixed by channel and include the
+product version, commit SHA, and workflow run number. Production archives are
+versioned so the asset name can be validated against the production tag.
 
 Future production release archives and their `.sha256` checksum files receive
 GitHub artifact attestations before the release assets are uploaded. Historical
@@ -89,7 +94,11 @@ release assets are not retroactively attested by the workflow.
 
 ## Version Rules
 
-Workspace version lives in `Cargo.toml` under `[workspace.package]`. Production tags must match that version exactly as `v<version>`. Do not create production tags from commits not contained in `main`.
+Workspace version lives in `Cargo.toml` under `[workspace.package]`. It is the
+canonical product version for Cargo, Tauri, iOS marketing version, API product
+metadata, channel artifacts, and production tags. Production tags must match
+that version exactly as `v<version>`. Do not create production tags from commits
+not contained in `main`.
 
 ## Rollback
 

@@ -35,8 +35,9 @@ changing shared architecture.
 ## Toolchain
 
 Use the stable Rust toolchain with the workspace's Rust 2021 edition. The CI
-workflow installs stable Rust with `rustfmt` and `clippy`, installs `just`, and
-runs `just ci` on Linux, Windows, and macOS.
+workflow installs stable Rust with `rustfmt` and `clippy`, then runs
+change-aware Rust, API, version, documentation, governance, platform, Tauri,
+container, iOS, and security checks on the appropriate runners.
 
 Package managers and tools used by the repository today:
 
@@ -70,7 +71,9 @@ The underlying commands are:
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
-cargo build --workspace
+python scripts/check_api_contract.py
+python scripts/check_versions.py
+python scripts/check_docs_links.py
 pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/governance-check.ps1
 ```
 
@@ -97,6 +100,7 @@ cargo tauri build
 For documentation and governance changes, run:
 
 ```powershell
+just docs-link-check
 just governance-check
 ```
 
