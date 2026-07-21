@@ -2,7 +2,7 @@ use std::{
     collections::HashMap,
     env, fs,
     io::{BufRead, BufReader, Read, Write},
-    net::{TcpListener, TcpStream},
+    net::{IpAddr, SocketAddr, TcpListener, TcpStream},
     process,
     sync::{Arc, Mutex},
     thread,
@@ -59,7 +59,7 @@ use ham_sync::{
     OFFLINE_OP_QSO_CREATE, OFFLINE_OP_QSO_DELETE, OFFLINE_OP_QSO_NOTE_ADD, OFFLINE_OP_QSO_RESTORE,
     OFFLINE_OP_STATION_PROFILE_SELECT, PROTOCOL_VERSION,
 };
-use serde::{Deserialize, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Value};
 
 const INDEX_HTML: &str = include_str!("../web/index.html");
@@ -696,6 +696,7 @@ fn handle_client(state: Arc<AppState>, mut stream: TcpStream) {
         ("POST", "/api/sync/discovery/start") => handle_sync_discovery(&state, true),
         ("POST", "/api/sync/discovery/stop") => handle_sync_discovery(&state, false),
         ("POST", "/api/sync/peers/refresh") => handle_sync_refresh(&state),
+        ("POST", "/api/sync/peers/add") => handle_sync_add_peer(&state, &request.body),
         ("POST", "/api/sync/handshake") => handle_sync_handshake(&state, &request.body),
         ("POST", "/api/sync/preview-pull") => handle_sync_preview_pull(&state, &request.body),
         ("POST", "/api/sync/pull-events") => handle_sync_pull_events(&state, &request.body),
@@ -1064,6 +1065,11 @@ struct HandshakePeerRequest {
 }
 
 #[derive(Debug, Deserialize)]
+struct ManualLanPeerRequest {
+    address: String,
+}
+
+#[derive(Debug, Deserialize)]
 struct LanPairingTokenRequest {
     approved_by_operator: bool,
     display_name: Option<String>,
@@ -1164,6 +1170,9 @@ fn response_with_headers(
         200 => "OK",
         404 => "Not Found",
         400 => "Bad Request",
+        403 => "Forbidden",
+        409 => "Conflict",
+        502 => "Bad Gateway",
         500 => "Internal Server Error",
         _ => "OK",
     };
@@ -5041,7 +5050,7 @@ fn handle_sync_refresh(state: &AppState) -> Vec<u8> {
         .lock()
         .expect("sync state mutex should not be poisoned");
     let mut peer = LocalPeerIdentity::new("Demo LAN Peer", Some(sync.config.local_sync_port));
-    peer.device_id = uuid::Uuid::parse_str("00000000-0000-4000-8000-0000000000aa").unwrap();
+    peer.device_id = demo_peer_device_id();
     let packet = DiscoveryPacket::from_identity(&peer);
     let identity = sync.identity.clone();
     let observation = sync
@@ -5066,6 +5075,91 @@ fn handle_sync_refresh(state: &AppState) -> Vec<u8> {
         error: None,
     });
     json_response(&sync_state_payload(state))
+}
+
+fn handle_sync_add_peer(state: &AppState, body: &[u8]) -> Vec<u8> {
+    if let Err(response) = ensure_gui_permission(
+        state,
+        &core_gui_manifest(),
+        PluginCapability::SyncLanDiscovery,
+        "Manual LAN peer add permission check",
+    ) {
+        return response;
+    }
+    let Ok(request) = serde_json::from_slice::<ManualLanPeerRequest>(body) else {
+        return json_error(400, "invalid manual LAN peer JSON");
+    };
+    let address = match parse_lan_peer_address(&request.address) {
+        Ok(address) => address,
+        Err(error) => return json_response_with_status(400, &json!({"ok": false, "error": error})),
+    };
+    let identity = match fetch_lan_peer_identity(address) {
+        Ok(identity) => identity,
+        Err(error) => {
+            {
+                let mut sync = state
+                    .sync
+                    .lock()
+                    .expect("sync state mutex should not be poisoned");
+                sync.warning_count += 1;
+            }
+            let _ = publish_gui_runtime(
+                state,
+                "network.peer.unreachable",
+                RuntimeEventSeverity::Warn,
+                "Manual LAN peer probe failed",
+                Some(json!({"address": address.to_string()})),
+                Some(error.clone()),
+            );
+            return json_response_with_status(400, &json!({"ok": false, "error": error}));
+        }
+    };
+    let packet = DiscoveryPacket::from_identity(&identity);
+    let observation = {
+        let mut sync = state
+            .sync
+            .lock()
+            .expect("sync state mutex should not be poisoned");
+        let local = sync.identity.clone();
+        sync.registry.observe(&local, packet, address)
+    };
+    let event_type = match &observation {
+        PeerObservation::Discovered(_) => "network.peer.discovered",
+        PeerObservation::Updated(_) => "network.peer.updated",
+        PeerObservation::IgnoredSelf => "network.peer.ignored_self",
+        PeerObservation::IgnoredIncompatible => "network.peer.ignored_incompatible",
+    };
+    let ok = matches!(
+        observation,
+        PeerObservation::Discovered(_) | PeerObservation::Updated(_)
+    );
+    let _ = publish_gui_runtime(
+        state,
+        event_type,
+        if ok {
+            RuntimeEventSeverity::Info
+        } else {
+            RuntimeEventSeverity::Warn
+        },
+        "Manual LAN peer probe completed",
+        Some(json!({
+            "address": address.to_string(),
+            "peer_device_id": identity.device_id,
+            "peer_display_name": identity.display_name,
+            "observation": format!("{observation:?}")
+        })),
+        None,
+    );
+    if ok {
+        json_response(
+            &json!({"ok": true, "peer_identity": identity, "sync": sync_state_payload(state)}),
+        )
+    } else {
+        json_response_with_status(
+            400,
+            &json!({"ok": false, "error": format!("{observation:?}")}),
+        )
+    }
 }
 
 fn handle_sync_events_since(state: &AppState, query: &str) -> Vec<u8> {
@@ -5120,37 +5214,12 @@ fn handle_sync_handshake(state: &AppState, body: &[u8]) -> Vec<u8> {
             replay_nonce: None,
         });
     let local_head = logbook_head_summary(state);
-    let mut sync = state
-        .sync
-        .lock()
-        .expect("sync state mutex should not be poisoned");
-    let Some(peer) = request
-        .peer_id
-        .as_ref()
-        .and_then(|peer_id| {
-            sync.registry
-                .list()
-                .into_iter()
-                .find(|peer| &peer.peer_id == peer_id)
-        })
-        .or_else(|| sync.registry.list().into_iter().next())
-    else {
-        sync.warning_count += 1;
-        drop(sync);
-        let _ = state.bridge.publish(RuntimeEventInput {
-            event_type: "sync.handshake.error".to_owned(),
-            severity: RuntimeEventSeverity::Warn,
-            source: "ham-sync".to_owned(),
-            source_plugin_id: None,
-            workspace_id: Some("dashboard".to_owned()),
-            payload_summary: "No peer selected for handshake".to_owned(),
-            redacted_payload: None,
-            error: Some("no discovered peers".to_owned()),
-        });
-        return json_response_with_status(
-            400,
-            &json!({"ok": false, "error": "no discovered peers"}),
-        );
+    let Some(peer) = selected_peer_record(state, request.peer_id) else {
+        return sync_no_peer_error(state, "sync.handshake.error");
+    };
+    let remote_head = match remote_head_for_peer(state, &peer) {
+        Ok(remote_head) => remote_head,
+        Err(error) => return sync_lan_transport_error(state, "sync.handshake.error", error),
     };
 
     let remote_request = HandshakeRequest {
@@ -5158,12 +5227,12 @@ fn handle_sync_handshake(state: &AppState, body: &[u8]) -> Vec<u8> {
         device_id: peer.device_id,
         session_id: peer.session_id,
         supported_capabilities: peer.capabilities.clone(),
-        logbooks: vec![LogbookHeadSummary {
-            logbook_id: state.logbook_id,
-            head_hash: None,
-            event_count: Some(0),
-        }],
+        logbooks: vec![remote_head],
     };
+    let mut sync = state
+        .sync
+        .lock()
+        .expect("sync state mutex should not be poisoned");
     let response = build_handshake_response(&sync.identity, &[local_head], &remote_request);
     sync.latest_handshake = Some(response.clone());
     drop(sync);
@@ -5199,9 +5268,10 @@ fn handle_sync_preview_pull(state: &AppState, body: &[u8]) -> Vec<u8> {
             peer_id: None,
             replay_nonce: None,
         });
-    let Some(peer_id) = selected_peer_id(state, request.peer_id) else {
+    let Some(peer) = selected_peer_record(state, request.peer_id) else {
         return sync_no_peer_error(state, "sync.preview_pull.failed");
     };
+    let peer_id = peer.peer_id.clone();
 
     let _ = publish_gui_runtime(
         state,
@@ -5216,12 +5286,11 @@ fn handle_sync_preview_pull(state: &AppState, body: &[u8]) -> Vec<u8> {
         .proposal_runtime
         .block_on(state.store.get_head(state.logbook_id))
         .unwrap_or(None);
-    let remote_events = {
-        let sync = state
-            .sync
-            .lock()
-            .expect("sync state mutex should not be poisoned");
-        sync.demo_remote_events.clone()
+    let remote_events = match remote_events_for_peer(state, &peer) {
+        Ok(events) => events,
+        Err(error) => {
+            return sync_lan_transport_error(state, "sync.preview_pull.failed", error);
+        }
     };
     let preview = preview_pull_from_events(
         PreviewPullRequest {
@@ -5312,12 +5381,11 @@ fn handle_sync_pull_events(state: &AppState, body: &[u8]) -> Vec<u8> {
         .proposal_runtime
         .block_on(state.store.get_head(state.logbook_id))
         .unwrap_or(None);
-    let remote_events = {
-        let sync = state
-            .sync
-            .lock()
-            .expect("sync state mutex should not be poisoned");
-        sync.demo_remote_events.clone()
+    let remote_events = match remote_events_for_peer(state, &peer) {
+        Ok(events) => events,
+        Err(error) => {
+            return sync_lan_transport_error(state, "sync.pull.failed", error);
+        }
     };
     for event in &remote_events {
         let _ = publish_gui_runtime(
@@ -5921,10 +5989,6 @@ fn logbook_head_summary(state: &AppState) -> LogbookHeadSummary {
     }
 }
 
-fn selected_peer_id(state: &AppState, requested: Option<String>) -> Option<String> {
-    selected_peer_record(state, requested).map(|peer| peer.peer_id)
-}
-
 fn selected_peer_record(state: &AppState, requested: Option<String>) -> Option<PeerRecord> {
     let sync = state
         .sync
@@ -5934,6 +5998,202 @@ fn selected_peer_record(state: &AppState, requested: Option<String>) -> Option<P
     requested
         .and_then(|requested| peers.iter().find(|peer| peer.peer_id == requested).cloned())
         .or_else(|| peers.into_iter().next())
+}
+
+fn remote_events_for_peer(
+    state: &AppState,
+    peer: &PeerRecord,
+) -> Result<Vec<CoreEventEnvelope>, String> {
+    let mut last_error = None;
+    for address in &peer.addresses {
+        match fetch_lan_peer_events(*address, state.logbook_id) {
+            Ok(events) => {
+                let _ = publish_gui_runtime(
+                    state,
+                    "sync.lan.transport.succeeded",
+                    RuntimeEventSeverity::Info,
+                    "Fetched remote official events over LAN HTTP",
+                    Some(json!({
+                        "peer_id": peer.peer_id,
+                        "address": address.to_string(),
+                        "event_count": events.len()
+                    })),
+                    None,
+                );
+                return Ok(events);
+            }
+            Err(error) => {
+                last_error = Some(error);
+            }
+        }
+    }
+
+    if is_demo_peer(peer) {
+        let sync = state
+            .sync
+            .lock()
+            .expect("sync state mutex should not be poisoned");
+        return Ok(sync.demo_remote_events.clone());
+    }
+
+    Err(last_error.unwrap_or_else(|| "LAN peer has no usable API addresses".to_owned()))
+}
+
+fn remote_head_for_peer(state: &AppState, peer: &PeerRecord) -> Result<LogbookHeadSummary, String> {
+    let mut last_error = None;
+    for address in &peer.addresses {
+        match fetch_lan_peer_head(*address, state.logbook_id) {
+            Ok(head) => return Ok(head),
+            Err(error) => last_error = Some(error),
+        }
+    }
+
+    if is_demo_peer(peer) {
+        let sync = state
+            .sync
+            .lock()
+            .expect("sync state mutex should not be poisoned");
+        return Ok(LogbookHeadSummary {
+            logbook_id: state.logbook_id,
+            head_hash: sync
+                .demo_remote_events
+                .last()
+                .map(|event| event.event_hash.clone()),
+            event_count: Some(sync.demo_remote_events.len() as u64),
+        });
+    }
+
+    Err(last_error.unwrap_or_else(|| "LAN peer has no usable API addresses".to_owned()))
+}
+
+fn fetch_lan_peer_identity(address: SocketAddr) -> Result<LocalPeerIdentity, String> {
+    let state: Value = lan_http_get_json(address, "/api/sync/state")?;
+    serde_json::from_value(
+        state
+            .get("identity")
+            .cloned()
+            .ok_or_else(|| "LAN peer state did not include identity".to_owned())?,
+    )
+    .map_err(|error| format!("LAN peer identity JSON was invalid: {error}"))
+}
+
+fn fetch_lan_peer_head(
+    address: SocketAddr,
+    logbook_id: uuid::Uuid,
+) -> Result<LogbookHeadSummary, String> {
+    let response: LogbookHeadSummary = lan_http_get_json(address, "/api/sync/get-head")?;
+    if response.logbook_id != logbook_id {
+        return Err(format!(
+            "LAN peer returned head for logbook {}, expected {logbook_id}",
+            response.logbook_id
+        ));
+    }
+    Ok(response)
+}
+
+fn fetch_lan_peer_events(
+    address: SocketAddr,
+    logbook_id: uuid::Uuid,
+) -> Result<Vec<CoreEventEnvelope>, String> {
+    let path = format!("/api/sync/events-since?logbook_id={logbook_id}");
+    let response: GetEventRangeResponse = lan_http_get_json(address, &path)?;
+    if response.logbook_id != logbook_id {
+        return Err(format!(
+            "LAN peer returned events for logbook {}, expected {logbook_id}",
+            response.logbook_id
+        ));
+    }
+    Ok(response.events)
+}
+
+fn lan_http_get_json<T>(address: SocketAddr, path: &str) -> Result<T, String>
+where
+    T: DeserializeOwned,
+{
+    let mut stream = TcpStream::connect_timeout(&address, Duration::from_secs(2))
+        .map_err(|error| format!("failed to connect to LAN peer {address}: {error}"))?;
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .map_err(|error| format!("failed to set LAN peer read timeout: {error}"))?;
+    stream
+        .set_write_timeout(Some(Duration::from_secs(5)))
+        .map_err(|error| format!("failed to set LAN peer write timeout: {error}"))?;
+    let request = format!(
+        "GET {path} HTTP/1.1\r\nHost: {}\r\nAccept: application/json\r\nConnection: close\r\n\r\n",
+        lan_host_header(address)
+    );
+    stream
+        .write_all(request.as_bytes())
+        .map_err(|error| format!("failed to write LAN peer request: {error}"))?;
+    let mut response = Vec::new();
+    stream
+        .read_to_end(&mut response)
+        .map_err(|error| format!("failed to read LAN peer response: {error}"))?;
+    let body = http_response_body(&response)?;
+    serde_json::from_slice(body).map_err(|error| format!("LAN peer JSON was invalid: {error}"))
+}
+
+fn http_response_body(response: &[u8]) -> Result<&[u8], String> {
+    let Some(header_end) = response.windows(4).position(|window| window == b"\r\n\r\n") else {
+        return Err("LAN peer response did not include HTTP headers".to_owned());
+    };
+    let headers = String::from_utf8_lossy(&response[..header_end]);
+    let status_line = headers.lines().next().unwrap_or_default();
+    if !status_line.contains(" 200 ") {
+        return Err(format!("LAN peer returned {status_line}"));
+    }
+    Ok(&response[header_end + 4..])
+}
+
+fn parse_lan_peer_address(input: &str) -> Result<SocketAddr, String> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return Err("LAN peer address is required".to_owned());
+    }
+    if trimmed.starts_with("https://") {
+        return Err("LAN peer transport currently supports http:// only".to_owned());
+    }
+    let without_scheme = trimmed.strip_prefix("http://").unwrap_or(trimmed);
+    let host_port = without_scheme
+        .split_once('/')
+        .map_or(without_scheme, |(host_port, _)| host_port);
+    let address = host_port
+        .parse::<SocketAddr>()
+        .map_err(|error| format!("invalid LAN peer address {host_port:?}: {error}"))?;
+    if address.port() == 0 {
+        return Err("LAN peer address must include a nonzero port".to_owned());
+    }
+    if !is_allowed_lan_peer_ip(address.ip()) {
+        return Err("LAN peer address must use a loopback, private, or link-local IP".to_owned());
+    }
+    Ok(address)
+}
+
+fn is_allowed_lan_peer_ip(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(ip) => ip.is_loopback() || ip.is_private() || ip.is_link_local(),
+        IpAddr::V6(ip) => {
+            let first_segment = ip.segments()[0];
+            ip.is_loopback() || ip.is_unicast_link_local() || (first_segment & 0xfe00) == 0xfc00
+        }
+    }
+}
+
+fn lan_host_header(address: SocketAddr) -> String {
+    if address.is_ipv6() {
+        format!("[{}]:{}", address.ip(), address.port())
+    } else {
+        address.to_string()
+    }
+}
+
+fn is_demo_peer(peer: &PeerRecord) -> bool {
+    peer.device_id == demo_peer_device_id()
+}
+
+fn demo_peer_device_id() -> uuid::Uuid {
+    uuid::Uuid::parse_str("00000000-0000-4000-8000-0000000000aa")
+        .expect("demo peer device id is valid")
 }
 
 fn sync_no_peer_error(state: &AppState, event_type: &str) -> Vec<u8> {
@@ -5973,6 +6233,30 @@ fn sync_lan_trust_error(state: &AppState, event_type: &str, error: impl Into<Str
         Some(error.clone()),
     );
     json_response_with_status(403, &json!({"ok": false, "error": error}))
+}
+
+fn sync_lan_transport_error(
+    state: &AppState,
+    event_type: &str,
+    error: impl Into<String>,
+) -> Vec<u8> {
+    let error = error.into();
+    {
+        let mut sync = state
+            .sync
+            .lock()
+            .expect("sync state mutex should not be poisoned");
+        sync.warning_count += 1;
+    }
+    let _ = publish_gui_runtime(
+        state,
+        event_type,
+        RuntimeEventSeverity::Warn,
+        "LAN peer transport failed",
+        None,
+        Some(error.clone()),
+    );
+    json_response_with_status(502, &json!({"ok": false, "error": error}))
 }
 
 fn cloud_auth(state: &AppState) -> Option<CloudAuth> {
@@ -6020,10 +6304,8 @@ fn build_demo_remote_events(state: &AppState) -> Vec<CoreEventEnvelope> {
             author_operator_id: None,
             station_callsign: "KE8YGW".to_owned(),
             operator_callsign: Some("KE8YGW".to_owned()),
-            author_device_id: uuid::Uuid::parse_str("00000000-0000-4000-8000-0000000000aa")
-                .expect("demo device id is valid"),
-            source_device_id: uuid::Uuid::parse_str("00000000-0000-4000-8000-0000000000aa")
-                .expect("demo device id is valid"),
+            author_device_id: demo_peer_device_id(),
+            source_device_id: demo_peer_device_id(),
             correlation_id: uuid::Uuid::new_v4(),
             source_plugin_id: Some("sync.demo.peer".to_owned()),
             schema_version: 1,
@@ -6183,4 +6465,43 @@ fn start_demo_runtime_publisher(bridge: GuiRuntimeBridge) {
             index += 1;
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lan_peer_address_accepts_http_ipv4_and_ipv6_socket_addresses() {
+        assert_eq!(
+            parse_lan_peer_address("http://127.0.0.1:9468/api/sync/state").unwrap(),
+            "127.0.0.1:9468".parse::<SocketAddr>().unwrap()
+        );
+        assert_eq!(
+            parse_lan_peer_address("192.168.1.25:9468").unwrap(),
+            "192.168.1.25:9468".parse::<SocketAddr>().unwrap()
+        );
+        assert_eq!(
+            parse_lan_peer_address("[::1]:9469").unwrap(),
+            "[::1]:9469".parse::<SocketAddr>().unwrap()
+        );
+        assert_eq!(
+            parse_lan_peer_address("[fd00::1]:9469").unwrap(),
+            "[fd00::1]:9469".parse::<SocketAddr>().unwrap()
+        );
+        assert!(parse_lan_peer_address("https://127.0.0.1:9468").is_err());
+        assert!(parse_lan_peer_address("localhost:9468").is_err());
+        assert!(parse_lan_peer_address("8.8.8.8:9468").is_err());
+        assert!(parse_lan_peer_address("[2001:4860:4860::8888]:9468").is_err());
+        assert!(parse_lan_peer_address("127.0.0.1:0").is_err());
+    }
+
+    #[test]
+    fn http_response_body_requires_successful_status_and_headers() {
+        let response = b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}";
+        assert_eq!(http_response_body(response).unwrap(), b"{}");
+        let rejected = b"HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\n\r\n";
+        assert!(http_response_body(rejected).is_err());
+        assert!(http_response_body(b"not http").is_err());
+    }
 }

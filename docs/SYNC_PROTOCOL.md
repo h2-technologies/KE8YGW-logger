@@ -168,10 +168,13 @@ through Rust bridge commands.
 - replay nonce hashing and rejection
 
 The GUI exposes trust-state, pairing-token, pairing-accept, and revoke
-endpoints. Mutating LAN pull rejects untrusted, revoked, wrong-logbook, or
-replayed peers before appending any remote official events. The current GUI LAN
-peer source is still the demo peer/model path; real peer-to-peer HTTP transport
-remains deferred.
+endpoints. It also exposes a manual LAN peer-add endpoint that probes another
+GUI instance over a numeric loopback/private/link-local `http://ip:port`, reads
+`/api/sync/state` for the peer identity, stores the peer with its advertised API
+port, then uses `/api/sync/get-head` and `/api/sync/events-since` for direct
+preview/pull. Mutating LAN pull rejects untrusted, revoked, wrong-logbook, or
+replayed peers before appending any remote official events. Automatic multicast
+discovery transport and production pairing UX remain deferred.
 
 ## Cloud Relay and Self-Hosted Sync
 
@@ -196,6 +199,6 @@ The current self-hosted server uses durable local storage by default: embedded S
 - Production LAN pairing UX over the durable trust store.
 - Signed official events.
 - End-to-end encrypted relay.
-- Real peer-to-peer HTTP transport for LAN replication.
+- Automatic multicast discovery transport for LAN replication.
 - Corrective-event conflict-resolution UX and full cross-client branch review.
 - Durable cloud server database.

@@ -833,11 +833,12 @@ exchanged, the MVP treats the result as unknown or diverged until the later
 replication protocol can compare event ancestry safely.
 
 The GUI Sync Status panel can start/stop discovery, refresh peers, handshake
-with a selected peer, preview a pull, trust or revoke a selected peer, recover
-the offline queue, pull missing events from trusted peers, and copy the local
-sync identity. The current implementation keeps peers in memory and includes a
-demo refresh path for local testing while real peer-to-peer HTTP transport is
-still pending.
+with a selected peer, manually add a direct LAN HTTP peer, preview a pull, trust
+or revoke a selected peer, recover the offline queue, pull missing events from
+trusted peers, and copy the local sync identity. The current implementation
+keeps peers in memory, includes a demo refresh path for local testing, and can
+preview/pull from another GUI instance over a numeric loopback/private/link-local
+`http://ip:port`; automatic multicast discovery transport is still pending.
 
 Runtime events include:
 
@@ -851,7 +852,7 @@ Runtime events include:
 
 Security limitations for MVP: peers are untrusted until they pass the durable
 LAN trust store, no destructive commands are accepted, automatic replication is
-disabled, and the production pairing UX plus real peer-to-peer HTTP transport
+disabled, and the production pairing UX plus automatic LAN discovery transport
 remain TODOs before unattended LAN sync.
 
 ## Safe LAN Event Replication
@@ -898,7 +899,7 @@ sync UI state, shown in the Sync Status panel, and emitted as
 review. Desktop can save a durable manual review from the current preview and
 record explicit recovery-path decisions; iOS can create, resolve, and snapshot
 the same Rust-owned review records through the bridge. Corrective-event conflict
-UX, full cross-client branch review, signed events, and real LAN peer-to-peer
+UX, full cross-client branch review, signed events, and automatic LAN discovery
 transport are still deferred.
 
 ## Durable Offline Queue And LAN Trust
@@ -940,6 +941,7 @@ Replication runtime events include:
 - `sync.remote_event.rejected`
 - `sync.pull.completed`
 - `sync.pull.failed`
+- `sync.lan.transport.succeeded`
 - `sync.divergence.detected`
 - `sync.conflict_review.created`
 - `sync.conflict_review.resolved`
@@ -957,9 +959,10 @@ To try the current GUI workflow locally:
 
 For two real local instances, run two GUI processes on different ports and set
 separate `HAM_PLATFORM_EVENT_LOG` paths so they do not share the same JSONL
-store. Real peer-to-peer HTTP transport and production pairing UX are the next
-sync tasks; the queue/trust/protocol messages added here are designed to be
-reused by that transport.
+store. In the Sync Status panel for the receiving instance, enter the other
+instance URL such as `http://127.0.0.1:9468`, click `Add Peer`, trust the added
+peer, then preview and pull. Automatic discovery and production pairing UX are
+the next sync tasks.
 
 ## Cloud Relay And Self-Hosted Sync
 

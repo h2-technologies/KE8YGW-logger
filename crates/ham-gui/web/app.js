@@ -1277,6 +1277,7 @@ function bindPanelControls() {
     start.addEventListener("click", startDiscovery);
     byId("sync-stop-discovery").addEventListener("click", stopDiscovery);
     byId("sync-refresh-peers").addEventListener("click", refreshPeers);
+    byId("sync-add-peer").addEventListener("click", addManualPeer);
     byId("sync-handshake").addEventListener("click", handshakeSelectedPeer);
     byId("sync-preview-pull").addEventListener("click", previewPullSelectedPeer);
     byId("sync-pull-events").addEventListener("click", pullSelectedPeer);
@@ -3041,6 +3042,12 @@ function renderSyncStatus() {
   return `<div class="sync-panel">
     <p><strong>LAN discovery:</strong> ${sync.discovery_running ? "running" : "stopped"}</p>
     <p><strong>Local identity:</strong> ${sync.identity.display_name}<br /><small>${sync.identity.device_id}</small></p>
+    <div class="qso-form">
+      <label>Peer HTTP URL
+        <input id="sync-peer-address" class="placeholder-control" placeholder="http://127.0.0.1:9468" />
+      </label>
+      <button id="sync-add-peer" class="toolbar-button" type="button">Add Peer</button>
+    </div>
     <div class="monitor-actions">
       <button id="sync-start-discovery" class="toolbar-button" type="button">Start</button>
       <button id="sync-stop-discovery" class="toolbar-button" type="button">Stop</button>
@@ -3162,6 +3169,19 @@ function stopDiscovery() {
 
 function refreshPeers() {
   syncPost("/api/sync/peers/refresh");
+}
+
+async function addManualPeer() {
+  const address = byId("sync-peer-address")?.value?.trim();
+  if (!address) return;
+  const result = await syncPost("/api/sync/peers/add", { address });
+  state.importSummary = result.peer_identity || result;
+  if (result.peer_identity) {
+    await refreshSyncState();
+    const peer = (state.syncState?.peers || []).find((candidate) => candidate.device_id === result.peer_identity.device_id);
+    if (peer) state.selectedPeerId = peer.peer_id;
+  }
+  render();
 }
 
 function handshakeSelectedPeer() {

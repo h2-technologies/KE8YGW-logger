@@ -31,9 +31,10 @@ outside issue #2.
      per-logbook order, idempotency/dependency checks, retry/backoff state,
      interrupted-send recovery, desktop/iOS queue hooks for implemented
      mutations, queue-aware cloud push acknowledgments, structured conflict
-     reports, and durable LAN trust records with single-use tokens, replay nonce
-     rejection, and revocation.
-   - Remaining: real LAN peer-to-peer HTTP transport, production pairing UX,
+     reports, durable manual conflict-review records, manual direct LAN HTTP
+     preview/pull transport, and durable LAN trust records with single-use
+     tokens, replay nonce rejection, and revocation.
+   - Remaining: automatic LAN discovery transport, production pairing UX,
      corrective-event conflict-resolution UX, full cross-client reconciliation UI,
      release-device iOS background retry qualification, and multi-device
      migration/recovery scenarios.
@@ -124,7 +125,7 @@ outside issue #2.
 
 ## Next Three Goals
 
-1. Finish sync/reconciliation hardening: real LAN peer-to-peer HTTP transport,
+1. Finish sync/reconciliation hardening: automatic LAN discovery transport,
    production pairing UX, corrective-event conflict-resolution UX, and iOS
    background retry validation on release devices.
 2. Complete production provider qualification and release-runner live validation

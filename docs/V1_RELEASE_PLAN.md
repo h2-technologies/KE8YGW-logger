@@ -50,11 +50,11 @@ Test-only or fake/default paths:
   GUI demo peer/runtime data.
 
 Deferred or unimplemented:
-- Real LAN trust pairing and peer-to-peer HTTP transport, LoTW/TQSL live upload,
-  SOTAWatch approved live access, RBN/background DX lifecycle, cached/offline map
-  regions, full contesting, full EmComm forms, signed desktop updater, production
-  signing/notarization/App Store distribution, full production provider
-  qualification, and release-candidate operations hardening.
+- Production LAN pairing UX and automatic discovery transport, LoTW/TQSL live
+  upload, SOTAWatch approved live access, RBN/background DX lifecycle,
+  cached/offline map regions, full contesting, full EmComm forms, signed
+  desktop updater, production signing/notarization/App Store distribution, full
+  production provider qualification, and release-candidate operations hardening.
 
 ## Schedule Gates
 

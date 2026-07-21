@@ -33,7 +33,8 @@ wrapper is not the iOS client. See `V1_RELEASE_PLAN.md`,
    - Status: implemented as protocol/model layer with MVP GUI/demo paths. A
      durable LAN trust store with single-use tokens, replay nonce checks, and
      revocation is implemented in `ham-sync` and exposed through GUI endpoints;
-     real peer-to-peer HTTP transport and full pairing UX remain high priority.
+     manual direct LAN HTTP preview/pull is available between GUI instances.
+     Automatic discovery transport and full pairing UX remain high priority.
 
 6. **Cloud/Self-Hosted Sync**
    - Sync server/client, pairing-token MVP auth, push/pull/preview via cloud, self-hosted config/Docker, GUI cloud settings, tests.
@@ -95,10 +96,11 @@ wrapper is not the iOS client. See `V1_RELEASE_PLAN.md`,
    - Versioned offline mutation envelopes, deterministic per-logbook queue
      ordering, idempotency keys, dependency checks, retry/backoff state,
      interrupted-send recovery, desktop/iOS mutation hooks, queue health
-     snapshots, structured conflict reports, and durable LAN trust state.
-   - Status: implemented as a v0.3 foundation. Full manual conflict-resolution
-     commands, release-device iOS background retry qualification, and real LAN
-     peer-to-peer HTTP transport remain planned.
+     snapshots, structured conflict reports, durable manual conflict-review
+     records, direct LAN HTTP preview/pull, and durable LAN trust state.
+   - Status: implemented as a v0.3 foundation. Corrective-event conflict UX,
+     release-device iOS background retry qualification, and automatic LAN
+     discovery transport remain planned.
 
 ## Dependency Order
 
@@ -106,8 +108,8 @@ The dependency-ordered v1 critical path is tracked in
 `V1_EXECUTION_PLAN.md`. The next high-impact work should minimize future
 rewrites:
 
-1. Finish the remaining sync/reconciliation hardening: real LAN peer-to-peer
-   HTTP transport, production pairing UX, corrective-event conflict-resolution UX,
+1. Finish the remaining sync/reconciliation hardening: automatic LAN discovery
+   transport, production pairing UX, corrective-event conflict-resolution UX,
    and release-device iOS background retry qualification before unattended
    desktop/iOS operation.
 2. Complete provider runtime hardening and production provider qualification

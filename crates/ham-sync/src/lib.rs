@@ -181,6 +181,10 @@ impl PeerRegistry {
             return PeerObservation::IgnoredSelf;
         }
 
+        let address = packet
+            .local_api_port
+            .map(|port| SocketAddr::new(address.ip(), port))
+            .unwrap_or(address);
         let peer_id = packet.peer_id();
         let now = Utc::now();
         match self.peers.get_mut(&peer_id) {
@@ -2734,6 +2738,18 @@ mod tests {
             Duration::from_secs(1),
         );
         assert_eq!(expired.len(), 1);
+    }
+
+    #[test]
+    fn peer_registry_uses_advertised_api_port() {
+        let local = local();
+        let mut registry = PeerRegistry::default();
+        let packet = DiscoveryPacket::from_identity(&LocalPeerIdentity::new("Peer", Some(9468)));
+        let source_address = "192.0.2.10:58124".parse().unwrap();
+        registry.observe(&local, packet, source_address);
+        let peers = registry.list();
+        assert_eq!(peers.len(), 1);
+        assert_eq!(peers[0].addresses, vec!["192.0.2.10:9468".parse().unwrap()]);
     }
 
     #[test]

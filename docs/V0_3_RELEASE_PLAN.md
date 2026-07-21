@@ -25,10 +25,13 @@ Last audited: 2026-07-21
 - Durable LAN trust store with explicit approval, hashed short-lived single-use
   pairing tokens, logbook-scoped trusted devices, replay nonce rejection, and
   immediate revocation.
+- Manual direct LAN HTTP peer add, handshake, preview, and trusted pull between
+  GUI instances using `/api/sync/state`, `/api/sync/get-head`, and
+  `/api/sync/events-since`.
 
 ## Still Incomplete For v1
 
-- Real LAN peer-to-peer HTTP transport.
+- Automatic LAN discovery transport.
 - Production pairing UX across desktop and iOS.
 - Corrective-event conflict-resolution UX on top of the durable manual review
   commands.
