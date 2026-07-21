@@ -42,7 +42,9 @@ Implemented foundations include the hosted `/api/v1` route slices, durable
 hosted and self-hosted metadata, proposal-backed QSO/POTA/SOTA/Net Control
 workflows, Tauri desktop wrapper, native iOS SwiftUI/Rust bridge, provider
 framework, maps/GIS foundation, diagnostics, governance, version validation,
-and cross-platform CI/security automation.
+cross-platform CI/security automation, and deterministic shared sync golden
+coverage for crash recovery, retry, duplicate/reordered delivery, conflict
+review, legacy queue migration, restore replay, and LAN revocation.
 
 Partial or incomplete v1 areas include hosted web/desktop/iOS account UX,
 production email/Turnstile deployment configuration, production reciprocal LAN

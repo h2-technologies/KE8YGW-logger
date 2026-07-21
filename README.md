@@ -933,6 +933,10 @@ startup or through the Sync panel recovery action. A deterministic `ham-sync`
 regression test covers a desktop-style restart/reconnect drain path, including
 ordered queued official events, accepted-by-hash cleanup, duplicate cloud replay,
 and local official-log duplicate prevention.
+Additional deterministic shared sync golden tests cover transient network retry,
+reordered delivery rejection, iOS-style pull/projection replay, clock-skewed
+event timestamps ordered by hashes, divergent heads, conflict-review resolution,
+legacy queue migration, restore replay, and LAN revocation.
 
 The same Rust recovery command is used by desktop and iOS. It returns a redacted
 recovery report, initializes absent v0.2 queue state, migrates conservative

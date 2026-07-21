@@ -107,7 +107,10 @@ wrapper is not the iOS client. See `V1_RELEASE_PLAN.md`,
      conflict-review records, direct LAN HTTP preview/pull, automatic LAN
      discovery, durable LAN trust state, and desktop/iOS corrective-event
      commands that submit explicit proposals and resolve reviews with generated
-     official event hashes.
+     official event hashes. Deterministic shared sync golden tests cover crash
+     recovery, transient retry, duplicate/reordered delivery, iOS-style pull
+     replay, clock-skewed timestamps, divergent heads, conflict-review
+     resolution, legacy queue migration, restore replay, and LAN revocation.
    - Status: implemented as a v0.3 foundation with HMAC-SHA256 signed LAN read
      endpoint authorization and GUI LAN auth credential rotation/recovery.
      Production reciprocal pairing UX, stronger LAN key-exchange hardening,

@@ -42,12 +42,17 @@ outside issue #2.
      rejection, revocation, HMAC-SHA256 signed LAN read endpoint authorization,
      GUI LAN auth credential rotation/recovery, and desktop/iOS
      corrective-event commands that submit explicit proposals and resolve
-     reviews with generated official event hashes.
+     reviews with generated official event hashes. Deterministic shared sync
+     golden tests cover desktop-style crash recovery, transient network retry,
+     duplicate replay, reordered delivery rejection, iOS-style pull/projection
+     replay, clock-skewed timestamps ordered by event hashes, divergent heads,
+     concurrent correction and tombstone/restore review, v0.2 legacy queue
+     migration, and LAN revocation.
    - Remaining: production reciprocal pairing UX, stronger LAN key-exchange
      hardening, full guided cross-client branch review and reconciliation UI,
      physical-device LAN/iOS local-network
      validation, release-device iOS background retry qualification, and
-     multi-device migration/recovery scenarios.
+     real hosted web/desktop/iOS/self-hosted migration/recovery qualification.
    - Blockers: local network permission behavior on iOS, trust-pairing UX,
      physical test devices, and acceptance criteria for manual conflict
      resolution.

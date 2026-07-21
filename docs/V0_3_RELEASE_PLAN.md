@@ -24,6 +24,11 @@ Last audited: 2026-07-21
 - Deterministic desktop restart/reconnect queue-drain coverage for interrupted
   sends, ordered queued official events, accepted-by-hash handling, and
   duplicate cloud replay.
+- Deterministic shared sync golden scenarios for desktop-style crash recovery,
+  transient network retry, duplicate replay, reordered delivery rejection,
+  iOS-style pull/projection replay, clock-skewed event timestamps ordered by
+  hashes, divergent heads, concurrent correction and tombstone/restore review,
+  v0.2 legacy queue migration, and LAN revocation.
 - Structured conflict reports for divergent previews, dependency-blocked queued
   mutations, unsupported remote schema versions, concurrent QSO corrections, and
   remote QSO tombstone/restore events that overlap local pending mutations.
@@ -59,13 +64,14 @@ Last audited: 2026-07-21
 - Full guided cross-client conflict review and reconciliation UI beyond the
   current prompt/API corrective-event path.
 - Release-device iOS background retry and local-network permission validation.
-- Full cross-client recovery/migration scenarios across hosted web, desktop,
-  iOS, and self-hosted sync.
+- Real hosted web/desktop/iOS/self-hosted end-to-end device qualification,
+  physical-device tests, and full migration matrix.
 
 ## Validation Targets
 
 ```powershell
 cargo test -p ham-sync
+cargo test -p ham-sync cross_client_golden
 cargo test -p ham-sync desktop_queue_recovers_restart_and_drains_to_cloud_without_duplicates
 cargo test -p ham-sync recover_or_initialize
 cargo test -p ham-sync conflict_report
