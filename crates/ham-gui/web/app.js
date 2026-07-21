@@ -1263,6 +1263,9 @@ function bindPanelControls() {
     byId("sync-handshake").addEventListener("click", handshakeSelectedPeer);
     byId("sync-preview-pull").addEventListener("click", previewPullSelectedPeer);
     byId("sync-pull-events").addEventListener("click", pullSelectedPeer);
+    byId("sync-trust-peer").addEventListener("click", trustSelectedPeer);
+    byId("sync-revoke-peer").addEventListener("click", revokeSelectedPeer);
+    byId("sync-recover-queue").addEventListener("click", recoverOfflineQueue);
     byId("sync-copy-identity").addEventListener("click", copyLocalSyncIdentity);
     byId("cloud-connect").addEventListener("click", connectCloudSyncFromPrompt);
     byId("cloud-push").addEventListener("click", pushCloudEvents);
@@ -2978,6 +2981,9 @@ async function rebuildProjections() {
 function renderSyncStatus() {
   const sync = state.syncState;
   if (!sync) return `<p class="muted">Sync state loading.</p>`;
+  const queue = sync.offline_queue?.health || {};
+  const trustedDevices = sync.lan_trust?.trusted_devices || [];
+  const trustedCount = trustedDevices.filter((device) => !device.revoked_at).length;
   return `<div class="sync-panel">
     <p><strong>LAN discovery:</strong> ${sync.discovery_running ? "running" : "stopped"}</p>
     <p><strong>Local identity:</strong> ${sync.identity.display_name}<br /><small>${sync.identity.device_id}</small></p>
@@ -2988,7 +2994,26 @@ function renderSyncStatus() {
       <button id="sync-handshake" class="toolbar-button" type="button">Handshake</button>
       <button id="sync-preview-pull" class="toolbar-button" type="button">Preview Pull</button>
       <button id="sync-pull-events" class="toolbar-button" type="button">Pull Missing</button>
+      <button id="sync-trust-peer" class="toolbar-button" type="button">Trust Selected</button>
+      <button id="sync-revoke-peer" class="toolbar-button" type="button">Revoke Selected</button>
       <button id="sync-copy-identity" class="toolbar-button" type="button">Copy Identity</button>
+    </div>
+    <div class="sync-summary">
+      <p><strong>Offline queue:</strong> total ${queue.total || 0} / pending ${queue.pending || 0} / retrying ${queue.retrying || 0} / blocked ${queue.blocked || 0} / failed ${queue.failed || 0} / action ${queue.user_action_required || 0}</p>
+      <p><strong>Ready:</strong> ${queue.ready_to_send || 0} / accepted ${queue.accepted || 0}</p>
+      ${sync.offline_queue_error ? `<p class="event-error">${sync.offline_queue_error}</p>` : ""}
+      <div class="monitor-actions">
+        <button id="sync-recover-queue" class="toolbar-button" type="button">Recover Queue</button>
+      </div>
+    </div>
+    <div class="sync-summary">
+      <p><strong>LAN trust:</strong> ${trustedCount} trusted / ${(sync.lan_trust?.trusted_devices || []).length} known devices</p>
+      ${sync.lan_trust_error ? `<p class="event-error">${sync.lan_trust_error}</p>` : ""}
+      ${
+        trustedDevices.length
+          ? `<pre class="path-block">${JSON.stringify(trustedDevices, null, 2)}</pre>`
+          : `<p class="muted">No trusted LAN peers yet.</p>`
+      }
     </div>
     <div class="sync-summary">
       <p><strong>Cloud:</strong> ${sync.cloud_connection_state} / ${sync.cloud_config?.sync_server_url || "not configured"}</p>
@@ -3088,10 +3113,54 @@ async function previewPullSelectedPeer() {
 }
 
 async function pullSelectedPeer() {
-  const result = await syncPost("/api/sync/pull-events", { peer_id: state.selectedPeerId });
+  const result = await syncPost("/api/sync/pull-events", { peer_id: state.selectedPeerId, replay_nonce: randomNonce() });
   state.importSummary = result.pull || result;
   await refreshQsos();
   render();
+}
+
+async function trustSelectedPeer() {
+  const peer = selectedPeer();
+  if (!peer) return;
+  const pairing = await syncPost("/api/sync/lan/pairing-token", {
+    approved_by_operator: true,
+    display_name: state.syncState?.identity?.display_name || "KE8YGW Logger Local",
+  });
+  if (!pairing.ok) {
+    state.importSummary = pairing;
+    return;
+  }
+  const trusted = await syncPost("/api/sync/lan/pairing-accept", {
+    token_id: pairing.pairing.token_id,
+    pairing_code: pairing.pairing.pairing_code,
+    peer_device_id: peer.device_id,
+    peer_display_name: peer.display_name,
+    logbook_id: state.syncState?.local_head?.logbook_id,
+    public_key_fingerprint: null,
+  });
+  state.importSummary = trusted.trusted_device || trusted;
+}
+
+async function revokeSelectedPeer() {
+  const peer = selectedPeer();
+  if (!peer) return;
+  const result = await syncPost("/api/sync/lan/revoke", { device_id: peer.device_id });
+  state.importSummary = result.trusted_device || result;
+}
+
+async function recoverOfflineQueue() {
+  const result = await syncPost("/api/sync/offline-queue/recover");
+  state.importSummary = result.offline_queue || result;
+}
+
+function selectedPeer() {
+  const peers = state.syncState?.peers || [];
+  return peers.find((peer) => peer.peer_id === state.selectedPeerId) || peers[0] || null;
+}
+
+function randomNonce() {
+  if (window.crypto?.randomUUID) return window.crypto.randomUUID();
+  return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
 function copyLocalSyncIdentity() {

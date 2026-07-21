@@ -27,12 +27,19 @@ outside issue #2.
      URLs; infrastructure sizing; retention/monitoring; and deployment secrets.
 
 3. Offline-first sync and reconciliation
-   - Finish desktop/iOS offline operation, queued mutations, replay, safe
-     reconciliation, divergence review, and user-directed conflict handling.
-   - Add real LAN peer-to-peer HTTP transport and trust pairing while preserving
-     the existing verification rules.
-   - Blockers: local network permission behavior on iOS, trust-pairing UX, and
-     test devices for multi-device scenarios.
+   - Implemented foundation: durable versioned mutation queue, deterministic
+     per-logbook order, idempotency/dependency checks, retry/backoff state,
+     interrupted-send recovery, desktop/iOS queue hooks for implemented
+     mutations, queue-aware cloud push acknowledgments, structured conflict
+     reports, and durable LAN trust records with single-use tokens, replay nonce
+     rejection, and revocation.
+   - Remaining: real LAN peer-to-peer HTTP transport, production pairing UX,
+     manual conflict-resolution commands, full cross-client reconciliation UI,
+     release-device iOS background retry qualification, and multi-device
+     migration/recovery scenarios.
+   - Blockers: local network permission behavior on iOS, trust-pairing UX,
+     physical test devices, and acceptance criteria for manual conflict
+     resolution.
 
 4. Production provider qualification
    - Complete QRZ, QRZ Logbook, LoTW/TQSL, eQSL, Club Log, POTA, SOTAWatch, DX
@@ -117,8 +124,9 @@ outside issue #2.
 
 ## Next Three Goals
 
-1. Implement desktop/iOS sync and offline reconciliation, including LAN trust
-   pairing.
+1. Finish sync/reconciliation hardening: real LAN peer-to-peer HTTP transport,
+   production pairing UX, manual conflict-resolution commands, and iOS
+   background retry validation on release devices.
 2. Complete production provider qualification and release-runner live validation
    for the issue #2 provider set.
 3. Wire hosted web, desktop, and iOS UI flows to the implemented account,

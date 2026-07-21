@@ -1,5 +1,8 @@
 //! Local-first LAN discovery and sync handshake primitives.
 
+pub mod offline;
+pub use offline::*;
+
 use std::{
     collections::{HashMap, HashSet},
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, UdpSocket},

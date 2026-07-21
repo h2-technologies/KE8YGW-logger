@@ -236,7 +236,7 @@ Returns:
 {
   "ok": true,
   "service": "ke8ygw-sync-server",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "mode": "self_hosted"
 }
 ```

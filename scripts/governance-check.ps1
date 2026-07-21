@@ -45,8 +45,8 @@ $rootCargo = Get-Content -Raw Cargo.toml
 if ($rootCargo -notmatch '(?m)^edition\s*=\s*"2021"\s*$') {
     Fail 'Workspace edition must remain 2021.'
 }
-if ($rootCargo -notmatch '(?m)^version\s*=\s*"0\.2\.0"\s*$') {
-    Fail 'Workspace version must remain 0.2.0 for this baseline.'
+if ($rootCargo -notmatch '(?m)^version\s*=\s*"0\.3\.0"\s*$') {
+    Fail 'Workspace version must remain 0.3.0 for the offline-sync baseline.'
 }
 if ($rootCargo -notmatch '(?m)^license\s*=\s*"MIT"\s*$') {
     Fail 'Workspace license must remain MIT.'

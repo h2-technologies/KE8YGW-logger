@@ -24,10 +24,10 @@ use ham_core::{
     MapLayerStack, MockRigProvider, NetControlProjection, NewLogbookEvent, NotificationSeverity,
     OnlineAutomationTask, OnlineNotification, OnlineProviderStatus, OperatorRole,
     PermissionGrantSet, PermissionGrantStatus, PermissionRegistry, PermissionSettings,
-    PotaSpotRecord, Projection, ProposalContext, RigConnectionStatus, RigDevice, RigProvider,
-    RigProviderStatus, RigState, RuntimeEventFilter, RuntimeEventSeverity, RuntimeLogConfig,
-    ServiceCache, ServiceCacheEntry, ServiceRegistry, ServiceRegistrySnapshot, StationBook,
-    StationConfiguration, StationProfile, UploadQueue, UploadTarget,
+    PotaSpotRecord, Projection, ProposalContext, ProposalOutcome, RigConnectionStatus, RigDevice,
+    RigProvider, RigProviderStatus, RigState, RuntimeEventFilter, RuntimeEventSeverity,
+    RuntimeLogConfig, ServiceCache, ServiceCacheEntry, ServiceRegistry, ServiceRegistrySnapshot,
+    StationBook, StationConfiguration, StationProfile, UploadQueue, UploadTarget,
 };
 use ham_gui::{
     mock::{capability_labels, mock_plugins},
@@ -41,15 +41,22 @@ use ham_plugin_sdk::{
     PROPOSAL_QSO_DELETE, PROPOSAL_QSO_NOTE_ADD, PROPOSAL_QSO_RESTORE,
 };
 use ham_sync::{
-    build_handshake_response, metadata_for_event, preview_pull_from_events, pull_missing_events,
-    CloudAuth, CloudConnectionState, CloudPreviewPullRequest, CloudPullEventsRequest,
-    CloudPullEventsResponse, CloudPushEventsRequest, CloudPushEventsResponse, CloudServerConfig,
-    CloudSyncConfig, CloudSyncStatusResponse, DiagnosticReportUploadRequest,
-    DiagnosticReportUploadResponse, DiagnosticReportUploadType, DiscoveryPacket,
-    GetEventMetadataResponse, GetEventRangeResponse, HandshakeRequest, InMemoryCloudSyncServer,
-    ListLogbooksResponse, LocalPeerIdentity, LogbookHeadSummary, PairDeviceRequest,
-    PeerObservation, PeerRecord, PeerRegistry, PreviewPullRequest, PreviewPullResponse,
-    PullEventsRequest, PullEventsResponse, ReplicationStatus, SyncConfig, PROTOCOL_VERSION,
+    build_handshake_response, conflict_report_from_preview, metadata_for_event,
+    preview_pull_from_events, pull_missing_events, CloudAuth, CloudConnectionState,
+    CloudPreviewPullRequest, CloudPullEventsRequest, CloudPullEventsResponse,
+    CloudPushEventsRequest, CloudPushEventsResponse, CloudServerConfig, CloudSyncConfig,
+    CloudSyncStatusResponse, DiagnosticReportUploadRequest, DiagnosticReportUploadResponse,
+    DiagnosticReportUploadType, DiscoveryPacket, GetEventMetadataResponse, GetEventRangeResponse,
+    HandshakeRequest, InMemoryCloudSyncServer, JsonLanTrustStore, JsonOfflineMutationQueue,
+    LanPairingAcceptance, LanTrustSnapshot, ListLogbooksResponse, LocalPeerIdentity,
+    LogbookHeadSummary, OfflineMutationEnvelope, OfflineMutationInput, OfflineQueueSnapshot,
+    PairDeviceRequest, PeerObservation, PeerRecord, PeerRegistry, PreviewPullRequest,
+    PreviewPullResponse, PullEventsRequest, PullEventsResponse, ReplicationStatus, SyncConfig,
+    OFFLINE_OP_ACTIVATION_END, OFFLINE_OP_ACTIVATION_START, OFFLINE_OP_NET_CHECKIN_CREATE,
+    OFFLINE_OP_NET_CHECKIN_DELETE, OFFLINE_OP_NET_SESSION_END, OFFLINE_OP_NET_SESSION_START,
+    OFFLINE_OP_NET_TRAFFIC_CREATE, OFFLINE_OP_QSO_CREATE, OFFLINE_OP_QSO_DELETE,
+    OFFLINE_OP_QSO_NOTE_ADD, OFFLINE_OP_QSO_RESTORE, OFFLINE_OP_STATION_PROFILE_SELECT,
+    PROTOCOL_VERSION,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -109,6 +116,8 @@ fn main() {
         JsonSupportStore::<RigUiConfig>::new(support_dir.join("rig-config.json"));
     let online_support_store =
         JsonSupportStore::<OnlineSupportState>::new(support_dir.join("online-support.json"));
+    let offline_queue = JsonOfflineMutationQueue::new(support_dir.join("offline-mutations.json"));
+    let lan_trust_store = JsonLanTrustStore::new(support_dir.join("lan-trust.json"));
     let mut station_book = station_store.load().unwrap_or_default();
     if station_book.profiles.is_empty() {
         seed_default_station_book(&mut station_book);
@@ -295,6 +304,33 @@ fn main() {
         OnlineSupportState::default(),
         "online support",
     );
+    match offline_queue.recover_interrupted_writes(chrono::Utc::now()) {
+        Ok(recovered) if recovered > 0 => {
+            let _ = bridge.publish(RuntimeEventInput {
+                event_type: "sync.offline_queue.recovered".to_owned(),
+                severity: RuntimeEventSeverity::Info,
+                source: "ham-sync".to_owned(),
+                source_plugin_id: None,
+                workspace_id: Some("dashboard".to_owned()),
+                payload_summary: format!("Recovered {recovered} interrupted offline sync attempts"),
+                redacted_payload: Some(json!({"recovered_count": recovered})),
+                error: None,
+            });
+        }
+        Ok(_) => {}
+        Err(error) => {
+            let _ = bridge.publish(RuntimeEventInput {
+                event_type: "sync.offline_queue.recovery_failed".to_owned(),
+                severity: RuntimeEventSeverity::Warn,
+                source: "ham-sync".to_owned(),
+                source_plugin_id: None,
+                workspace_id: Some("dashboard".to_owned()),
+                payload_summary: "Offline queue recovery failed".to_owned(),
+                redacted_payload: None,
+                error: Some(error.to_string()),
+            });
+        }
+    }
 
     let state = Arc::new(AppState {
         bridge,
@@ -302,6 +338,8 @@ fn main() {
         logbook_id,
         proposal_runtime,
         sync: Mutex::new(SyncUiState::new(bound_addr.clone())),
+        offline_queue,
+        lan_trust_store,
         cloud_server: InMemoryCloudSyncServer::new(CloudServerConfig::default()),
         lookup_cache: LookupCache::new(),
         lookup_config: Mutex::new(lookup_config),
@@ -342,6 +380,8 @@ struct AppState {
     logbook_id: uuid::Uuid,
     proposal_runtime: tokio::runtime::Runtime,
     sync: Mutex<SyncUiState>,
+    offline_queue: JsonOfflineMutationQueue,
+    lan_trust_store: JsonLanTrustStore,
     cloud_server: InMemoryCloudSyncServer,
     lookup_cache: LookupCache,
     lookup_config: Mutex<LookupUiConfig>,
@@ -654,6 +694,14 @@ fn handle_client(state: Arc<AppState>, mut stream: TcpStream) {
         ("POST", "/api/sync/handshake") => handle_sync_handshake(&state, &request.body),
         ("POST", "/api/sync/preview-pull") => handle_sync_preview_pull(&state, &request.body),
         ("POST", "/api/sync/pull-events") => handle_sync_pull_events(&state, &request.body),
+        ("GET", "/api/sync/offline-queue") => handle_offline_queue_state(&state),
+        ("POST", "/api/sync/offline-queue/recover") => handle_offline_queue_recover(&state),
+        ("GET", "/api/sync/lan/trust") => handle_lan_trust_state(&state),
+        ("POST", "/api/sync/lan/pairing-token") => handle_lan_pairing_token(&state, &request.body),
+        ("POST", "/api/sync/lan/pairing-accept") => {
+            handle_lan_pairing_accept(&state, &request.body)
+        }
+        ("POST", "/api/sync/lan/revoke") => handle_lan_trust_revoke(&state, &request.body),
         ("POST", "/api/sync/cloud/connect") => handle_cloud_connect(&state, &request.body),
         ("POST", "/api/sync/cloud/push") => handle_cloud_push(&state),
         ("POST", "/api/sync/cloud/preview-pull") => handle_cloud_preview_pull(&state),
@@ -1002,6 +1050,28 @@ struct MapLayerToggleRequest {
 #[derive(Debug, Deserialize)]
 struct HandshakePeerRequest {
     peer_id: Option<String>,
+    replay_nonce: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct LanPairingTokenRequest {
+    approved_by_operator: bool,
+    display_name: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct LanPairingAcceptRequest {
+    token_id: uuid::Uuid,
+    pairing_code: String,
+    peer_device_id: uuid::Uuid,
+    peer_display_name: String,
+    logbook_id: Option<uuid::Uuid>,
+    public_key_fingerprint: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct LanTrustRevokeRequest {
+    device_id: uuid::Uuid,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1031,6 +1101,10 @@ struct SyncStatePayload {
     local_head: LogbookHeadSummary,
     remote_head: Option<LogbookHeadSummary>,
     divergence: Option<String>,
+    offline_queue: Option<OfflineQueueSnapshot>,
+    offline_queue_error: Option<String>,
+    lan_trust: Option<LanTrustSnapshot>,
+    lan_trust_error: Option<String>,
     cloud_config: CloudSyncConfig,
     cloud_connection_state: CloudConnectionState,
     cloud_account_id: Option<String>,
@@ -2748,14 +2822,60 @@ fn handle_station_select_profile(state: &AppState, body: &[u8]) -> Vec<u8> {
     let Ok(request) = serde_json::from_slice::<StationProfileSelectRequest>(body) else {
         return json_error(400, "invalid station profile selection JSON");
     };
+    let now = chrono::Utc::now();
+    let device_id = state.bridge.status().device_id;
+    let offline_mutation = match state.offline_queue.enqueue_input(
+        OfflineMutationInput::new(
+            state.logbook_id,
+            device_id,
+            device_id,
+            OFFLINE_OP_STATION_PROFILE_SELECT,
+            json!({"station_profile_id": request.station_profile_id}),
+        )
+        .with_idempotency_key(format!(
+            "station.profile.select:{}:{}",
+            request.station_profile_id,
+            uuid::Uuid::new_v4()
+        )),
+        now,
+    ) {
+        Ok(mutation) => mutation,
+        Err(error) => {
+            return json_response_with_status(
+                500,
+                &json!({"ok": false, "error": format!("failed to persist offline mutation before station update: {error}")}),
+            )
+        }
+    };
     let mut book = state
         .station_book
         .lock()
         .expect("station book mutex should not be poisoned");
     if let Err(error) = book.select_profile(request.station_profile_id) {
+        let _ = state.offline_queue.mark_user_action_required(
+            offline_mutation.operation_id,
+            error.to_string(),
+            Some("station_profile_invalid".to_owned()),
+            chrono::Utc::now(),
+        );
         return json_error(400, error.to_string());
     }
-    let _ = state.station_store.save(&book);
+    if let Err(error) = state.station_store.save(&book) {
+        let _ = state.offline_queue.mark_user_action_required(
+            offline_mutation.operation_id,
+            error.to_string(),
+            Some("station_support_save_failed".to_owned()),
+            chrono::Utc::now(),
+        );
+        return json_response_with_status(
+            500,
+            &json!({"ok": false, "error": format!("failed to save station support state: {error}")}),
+        );
+    }
+    let accepted_mutation = state
+        .offline_queue
+        .mark_accepted(offline_mutation.operation_id, chrono::Utc::now())
+        .unwrap_or(offline_mutation);
     let _ = publish_gui_runtime(
         state,
         "station.profile.selected",
@@ -2764,7 +2884,7 @@ fn handle_station_select_profile(state: &AppState, body: &[u8]) -> Vec<u8> {
         Some(json!({"station_profile_id": request.station_profile_id})),
         None,
     );
-    json_response(&json!({"ok": true, "station": &*book}))
+    json_response(&json!({"ok": true, "station": &*book, "offline_mutation": accepted_mutation}))
 }
 
 fn handle_awards(state: &AppState) -> Vec<u8> {
@@ -3427,24 +3547,17 @@ fn submit_net_proposal(
     entity_id: Option<uuid::Uuid>,
     payload: Value,
 ) -> Vec<u8> {
-    let proposal = ProposalEnvelope::new(
+    let result = submit_offline_tracked_proposal(
+        state,
         proposal_type,
-        state.logbook_id,
         entity_id,
         Some(uuid::Uuid::new_v4()),
-        state.bridge.status().device_id,
         "plugin.net-control",
-        1,
+        net_control_context(state),
         payload,
     );
-    let result = state.proposal_runtime.block_on(submit_proposal(
-        state.store.as_ref(),
-        &state.bridge,
-        &net_control_context(state),
-        proposal,
-    ));
     match result {
-        Ok(outcome) => {
+        Ok((outcome, offline_mutation, offline_queue_warning)) => {
             let event_name = match proposal_type {
                 PROPOSAL_NET_SESSION_START => "net.session.started",
                 PROPOSAL_NET_SESSION_END => "net.session.ended",
@@ -3464,9 +3577,13 @@ fn submit_net_proposal(
                 })),
                 None,
             );
-            json_response(
-                &json!({"ok": true, "event": outcome.official_event, "net": net_control_payload(state)}),
-            )
+            json_response(&json!({
+                "ok": true,
+                "event": outcome.official_event,
+                "offline_mutation": offline_mutation,
+                "offline_queue_warning": offline_queue_warning,
+                "net": net_control_payload(state)
+            }))
         }
         Err(error) => {
             let _ = publish_gui_runtime(
@@ -3477,7 +3594,7 @@ fn submit_net_proposal(
                 None,
                 Some(error.to_string()),
             );
-            json_response_with_status(400, &json!({"ok": false, "error": error.to_string()}))
+            json_response_with_status(400, &json!({"ok": false, "error": error}))
         }
     }
 }
@@ -3609,54 +3726,43 @@ fn handle_qso_create_with_activation(state: &AppState, body: &[u8]) -> Vec<u8> {
             payload["grid"] = json!(grid);
         }
     }
-    let proposal = ProposalEnvelope::new(
+    let (qso, offline_mutation, offline_queue_warning) = match submit_offline_tracked_proposal(
+        state,
         PROPOSAL_QSO_CREATE,
-        state.logbook_id,
         None,
         None,
-        state.bridge.status().device_id,
         "plugin.pota-sota",
-        1,
+        pota_sota_context(state),
         payload,
-    );
-    let qso = match state.proposal_runtime.block_on(submit_proposal(
-        state.store.as_ref(),
-        &state.bridge,
-        &pota_sota_context(state),
-        proposal,
-    )) {
-        Ok(outcome) => outcome,
-        Err(error) => {
-            return json_response_with_status(
-                400,
-                &json!({"ok": false, "error": error.to_string()}),
-            )
+    ) {
+        Ok((outcome, offline_mutation, offline_queue_warning)) => {
+            (outcome, offline_mutation, offline_queue_warning)
         }
+        Err(error) => return json_response_with_status(400, &json!({"ok": false, "error": error})),
     };
     if let (Some(active), Some(qso_id)) = (
         activation_projection_payload(state).active_activation,
         qso.official_event.entity_id,
     ) {
-        let link = ProposalEnvelope::new(
+        let link_payload = json!({"activation_id": active.activation_id});
+        let _ = submit_offline_tracked_proposal(
+            state,
             PROPOSAL_QSO_ACTIVATION_LINK,
-            state.logbook_id,
             Some(qso_id),
             None,
-            state.bridge.status().device_id,
             "plugin.pota-sota",
-            1,
-            json!({"activation_id": active.activation_id}),
+            pota_sota_context(state),
+            link_payload,
         );
-        let _ = state.proposal_runtime.block_on(submit_proposal(
-            state.store.as_ref(),
-            &state.bridge,
-            &pota_sota_context(state),
-            link,
-        ));
     }
-    json_response(
-        &json!({"ok": true, "event": qso.official_event, "projection": qso_projection_payload(state, "include_deleted=true"), "activations": activation_projection_payload(state)}),
-    )
+    json_response(&json!({
+        "ok": true,
+        "event": qso.official_event,
+        "offline_mutation": offline_mutation,
+        "offline_queue_warning": offline_queue_warning,
+        "projection": qso_projection_payload(state, "include_deleted=true"),
+        "activations": activation_projection_payload(state)
+    }))
 }
 
 fn apply_accepted_lookup_fields(payload: &mut Value, request: &CreateQsoRequest) {
@@ -3744,6 +3850,94 @@ fn apply_active_station_defaults(state: &AppState, payload: &mut Value) {
     book.apply_defaults_to_qso_payload(payload);
 }
 
+fn offline_operation_type_for_proposal(proposal_type: &str) -> String {
+    match proposal_type {
+        PROPOSAL_QSO_CREATE => OFFLINE_OP_QSO_CREATE,
+        PROPOSAL_QSO_DELETE => OFFLINE_OP_QSO_DELETE,
+        PROPOSAL_QSO_RESTORE => OFFLINE_OP_QSO_RESTORE,
+        PROPOSAL_QSO_NOTE_ADD => OFFLINE_OP_QSO_NOTE_ADD,
+        PROPOSAL_ACTIVATION_START => OFFLINE_OP_ACTIVATION_START,
+        PROPOSAL_ACTIVATION_END => OFFLINE_OP_ACTIVATION_END,
+        PROPOSAL_NET_SESSION_START => OFFLINE_OP_NET_SESSION_START,
+        PROPOSAL_NET_SESSION_END => OFFLINE_OP_NET_SESSION_END,
+        PROPOSAL_NET_CHECKIN_CREATE => OFFLINE_OP_NET_CHECKIN_CREATE,
+        PROPOSAL_NET_CHECKIN_DELETE => OFFLINE_OP_NET_CHECKIN_DELETE,
+        PROPOSAL_NET_TRAFFIC_CREATE => OFFLINE_OP_NET_TRAFFIC_CREATE,
+        _ => proposal_type,
+    }
+    .to_owned()
+}
+
+fn submit_offline_tracked_proposal(
+    state: &AppState,
+    proposal_type: &str,
+    entity_id: Option<uuid::Uuid>,
+    author_operator_id: Option<uuid::Uuid>,
+    source_plugin_id: &str,
+    context: ProposalContext,
+    payload: Value,
+) -> Result<(ProposalOutcome, OfflineMutationEnvelope, Option<String>), String> {
+    let now = chrono::Utc::now();
+    let device_id = state.bridge.status().device_id;
+    let operation_id = uuid::Uuid::new_v4();
+    let queued = state
+        .offline_queue
+        .enqueue_input(
+            OfflineMutationInput::new(
+                state.logbook_id,
+                device_id,
+                device_id,
+                offline_operation_type_for_proposal(proposal_type),
+                payload.clone(),
+            )
+            .with_operation_id(operation_id)
+            .with_correlation_id(operation_id)
+            .with_idempotency_key(format!("{proposal_type}:{operation_id}")),
+            now,
+        )
+        .map_err(|error| format!("failed to persist offline mutation before submit: {error}"))?;
+
+    let proposal = ProposalEnvelope::new(
+        proposal_type,
+        state.logbook_id,
+        entity_id,
+        author_operator_id,
+        device_id,
+        source_plugin_id,
+        1,
+        payload,
+    );
+    let result = state.proposal_runtime.block_on(submit_proposal(
+        state.store.as_ref(),
+        &state.bridge,
+        &context,
+        proposal,
+    ));
+    match result {
+        Ok(outcome) => {
+            let queue_warning = state
+                .offline_queue
+                .record_local_event(
+                    queued.operation_id,
+                    &outcome.official_event,
+                    chrono::Utc::now(),
+                )
+                .err()
+                .map(|error| error.to_string());
+            Ok((outcome, queued, queue_warning))
+        }
+        Err(error) => {
+            let _ = state.offline_queue.mark_user_action_required(
+                queued.operation_id,
+                error.to_string(),
+                Some("domain_validation_failed".to_owned()),
+                chrono::Utc::now(),
+            );
+            Err(error.to_string())
+        }
+    }
+}
+
 fn handle_qso_simple_action(state: &AppState, body: &[u8], proposal_type: &str) -> Vec<u8> {
     let Ok(request) = serde_json::from_slice::<QsoIdRequest>(body) else {
         return json_error(400, "invalid QSO action JSON");
@@ -3769,32 +3963,27 @@ fn submit_gui_proposal(
     qso_id: Option<uuid::Uuid>,
     payload: Value,
 ) -> Vec<u8> {
-    let proposal = ProposalEnvelope::new(
+    match submit_offline_tracked_proposal(
+        state,
         proposal_type,
-        state.logbook_id,
         qso_id,
         None,
-        state.bridge.status().device_id,
         "core.gui",
-        1,
+        proposal_context(state),
         payload,
-    );
-    match state.proposal_runtime.block_on(submit_proposal(
-        state.store.as_ref(),
-        &state.bridge,
-        &proposal_context(state),
-        proposal,
-    )) {
-        Ok(outcome) => json_response(&json!({
+    ) {
+        Ok((outcome, offline_mutation, offline_queue_warning)) => json_response(&json!({
             "ok": true,
             "event": outcome.official_event,
+            "offline_mutation": offline_mutation,
+            "offline_queue_warning": offline_queue_warning,
             "projection": qso_projection_payload(state, "include_deleted=true")
         })),
         Err(error) => json_response_with_status(
             400,
             &json!({
                 "ok": false,
-                "error": error.to_string()
+                "error": error
             }),
         ),
     }
@@ -4254,6 +4443,18 @@ fn local_divergence_review_payload(state: &AppState) -> Value {
         .divergence
         .clone()
         .or_else(|| sync.cloud_divergence.clone());
+    let offline_mutations = state
+        .offline_queue
+        .load_snapshot(chrono::Utc::now())
+        .map(|snapshot| snapshot.mutations)
+        .unwrap_or_default();
+    let conflict_report = sync
+        .latest_preview
+        .as_ref()
+        .or(sync.latest_cloud_preview.as_ref())
+        .map(|preview| {
+            conflict_report_from_preview(preview, &offline_mutations, chrono::Utc::now())
+        });
     json!({
         "created_at": chrono::Utc::now(),
         "logbook_id": state.logbook_id,
@@ -4266,6 +4467,7 @@ fn local_divergence_review_payload(state: &AppState) -> Value {
         "can_safely_push": sync.cloud_divergence.is_none(),
         "divergence_detected": divergence.is_some(),
         "revoked_device_state": "unknown in local GUI mode",
+        "conflict_report": conflict_report,
         "recommended_action": divergence.unwrap_or_else(|| "No divergence detected; use normal preview/push/pull controls.".to_owned())
     })
 }
@@ -4301,23 +4503,16 @@ fn handle_activation_start(state: &AppState, body: &[u8]) -> Vec<u8> {
     if let Some(notes) = request.notes.filter(|value| !value.trim().is_empty()) {
         payload["notes"] = json!(notes);
     }
-    let proposal = ProposalEnvelope::new(
+    match submit_offline_tracked_proposal(
+        state,
         PROPOSAL_ACTIVATION_START,
-        state.logbook_id,
         None,
         None,
-        state.bridge.status().device_id,
         "plugin.pota-sota",
-        1,
+        pota_sota_context(state),
         payload,
-    );
-    match state.proposal_runtime.block_on(submit_proposal(
-        state.store.as_ref(),
-        &state.bridge,
-        &pota_sota_context(state),
-        proposal,
-    )) {
-        Ok(outcome) => {
+    ) {
+        Ok((outcome, offline_mutation, offline_queue_warning)) => {
             let _ = publish_gui_runtime(
                 state,
                 "activation.started",
@@ -4326,13 +4521,15 @@ fn handle_activation_start(state: &AppState, body: &[u8]) -> Vec<u8> {
                 Some(json!(&outcome.official_event)),
                 None,
             );
-            json_response(
-                &json!({"ok": true, "event": outcome.official_event, "activations": activation_projection_payload(state)}),
-            )
+            json_response(&json!({
+                "ok": true,
+                "event": outcome.official_event,
+                "offline_mutation": offline_mutation,
+                "offline_queue_warning": offline_queue_warning,
+                "activations": activation_projection_payload(state)
+            }))
         }
-        Err(error) => {
-            json_response_with_status(400, &json!({"ok": false, "error": error.to_string()}))
-        }
+        Err(error) => json_response_with_status(400, &json!({"ok": false, "error": error})),
     }
 }
 
@@ -4353,23 +4550,16 @@ fn handle_activation_end(state: &AppState, body: &[u8]) -> Vec<u8> {
                 .map(str::to_owned)
         })
         .unwrap_or_else(|| chrono::Utc::now().to_rfc3339());
-    let proposal = ProposalEnvelope::new(
+    match submit_offline_tracked_proposal(
+        state,
         PROPOSAL_ACTIVATION_END,
-        state.logbook_id,
         Some(request.activation_id),
         None,
-        state.bridge.status().device_id,
         "plugin.pota-sota",
-        1,
+        pota_sota_context(state),
         json!({"started_at": started_at, "ended_at": chrono::Utc::now().to_rfc3339()}),
-    );
-    match state.proposal_runtime.block_on(submit_proposal(
-        state.store.as_ref(),
-        &state.bridge,
-        &pota_sota_context(state),
-        proposal,
-    )) {
-        Ok(outcome) => {
+    ) {
+        Ok((outcome, offline_mutation, offline_queue_warning)) => {
             let _ = publish_gui_runtime(
                 state,
                 "activation.ended",
@@ -4378,13 +4568,15 @@ fn handle_activation_end(state: &AppState, body: &[u8]) -> Vec<u8> {
                 Some(json!(&outcome.official_event)),
                 None,
             );
-            json_response(
-                &json!({"ok": true, "event": outcome.official_event, "activations": activation_projection_payload(state)}),
-            )
+            json_response(&json!({
+                "ok": true,
+                "event": outcome.official_event,
+                "offline_mutation": offline_mutation,
+                "offline_queue_warning": offline_queue_warning,
+                "activations": activation_projection_payload(state)
+            }))
         }
-        Err(error) => {
-            json_response_with_status(400, &json!({"ok": false, "error": error.to_string()}))
-        }
+        Err(error) => json_response_with_status(400, &json!({"ok": false, "error": error})),
     }
 }
 
@@ -4445,6 +4637,15 @@ fn sync_state_payload(state: &AppState) -> SyncStatePayload {
         .sync
         .lock()
         .expect("sync state mutex should not be poisoned");
+    let now = chrono::Utc::now();
+    let (offline_queue, offline_queue_error) = match state.offline_queue.load_snapshot(now) {
+        Ok(snapshot) => (Some(snapshot), None),
+        Err(error) => (None, Some(error.to_string())),
+    };
+    let (lan_trust, lan_trust_error) = match state.lan_trust_store.snapshot() {
+        Ok(snapshot) => (Some(snapshot), None),
+        Err(error) => (None, Some(error.to_string())),
+    };
     let local_head = logbook_head_summary(state);
     let remote_head = sync
         .demo_remote_events
@@ -4466,6 +4667,10 @@ fn sync_state_payload(state: &AppState) -> SyncStatePayload {
         local_head,
         remote_head,
         divergence: sync.divergence.clone(),
+        offline_queue,
+        offline_queue_error,
+        lan_trust,
+        lan_trust_error,
         cloud_config: sync.cloud_config.clone(),
         cloud_connection_state: if sync.cloud_auth.is_some() {
             CloudConnectionState::Connected
@@ -4481,6 +4686,162 @@ fn sync_state_payload(state: &AppState) -> SyncStatePayload {
         last_cloud_pull_time: sync.last_cloud_pull_time.clone(),
         cloud_divergence: sync.cloud_divergence.clone(),
         warning_count: sync.warning_count,
+    }
+}
+
+fn handle_offline_queue_state(state: &AppState) -> Vec<u8> {
+    match state.offline_queue.load_snapshot(chrono::Utc::now()) {
+        Ok(snapshot) => json_response(&json!({"ok": true, "offline_queue": snapshot})),
+        Err(error) => {
+            json_response_with_status(400, &json!({"ok": false, "error": error.to_string()}))
+        }
+    }
+}
+
+fn handle_offline_queue_recover(state: &AppState) -> Vec<u8> {
+    let now = chrono::Utc::now();
+    match state.offline_queue.recover_interrupted_writes(now) {
+        Ok(recovered_count) => {
+            let snapshot = state.offline_queue.load_snapshot(now).ok();
+            let _ = publish_gui_runtime(
+                state,
+                "sync.offline_queue.recovered",
+                RuntimeEventSeverity::Info,
+                &format!("Recovered {recovered_count} interrupted offline sync attempts"),
+                Some(json!({"recovered_count": recovered_count})),
+                None,
+            );
+            json_response(
+                &json!({"ok": true, "recovered_count": recovered_count, "offline_queue": snapshot}),
+            )
+        }
+        Err(error) => {
+            json_response_with_status(400, &json!({"ok": false, "error": error.to_string()}))
+        }
+    }
+}
+
+fn handle_lan_trust_state(state: &AppState) -> Vec<u8> {
+    match state.lan_trust_store.snapshot() {
+        Ok(snapshot) => json_response(&json!({"ok": true, "lan_trust": snapshot})),
+        Err(error) => {
+            json_response_with_status(400, &json!({"ok": false, "error": error.to_string()}))
+        }
+    }
+}
+
+fn handle_lan_pairing_token(state: &AppState, body: &[u8]) -> Vec<u8> {
+    if let Err(response) = ensure_gui_permission(
+        state,
+        &core_gui_manifest(),
+        PluginCapability::SyncLanDiscovery,
+        "LAN pairing token permission check",
+    ) {
+        return response;
+    }
+    let Ok(request) = serde_json::from_slice::<LanPairingTokenRequest>(body) else {
+        return json_error(400, "invalid LAN pairing token JSON");
+    };
+    let display_name = request
+        .display_name
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "KE8YGW Logger Local".to_owned());
+    let device_id = state.bridge.status().device_id;
+    match state.lan_trust_store.issue_pairing_token(
+        device_id,
+        state.logbook_id,
+        display_name,
+        request.approved_by_operator,
+        chrono::Utc::now(),
+    ) {
+        Ok(token) => {
+            let _ = publish_gui_runtime(
+                state,
+                "sync.lan.pairing_token.issued",
+                RuntimeEventSeverity::Info,
+                "LAN pairing token issued after operator approval",
+                Some(json!({"token_id": token.token_id, "expires_at": token.expires_at})),
+                None,
+            );
+            json_response(&json!({"ok": true, "pairing": token}))
+        }
+        Err(error) => {
+            json_response_with_status(400, &json!({"ok": false, "error": error.to_string()}))
+        }
+    }
+}
+
+fn handle_lan_pairing_accept(state: &AppState, body: &[u8]) -> Vec<u8> {
+    if let Err(response) = ensure_gui_permission(
+        state,
+        &core_gui_manifest(),
+        PluginCapability::SyncLanDiscovery,
+        "LAN pairing accept permission check",
+    ) {
+        return response;
+    }
+    let Ok(request) = serde_json::from_slice::<LanPairingAcceptRequest>(body) else {
+        return json_error(400, "invalid LAN pairing accept JSON");
+    };
+    let logbook_id = request.logbook_id.unwrap_or(state.logbook_id);
+    match state.lan_trust_store.accept_pairing_token(
+        LanPairingAcceptance {
+            token_id: request.token_id,
+            pairing_code: request.pairing_code,
+            peer_device_id: request.peer_device_id,
+            peer_display_name: request.peer_display_name,
+            requested_logbooks: vec![logbook_id],
+            public_key_fingerprint: request.public_key_fingerprint,
+        },
+        chrono::Utc::now(),
+    ) {
+        Ok(device) => {
+            let _ = publish_gui_runtime(
+                state,
+                "sync.lan.device.trusted",
+                RuntimeEventSeverity::Info,
+                "LAN peer device trusted",
+                Some(json!({"device_id": device.device_id, "logbook_ids": device.logbook_ids})),
+                None,
+            );
+            json_response(&json!({"ok": true, "trusted_device": device}))
+        }
+        Err(error) => {
+            json_response_with_status(400, &json!({"ok": false, "error": error.to_string()}))
+        }
+    }
+}
+
+fn handle_lan_trust_revoke(state: &AppState, body: &[u8]) -> Vec<u8> {
+    if let Err(response) = ensure_gui_permission(
+        state,
+        &core_gui_manifest(),
+        PluginCapability::SyncLanDiscovery,
+        "LAN trust revoke permission check",
+    ) {
+        return response;
+    }
+    let Ok(request) = serde_json::from_slice::<LanTrustRevokeRequest>(body) else {
+        return json_error(400, "invalid LAN trust revoke JSON");
+    };
+    match state
+        .lan_trust_store
+        .revoke_device(request.device_id, chrono::Utc::now())
+    {
+        Ok(device) => {
+            let _ = publish_gui_runtime(
+                state,
+                "sync.lan.device.revoked",
+                RuntimeEventSeverity::Warn,
+                "LAN peer device revoked",
+                Some(json!({"device_id": device.device_id})),
+                None,
+            );
+            json_response(&json!({"ok": true, "trusted_device": device}))
+        }
+        Err(error) => {
+            json_response_with_status(400, &json!({"ok": false, "error": error.to_string()}))
+        }
     }
 }
 
@@ -4598,8 +4959,11 @@ fn handle_sync_event_metadata(state: &AppState, query: &str) -> Vec<u8> {
 }
 
 fn handle_sync_handshake(state: &AppState, body: &[u8]) -> Vec<u8> {
-    let request = serde_json::from_slice::<HandshakePeerRequest>(body)
-        .unwrap_or(HandshakePeerRequest { peer_id: None });
+    let request =
+        serde_json::from_slice::<HandshakePeerRequest>(body).unwrap_or(HandshakePeerRequest {
+            peer_id: None,
+            replay_nonce: None,
+        });
     let local_head = logbook_head_summary(state);
     let mut sync = state
         .sync
@@ -4675,8 +5039,11 @@ fn handle_sync_preview_pull(state: &AppState, body: &[u8]) -> Vec<u8> {
     ) {
         return response;
     }
-    let request = serde_json::from_slice::<HandshakePeerRequest>(body)
-        .unwrap_or(HandshakePeerRequest { peer_id: None });
+    let request =
+        serde_json::from_slice::<HandshakePeerRequest>(body).unwrap_or(HandshakePeerRequest {
+            peer_id: None,
+            replay_nonce: None,
+        });
     let Some(peer_id) = selected_peer_id(state, request.peer_id) else {
         return sync_no_peer_error(state, "sync.preview_pull.failed");
     };
@@ -4749,11 +5116,34 @@ fn handle_sync_pull_events(state: &AppState, body: &[u8]) -> Vec<u8> {
     ) {
         return response;
     }
-    let request = serde_json::from_slice::<HandshakePeerRequest>(body)
-        .unwrap_or(HandshakePeerRequest { peer_id: None });
-    let Some(peer_id) = selected_peer_id(state, request.peer_id) else {
+    let request =
+        serde_json::from_slice::<HandshakePeerRequest>(body).unwrap_or(HandshakePeerRequest {
+            peer_id: None,
+            replay_nonce: None,
+        });
+    let Some(peer) = selected_peer_record(state, request.peer_id) else {
         return sync_no_peer_error(state, "sync.pull.failed");
     };
+    let peer_id = peer.peer_id.clone();
+    let Some(replay_nonce) = request
+        .replay_nonce
+        .as_deref()
+        .filter(|value| !value.is_empty())
+    else {
+        return sync_lan_trust_error(
+            state,
+            "sync.pull.failed",
+            "trusted LAN pull requires a replay nonce",
+        );
+    };
+    if let Err(error) = state.lan_trust_store.authorize_peer(
+        peer.device_id,
+        state.logbook_id,
+        replay_nonce,
+        chrono::Utc::now(),
+    ) {
+        return sync_lan_trust_error(state, "sync.pull.failed", error.to_string());
+    }
 
     let _ = publish_gui_runtime(
         state,
@@ -5032,10 +5422,47 @@ fn handle_cloud_push(state: &AppState) -> Vec<u8> {
         None,
         None,
     );
-    let events = state
+    let all_events = state
         .proposal_runtime
         .block_on(state.store.list_events(state.logbook_id))
         .unwrap_or_default();
+    let offline_batch = match state.offline_queue.ready_event_batch(
+        state.logbook_id,
+        &all_events,
+        chrono::Utc::now(),
+    ) {
+        Ok(batch) => batch,
+        Err(error) => {
+            return json_response_with_status(
+                400,
+                &json!({"ok": false, "error": format!("offline queue is not readable: {error}")}),
+            )
+        }
+    };
+    for operation_id in &offline_batch.missing_local_event_operation_ids {
+        let _ = state.offline_queue.mark_user_action_required(
+            *operation_id,
+            "offline mutation has no matching local official event",
+            Some("missing_local_official_event".to_owned()),
+            chrono::Utc::now(),
+        );
+    }
+    for operation_id in &offline_batch.operation_ids {
+        let _ = state
+            .offline_queue
+            .mark_sending(*operation_id, chrono::Utc::now());
+    }
+    let queued_hashes = offline_batch
+        .events
+        .iter()
+        .map(|event| event.event_hash.clone())
+        .collect::<std::collections::HashSet<_>>();
+    let events = if offline_batch.events.is_empty() {
+        all_events
+    } else {
+        offline_batch.events.clone()
+    };
+    let pushed_event_count = events.len();
     let response = state
         .proposal_runtime
         .block_on(state.cloud_server.push_events(CloudPushEventsRequest {
@@ -5067,6 +5494,34 @@ fn handle_cloud_push(state: &AppState) -> Vec<u8> {
                     sync.warning_count += 1;
                 }
             }
+            if push.errors.is_empty() {
+                let _ = state
+                    .offline_queue
+                    .mark_accepted_by_event_hashes(&queued_hashes, chrono::Utc::now());
+            } else if push.status == ReplicationStatus::Diverged {
+                for operation_id in &offline_batch.operation_ids {
+                    let _ = state.offline_queue.mark_blocked(
+                        *operation_id,
+                        push.errors
+                            .first()
+                            .cloned()
+                            .unwrap_or_else(|| "cloud divergence detected".to_owned()),
+                        chrono::Utc::now(),
+                    );
+                }
+            } else {
+                for operation_id in &offline_batch.operation_ids {
+                    let _ = state.offline_queue.mark_user_action_required(
+                        *operation_id,
+                        push.errors
+                            .first()
+                            .cloned()
+                            .unwrap_or_else(|| "cloud push rejected".to_owned()),
+                        Some("cloud_push_rejected".to_owned()),
+                        chrono::Utc::now(),
+                    );
+                }
+            }
             let _ = publish_cloud_runtime(
                 state,
                 "sync.cloud.push.progress",
@@ -5087,9 +5542,25 @@ fn handle_cloud_push(state: &AppState) -> Vec<u8> {
                 Some(json!(&push)),
                 push.errors.first().cloned(),
             );
-            json_response(&json!({"ok": push.errors.is_empty(), "push": push}))
+            json_response(&json!({
+                "ok": push.errors.is_empty(),
+                "push": push,
+                "offline_push_batch": {
+                    "operation_ids": offline_batch.operation_ids,
+                    "event_count": pushed_event_count,
+                    "missing_local_event_operation_ids": offline_batch.missing_local_event_operation_ids
+                }
+            }))
         }
         Err(error) => {
+            for operation_id in &offline_batch.operation_ids {
+                let _ = state.offline_queue.record_transient_failure(
+                    *operation_id,
+                    error.to_string(),
+                    Some("cloud_push_failed".to_owned()),
+                    chrono::Utc::now(),
+                );
+            }
             let _ = publish_cloud_runtime(
                 state,
                 "sync.cloud.push.failed",
@@ -5296,17 +5767,18 @@ fn logbook_head_summary(state: &AppState) -> LogbookHeadSummary {
 }
 
 fn selected_peer_id(state: &AppState, requested: Option<String>) -> Option<String> {
+    selected_peer_record(state, requested).map(|peer| peer.peer_id)
+}
+
+fn selected_peer_record(state: &AppState, requested: Option<String>) -> Option<PeerRecord> {
     let sync = state
         .sync
         .lock()
         .expect("sync state mutex should not be poisoned");
-    requested.or_else(|| {
-        sync.registry
-            .list()
-            .into_iter()
-            .next()
-            .map(|peer| peer.peer_id)
-    })
+    let peers = sync.registry.list();
+    requested
+        .and_then(|requested| peers.iter().find(|peer| peer.peer_id == requested).cloned())
+        .or_else(|| peers.into_iter().next())
 }
 
 fn sync_no_peer_error(state: &AppState, event_type: &str) -> Vec<u8> {
@@ -5326,6 +5798,26 @@ fn sync_no_peer_error(state: &AppState, event_type: &str) -> Vec<u8> {
         Some("no discovered peers".to_owned()),
     );
     json_response_with_status(400, &json!({"ok": false, "error": "no discovered peers"}))
+}
+
+fn sync_lan_trust_error(state: &AppState, event_type: &str, error: impl Into<String>) -> Vec<u8> {
+    let error = error.into();
+    {
+        let mut sync = state
+            .sync
+            .lock()
+            .expect("sync state mutex should not be poisoned");
+        sync.warning_count += 1;
+    }
+    let _ = publish_gui_runtime(
+        state,
+        event_type,
+        RuntimeEventSeverity::Warn,
+        "LAN peer trust check failed",
+        None,
+        Some(error.clone()),
+    );
+    json_response_with_status(403, &json!({"ok": false, "error": error}))
 }
 
 fn cloud_auth(state: &AppState) -> Option<CloudAuth> {

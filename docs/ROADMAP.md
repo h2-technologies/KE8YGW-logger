@@ -30,12 +30,16 @@ wrapper is not the iOS client. See `V1_RELEASE_PLAN.md`,
 
 5. **Sync Foundation**
    - IPv4/IPv6 LAN discovery, peer registry, handshake, head comparison, safe preview pull and pull missing events over LAN, GUI Sync Status, tests.
-   - Status: implemented as protocol/model layer with MVP GUI/demo paths; real peer-to-peer HTTP transport remains high priority.
+   - Status: implemented as protocol/model layer with MVP GUI/demo paths. A
+     durable LAN trust store with single-use tokens, replay nonce checks, and
+     revocation is implemented in `ham-sync` and exposed through GUI endpoints;
+     real peer-to-peer HTTP transport and full pairing UX remain high priority.
 
 6. **Cloud/Self-Hosted Sync**
    - Sync server/client, pairing-token MVP auth, push/pull/preview via cloud, self-hosted config/Docker, GUI cloud settings, tests.
    - Status: implemented with durable SurrealDB support metadata and JSONL
-     official event storage for hosted/self-hosted server paths.
+     official event storage for hosted/self-hosted server paths. Desktop cloud
+     push is queue-aware for local official mutations.
 
 7. **POTA/SOTA Vertical Slice**
    - POTA/SOTA plugin model, activation events/proposals/projections, QSO activation links, activation GUI, ADIF fields, tests.
@@ -87,14 +91,25 @@ wrapper is not the iOS client. See `V1_RELEASE_PLAN.md`,
       and durable scheduler
       execution remain planned.
 
+17. **Offline Mutation Queue + Reconciliation Foundation**
+   - Versioned offline mutation envelopes, deterministic per-logbook queue
+     ordering, idempotency keys, dependency checks, retry/backoff state,
+     interrupted-send recovery, desktop/iOS mutation hooks, queue health
+     snapshots, structured conflict reports, and durable LAN trust state.
+   - Status: implemented as a v0.3 foundation. Full manual conflict-resolution
+     commands, release-device iOS background retry qualification, and real LAN
+     peer-to-peer HTTP transport remain planned.
+
 ## Dependency Order
 
 The dependency-ordered v1 critical path is tracked in
 `V1_EXECUTION_PLAN.md`. The next high-impact work should minimize future
 rewrites:
 
-1. Finish sync/offline reconciliation, LAN trust pairing, and conflict review
-   before unattended desktop/iOS operation.
+1. Finish the remaining sync/reconciliation hardening: real LAN peer-to-peer
+   HTTP transport, production pairing UX, manual conflict-resolution commands,
+   and release-device iOS background retry qualification before unattended
+   desktop/iOS operation.
 2. Complete provider runtime hardening and production provider qualification
    before release-candidate data migration or operations work.
 3. Build the remaining client surfaces on top of stable account, sync, provider,

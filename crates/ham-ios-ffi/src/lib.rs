@@ -30,7 +30,14 @@ use ham_plugin_sdk::{
     PROPOSAL_NET_SESSION_END, PROPOSAL_NET_SESSION_START, PROPOSAL_NET_TRAFFIC_CREATE,
     PROPOSAL_QSO_CREATE, PROPOSAL_QSO_DELETE,
 };
-use ham_sync::{CloudConnectionState, CloudSyncConfig, LocalPeerIdentity, SyncConfig};
+use ham_sync::{
+    CloudConnectionState, CloudSyncConfig, JsonOfflineMutationQueue, LocalPeerIdentity,
+    OfflineMutationEnvelope, OfflineMutationInput, SyncConfig, OFFLINE_OP_ACTIVATION_END,
+    OFFLINE_OP_ACTIVATION_START, OFFLINE_OP_NET_CHECKIN_CREATE, OFFLINE_OP_NET_SESSION_END,
+    OFFLINE_OP_NET_SESSION_START, OFFLINE_OP_NET_TRAFFIC_CREATE, OFFLINE_OP_QSO_CREATE,
+    OFFLINE_OP_QSO_DELETE, OFFLINE_OP_STATION_EQUIPMENT_CREATE, OFFLINE_OP_STATION_PROFILE_CREATE,
+    OFFLINE_OP_STATION_PROFILE_SELECT,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tokio::runtime::Runtime;
@@ -166,6 +173,12 @@ struct QsoListRequest {
 struct StationProfileCreateRequest {
     app_support_dir: String,
     #[serde(default)]
+    logbook_id: Option<Uuid>,
+    #[serde(default)]
+    device_id: Option<Uuid>,
+    #[serde(default)]
+    operation_id: Option<String>,
+    #[serde(default)]
     station_profile_id: Option<Uuid>,
     display_name: String,
     station_callsign: String,
@@ -189,6 +202,12 @@ struct StationProfileCreateRequest {
 struct StationEquipmentCreateRequest {
     app_support_dir: String,
     #[serde(default)]
+    logbook_id: Option<Uuid>,
+    #[serde(default)]
+    device_id: Option<Uuid>,
+    #[serde(default)]
+    operation_id: Option<String>,
+    #[serde(default)]
     equipment_id: Option<Uuid>,
     equipment_type: String,
     display_name: String,
@@ -207,7 +226,21 @@ struct StationEquipmentCreateRequest {
 #[derive(Debug, Deserialize)]
 struct StationSelectProfileRequest {
     app_support_dir: String,
+    #[serde(default)]
+    logbook_id: Option<Uuid>,
+    #[serde(default)]
+    device_id: Option<Uuid>,
+    #[serde(default)]
+    operation_id: Option<String>,
     station_profile_id: Uuid,
+}
+
+#[derive(Debug, Deserialize)]
+struct SyncSnapshotRequest {
+    #[serde(default)]
+    app_support_dir: Option<String>,
+    #[serde(default)]
+    logbook_id: Option<Uuid>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -405,7 +438,9 @@ fn dispatch_call(call: BridgeCall, correlation_id: Uuid) -> Result<Value, Bridge
         "station.book" => station_book_command_payload(payload),
         "provider.status" => provider_status_payload(),
         "map.snapshot" => map_snapshot_payload(),
-        "sync.snapshot" => sync_snapshot_payload(),
+        "sync.snapshot" => sync_snapshot_command(payload),
+        "sync.offline_queue.snapshot" => sync_snapshot_command(payload),
+        "sync.offline_queue.recover" => sync_offline_queue_recover_command(payload),
         "diagnostics.snapshot" => diagnostics_command_payload(payload),
         "settings.get" => settings_get_command(payload),
         "settings.create_default" => settings_create_default_command(payload),
@@ -439,19 +474,33 @@ fn dispatch_call(call: BridgeCall, correlation_id: Uuid) -> Result<Value, Bridge
         "qso.create" => create_qso_command(payload, correlation_id),
         "qso.delete" => delete_qso_command(payload, correlation_id),
         "qso.list" => list_qsos_command(payload),
-        "station.profile.create" => station_profile_create_command(payload),
-        "station.equipment.create" => station_equipment_create_command(payload),
-        "station.profile.select" => station_profile_select_command(payload),
-        "activation.start" => domain_proposal_command(payload, PROPOSAL_ACTIVATION_START, None),
-        "activation.end" => {
-            domain_proposal_command(payload, PROPOSAL_ACTIVATION_END, Some("activation_id"))
+        "station.profile.create" => station_profile_create_command(payload, correlation_id),
+        "station.equipment.create" => station_equipment_create_command(payload, correlation_id),
+        "station.profile.select" => station_profile_select_command(payload, correlation_id),
+        "activation.start" => {
+            domain_proposal_command(payload, PROPOSAL_ACTIVATION_START, None, correlation_id)
         }
-        "net.session.start" => domain_proposal_command(payload, PROPOSAL_NET_SESSION_START, None),
-        "net.session.end" => {
-            domain_proposal_command(payload, PROPOSAL_NET_SESSION_END, Some("net_session_id"))
+        "activation.end" => domain_proposal_command(
+            payload,
+            PROPOSAL_ACTIVATION_END,
+            Some("activation_id"),
+            correlation_id,
+        ),
+        "net.session.start" => {
+            domain_proposal_command(payload, PROPOSAL_NET_SESSION_START, None, correlation_id)
         }
-        "net.checkin.create" => domain_proposal_command(payload, PROPOSAL_NET_CHECKIN_CREATE, None),
-        "net.traffic.create" => domain_proposal_command(payload, PROPOSAL_NET_TRAFFIC_CREATE, None),
+        "net.session.end" => domain_proposal_command(
+            payload,
+            PROPOSAL_NET_SESSION_END,
+            Some("net_session_id"),
+            correlation_id,
+        ),
+        "net.checkin.create" => {
+            domain_proposal_command(payload, PROPOSAL_NET_CHECKIN_CREATE, None, correlation_id)
+        }
+        "net.traffic.create" => {
+            domain_proposal_command(payload, PROPOSAL_NET_TRAFFIC_CREATE, None, correlation_id)
+        }
         command => Err(BridgeFault::unsupported_command(command)),
     }
 }
@@ -794,17 +843,94 @@ fn map_snapshot_payload() -> Result<Value, BridgeFault> {
 }
 
 fn sync_snapshot_payload() -> Result<Value, BridgeFault> {
+    sync_snapshot_for_support(None, default_logbook_id())
+}
+
+fn sync_snapshot_command(payload: Value) -> Result<Value, BridgeFault> {
+    let request: SyncSnapshotRequest = serde_json::from_value(payload).map_err(|error| {
+        BridgeFault::invalid_json(format!("invalid sync snapshot payload: {error}"))
+    })?;
+    sync_snapshot_for_support(
+        request.app_support_dir.as_deref(),
+        request.logbook_id.unwrap_or_else(default_logbook_id),
+    )
+}
+
+fn sync_offline_queue_recover_command(payload: Value) -> Result<Value, BridgeFault> {
+    let request: SyncSnapshotRequest = serde_json::from_value(payload).map_err(|error| {
+        BridgeFault::invalid_json(format!("invalid sync recovery payload: {error}"))
+    })?;
+    let app_support_dir = request
+        .app_support_dir
+        .as_deref()
+        .ok_or_else(|| BridgeFault::invalid_input("app_support_dir is required"))?;
+    let queue = offline_queue(app_support_dir)?;
+    let now = Utc::now();
+    let recovered_count = queue
+        .recover_interrupted_writes(now)
+        .map_err(|error| BridgeFault::storage(error.to_string()))?;
+    let mut snapshot = sync_snapshot_for_support(
+        Some(app_support_dir),
+        request.logbook_id.unwrap_or_else(default_logbook_id),
+    )?;
+    snapshot["recovered_count"] = json!(recovered_count);
+    Ok(snapshot)
+}
+
+fn sync_snapshot_for_support(
+    app_support_dir: Option<&str>,
+    logbook_id: Uuid,
+) -> Result<Value, BridgeFault> {
+    let queue_snapshot = match app_support_dir {
+        Some(dir) => {
+            let queue = offline_queue(dir)?;
+            Some(
+                queue
+                    .load_snapshot(Utc::now())
+                    .map_err(|error| BridgeFault::storage(error.to_string()))?,
+            )
+        }
+        None => None,
+    };
+    let pending_events = match app_support_dir {
+        Some(dir) => {
+            let runtime =
+                Runtime::new().map_err(|error| BridgeFault::internal(error.to_string()))?;
+            let store = event_store(dir)?;
+            runtime
+                .block_on(store.list_events(logbook_id))
+                .map_err(|error| BridgeFault::storage(error.to_string()))?
+                .len()
+        }
+        None => 0,
+    };
+    let pending_changes = queue_snapshot
+        .as_ref()
+        .map(|snapshot| {
+            snapshot.health.pending
+                + snapshot.health.retrying
+                + snapshot.health.sending
+                + snapshot.health.blocked
+                + snapshot.health.failed
+                + snapshot.health.user_action_required
+        })
+        .unwrap_or(0);
     Ok(json!({
         "config": SyncConfig::default(),
         "identity": LocalPeerIdentity::new("KE8YGW Logger iOS", None),
         "cloud_config": CloudSyncConfig::default(),
         "cloud_connection_state": CloudConnectionState::Disconnected,
         "sync_protocol_version": ham_sync::PROTOCOL_VERSION,
-        "pending_changes": 0,
-        "pending_events": 0,
-        "offline_queue": Vec::<Value>::new(),
+        "pending_changes": pending_changes,
+        "pending_events": pending_events,
+        "offline_queue": queue_snapshot,
         "conflicts": Vec::<Value>::new(),
-        "history": Vec::<Value>::new()
+        "history": Vec::<Value>::new(),
+        "retry_policy": {
+            "network_required": true,
+            "background_retry_supported": true,
+            "permanent_user_action_states": ["blocked", "failed", "user_action_required"]
+        }
     }))
 }
 
@@ -960,6 +1086,15 @@ fn create_qso_command(payload: Value, correlation_id: Uuid) -> Result<Value, Bri
 
         let mut qso_payload = normalize_qso_payload(request.qso, &operation_id)?;
         station_book.apply_defaults_to_qso_payload(&mut qso_payload);
+        let queued = enqueue_ios_mutation(
+            &request.app_support_dir,
+            logbook_id,
+            device_id,
+            OFFLINE_OP_QSO_CREATE,
+            qso_payload.clone(),
+            &operation_id,
+            correlation_id,
+        )?;
 
         let proposal = ProposalEnvelope::new(
             PROPOSAL_QSO_CREATE,
@@ -978,19 +1113,31 @@ fn create_qso_command(payload: Value, correlation_id: Uuid) -> Result<Value, Bri
             proposal,
         )
         .await
-        .map_err(|error| BridgeFault::domain(error.to_string()))?;
+        .map_err(|error| {
+            mark_ios_user_action_required(
+                &request.app_support_dir,
+                &queued,
+                error.to_string(),
+                "domain_validation_failed",
+            );
+            BridgeFault::domain(error.to_string())
+        })?;
+        let offline_mutation =
+            record_ios_official_event(&request.app_support_dir, &queued, &outcome.official_event)?;
         let projection = store
             .rebuild_projections(logbook_id)
             .await
             .map_err(|error| BridgeFault::storage(error.to_string()))?;
-        qso_mutation_result(
+        let mut result = qso_mutation_result(
             &store,
             logbook_id,
             &projection,
             &outcome.official_event,
             false,
         )
-        .await
+        .await?;
+        result["offline_mutation"] = json!(offline_mutation);
+        Ok(result)
     })
 }
 
@@ -1011,6 +1158,15 @@ fn delete_qso_command(payload: Value, correlation_id: Uuid) -> Result<Value, Bri
             "reason": "ios_delete",
             "client_operation_id": operation_id
         });
+        let queued = enqueue_ios_mutation(
+            &request.app_support_dir,
+            logbook_id,
+            device_id,
+            OFFLINE_OP_QSO_DELETE,
+            payload.clone(),
+            &operation_id,
+            correlation_id,
+        )?;
         let proposal = ProposalEnvelope::new(
             PROPOSAL_QSO_DELETE,
             logbook_id,
@@ -1028,19 +1184,31 @@ fn delete_qso_command(payload: Value, correlation_id: Uuid) -> Result<Value, Bri
             proposal,
         )
         .await
-        .map_err(|error| BridgeFault::domain(error.to_string()))?;
+        .map_err(|error| {
+            mark_ios_user_action_required(
+                &request.app_support_dir,
+                &queued,
+                error.to_string(),
+                "domain_validation_failed",
+            );
+            BridgeFault::domain(error.to_string())
+        })?;
+        let offline_mutation =
+            record_ios_official_event(&request.app_support_dir, &queued, &outcome.official_event)?;
         let projection = store
             .rebuild_projections(logbook_id)
             .await
             .map_err(|error| BridgeFault::storage(error.to_string()))?;
-        qso_mutation_result(
+        let mut result = qso_mutation_result(
             &store,
             logbook_id,
             &projection,
             &outcome.official_event,
             false,
         )
-        .await
+        .await?;
+        result["offline_mutation"] = json!(offline_mutation);
+        Ok(result)
     })
 }
 
@@ -1076,7 +1244,10 @@ fn list_qsos_command(payload: Value) -> Result<Value, BridgeFault> {
     })
 }
 
-fn station_profile_create_command(payload: Value) -> Result<Value, BridgeFault> {
+fn station_profile_create_command(
+    payload: Value,
+    correlation_id: Uuid,
+) -> Result<Value, BridgeFault> {
     let request: StationProfileCreateRequest =
         serde_json::from_value(payload).map_err(|error| {
             BridgeFault::invalid_json(format!("invalid station.profile.create payload: {error}"))
@@ -1087,26 +1258,49 @@ fn station_profile_create_command(payload: Value) -> Result<Value, BridgeFault> 
         .map_err(|error| BridgeFault::storage(error.to_string()))?;
     ensure_station_book_seeded(&store, &mut book)?;
 
-    if let Some(profile_id) = request.station_profile_id {
-        if let Some(existing) = book
-            .profiles
-            .iter()
-            .find(|profile| profile.station_profile_id == profile_id)
-            .cloned()
-        {
-            return Ok(json!({
-                "profile": existing,
-                "station_book": book,
-                "idempotent": true,
-                "projection_source": "rust"
-            }));
-        }
+    let profile_id = request.station_profile_id.unwrap_or_else(Uuid::new_v4);
+    if let Some(existing) = book
+        .profiles
+        .iter()
+        .find(|profile| profile.station_profile_id == profile_id)
+        .cloned()
+    {
+        return Ok(json!({
+            "profile": existing,
+            "station_book": book,
+            "idempotent": true,
+            "projection_source": "rust"
+        }));
     }
 
+    let logbook_id = request.logbook_id.unwrap_or_else(default_logbook_id);
+    let device_id = request.device_id.unwrap_or_else(Uuid::new_v4);
+    let operation_id = request
+        .operation_id
+        .clone()
+        .unwrap_or_else(|| profile_id.to_string());
+    let queued = enqueue_ios_mutation(
+        &request.app_support_dir,
+        logbook_id,
+        device_id,
+        OFFLINE_OP_STATION_PROFILE_CREATE,
+        json!({
+            "station_profile_id": profile_id,
+            "display_name": request.display_name.clone(),
+            "station_callsign": request.station_callsign.clone(),
+            "operator_callsign": request.operator_callsign.clone(),
+            "profile_type": request.profile_type.clone(),
+            "default_grid": request.default_grid.clone(),
+            "default_qth": request.default_qth.clone(),
+            "default_power_watts": request.default_power_watts,
+            "notes": request.notes.clone(),
+            "active": request.active
+        }),
+        &operation_id,
+        correlation_id,
+    )?;
     let mut profile = StationProfile::new(request.display_name, request.station_callsign);
-    if let Some(profile_id) = request.station_profile_id {
-        profile.station_profile_id = profile_id;
-    }
+    profile.station_profile_id = profile_id;
     profile.operator_callsign = request.operator_callsign;
     profile.default_grid = request.default_grid;
     profile.default_qth = request.default_qth;
@@ -1115,19 +1309,30 @@ fn station_profile_create_command(payload: Value) -> Result<Value, BridgeFault> 
     profile.tags = request.profile_type.into_iter().collect();
     profile.active = request.active.unwrap_or(book.profiles.is_empty());
     let created = book.create_profile(profile);
-    store
-        .save(&book)
-        .map_err(|error| BridgeFault::storage(error.to_string()))?;
+    store.save(&book).map_err(|error| {
+        mark_ios_user_action_required(
+            &request.app_support_dir,
+            &queued,
+            error.to_string(),
+            "station_support_save_failed",
+        );
+        BridgeFault::storage(error.to_string())
+    })?;
+    let offline_mutation = mark_ios_mutation_accepted(&request.app_support_dir, &queued)?;
 
     Ok(json!({
         "profile": created,
         "station_book": book,
+        "offline_mutation": offline_mutation,
         "idempotent": false,
         "projection_source": "rust"
     }))
 }
 
-fn station_equipment_create_command(payload: Value) -> Result<Value, BridgeFault> {
+fn station_equipment_create_command(
+    payload: Value,
+    correlation_id: Uuid,
+) -> Result<Value, BridgeFault> {
     let request: StationEquipmentCreateRequest =
         serde_json::from_value(payload).map_err(|error| {
             BridgeFault::invalid_json(format!("invalid station.equipment.create payload: {error}"))
@@ -1138,46 +1343,78 @@ fn station_equipment_create_command(payload: Value) -> Result<Value, BridgeFault
         .map_err(|error| BridgeFault::storage(error.to_string()))?;
     ensure_station_book_seeded(&store, &mut book)?;
 
-    if let Some(equipment_id) = request.equipment_id {
-        if let Some(existing) = book
-            .equipment
-            .iter()
-            .find(|item| item.equipment_id == equipment_id)
-            .cloned()
-        {
-            return Ok(json!({
-                "equipment": existing,
-                "station_book": book,
-                "idempotent": true,
-                "projection_source": "rust"
-            }));
-        }
+    let equipment_id = request.equipment_id.unwrap_or_else(Uuid::new_v4);
+    if let Some(existing) = book
+        .equipment
+        .iter()
+        .find(|item| item.equipment_id == equipment_id)
+        .cloned()
+    {
+        return Ok(json!({
+            "equipment": existing,
+            "station_book": book,
+            "idempotent": true,
+            "projection_source": "rust"
+        }));
     }
 
+    let logbook_id = request.logbook_id.unwrap_or_else(default_logbook_id);
+    let device_id = request.device_id.unwrap_or_else(Uuid::new_v4);
+    let operation_id = request
+        .operation_id
+        .clone()
+        .unwrap_or_else(|| equipment_id.to_string());
+    let queued = enqueue_ios_mutation(
+        &request.app_support_dir,
+        logbook_id,
+        device_id,
+        OFFLINE_OP_STATION_EQUIPMENT_CREATE,
+        json!({
+            "equipment_id": equipment_id,
+            "equipment_type": request.equipment_type.clone(),
+            "display_name": request.display_name.clone(),
+            "manufacturer": request.manufacturer.clone(),
+            "model": request.model.clone(),
+            "serial_number": request.serial_number.clone(),
+            "capabilities": request.capabilities.clone(),
+            "notes": request.notes.clone()
+        }),
+        &operation_id,
+        correlation_id,
+    )?;
     let equipment_type = parse_equipment_type(&request.equipment_type)?;
     let mut item = EquipmentItem::new(equipment_type, request.display_name);
-    if let Some(equipment_id) = request.equipment_id {
-        item.equipment_id = equipment_id;
-    }
+    item.equipment_id = equipment_id;
     item.manufacturer = request.manufacturer;
     item.model = request.model;
     item.serial_number = request.serial_number;
     item.capabilities = request.capabilities;
     item.notes = request.notes;
     let created = book.create_equipment(item);
-    store
-        .save(&book)
-        .map_err(|error| BridgeFault::storage(error.to_string()))?;
+    store.save(&book).map_err(|error| {
+        mark_ios_user_action_required(
+            &request.app_support_dir,
+            &queued,
+            error.to_string(),
+            "station_support_save_failed",
+        );
+        BridgeFault::storage(error.to_string())
+    })?;
+    let offline_mutation = mark_ios_mutation_accepted(&request.app_support_dir, &queued)?;
 
     Ok(json!({
         "equipment": created,
         "station_book": book,
+        "offline_mutation": offline_mutation,
         "idempotent": false,
         "projection_source": "rust"
     }))
 }
 
-fn station_profile_select_command(payload: Value) -> Result<Value, BridgeFault> {
+fn station_profile_select_command(
+    payload: Value,
+    correlation_id: Uuid,
+) -> Result<Value, BridgeFault> {
     let request: StationSelectProfileRequest =
         serde_json::from_value(payload).map_err(|error| {
             BridgeFault::invalid_json(format!("invalid station.profile.select payload: {error}"))
@@ -1187,14 +1424,45 @@ fn station_profile_select_command(payload: Value) -> Result<Value, BridgeFault> 
         .load()
         .map_err(|error| BridgeFault::storage(error.to_string()))?;
     ensure_station_book_seeded(&store, &mut book)?;
+    let logbook_id = request.logbook_id.unwrap_or_else(default_logbook_id);
+    let device_id = request.device_id.unwrap_or_else(Uuid::new_v4);
+    let operation_id = request
+        .operation_id
+        .clone()
+        .unwrap_or_else(|| request.station_profile_id.to_string());
+    let queued = enqueue_ios_mutation(
+        &request.app_support_dir,
+        logbook_id,
+        device_id,
+        OFFLINE_OP_STATION_PROFILE_SELECT,
+        json!({"station_profile_id": request.station_profile_id}),
+        &operation_id,
+        correlation_id,
+    )?;
     book.select_profile(request.station_profile_id)
-        .map_err(|error| BridgeFault::domain(error.to_string()))?;
-    store
-        .save(&book)
-        .map_err(|error| BridgeFault::storage(error.to_string()))?;
+        .map_err(|error| {
+            mark_ios_user_action_required(
+                &request.app_support_dir,
+                &queued,
+                error.to_string(),
+                "station_profile_invalid",
+            );
+            BridgeFault::domain(error.to_string())
+        })?;
+    store.save(&book).map_err(|error| {
+        mark_ios_user_action_required(
+            &request.app_support_dir,
+            &queued,
+            error.to_string(),
+            "station_support_save_failed",
+        );
+        BridgeFault::storage(error.to_string())
+    })?;
+    let offline_mutation = mark_ios_mutation_accepted(&request.app_support_dir, &queued)?;
 
     Ok(json!({
         "station_book": book,
+        "offline_mutation": offline_mutation,
         "projection_source": "rust"
     }))
 }
@@ -1203,6 +1471,7 @@ fn domain_proposal_command(
     payload: Value,
     proposal_type: &str,
     entity_id_field: Option<&str>,
+    correlation_id: Uuid,
 ) -> Result<Value, BridgeFault> {
     let runtime = Runtime::new().map_err(|error| BridgeFault::internal(error.to_string()))?;
     runtime.block_on(async move {
@@ -1226,6 +1495,21 @@ fn domain_proposal_command(
             .and_then(Value::as_str)
             .and_then(|value| Uuid::parse_str(value).ok());
         object.insert("source".to_owned(), json!("ios/native"));
+        let external_operation_id = object
+            .get("operation_id")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+            .unwrap_or_else(|| correlation_id.to_string());
+        let proposal_payload = Value::Object(object);
+        let queued = enqueue_ios_mutation(
+            &app_support_dir,
+            logbook_id,
+            device_id,
+            ios_offline_operation_type(proposal_type),
+            proposal_payload.clone(),
+            &external_operation_id,
+            correlation_id,
+        )?;
 
         let store = event_store(&app_support_dir)?;
         let proposal = ProposalEnvelope::new(
@@ -1236,7 +1520,7 @@ fn domain_proposal_command(
             device_id,
             IOS_PLUGIN_ID,
             1,
-            Value::Object(object),
+            proposal_payload,
         );
         let outcome = submit_proposal(
             &store,
@@ -1245,7 +1529,17 @@ fn domain_proposal_command(
             proposal,
         )
         .await
-        .map_err(|error| BridgeFault::domain(error.to_string()))?;
+        .map_err(|error| {
+            mark_ios_user_action_required(
+                &app_support_dir,
+                &queued,
+                error.to_string(),
+                "domain_validation_failed",
+            );
+            BridgeFault::domain(error.to_string())
+        })?;
+        let offline_mutation =
+            record_ios_official_event(&app_support_dir, &queued, &outcome.official_event)?;
         let pending_events = store
             .list_events(logbook_id)
             .await
@@ -1254,6 +1548,7 @@ fn domain_proposal_command(
         Ok(json!({
             "accepted": true,
             "official_event": outcome.official_event,
+            "offline_mutation": offline_mutation,
             "projection": {
                 "source": "rust",
                 "schema_version": BRIDGE_SCHEMA_VERSION,
@@ -1400,6 +1695,81 @@ fn settings_store(
 fn event_store(app_support_dir: &str) -> Result<JsonlLogbookEventStore, BridgeFault> {
     JsonlLogbookEventStore::open(rust_support_dir(app_support_dir)?.join("official-events.jsonl"))
         .map_err(|error| BridgeFault::storage(error.to_string()))
+}
+
+fn offline_queue(app_support_dir: &str) -> Result<JsonOfflineMutationQueue, BridgeFault> {
+    Ok(JsonOfflineMutationQueue::new(
+        rust_support_dir(app_support_dir)?.join("offline-mutations.json"),
+    ))
+}
+
+fn enqueue_ios_mutation(
+    app_support_dir: &str,
+    logbook_id: Uuid,
+    device_id: Uuid,
+    operation_type: &str,
+    payload: Value,
+    external_operation_id: &str,
+    correlation_id: Uuid,
+) -> Result<OfflineMutationEnvelope, BridgeFault> {
+    let queue = offline_queue(app_support_dir)?;
+    let operation_id = Uuid::parse_str(external_operation_id).unwrap_or(correlation_id);
+    queue
+        .enqueue_input(
+            OfflineMutationInput::new(logbook_id, device_id, device_id, operation_type, payload)
+                .with_operation_id(operation_id)
+                .with_correlation_id(correlation_id)
+                .with_idempotency_key(format!("{operation_type}:{external_operation_id}")),
+            Utc::now(),
+        )
+        .map_err(|error| BridgeFault::storage(error.to_string()))
+}
+
+fn record_ios_official_event(
+    app_support_dir: &str,
+    queued: &OfflineMutationEnvelope,
+    event: &ham_core::CoreEventEnvelope,
+) -> Result<OfflineMutationEnvelope, BridgeFault> {
+    offline_queue(app_support_dir)?
+        .record_local_event(queued.operation_id, event, Utc::now())
+        .map_err(|error| BridgeFault::storage(error.to_string()))
+}
+
+fn mark_ios_user_action_required(
+    app_support_dir: &str,
+    queued: &OfflineMutationEnvelope,
+    reason: impl Into<String>,
+    error_code: impl Into<String>,
+) {
+    if let Ok(queue) = offline_queue(app_support_dir) {
+        let _ = queue.mark_user_action_required(
+            queued.operation_id,
+            reason.into(),
+            Some(error_code.into()),
+            Utc::now(),
+        );
+    }
+}
+
+fn mark_ios_mutation_accepted(
+    app_support_dir: &str,
+    queued: &OfflineMutationEnvelope,
+) -> Result<OfflineMutationEnvelope, BridgeFault> {
+    offline_queue(app_support_dir)?
+        .mark_accepted(queued.operation_id, Utc::now())
+        .map_err(|error| BridgeFault::storage(error.to_string()))
+}
+
+fn ios_offline_operation_type(proposal_type: &str) -> &'static str {
+    match proposal_type {
+        PROPOSAL_ACTIVATION_START => OFFLINE_OP_ACTIVATION_START,
+        PROPOSAL_ACTIVATION_END => OFFLINE_OP_ACTIVATION_END,
+        PROPOSAL_NET_SESSION_START => OFFLINE_OP_NET_SESSION_START,
+        PROPOSAL_NET_SESSION_END => OFFLINE_OP_NET_SESSION_END,
+        PROPOSAL_NET_CHECKIN_CREATE => OFFLINE_OP_NET_CHECKIN_CREATE,
+        PROPOSAL_NET_TRAFFIC_CREATE => OFFLINE_OP_NET_TRAFFIC_CREATE,
+        _ => "ios.domain.mutation",
+    }
 }
 
 fn rust_support_dir(app_support_dir: &str) -> Result<PathBuf, BridgeFault> {
@@ -1798,6 +2168,15 @@ mod tests {
             first["data"]["qso"]["qso_id"],
             second["data"]["qso"]["qso_id"]
         );
+        let snapshot = call_json(json!({
+            "command": "sync.snapshot",
+            "payload": {
+                "app_support_dir": app_support_dir.to_string_lossy()
+            }
+        }));
+        assert_eq!(snapshot["ok"], true);
+        assert_eq!(snapshot["data"]["offline_queue"]["health"]["pending"], 1);
+        assert_eq!(snapshot["data"]["offline_queue"]["health"]["total"], 1);
         let _ = std::fs::remove_dir_all(app_support_dir);
     }
 
@@ -1822,7 +2201,16 @@ mod tests {
 
         assert_eq!(first["ok"], true);
         assert_eq!(first["data"]["profile"]["station_callsign"], "K1ABC/P");
+        assert_eq!(first["data"]["offline_mutation"]["status"], "accepted");
         assert_eq!(second["data"]["idempotent"], true);
+        let snapshot = call_json(json!({
+            "command": "sync.snapshot",
+            "payload": {
+                "app_support_dir": app_support_dir.to_string_lossy()
+            }
+        }));
+        assert_eq!(snapshot["ok"], true);
+        assert_eq!(snapshot["data"]["offline_queue"]["health"]["accepted"], 1);
         let _ = std::fs::remove_dir_all(app_support_dir);
     }
 

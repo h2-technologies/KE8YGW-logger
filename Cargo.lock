@@ -2236,7 +2236,7 @@ dependencies = [
 
 [[package]]
 name = "ham-api-contract"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -2244,7 +2244,7 @@ dependencies = [
 
 [[package]]
 name = "ham-cli"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "ham-core",
  "ham-plugin-sdk",
@@ -2254,7 +2254,7 @@ dependencies = [
 
 [[package]]
 name = "ham-core"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "async-trait",
  "chrono",
@@ -2272,7 +2272,7 @@ dependencies = [
 
 [[package]]
 name = "ham-desktop"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -2280,7 +2280,7 @@ dependencies = [
 
 [[package]]
 name = "ham-gui"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "async-trait",
  "chrono",
@@ -2295,7 +2295,7 @@ dependencies = [
 
 [[package]]
 name = "ham-ios-ffi"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "ham-core",
@@ -2309,7 +2309,7 @@ dependencies = [
 
 [[package]]
 name = "ham-plugin-sdk"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "serde",
@@ -2319,7 +2319,7 @@ dependencies = [
 
 [[package]]
 name = "ham-server"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "ham-api-contract",
@@ -2338,7 +2338,7 @@ dependencies = [
 
 [[package]]
 name = "ham-sync"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "ham-core",
@@ -2353,7 +2353,7 @@ dependencies = [
 
 [[package]]
 name = "ham-sync-server"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "ham-api-contract",
  "ham-sync",
@@ -3106,7 +3106,7 @@ dependencies = [
 
 [[package]]
 name = "ke8ygw-logger-desktop"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "ham-desktop",
  "rfd",

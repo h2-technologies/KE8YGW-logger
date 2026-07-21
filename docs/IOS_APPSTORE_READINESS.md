@@ -14,8 +14,9 @@ web and desktop on November 24, 2026.
 - No PWA, pinned web app, or Home Screen install positioning.
 
 Current repository status: native SwiftUI source, Rust FFI, Xcode project files,
-build scripts, and simulator CI are present. Signing, provisioning, TestFlight,
-App Store metadata, privacy manifest, physical-device validation, and full v1
+build scripts, simulator CI, and Rust-owned offline queue commands are present.
+Signing, provisioning, TestFlight, App Store metadata, privacy manifest,
+physical-device validation, release-safe background retry, and full v1
 offline/sync/provider qualification remain incomplete.
 
 ## Bundle and Signing

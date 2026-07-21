@@ -8,7 +8,7 @@ sync, with room for emergency communications, net control, and contesting.
 
 The locked v1 release target is November 24, 2026. v1 includes hosted web,
 native iOS, and signed desktop clients for Windows, macOS, and broad Linux
-distribution support. The current workspace version is `0.2.0`; that value in
+distribution support. The current workspace version is `0.3.0`; that value in
 `Cargo.toml` is the canonical product version until a release branch or tag
 updates it.
 
@@ -21,6 +21,8 @@ passes should start with these documents:
   system model, MVP scope, and crate migration notes.
 - [v0.2 Release Plan](docs/V0_2_RELEASE_PLAN.md): almost-v1 beta checklist,
   acceptance criteria, risks, and v1 delta.
+- [v0.3 Release Plan](docs/V0_3_RELEASE_PLAN.md): offline-sync queue/trust
+  foundation, validation, and remaining v1 sync gaps.
 - [v1 Release Plan](docs/V1_RELEASE_PLAN.md): November 24, 2026 hosted web,
   native iOS, Windows/macOS/Linux desktop, shared core/API, sync, providers,
   contesting, EmComm, and release qualification scope.
@@ -121,7 +123,7 @@ passes should start with these documents:
 
 ## v0.2 Almost-v1 Beta Status
 
-The current `0.2.0` workspace is the v1 foundation baseline, not the complete
+The current `0.3.0` workspace is the offline-sync v1 foundation baseline, not the complete
 v1 product. The `ham-server` crate exposes `/api/v1` hosted routes, one-time
 server-admin bootstrap, personal/public/self-hosted configuration, invite-only
 registration by default, administrator open/disabled registration switches,
@@ -830,11 +832,12 @@ Event counts are hints only. If head hashes differ and ancestry has not been
 exchanged, the MVP treats the result as unknown or diverged until the later
 replication protocol can compare event ancestry safely.
 
-The GUI Sync Status panel can start/stop discovery, refresh peers, handshake with
-a selected peer, preview a pull, pull missing events, and copy the local sync
-identity. The current implementation keeps peers in memory and includes a demo
-refresh path for local testing while the multicast service is finalized for real
-multi-device runs.
+The GUI Sync Status panel can start/stop discovery, refresh peers, handshake
+with a selected peer, preview a pull, trust or revoke a selected peer, recover
+the offline queue, pull missing events from trusted peers, and copy the local
+sync identity. The current implementation keeps peers in memory and includes a
+demo refresh path for local testing while real peer-to-peer HTTP transport is
+still pending.
 
 Runtime events include:
 
@@ -846,9 +849,10 @@ Runtime events include:
 - `sync.handshake.accepted`
 - `sync.handshake.error`
 
-Security limitations for MVP: peers are untrusted, no destructive commands are
-accepted, automatic replication is disabled, and authentication/trust pairing is
-a TODO before unattended sync.
+Security limitations for MVP: peers are untrusted until they pass the durable
+LAN trust store, no destructive commands are accepted, automatic replication is
+disabled, and the production pairing UX plus real peer-to-peer HTTP transport
+remain TODOs before unattended LAN sync.
 
 ## Safe LAN Event Replication
 
@@ -890,8 +894,33 @@ rebuilds QSO projections.
 
 If chains diverge, the MVP does not merge automatically. Divergence is stored in
 sync UI state, shown in the Sync Status panel, and emitted as
-`sync.divergence.detected`. Branch review, conflict resolution, signed events,
-device pairing, and cloud relay support are intentionally deferred.
+`sync.divergence.detected`. Structured conflict reports are exposed for client
+review, but branch review UI, manual conflict-resolution commands, signed
+events, and real LAN peer-to-peer transport are still deferred.
+
+## Durable Offline Queue And LAN Trust
+
+`ham-sync` now defines the v0.3 offline mutation queue used by desktop and iOS
+mutation paths. Queue entries are persisted before local acknowledgment and
+record operation/device/client/logbook IDs, deterministic per-logbook order,
+idempotency keys, dependencies, retry/backoff state, queue health, and the local
+official event hash when a mutation creates official history.
+
+Desktop queues QSO, activation, Net Control, and station-profile support-state
+mutations. iOS queues QSO, activation, Net Control, station-profile, and
+equipment commands through the Rust FFI bridge. Station/equipment data remains
+support state rather than official synced history.
+
+The GUI cloud push path uses queued official events when available and marks
+queue entries accepted only after the cloud/self-hosted sync receiver accepts or
+ignores the matching event hashes. Interrupted sends recover to retrying on
+startup or through the Sync panel recovery action.
+
+LAN trust records are durable support state. Pairing tokens require explicit
+operator approval, expire quickly, are single use, and are stored only as
+hashes. Trusted devices are scoped to logbooks, replay nonces are rejected, and
+revocation is immediate. Mutating LAN pull rejects untrusted, revoked,
+wrong-logbook, or replayed peers before appending remote official events.
 
 Replication runtime events include:
 
@@ -913,13 +942,15 @@ To try the current GUI workflow locally:
 2. Open the Dashboard Sync Status panel.
 3. Click `Refresh Peers` to add the demo LAN peer.
 4. Click `Preview Pull` to inspect available remote events.
-5. Click `Pull Missing` to append verified missing events and rebuild QSOs.
+5. Click `Trust Selected` to create and consume a one-time local trust token for
+   the selected demo peer.
+6. Click `Pull Missing` to append verified missing events and rebuild QSOs.
 
 For two real local instances, run two GUI processes on different ports and set
 separate `HAM_PLATFORM_EVENT_LOG` paths so they do not share the same JSONL
-store. Real peer-to-peer HTTP transport and trust pairing are the next sync
-tasks; the protocol messages added here are designed to be reused by that
-transport.
+store. Real peer-to-peer HTTP transport and production pairing UX are the next
+sync tasks; the queue/trust/protocol messages added here are designed to be
+reused by that transport.
 
 ## Cloud Relay And Self-Hosted Sync
 
@@ -1219,8 +1250,8 @@ just release
 Tagged releases are automated from git tags matching `v*.*.*`, for example:
 
 ```powershell
-git tag v0.2.0
-git push origin v0.2.0
+git tag v0.3.0
+git push origin v0.3.0
 ```
 
 The release workflow validates that the production tag matches the workspace

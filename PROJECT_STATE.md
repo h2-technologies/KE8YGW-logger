@@ -2,7 +2,7 @@
 
 Last audited: 2026-07-21
 
-Canonical product version: `0.2.0` from `Cargo.toml`
+Canonical product version: `0.3.0` from `Cargo.toml`
 `[workspace.package].version`.
 
 Locked v1 release target: November 24, 2026 with hosted web, native iOS, and
@@ -40,6 +40,12 @@ operations, and release qualification.
   tokens, rate limits, audits, and support state; durable self-hosted
   sync/report metadata, JSONL official-event storage, and filesystem diagnostic
   report payloads.
+- Durable offline mutation queue schema and JSON support store in `ham-sync`,
+  including operation/device/client/logbook IDs, deterministic per-logbook
+  ordering, idempotency keys, dependency checks, retries/backoff, recovery of
+  interrupted sends, redacted queue health, structured conflict reports, and
+  LAN trust records with short-lived single-use pairing tokens, replay nonce
+  rejection, and immediate revocation.
 - Tauri v2 desktop wrapper with bundled web assets, native dialog commands, and
   restricted `/api/*` proxying.
 - Native iOS SwiftUI project, SwiftData cache/projection models, Rust FFI bridge,
@@ -63,10 +69,14 @@ operations, and release qualification.
   request IDs, audits, and durable configurable rate limits. Production hosted
   web UI wiring, external email deliverability, infrastructure sizing,
   retention, monitoring, and deployment secrets remain incomplete.
-- Sync has discovery, handshake, preview/pull/push verification models, and
-  durable self-hosted backend; real LAN peer-to-peer HTTP transport, trust
-  pairing, automatic/user-directed merge policy, and full desktop/iOS
-  reconciliation are incomplete.
+- Sync has discovery, handshake, preview/pull/push verification models, durable
+  self-hosted backend, desktop queue integration for QSO/activation/Net Control
+  official mutations and station-profile support state, iOS queue integration
+  for QSO/activation/Net Control/station/equipment commands, queue-aware cloud
+  push acknowledgment, LAN trust persistence/endpoints, and structured
+  divergence reports. Real LAN peer-to-peer HTTP transport, full trust-pairing
+  UX, automatic/user-directed merge policy, iOS background scheduler validation,
+  and full cross-device reconciliation UI are incomplete.
 - Providers have metadata, fake/default execution, credential references,
   hosted QRZ XML/HamQTH lookup, POTA spot fetch, bounded DX Cluster controls,
   and gated Club Log/QRZ Logbook/eQSL live uploads; LoTW/TQSL, SOTAWatch live,
@@ -94,8 +104,10 @@ operations, and release qualification.
 
 ## Deferred Or Unimplemented For v1
 
-- LAN trust pairing and real peer-to-peer LAN transport.
-- Full desktop/iOS offline queue, reconciliation, and conflict review.
+- Real peer-to-peer LAN transport and production pairing UX beyond the shared
+  durable trust store.
+- Full cross-device reconciliation UI, manual conflict-resolution commands, and
+  release-device iOS background retry qualification.
 - LoTW/TQSL managed certificate/signing mode, SOTAWatch approved live access,
   RBN/DX background lifecycle, production maps/offline caching, and propagation
   provider qualification.
@@ -165,9 +177,21 @@ Known manual repository/external settings remain in
 | #24 Hosted authorization boundaries | Satisfied for server foundation | Central `authorize`, `require_instance_admin`, `require_logbook_role`, cross-account/logbook negative tests, provider/backup/sync scoping tests in `crates/ham-server/src/lib.rs` |
 | #25 Operational limits, request IDs, audits, safe errors | Satisfied for server foundation | `HostedLimitConfig`, `RateLimitRecord`, request ID success/error propagation, `AuditRecord`, provider/sync/account limit enforcement, stable error codes in `ham-api-contract`, `tests::request_ids_limits_and_audits_are_durable_and_redacted` |
 
+## v0.3 Offline Sync Issue Audit
+
+| Issue | Status after this branch merges | Evidence |
+| --- | --- | --- |
+| #26 Durable idempotent offline mutation envelopes | Satisfied for shared contract | `crates/ham-sync/src/offline.rs`, `JsonOfflineMutationQueue`, schema-version rejection, idempotent enqueue, deterministic sequence tests, retry/recovery tests, `docs/SYNC_PROTOCOL.md`, `docs/V0_3_RELEASE_PLAN.md` |
+| #27 Persistent desktop offline queue | Partially satisfied | GUI persists queue entries before QSO/activation/Net Control/station support mutations, recovers interrupted sends at startup, exposes queue state/recovery, and cloud push acknowledges queued official event hashes. Full reconnect automation and browser-level desktop recovery tests remain. |
+| #28 Persistent iOS offline queue | Partially satisfied | `ham-ios-ffi` queues QSO/activation/Net Control/station/equipment commands and exposes queue snapshots/recovery. Release-device background retry, local-network permission behavior, and termination/poor-network validation remain. |
+| #29 Push/pull/divergence/manual conflict review | Partially satisfied | Existing verified preview/pull/push remains, queue-aware cloud push was added, and structured conflict reports are exposed. Manual resolution commands and full conflict UI remain. |
+| #30 Device pairing/trust/revocation/LAN transport decision | Partially satisfied | `JsonLanTrustStore` provides explicit approval, hashed expiring single-use tokens, logbook-scoped trusted devices, replay nonce rejection, and immediate revocation; GUI exposes trust endpoints and LAN pull rejects untrusted/revoked/replayed peers. Real peer-to-peer HTTP transport and production pairing UX remain. |
+| #31 Cross-client sync recovery/migration test suite | Partially satisfied | New deterministic queue/trust/recovery tests and iOS FFI queue assertions exist. Full hosted web/desktop/iOS/self-hosted golden scenarios, physical-device tests, and migration matrix remain. |
+
 ## Next Recommended Goal
 
-Implement desktop/iOS sync and offline reconciliation, including LAN trust
-pairing and user-directed divergence handling. That goal unblocks unattended
-desktop/iOS operation, cached map/offline work, contesting, EmComm, and release
-qualification.
+Finish the remaining sync/reconciliation hardening: real LAN peer-to-peer
+transport, production pairing UX, manual conflict-resolution commands, and
+release-device iOS background retry qualification. That goal unblocks
+unattended desktop/iOS operation, cached map/offline work, contesting, EmComm,
+and release qualification.

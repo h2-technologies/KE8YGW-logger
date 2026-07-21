@@ -8,7 +8,8 @@ Sync is local-first. LAN discovery and direct LAN replication are preferred. Clo
 - Do not sync credentials, API keys, private plugin configuration, or support cache data by default.
 - Do not let peers mutate local official logs directly.
 - Do not auto-merge divergent chains in MVP.
-- Treat peers as untrusted until future pairing/authentication work is complete.
+- Treat peers as untrusted unless they pass the durable LAN trust store or
+  cloud/self-hosted sync authentication path.
 
 ## LAN Discovery
 
@@ -70,6 +71,39 @@ Event counts are hints only. A matching head hash means the logbook heads match.
 
 ## Safe Replication
 
+### Offline Mutation Queue
+
+The v0.3 queue contract is implemented in `ham-sync::offline` and persisted as
+versioned JSON support state named `offline-mutations.json` by desktop and iOS
+clients.
+
+Each mutation envelope records:
+
+- queue schema version
+- operation, correlation, client, device, and logbook IDs
+- deterministic per-logbook sequence number
+- operation type and idempotency key
+- dependencies on accepted operation IDs, event hashes, or minimum schema
+  version
+- redacted payload copy for replay/diagnostics
+- status: `pending`, `sending`, `retrying`, `blocked`, `failed`, `accepted`,
+  or `user_action_required`
+- attempts, bounded exponential backoff, and next retry time
+- accepted local official event ID/hash when the operation created official
+  history
+
+Clients persist the queue entry before acknowledging the local mutation. If core
+domain validation rejects the proposal, the queue entry moves to
+`user_action_required`; the official event stream is not edited. If the app
+crashes while a send is `sending`, startup recovery moves it back to `retrying`.
+Queued official events drain in deterministic logbook order, and a later event
+does not bypass an earlier blocked, failed, retrying, or dependency-missing
+operation.
+
+Station/equipment commands are queued as support-state mutations and marked
+accepted after the support store write succeeds. They remain support state and
+are not official logbook history.
+
 ### Preview Pull
 
 Preview pull compares local and remote chain metadata and reports how many events would be fetched. It writes nothing.
@@ -93,6 +127,29 @@ Accepted remote events are appended through the official event store without rew
 
 Push sends local official events to a peer or cloud server. The receiver applies the same verification rules and stores only valid append-only events.
 
+Desktop cloud push now uses the offline queue when queued local official events
+are present. Queue entries are marked `sending` before transport and `accepted`
+only after the cloud/self-hosted receiver accepts or ignores the matching event
+hashes. Divergence blocks the queued operations for manual review.
+
+## LAN Trust
+
+`ham-sync::offline` includes durable LAN trust records persisted as
+`lan-trust.json` by the GUI. The trust model includes:
+
+- explicit operator approval before issuing a pairing token
+- short-lived single-use pairing tokens stored only as hashes
+- trusted device records scoped to logbook IDs
+- optional public-key fingerprint metadata for future signed transport
+- immediate revocation
+- replay nonce hashing and rejection
+
+The GUI exposes trust-state, pairing-token, pairing-accept, and revoke
+endpoints. Mutating LAN pull rejects untrusted, revoked, wrong-logbook, or
+replayed peers before appending any remote official events. The current GUI LAN
+peer source is still the demo peer/model path; real peer-to-peer HTTP transport
+remains deferred.
+
 ## Cloud Relay and Self-Hosted Sync
 
 Cloud sync reuses the same event envelopes and verification path. MVP auth uses pairing-code/token sessions.
@@ -113,9 +170,9 @@ The current self-hosted server uses durable local storage by default: embedded S
 
 ## Deferred Work
 
-- Device pairing/trust UX.
+- Production LAN pairing UX over the durable trust store.
 - Signed official events.
 - End-to-end encrypted relay.
 - Real peer-to-peer HTTP transport for LAN replication.
-- Divergence branch review and conflict resolution.
+- Manual divergence branch review and conflict-resolution commands.
 - Durable cloud server database.
