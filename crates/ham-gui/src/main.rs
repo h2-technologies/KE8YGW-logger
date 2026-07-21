@@ -34,31 +34,35 @@ use ham_gui::{
     CommandRegistry, GuiRuntimeBridge, GuiShellState, RuntimeBridgeStatus, RuntimeEventInput,
 };
 use ham_plugin_sdk::{
-    PluginCapability, PluginManifest, ProposalEnvelope, ServiceType, PROPOSAL_ACTIVATION_END,
-    PROPOSAL_ACTIVATION_START, PROPOSAL_NET_CHECKIN_CREATE, PROPOSAL_NET_CHECKIN_DELETE,
-    PROPOSAL_NET_REPORT_EXPORT, PROPOSAL_NET_SESSION_END, PROPOSAL_NET_SESSION_START,
-    PROPOSAL_NET_TRAFFIC_CREATE, PROPOSAL_QSO_ACTIVATION_LINK, PROPOSAL_QSO_CORRECT,
-    PROPOSAL_QSO_CREATE, PROPOSAL_QSO_DELETE, PROPOSAL_QSO_NOTE_ADD, PROPOSAL_QSO_RESTORE,
+    PluginCapability, PluginManifest, ProposalEnvelope, ServiceType, PROPOSAL_ACTIVATION_CANCEL,
+    PROPOSAL_ACTIVATION_CREATE, PROPOSAL_ACTIVATION_END, PROPOSAL_ACTIVATION_NOTE_ADD,
+    PROPOSAL_ACTIVATION_START, PROPOSAL_ACTIVATION_UPDATE, PROPOSAL_NET_CHECKIN_CREATE,
+    PROPOSAL_NET_CHECKIN_DELETE, PROPOSAL_NET_CHECKIN_UPDATE, PROPOSAL_NET_REPORT_EXPORT,
+    PROPOSAL_NET_SESSION_CANCEL, PROPOSAL_NET_SESSION_END, PROPOSAL_NET_SESSION_START,
+    PROPOSAL_NET_TEMPLATE_CREATE, PROPOSAL_NET_TEMPLATE_UPDATE, PROPOSAL_NET_TRAFFIC_CREATE,
+    PROPOSAL_NET_TRAFFIC_UPDATE, PROPOSAL_QSO_ACTIVATION_LINK, PROPOSAL_QSO_ACTIVATION_UNLINK,
+    PROPOSAL_QSO_CORRECT, PROPOSAL_QSO_CREATE, PROPOSAL_QSO_DELETE, PROPOSAL_QSO_NOTE_ADD,
+    PROPOSAL_QSO_RESTORE,
 };
 use ham_sync::{
     build_handshake_response, conflict_report_from_preview, lan_auth_signature, metadata_for_event,
     preview_pull_from_events, pull_missing_events, verify_lan_auth_signature, CloudAuth,
     CloudConnectionState, CloudPreviewPullRequest, CloudPullEventsRequest, CloudPullEventsResponse,
     CloudPushEventsRequest, CloudPushEventsResponse, CloudServerConfig, CloudSyncConfig,
-    CloudSyncStatusResponse, ConflictReviewSnapshot, DiagnosticReportUploadRequest,
-    DiagnosticReportUploadResponse, DiagnosticReportUploadType, DiscoveryPacket,
-    GetEventMetadataResponse, GetEventRangeResponse, HandshakeRequest, InMemoryCloudSyncServer,
-    JsonConflictReviewStore, JsonLanTrustStore, JsonOfflineMutationQueue, LanDiscoveryService,
-    LanPairingAcceptance, LanPeerTrustUpdate, LanTrustSnapshot, ListLogbooksResponse,
-    LocalPeerIdentity, LogbookHeadSummary, ManualConflictResolution,
+    CloudSyncStatusResponse, ConflictReviewSnapshot, ConflictReviewStatus,
+    DiagnosticReportUploadRequest, DiagnosticReportUploadResponse, DiagnosticReportUploadType,
+    DiscoveryPacket, GetEventMetadataResponse, GetEventRangeResponse, HandshakeRequest,
+    InMemoryCloudSyncServer, JsonConflictReviewStore, JsonLanTrustStore, JsonOfflineMutationQueue,
+    LanDiscoveryService, LanPairingAcceptance, LanPeerTrustUpdate, LanTrustSnapshot,
+    ListLogbooksResponse, LocalPeerIdentity, LogbookHeadSummary, ManualConflictResolution,
     ManualConflictResolutionChoice, OfflineMutationEnvelope, OfflineMutationInput,
     OfflineQueueSnapshot, PairDeviceRequest, PeerObservation, PeerRecord, PeerRegistry,
     PreviewPullRequest, PreviewPullResponse, PullEventsRequest, PullEventsResponse,
     ReplicationStatus, SyncConfig, SyncConflictReport, LAN_AUTH_SIGNATURE_VERSION,
-    OFFLINE_OP_ACTIVATION_END, OFFLINE_OP_ACTIVATION_START, OFFLINE_OP_NET_CHECKIN_CREATE,
-    OFFLINE_OP_NET_CHECKIN_DELETE, OFFLINE_OP_NET_SESSION_END, OFFLINE_OP_NET_SESSION_START,
-    OFFLINE_OP_NET_TRAFFIC_CREATE, OFFLINE_OP_QSO_CORRECT, OFFLINE_OP_QSO_CREATE,
-    OFFLINE_OP_QSO_DELETE, OFFLINE_OP_QSO_NOTE_ADD, OFFLINE_OP_QSO_RESTORE,
+    MAX_CONFLICT_REVIEW_NOTE_BYTES, OFFLINE_OP_ACTIVATION_END, OFFLINE_OP_ACTIVATION_START,
+    OFFLINE_OP_NET_CHECKIN_CREATE, OFFLINE_OP_NET_CHECKIN_DELETE, OFFLINE_OP_NET_SESSION_END,
+    OFFLINE_OP_NET_SESSION_START, OFFLINE_OP_NET_TRAFFIC_CREATE, OFFLINE_OP_QSO_CORRECT,
+    OFFLINE_OP_QSO_CREATE, OFFLINE_OP_QSO_DELETE, OFFLINE_OP_QSO_NOTE_ADD, OFFLINE_OP_QSO_RESTORE,
     OFFLINE_OP_STATION_PROFILE_SELECT, PROTOCOL_NAME, PROTOCOL_VERSION,
 };
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
@@ -718,6 +722,9 @@ fn handle_client(state: Arc<AppState>, mut stream: TcpStream) {
         ("POST", "/api/sync/conflict-reviews/resolve") => {
             handle_conflict_review_resolve(&state, &request.body)
         }
+        ("POST", "/api/sync/conflict-reviews/corrective-events") => {
+            handle_conflict_review_corrective_events(&state, &request.body)
+        }
         ("GET", "/api/sync/lan/trust") => handle_lan_trust_state(&state),
         ("POST", "/api/sync/lan/pairing-token") => handle_lan_pairing_token(&state, &request.body),
         ("POST", "/api/sync/lan/pairing-accept") => {
@@ -1139,6 +1146,22 @@ struct ConflictReviewResolveRequest {
 }
 
 #[derive(Debug, Deserialize)]
+struct ConflictReviewCorrectiveEventsRequest {
+    review_id: uuid::Uuid,
+    operator_note: Option<String>,
+    #[serde(default)]
+    proposals: Vec<CorrectiveProposalRequest>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CorrectiveProposalRequest {
+    proposal_type: String,
+    entity_id: Option<uuid::Uuid>,
+    #[serde(default)]
+    payload: Value,
+}
+
+#[derive(Debug, Deserialize)]
 struct CloudConnectRequest {
     server_url: Option<String>,
     device_name: Option<String>,
@@ -1420,6 +1443,7 @@ fn pota_sota_manifest() -> PluginManifest {
             PluginCapability::ActivationCreate,
             PluginCapability::ActivationUpdate,
             PluginCapability::ActivationEnd,
+            PluginCapability::ActivationCancel,
             PluginCapability::QsoCreate,
             PluginCapability::QsoCorrect,
             PluginCapability::QsoNoteAdd,
@@ -3938,6 +3962,52 @@ fn offline_operation_type_for_proposal(proposal_type: &str) -> String {
     .to_owned()
 }
 
+fn corrective_context_for_proposal(
+    state: &AppState,
+    proposal_type: &str,
+) -> Result<(&'static str, ProposalContext), String> {
+    match proposal_type {
+        PROPOSAL_QSO_CREATE
+        | PROPOSAL_QSO_CORRECT
+        | PROPOSAL_QSO_DELETE
+        | PROPOSAL_QSO_RESTORE
+        | PROPOSAL_QSO_NOTE_ADD => Ok(("core.gui", proposal_context(state))),
+        PROPOSAL_ACTIVATION_CREATE
+        | PROPOSAL_ACTIVATION_UPDATE
+        | PROPOSAL_ACTIVATION_START
+        | PROPOSAL_ACTIVATION_END
+        | PROPOSAL_ACTIVATION_CANCEL
+        | PROPOSAL_ACTIVATION_NOTE_ADD
+        | PROPOSAL_QSO_ACTIVATION_LINK
+        | PROPOSAL_QSO_ACTIVATION_UNLINK => Ok(("plugin.pota-sota", pota_sota_context(state))),
+        PROPOSAL_NET_TEMPLATE_CREATE
+        | PROPOSAL_NET_TEMPLATE_UPDATE
+        | PROPOSAL_NET_SESSION_START
+        | PROPOSAL_NET_SESSION_END
+        | PROPOSAL_NET_SESSION_CANCEL
+        | PROPOSAL_NET_CHECKIN_CREATE
+        | PROPOSAL_NET_CHECKIN_UPDATE
+        | PROPOSAL_NET_CHECKIN_DELETE
+        | PROPOSAL_NET_TRAFFIC_CREATE
+        | PROPOSAL_NET_TRAFFIC_UPDATE
+        | PROPOSAL_NET_REPORT_EXPORT => Ok(("plugin.net-control", net_control_context(state))),
+        other => Err(format!("unsupported corrective proposal type `{other}`")),
+    }
+}
+
+fn corrective_proposal_requires_entity_id(proposal_type: &str) -> bool {
+    !matches!(
+        proposal_type,
+        PROPOSAL_QSO_CREATE
+            | PROPOSAL_ACTIVATION_CREATE
+            | PROPOSAL_ACTIVATION_START
+            | PROPOSAL_NET_TEMPLATE_CREATE
+            | PROPOSAL_NET_SESSION_START
+            | PROPOSAL_NET_CHECKIN_CREATE
+            | PROPOSAL_NET_TRAFFIC_CREATE
+    )
+}
+
 fn submit_offline_tracked_proposal(
     state: &AppState,
     proposal_type: &str,
@@ -4889,6 +4959,138 @@ fn handle_conflict_review_resolve(state: &AppState, body: &[u8]) -> Vec<u8> {
                 "ok": true,
                 "conflict_review": review,
                 "marked_user_action_count": marked_user_action,
+                "conflict_reviews": snapshot
+            }))
+        }
+        Err(error) => {
+            json_response_with_status(400, &json!({"ok": false, "error": error.to_string()}))
+        }
+    }
+}
+
+fn handle_conflict_review_corrective_events(state: &AppState, body: &[u8]) -> Vec<u8> {
+    let Ok(request) = serde_json::from_slice::<ConflictReviewCorrectiveEventsRequest>(body) else {
+        return json_error(400, "invalid conflict review corrective-events JSON");
+    };
+    if request.proposals.is_empty() {
+        return json_error(400, "at least one corrective proposal is required");
+    }
+    if request
+        .operator_note
+        .as_ref()
+        .is_some_and(|note| note.len() > MAX_CONFLICT_REVIEW_NOTE_BYTES)
+    {
+        return json_error(400, "conflict review note is too large");
+    }
+    for proposal in &request.proposals {
+        let proposal_type = proposal.proposal_type.trim();
+        if proposal_type.is_empty() {
+            return json_error(400, "corrective proposal_type is required");
+        }
+        if !proposal.payload.is_object() {
+            return json_error(400, "corrective proposal payload must be a JSON object");
+        }
+        if corrective_proposal_requires_entity_id(proposal_type) && proposal.entity_id.is_none() {
+            return json_error(
+                400,
+                "corrective proposal entity_id is required for this proposal type",
+            );
+        }
+        if let Err(error) = corrective_context_for_proposal(state, proposal_type) {
+            return json_response_with_status(400, &json!({"ok": false, "error": error}));
+        }
+    }
+
+    let review_snapshot = match state.conflict_review_store.load_snapshot() {
+        Ok(snapshot) => snapshot,
+        Err(error) => {
+            return json_response_with_status(
+                400,
+                &json!({"ok": false, "error": error.to_string()}),
+            )
+        }
+    };
+    if !review_snapshot.reviews.iter().any(|review| {
+        review.review_id == request.review_id && review.status == ConflictReviewStatus::Open
+    }) {
+        return json_response_with_status(
+            404,
+            &json!({"ok": false, "error": "open conflict review was not found"}),
+        );
+    }
+
+    let mut corrective_events = Vec::new();
+    let mut corrective_event_hashes = Vec::new();
+    let mut offline_mutations = Vec::new();
+    let mut offline_queue_warnings = Vec::new();
+    for proposal in request.proposals {
+        let proposal_type = proposal.proposal_type.trim().to_owned();
+        if proposal_type.is_empty() {
+            return json_error(400, "corrective proposal_type is required");
+        }
+        let (source_plugin_id, context) =
+            match corrective_context_for_proposal(state, &proposal_type) {
+                Ok(value) => value,
+                Err(error) => {
+                    return json_response_with_status(400, &json!({"ok": false, "error": error}))
+                }
+            };
+        match submit_offline_tracked_proposal(
+            state,
+            &proposal_type,
+            proposal.entity_id,
+            None,
+            source_plugin_id,
+            context,
+            proposal.payload,
+        ) {
+            Ok((outcome, offline_mutation, offline_queue_warning)) => {
+                corrective_event_hashes.push(outcome.official_event.event_hash.clone());
+                corrective_events.push(outcome.official_event);
+                offline_mutations.push(offline_mutation);
+                if let Some(warning) = offline_queue_warning {
+                    offline_queue_warnings.push(warning);
+                }
+            }
+            Err(error) => {
+                return json_response_with_status(400, &json!({"ok": false, "error": error}))
+            }
+        }
+    }
+
+    let mut resolution =
+        ManualConflictResolution::new(ManualConflictResolutionChoice::CreateCorrectiveEvents)
+            .with_corrective_event_hashes(corrective_event_hashes.clone())
+            .with_resolved_by_device_id(state.bridge.status().device_id);
+    if let Some(note) = request.operator_note.filter(|note| !note.trim().is_empty()) {
+        resolution = resolution.with_note(note);
+    }
+
+    let now = chrono::Utc::now();
+    match state
+        .conflict_review_store
+        .resolve_review(request.review_id, resolution, now)
+    {
+        Ok(review) => {
+            let snapshot = state.conflict_review_store.load_snapshot().ok();
+            let _ = publish_gui_runtime(
+                state,
+                "sync.conflict_review.corrective_events_created",
+                RuntimeEventSeverity::Info,
+                "Manual conflict review resolved with corrective events",
+                Some(json!({
+                    "review_id": review.review_id,
+                    "corrective_event_count": corrective_event_hashes.len()
+                })),
+                None,
+            );
+            json_response(&json!({
+                "ok": true,
+                "conflict_review": review,
+                "corrective_events": corrective_events,
+                "corrective_event_hashes": corrective_event_hashes,
+                "offline_mutations": offline_mutations,
+                "offline_queue_warnings": offline_queue_warnings,
                 "conflict_reviews": snapshot
             }))
         }

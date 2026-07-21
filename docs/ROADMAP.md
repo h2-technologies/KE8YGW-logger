@@ -105,11 +105,13 @@ wrapper is not the iOS client. See `V1_RELEASE_PLAN.md`,
      divergent heads, missing dependencies, unsupported schemas, concurrent QSO
      corrections, and tombstone/restore overlaps, durable manual
      conflict-review records, direct LAN HTTP preview/pull, automatic LAN
-     discovery, and durable LAN trust state.
+     discovery, durable LAN trust state, and desktop/iOS corrective-event
+     commands that submit explicit proposals and resolve reviews with generated
+     official event hashes.
    - Status: implemented as a v0.3 foundation with HMAC-SHA256 signed LAN read
      endpoint authorization and GUI LAN auth credential rotation/recovery.
      Production reciprocal pairing UX, stronger LAN key-exchange hardening,
-     corrective-event conflict UX,
+     full guided cross-client branch review and reconciliation UI,
      physical-device LAN/iOS local-network validation, and release-device iOS
      background retry qualification remain planned.
 
@@ -121,9 +123,9 @@ rewrites:
 
 1. Finish the remaining sync/reconciliation hardening: production reciprocal
    LAN pairing UX, stronger LAN key-exchange hardening,
-   corrective-event conflict-resolution UX, physical-device LAN/iOS
-   local-network validation, and release-device iOS background retry
-   qualification before unattended desktop/iOS operation.
+   full guided cross-client branch review and reconciliation UI,
+   physical-device LAN/iOS local-network validation, and release-device iOS
+   background retry qualification before unattended desktop/iOS operation.
 2. Complete provider runtime hardening and production provider qualification
    before release-candidate data migration or operations work.
 3. Build the remaining client surfaces on top of stable account, sync, provider,

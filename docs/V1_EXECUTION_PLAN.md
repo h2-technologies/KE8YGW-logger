@@ -40,10 +40,12 @@ outside issue #2.
      automatic IPv4/IPv6 multicast LAN discovery with reachable identity
      probing, durable LAN trust records with single-use tokens, replay nonce
      rejection, revocation, HMAC-SHA256 signed LAN read endpoint authorization,
-     and GUI LAN auth credential rotation/recovery.
+     GUI LAN auth credential rotation/recovery, and desktop/iOS
+     corrective-event commands that submit explicit proposals and resolve
+     reviews with generated official event hashes.
    - Remaining: production reciprocal pairing UX, stronger LAN key-exchange
-     hardening, corrective-event conflict-resolution UX, full
-     cross-client reconciliation UI, physical-device LAN/iOS local-network
+     hardening, full guided cross-client branch review and reconciliation UI,
+     physical-device LAN/iOS local-network
      validation, release-device iOS background retry qualification, and
      multi-device migration/recovery scenarios.
    - Blockers: local network permission behavior on iOS, trust-pairing UX,
@@ -134,8 +136,8 @@ outside issue #2.
 ## Next Three Goals
 
 1. Finish sync/reconciliation hardening: production reciprocal LAN pairing UX,
-   stronger LAN key-exchange hardening, corrective-event
-   conflict-resolution UX, physical-device LAN/iOS local-network validation, and
+   stronger LAN key-exchange hardening, full guided cross-client branch review
+   and reconciliation UI, physical-device LAN/iOS local-network validation, and
    iOS background retry validation on release devices.
 2. Complete production provider qualification and release-runner live validation
    for the issue #2 provider set.

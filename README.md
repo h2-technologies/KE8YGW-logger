@@ -449,7 +449,7 @@ and the summit reference. Deleted/cancelled QSOs are excluded by default.
 Current MVP limitations: one active activation per station/operator is assumed;
 multi-op, multi-park/multi-summit, spotting integration, online reference
 lookups, GPS auto-detection, offline reference caches, award tracking, and
-conflict review UX are future work.
+full guided cross-client conflict review UX are future work.
 
 ## Callsign Lookup And Smart Autofill Plugin
 
@@ -904,11 +904,13 @@ remote schemas, concurrent QSO corrections, and remote QSO tombstone/restore
 events that overlap local pending mutations. Desktop can save a durable manual
 review from the current preview and record explicit recovery-path decisions;
 iOS can create, resolve, and snapshot the same Rust-owned review records through
-the bridge. LAN auth credential rotation/recovery is available through the GUI
-trust endpoint. Corrective-event conflict UX, full cross-client branch review,
-signed events, production reciprocal LAN pairing UX, stronger LAN key-exchange
-hardening, and physical-device LAN/iOS local-network validation are still
-deferred.
+the bridge. Desktop and iOS can also resolve reviews with corrective events by
+submitting explicit proposals through the normal proposal pipeline and storing
+the generated official event hashes on the review. LAN auth credential
+rotation/recovery is available through the GUI trust endpoint. Full guided
+cross-client branch review, signed events, production reciprocal LAN pairing
+UX, stronger LAN key-exchange hardening, and physical-device LAN/iOS
+local-network validation are still deferred.
 
 ## Durable Offline Queue And LAN Trust
 
@@ -952,7 +954,9 @@ replayed peers before appending remote official events.
 Manual conflict-review records are also durable support state. They store
 structured conflict reports and the operator-selected recovery path without
 rewriting official history. Unsafe divergent pulls are rejected by the shared
-Rust validator; corrective-event resolutions require event hashes as evidence.
+Rust validator; corrective-event resolutions require event hashes as evidence,
+and the desktop/iOS corrective-event commands create those hashes by submitting
+normal core proposals before resolving a review.
 
 Replication runtime events include:
 

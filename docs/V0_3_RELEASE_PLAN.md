@@ -30,6 +30,10 @@ Last audited: 2026-07-21
 - Durable manual conflict-review records for desktop and iOS bridge clients,
   with explicit recovery-path decisions and validation that rejects unsafe
   divergent pulls.
+- Corrective-event conflict-review resolution commands for desktop and iOS
+  bridge clients. They submit explicit corrective proposals through the normal
+  proposal pipeline, persist the offline mutation, append official events, and
+  resolve the review with the generated event hashes.
 - Durable LAN trust store with explicit approval, hashed short-lived single-use
   pairing tokens, logbook-scoped trusted devices, replay nonce rejection, and
   immediate revocation.
@@ -52,8 +56,8 @@ Last audited: 2026-07-21
 - Production reciprocal pairing UX across desktop and iOS.
 - Stronger LAN key-exchange hardening.
 - Physical-device LAN and iOS Local Network permission validation.
-- Corrective-event conflict-resolution UX on top of the durable manual review
-  commands.
+- Full guided cross-client conflict review and reconciliation UI beyond the
+  current prompt/API corrective-event path.
 - Release-device iOS background retry and local-network permission validation.
 - Full cross-client recovery/migration scenarios across hosted web, desktop,
   iOS, and self-hosted sync.

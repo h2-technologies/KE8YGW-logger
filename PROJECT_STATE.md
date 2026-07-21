@@ -84,12 +84,13 @@ operations, and release qualification.
   reports, durable manual conflict-review create/resolve commands, and GUI
   manual direct LAN HTTP preview/pull transport, HMAC-SHA256 proof-of-possession
   for protected LAN read endpoints, explicit LAN auth credential
-  rotation/recovery through the GUI trust endpoint, and automatic IPv4/IPv6
-  multicast discovery that probes peer identity before recording reachable
-  peers. Production reciprocal trust-pairing UX, stronger LAN key-exchange
-  hardening, corrective-event conflict UX, physical-device LAN/iOS local-network
-  validation, iOS background scheduler validation, and full cross-device
-  reconciliation UI are incomplete.
+  rotation/recovery through the GUI trust endpoint, desktop/iOS corrective-event
+  commands that submit explicit proposals and resolve reviews with generated
+  official event hashes, and automatic IPv4/IPv6 multicast discovery that
+  probes peer identity before recording reachable peers. Production reciprocal
+  trust-pairing UX, stronger LAN key-exchange hardening, full guided
+  cross-device reconciliation UI, physical-device LAN/iOS local-network
+  validation, and iOS background scheduler validation are incomplete.
 - Providers have metadata, fake/default execution, credential references,
   hosted QRZ XML/HamQTH lookup, POTA spot fetch, bounded DX Cluster controls,
   and gated Club Log/QRZ Logbook/eQSL live uploads; LoTW/TQSL, SOTAWatch live,
@@ -120,8 +121,8 @@ operations, and release qualification.
 - Production reciprocal LAN pairing UX beyond prompt-based token completion,
   stronger LAN key-exchange hardening, and physical-device validation beyond
   the current HMAC-SHA256 signed LAN read endpoints and GUI auth-rotation path.
-- Full cross-device reconciliation UI, corrective-event conflict-resolution UX,
-  and release-device iOS background retry qualification.
+- Full guided cross-device branch review and reconciliation UI, plus
+  release-device iOS background retry qualification.
 - LoTW/TQSL managed certificate/signing mode, SOTAWatch approved live access,
   RBN/DX background lifecycle, production maps/offline caching, and propagation
   provider qualification.
@@ -198,15 +199,15 @@ Known manual repository/external settings remain in
 | #26 Durable idempotent offline mutation envelopes | Satisfied for shared contract | `crates/ham-sync/src/offline.rs`, `JsonOfflineMutationQueue`, schema-version rejection, idempotent enqueue, deterministic sequence tests, retry/recovery tests, `docs/SYNC_PROTOCOL.md`, `docs/V0_3_RELEASE_PLAN.md` |
 | #27 Persistent desktop offline queue | Partially satisfied | GUI persists queue entries before QSO/activation/Net Control/station support mutations, recovers/interprets queue state at startup, exposes queue state/recovery, and cloud push acknowledges queued official event hashes. `desktop_queue_recovers_restart_and_drains_to_cloud_without_duplicates` proves a desktop-style restart/reconnect drain path recovers a `sending` operation, drains queued official events in order, marks accepted entries by event hash, and ignores duplicate cloud replay without creating local duplicates. Shared recovery now initializes v0.2 absent queues, migrates legacy `version: 0` records, promotes interrupted atomic writes, and quarantines corrupt queue JSON. Full reconnect automation and browser-level desktop recovery tests remain. |
 | #28 Persistent iOS offline queue | Partially satisfied | `ham-ios-ffi` queues QSO/activation/Net Control/station/equipment commands and exposes queue snapshots/recovery plus Rust-owned conflict-review create/resolve commands. The iOS recovery command now uses the shared migration/quarantine recovery report. Release-device background retry, local-network permission behavior, and termination/poor-network validation remain. |
-| #29 Push/pull/divergence/manual conflict review | Partially satisfied | Existing verified preview/pull/push remains, queue-aware cloud push was added, structured conflict reports classify divergent heads, missing dependencies, unsupported remote schemas, concurrent QSO corrections, and tombstone/restore overlaps, and durable manual conflict-review create/resolve commands reject unsafe divergent pulls while allowing explicit recovery-path decisions. Corrective-event creation UX and full cross-client conflict UI remain. |
+| #29 Push/pull/divergence/manual conflict review | Partially satisfied | Existing verified preview/pull/push remains, queue-aware cloud push was added, structured conflict reports classify divergent heads, missing dependencies, unsupported remote schemas, concurrent QSO corrections, and tombstone/restore overlaps, durable manual conflict-review create/resolve commands reject unsafe divergent pulls, and desktop/iOS corrective-event commands submit explicit proposals through the normal proposal pipeline before resolving reviews with generated event hashes. Full guided cross-client branch review UI remains. |
 | #30 Device pairing/trust/revocation/LAN transport decision | Partially satisfied | `JsonLanTrustStore` provides explicit approval, hashed expiring single-use tokens, logbook-scoped trusted devices, auth credential references, auth credential rotation, replay nonce rejection, and immediate revocation; GUI exposes trust endpoints, reciprocal prompt-based pairing completion, manual direct LAN HTTP peer add/preview/pull, automatic IPv4/IPv6 multicast discovery with reachable identity probing, advertised API-port normalization, HMAC-SHA256 signed LAN list/head/event read endpoints, LAN auth rotation/recovery, and LAN pull rejects untrusted/revoked/replayed peers before local append. Production reciprocal pairing UX, stronger key-exchange hardening, and physical LAN/iOS local-network validation remain. |
 | #31 Cross-client sync recovery/migration test suite | Partially satisfied | New deterministic queue/trust/recovery/conflict-review tests, desktop restart/reconnect drain coverage, queued target-entity persistence/backfill tests, unsupported-schema/concurrent-correction/tombstone-restore conflict-report tests, v0.2 absent/legacy queue migration tests, corrupt queue quarantine tests, interrupted atomic-write promotion tests, and iOS FFI queue/conflict-review assertions exist. Full hosted web/desktop/iOS/self-hosted golden scenarios, physical-device tests, and migration matrix remain. |
 
 ## Next Recommended Goal
 
 Finish the remaining sync/reconciliation hardening: production reciprocal
-pairing UX, stronger LAN key-exchange hardening, corrective-event
-conflict-resolution UX, physical LAN/iOS local-network validation, and
+pairing UX, stronger LAN key-exchange hardening, full guided cross-client branch
+review and reconciliation UI, physical LAN/iOS local-network validation, and
 release-device iOS background retry qualification. That goal unblocks
 unattended desktop/iOS operation, cached map/offline work, contesting, EmComm,
 and release qualification.

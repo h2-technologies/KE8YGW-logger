@@ -26,17 +26,24 @@ use ham_core::{
 };
 use ham_plugin_sdk::{
     PluginCapability, PluginManifest, ProposalEnvelope, OFFICIAL_LOG_QSO_CREATED,
-    PROPOSAL_ACTIVATION_END, PROPOSAL_ACTIVATION_START, PROPOSAL_NET_CHECKIN_CREATE,
-    PROPOSAL_NET_SESSION_END, PROPOSAL_NET_SESSION_START, PROPOSAL_NET_TRAFFIC_CREATE,
-    PROPOSAL_QSO_CREATE, PROPOSAL_QSO_DELETE,
+    PROPOSAL_ACTIVATION_CANCEL, PROPOSAL_ACTIVATION_CREATE, PROPOSAL_ACTIVATION_END,
+    PROPOSAL_ACTIVATION_NOTE_ADD, PROPOSAL_ACTIVATION_START, PROPOSAL_ACTIVATION_UPDATE,
+    PROPOSAL_NET_CHECKIN_CREATE, PROPOSAL_NET_CHECKIN_DELETE, PROPOSAL_NET_CHECKIN_UPDATE,
+    PROPOSAL_NET_REPORT_EXPORT, PROPOSAL_NET_SESSION_CANCEL, PROPOSAL_NET_SESSION_END,
+    PROPOSAL_NET_SESSION_START, PROPOSAL_NET_TEMPLATE_CREATE, PROPOSAL_NET_TEMPLATE_UPDATE,
+    PROPOSAL_NET_TRAFFIC_CREATE, PROPOSAL_NET_TRAFFIC_UPDATE, PROPOSAL_QSO_ACTIVATION_LINK,
+    PROPOSAL_QSO_ACTIVATION_UNLINK, PROPOSAL_QSO_CORRECT, PROPOSAL_QSO_CREATE, PROPOSAL_QSO_DELETE,
+    PROPOSAL_QSO_NOTE_ADD, PROPOSAL_QSO_RESTORE,
 };
 use ham_sync::{
-    CloudConnectionState, CloudSyncConfig, JsonConflictReviewStore, JsonOfflineMutationQueue,
-    LocalPeerIdentity, ManualConflictResolution, OfflineMutationEnvelope, OfflineMutationInput,
-    SyncConfig, SyncConflictReport, OFFLINE_OP_ACTIVATION_END, OFFLINE_OP_ACTIVATION_START,
-    OFFLINE_OP_NET_CHECKIN_CREATE, OFFLINE_OP_NET_SESSION_END, OFFLINE_OP_NET_SESSION_START,
-    OFFLINE_OP_NET_TRAFFIC_CREATE, OFFLINE_OP_QSO_CREATE, OFFLINE_OP_QSO_DELETE,
-    OFFLINE_OP_STATION_EQUIPMENT_CREATE, OFFLINE_OP_STATION_PROFILE_CREATE,
+    CloudConnectionState, CloudSyncConfig, ConflictReviewStatus, JsonConflictReviewStore,
+    JsonOfflineMutationQueue, LocalPeerIdentity, ManualConflictResolution,
+    ManualConflictResolutionChoice, OfflineMutationEnvelope, OfflineMutationInput, SyncConfig,
+    SyncConflictReport, MAX_CONFLICT_REVIEW_NOTE_BYTES, OFFLINE_OP_ACTIVATION_END,
+    OFFLINE_OP_ACTIVATION_START, OFFLINE_OP_NET_CHECKIN_CREATE, OFFLINE_OP_NET_CHECKIN_DELETE,
+    OFFLINE_OP_NET_SESSION_END, OFFLINE_OP_NET_SESSION_START, OFFLINE_OP_NET_TRAFFIC_CREATE,
+    OFFLINE_OP_QSO_CORRECT, OFFLINE_OP_QSO_CREATE, OFFLINE_OP_QSO_DELETE, OFFLINE_OP_QSO_NOTE_ADD,
+    OFFLINE_OP_QSO_RESTORE, OFFLINE_OP_STATION_EQUIPMENT_CREATE, OFFLINE_OP_STATION_PROFILE_CREATE,
     OFFLINE_OP_STATION_PROFILE_SELECT,
 };
 use serde::{Deserialize, Serialize};
@@ -258,6 +265,30 @@ struct ConflictReviewResolveRequest {
 }
 
 #[derive(Debug, Deserialize)]
+struct ConflictReviewCorrectiveEventsRequest {
+    app_support_dir: String,
+    #[serde(default)]
+    logbook_id: Option<Uuid>,
+    #[serde(default)]
+    device_id: Option<Uuid>,
+    review_id: Uuid,
+    #[serde(default)]
+    operator_note: Option<String>,
+    #[serde(default)]
+    proposals: Vec<IosCorrectiveProposalRequest>,
+}
+
+#[derive(Debug, Deserialize)]
+struct IosCorrectiveProposalRequest {
+    proposal_type: String,
+    entity_id: Option<Uuid>,
+    #[serde(default)]
+    operation_id: Option<String>,
+    #[serde(default)]
+    payload: Value,
+}
+
+#[derive(Debug, Deserialize)]
 struct ApplicationSettingsUpdateRequest {
     app_support_dir: String,
     settings: ApplicationSettings,
@@ -458,6 +489,9 @@ fn dispatch_call(call: BridgeCall, correlation_id: Uuid) -> Result<Value, Bridge
         "sync.conflict_reviews.snapshot" => sync_snapshot_command(payload),
         "sync.conflict_reviews.create" => sync_conflict_review_create_command(payload),
         "sync.conflict_reviews.resolve" => sync_conflict_review_resolve_command(payload),
+        "sync.conflict_reviews.corrective_events" => {
+            sync_conflict_review_corrective_events_command(payload, correlation_id)
+        }
         "diagnostics.snapshot" => diagnostics_command_payload(payload),
         "settings.get" => settings_get_command(payload),
         "settings.create_default" => settings_create_default_command(payload),
@@ -931,6 +965,177 @@ fn sync_conflict_review_resolve_command(payload: Value) -> Result<Value, BridgeF
         "conflict_review": review,
         "conflict_reviews": snapshot
     }))
+}
+
+fn sync_conflict_review_corrective_events_command(
+    payload: Value,
+    correlation_id: Uuid,
+) -> Result<Value, BridgeFault> {
+    let request: ConflictReviewCorrectiveEventsRequest =
+        serde_json::from_value(payload).map_err(|error| {
+            BridgeFault::invalid_json(format!(
+                "invalid conflict review corrective-events payload: {error}"
+            ))
+        })?;
+    if request.proposals.is_empty() {
+        return Err(BridgeFault::invalid_input(
+            "at least one corrective proposal is required",
+        ));
+    }
+    if request
+        .operator_note
+        .as_ref()
+        .is_some_and(|note| note.len() > MAX_CONFLICT_REVIEW_NOTE_BYTES)
+    {
+        return Err(BridgeFault::invalid_input(
+            "conflict review note is too large",
+        ));
+    }
+    for proposal in &request.proposals {
+        let proposal_type = proposal.proposal_type.trim();
+        if proposal_type.is_empty() {
+            return Err(BridgeFault::invalid_input(
+                "corrective proposal_type is required",
+            ));
+        }
+        if !is_supported_ios_corrective_proposal(proposal_type) {
+            return Err(BridgeFault::invalid_input(format!(
+                "unsupported corrective proposal type `{proposal_type}`"
+            )));
+        }
+        if !proposal.payload.is_object() {
+            return Err(BridgeFault::invalid_input(
+                "corrective proposal payload must be a JSON object",
+            ));
+        }
+        if corrective_proposal_requires_entity_id(proposal_type) && proposal.entity_id.is_none() {
+            return Err(BridgeFault::invalid_input(
+                "corrective proposal entity_id is required for this proposal type",
+            ));
+        }
+        if let Some(operation_id) = proposal
+            .operation_id
+            .as_ref()
+            .filter(|value| !value.trim().is_empty())
+        {
+            Uuid::parse_str(operation_id).map_err(|_| {
+                BridgeFault::invalid_input("corrective proposal operation_id must be a UUID")
+            })?;
+        }
+    }
+
+    let review_store = conflict_review_store(&request.app_support_dir)?;
+    let review_snapshot = review_store
+        .load_snapshot()
+        .map_err(|error| BridgeFault::storage(error.to_string()))?;
+    if !review_snapshot.reviews.iter().any(|review| {
+        review.review_id == request.review_id && review.status == ConflictReviewStatus::Open
+    }) {
+        return Err(BridgeFault::invalid_input(
+            "open conflict review was not found",
+        ));
+    }
+
+    let runtime = Runtime::new().map_err(|error| BridgeFault::internal(error.to_string()))?;
+    runtime.block_on(async move {
+        let logbook_id = request.logbook_id.unwrap_or_else(default_logbook_id);
+        let device_id = request.device_id.unwrap_or_else(Uuid::new_v4);
+        let event_store = event_store(&request.app_support_dir)?;
+        let mut corrective_events = Vec::new();
+        let mut corrective_event_hashes = Vec::new();
+        let mut offline_mutations = Vec::new();
+
+        for proposal in request.proposals {
+            let proposal_type = proposal.proposal_type.trim().to_owned();
+            let operation_id = proposal
+                .operation_id
+                .filter(|value| !value.trim().is_empty())
+                .unwrap_or_else(|| Uuid::new_v4().to_string());
+            let proposal_payload = corrective_payload_with_entity_id(
+                &proposal_type,
+                proposal.payload,
+                proposal.entity_id,
+            )?;
+            let operation_type = ios_corrective_offline_operation_type(&proposal_type);
+            let queued = enqueue_ios_mutation_with_input(
+                &request.app_support_dir,
+                IosMutationQueueInput {
+                    logbook_id,
+                    device_id,
+                    operation_type: &operation_type,
+                    payload: proposal_payload.clone(),
+                    external_operation_id: &operation_id,
+                    correlation_id,
+                    entity_id: proposal.entity_id,
+                },
+            )?;
+            let proposal = ProposalEnvelope::new(
+                &proposal_type,
+                logbook_id,
+                proposal.entity_id,
+                None,
+                device_id,
+                IOS_PLUGIN_ID,
+                1,
+                proposal_payload,
+            );
+            let outcome = submit_proposal(
+                &event_store,
+                &InMemoryEventBus::default(),
+                &ios_proposal_context(),
+                proposal,
+            )
+            .await
+            .map_err(|error| {
+                mark_ios_user_action_required(
+                    &request.app_support_dir,
+                    &queued,
+                    error.to_string(),
+                    "domain_validation_failed",
+                );
+                BridgeFault::domain(error.to_string())
+            })?;
+            let offline_mutation = record_ios_official_event(
+                &request.app_support_dir,
+                &queued,
+                &outcome.official_event,
+            )?;
+            corrective_event_hashes.push(outcome.official_event.event_hash.clone());
+            corrective_events.push(outcome.official_event);
+            offline_mutations.push(offline_mutation);
+        }
+
+        let mut resolution =
+            ManualConflictResolution::new(ManualConflictResolutionChoice::CreateCorrectiveEvents)
+                .with_corrective_event_hashes(corrective_event_hashes.clone())
+                .with_resolved_by_device_id(device_id);
+        if let Some(note) = request.operator_note.filter(|note| !note.trim().is_empty()) {
+            resolution = resolution.with_note(note);
+        }
+        let review = review_store
+            .resolve_review(request.review_id, resolution, Utc::now())
+            .map_err(|error| BridgeFault::storage(error.to_string()))?;
+        let snapshot = review_store
+            .load_snapshot()
+            .map_err(|error| BridgeFault::storage(error.to_string()))?;
+        let pending_events = event_store
+            .list_events(logbook_id)
+            .await
+            .map_err(|error| BridgeFault::storage(error.to_string()))?
+            .len();
+        Ok(json!({
+            "conflict_review": review,
+            "conflict_reviews": snapshot,
+            "corrective_events": corrective_events,
+            "corrective_event_hashes": corrective_event_hashes,
+            "offline_mutations": offline_mutations,
+            "projection": {
+                "source": "rust",
+                "schema_version": BRIDGE_SCHEMA_VERSION,
+                "pending_event_count": pending_events
+            }
+        }))
+    })
 }
 
 fn sync_snapshot_for_support(
@@ -1778,6 +1983,16 @@ fn conflict_review_store(app_support_dir: &str) -> Result<JsonConflictReviewStor
     ))
 }
 
+struct IosMutationQueueInput<'a> {
+    logbook_id: Uuid,
+    device_id: Uuid,
+    operation_type: &'a str,
+    payload: Value,
+    external_operation_id: &'a str,
+    correlation_id: Uuid,
+    entity_id: Option<Uuid>,
+}
+
 fn enqueue_ios_mutation(
     app_support_dir: &str,
     logbook_id: Uuid,
@@ -1787,16 +2002,45 @@ fn enqueue_ios_mutation(
     external_operation_id: &str,
     correlation_id: Uuid,
 ) -> Result<OfflineMutationEnvelope, BridgeFault> {
+    enqueue_ios_mutation_with_input(
+        app_support_dir,
+        IosMutationQueueInput {
+            logbook_id,
+            device_id,
+            operation_type,
+            payload,
+            external_operation_id,
+            correlation_id,
+            entity_id: None,
+        },
+    )
+}
+
+fn enqueue_ios_mutation_with_input(
+    app_support_dir: &str,
+    input: IosMutationQueueInput<'_>,
+) -> Result<OfflineMutationEnvelope, BridgeFault> {
     let queue = offline_queue(app_support_dir)?;
-    let operation_id = Uuid::parse_str(external_operation_id).unwrap_or(correlation_id);
-    let entity_id = payload_entity_id(operation_type, &payload);
+    let operation_id = Uuid::parse_str(input.external_operation_id).unwrap_or(input.correlation_id);
+    let entity_id = input
+        .entity_id
+        .or_else(|| payload_entity_id(input.operation_type, &input.payload));
     queue
         .enqueue_input(
-            OfflineMutationInput::new(logbook_id, device_id, device_id, operation_type, payload)
-                .with_operation_id(operation_id)
-                .with_correlation_id(correlation_id)
-                .with_entity_id(entity_id)
-                .with_idempotency_key(format!("{operation_type}:{external_operation_id}")),
+            OfflineMutationInput::new(
+                input.logbook_id,
+                input.device_id,
+                input.device_id,
+                input.operation_type,
+                input.payload,
+            )
+            .with_operation_id(operation_id)
+            .with_correlation_id(input.correlation_id)
+            .with_entity_id(entity_id)
+            .with_idempotency_key(format!(
+                "{}:{}",
+                input.operation_type, input.external_operation_id
+            )),
             Utc::now(),
         )
         .map_err(|error| BridgeFault::storage(error.to_string()))
@@ -1804,12 +2048,18 @@ fn enqueue_ios_mutation(
 
 fn payload_entity_id(operation_type: &str, payload: &Value) -> Option<Uuid> {
     let fields: &[&str] = match operation_type {
-        OFFLINE_OP_QSO_CREATE | OFFLINE_OP_QSO_DELETE => &["entity_id", "qso_id"],
+        OFFLINE_OP_QSO_CREATE
+        | OFFLINE_OP_QSO_CORRECT
+        | OFFLINE_OP_QSO_DELETE
+        | OFFLINE_OP_QSO_RESTORE
+        | OFFLINE_OP_QSO_NOTE_ADD => &["entity_id", "qso_id"],
         OFFLINE_OP_ACTIVATION_START | OFFLINE_OP_ACTIVATION_END => &["entity_id", "activation_id"],
         OFFLINE_OP_NET_SESSION_START | OFFLINE_OP_NET_SESSION_END => {
             &["entity_id", "net_session_id"]
         }
-        OFFLINE_OP_NET_CHECKIN_CREATE => &["entity_id", "checkin_id"],
+        OFFLINE_OP_NET_CHECKIN_CREATE | OFFLINE_OP_NET_CHECKIN_DELETE => {
+            &["entity_id", "checkin_id"]
+        }
         OFFLINE_OP_NET_TRAFFIC_CREATE => &["entity_id", "traffic_id"],
         OFFLINE_OP_STATION_PROFILE_CREATE | OFFLINE_OP_STATION_PROFILE_SELECT => {
             &["entity_id", "station_profile_id"]
@@ -1869,6 +2119,107 @@ fn ios_offline_operation_type(proposal_type: &str) -> &'static str {
         PROPOSAL_NET_CHECKIN_CREATE => OFFLINE_OP_NET_CHECKIN_CREATE,
         PROPOSAL_NET_TRAFFIC_CREATE => OFFLINE_OP_NET_TRAFFIC_CREATE,
         _ => "ios.domain.mutation",
+    }
+}
+
+fn ios_corrective_offline_operation_type(proposal_type: &str) -> String {
+    match proposal_type {
+        PROPOSAL_QSO_CREATE => OFFLINE_OP_QSO_CREATE,
+        PROPOSAL_QSO_CORRECT => OFFLINE_OP_QSO_CORRECT,
+        PROPOSAL_QSO_DELETE => OFFLINE_OP_QSO_DELETE,
+        PROPOSAL_QSO_RESTORE => OFFLINE_OP_QSO_RESTORE,
+        PROPOSAL_QSO_NOTE_ADD => OFFLINE_OP_QSO_NOTE_ADD,
+        PROPOSAL_ACTIVATION_START => OFFLINE_OP_ACTIVATION_START,
+        PROPOSAL_ACTIVATION_END => OFFLINE_OP_ACTIVATION_END,
+        PROPOSAL_NET_SESSION_START => OFFLINE_OP_NET_SESSION_START,
+        PROPOSAL_NET_SESSION_END => OFFLINE_OP_NET_SESSION_END,
+        PROPOSAL_NET_CHECKIN_CREATE => OFFLINE_OP_NET_CHECKIN_CREATE,
+        PROPOSAL_NET_CHECKIN_DELETE => OFFLINE_OP_NET_CHECKIN_DELETE,
+        PROPOSAL_NET_TRAFFIC_CREATE => OFFLINE_OP_NET_TRAFFIC_CREATE,
+        _ => proposal_type,
+    }
+    .to_owned()
+}
+
+fn is_supported_ios_corrective_proposal(proposal_type: &str) -> bool {
+    matches!(
+        proposal_type,
+        PROPOSAL_QSO_CREATE
+            | PROPOSAL_QSO_CORRECT
+            | PROPOSAL_QSO_DELETE
+            | PROPOSAL_QSO_RESTORE
+            | PROPOSAL_QSO_NOTE_ADD
+            | PROPOSAL_ACTIVATION_CREATE
+            | PROPOSAL_ACTIVATION_UPDATE
+            | PROPOSAL_ACTIVATION_START
+            | PROPOSAL_ACTIVATION_END
+            | PROPOSAL_ACTIVATION_CANCEL
+            | PROPOSAL_ACTIVATION_NOTE_ADD
+            | PROPOSAL_QSO_ACTIVATION_LINK
+            | PROPOSAL_QSO_ACTIVATION_UNLINK
+            | PROPOSAL_NET_TEMPLATE_CREATE
+            | PROPOSAL_NET_TEMPLATE_UPDATE
+            | PROPOSAL_NET_SESSION_START
+            | PROPOSAL_NET_SESSION_END
+            | PROPOSAL_NET_SESSION_CANCEL
+            | PROPOSAL_NET_CHECKIN_CREATE
+            | PROPOSAL_NET_CHECKIN_UPDATE
+            | PROPOSAL_NET_CHECKIN_DELETE
+            | PROPOSAL_NET_TRAFFIC_CREATE
+            | PROPOSAL_NET_TRAFFIC_UPDATE
+            | PROPOSAL_NET_REPORT_EXPORT
+    )
+}
+
+fn corrective_proposal_requires_entity_id(proposal_type: &str) -> bool {
+    !matches!(
+        proposal_type,
+        PROPOSAL_QSO_CREATE
+            | PROPOSAL_ACTIVATION_CREATE
+            | PROPOSAL_ACTIVATION_START
+            | PROPOSAL_NET_TEMPLATE_CREATE
+            | PROPOSAL_NET_SESSION_START
+            | PROPOSAL_NET_CHECKIN_CREATE
+            | PROPOSAL_NET_TRAFFIC_CREATE
+    )
+}
+
+fn corrective_payload_with_entity_id(
+    proposal_type: &str,
+    payload: Value,
+    entity_id: Option<Uuid>,
+) -> Result<Value, BridgeFault> {
+    let Some(mut object) = payload.as_object().cloned() else {
+        return Err(BridgeFault::invalid_input(
+            "corrective proposal payload must be a JSON object",
+        ));
+    };
+    if let Some(entity_id) = entity_id {
+        let entity_key = proposal_entity_key(proposal_type);
+        object
+            .entry(entity_key.to_owned())
+            .or_insert_with(|| json!(entity_id));
+    }
+    Ok(Value::Object(object))
+}
+
+fn proposal_entity_key(proposal_type: &str) -> &'static str {
+    match proposal_type {
+        PROPOSAL_NET_TEMPLATE_CREATE | PROPOSAL_NET_TEMPLATE_UPDATE => "net_template_id",
+        PROPOSAL_ACTIVATION_CREATE
+        | PROPOSAL_ACTIVATION_UPDATE
+        | PROPOSAL_ACTIVATION_START
+        | PROPOSAL_ACTIVATION_END
+        | PROPOSAL_ACTIVATION_CANCEL
+        | PROPOSAL_ACTIVATION_NOTE_ADD => "activation_id",
+        PROPOSAL_NET_SESSION_START | PROPOSAL_NET_SESSION_END | PROPOSAL_NET_SESSION_CANCEL => {
+            "net_session_id"
+        }
+        PROPOSAL_NET_CHECKIN_CREATE | PROPOSAL_NET_CHECKIN_UPDATE | PROPOSAL_NET_CHECKIN_DELETE => {
+            "checkin_id"
+        }
+        PROPOSAL_NET_TRAFFIC_CREATE | PROPOSAL_NET_TRAFFIC_UPDATE => "traffic_id",
+        _ => "qso_id",
     }
 }
 
@@ -2388,6 +2739,159 @@ mod tests {
             snapshot["data"]["conflict_reviews"]["health"]["resolved"],
             1
         );
+        let _ = std::fs::remove_dir_all(app_support_dir);
+    }
+
+    #[test]
+    fn conflict_review_corrective_events_use_proposal_pipeline() {
+        let app_support_dir = std::env::temp_dir().join(format!("ham-ios-{}", Uuid::new_v4()));
+        let logbook_id = default_logbook_id();
+        let device_id = Uuid::new_v4();
+        let qso = call_json(json!({
+            "command": "qso.create",
+            "payload": {
+                "app_support_dir": app_support_dir.to_string_lossy(),
+                "logbook_id": logbook_id,
+                "device_id": device_id,
+                "operation_id": Uuid::new_v4().to_string(),
+                "qso": {
+                    "contacted_callsign": "w1aw",
+                    "station_callsign": "ke8ygw",
+                    "operator_callsign": "ke8ygw",
+                    "started_at": "2026-07-10T12:00:00Z",
+                    "mode": "ssb",
+                    "band": "20m"
+                }
+            }
+        }));
+        assert_eq!(qso["ok"], true);
+        let qso_id = qso["data"]["qso"]["qso_id"].as_str().unwrap().to_owned();
+
+        let preview = ham_sync::PreviewPullResponse {
+            peer_id: "ios-peer".to_owned(),
+            logbook_id,
+            status: ham_sync::ReplicationStatus::Diverged,
+            local_head_hash: Some("local".to_owned()),
+            remote_head_hash: Some("remote".to_owned()),
+            missing_event_count: 0,
+            remote_event_count: 2,
+            events: Vec::new(),
+            message: "Remote chain does not contain the local head".to_owned(),
+        };
+        let report = ham_sync::conflict_report_from_preview(&preview, &[], Utc::now());
+        let created = call_json(json!({
+            "command": "sync.conflict_reviews.create",
+            "payload": {
+                "app_support_dir": app_support_dir.to_string_lossy(),
+                "report": report
+            }
+        }));
+        assert_eq!(created["ok"], true);
+        let review_id = created["data"]["conflict_review"]["review_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+
+        let resolved = call_json(json!({
+            "command": "sync.conflict_reviews.corrective_events",
+            "payload": {
+                "app_support_dir": app_support_dir.to_string_lossy(),
+                "logbook_id": logbook_id,
+                "device_id": device_id,
+                "review_id": review_id,
+                "operator_note": "Resolved with corrective note.",
+                "proposals": [{
+                    "proposal_type": PROPOSAL_QSO_NOTE_ADD,
+                    "entity_id": qso_id.clone(),
+                    "operation_id": Uuid::new_v4().to_string(),
+                    "payload": {
+                        "note": "Remote branch reviewed; local QSO retained."
+                    }
+                }]
+            }
+        }));
+        assert_eq!(resolved["ok"], true);
+        assert_eq!(
+            resolved["data"]["conflict_review"]["selected_resolution"]["choice"],
+            "create_corrective_events"
+        );
+        assert_eq!(
+            resolved["data"]["corrective_events"][0]["event_type"],
+            "official.log.qso.note_added"
+        );
+        assert_eq!(
+            resolved["data"]["corrective_event_hashes"][0],
+            resolved["data"]["corrective_events"][0]["event_hash"]
+        );
+        assert_eq!(
+            resolved["data"]["offline_mutations"][0]["entity_id"]
+                .as_str()
+                .unwrap(),
+            qso_id
+        );
+
+        let qsos = call_json(json!({
+            "command": "qso.list",
+            "payload": {
+                "app_support_dir": app_support_dir.to_string_lossy(),
+                "logbook_id": logbook_id
+            }
+        }));
+        assert_eq!(qsos["ok"], true);
+        assert_eq!(
+            qsos["data"]["records"][0]["note_history"][0]["note"],
+            "Remote branch reviewed; local QSO retained."
+        );
+        let _ = std::fs::remove_dir_all(app_support_dir);
+    }
+
+    #[test]
+    fn conflict_review_corrective_events_reject_empty_proposals() {
+        let app_support_dir = std::env::temp_dir().join(format!("ham-ios-{}", Uuid::new_v4()));
+        let logbook_id = default_logbook_id();
+        let preview = ham_sync::PreviewPullResponse {
+            peer_id: "ios-peer".to_owned(),
+            logbook_id,
+            status: ham_sync::ReplicationStatus::Diverged,
+            local_head_hash: Some("local".to_owned()),
+            remote_head_hash: Some("remote".to_owned()),
+            missing_event_count: 0,
+            remote_event_count: 2,
+            events: Vec::new(),
+            message: "Remote chain does not contain the local head".to_owned(),
+        };
+        let report = ham_sync::conflict_report_from_preview(&preview, &[], Utc::now());
+        let created = call_json(json!({
+            "command": "sync.conflict_reviews.create",
+            "payload": {
+                "app_support_dir": app_support_dir.to_string_lossy(),
+                "report": report
+            }
+        }));
+        let review_id = created["data"]["conflict_review"]["review_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+
+        let rejected = call_json(json!({
+            "command": "sync.conflict_reviews.corrective_events",
+            "payload": {
+                "app_support_dir": app_support_dir.to_string_lossy(),
+                "review_id": review_id,
+                "proposals": []
+            }
+        }));
+        assert_eq!(rejected["ok"], false);
+        assert_eq!(rejected["error"]["code"], "invalid_input");
+
+        let snapshot = call_json(json!({
+            "command": "sync.conflict_reviews.snapshot",
+            "payload": {
+                "app_support_dir": app_support_dir.to_string_lossy(),
+                "logbook_id": logbook_id
+            }
+        }));
+        assert_eq!(snapshot["data"]["conflict_reviews"]["health"]["open"], 1);
         let _ = std::fs::remove_dir_all(app_support_dir);
     }
 

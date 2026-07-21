@@ -1081,6 +1081,7 @@ function renderDivergenceReviewScreen() {
     <div class="monitor-actions">
       <button id="divergence-refresh" class="toolbar-button" type="button">Refresh Review</button>
       <button id="divergence-save-review" class="toolbar-button" type="button">Save Manual Review</button>
+      <button id="divergence-corrective-note" class="toolbar-button" type="button">Corrective Note</button>
       <button id="divergence-mark-action" class="toolbar-button" type="button">Mark User Action</button>
       <button id="divergence-keep-local" class="toolbar-button" type="button">Keep Local</button>
       <button id="divergence-export" class="toolbar-button" type="button">Export Report</button>
@@ -1116,6 +1117,7 @@ function renderConflictReviewRecord(review) {
 function bindDivergenceControls() {
   byId("divergence-refresh")?.addEventListener("click", refreshDivergenceReview);
   byId("divergence-save-review")?.addEventListener("click", saveConflictReview);
+  byId("divergence-corrective-note")?.addEventListener("click", createCorrectiveConflictNote);
   byId("divergence-mark-action")?.addEventListener("click", () => resolveConflictReview("mark_user_action_required"));
   byId("divergence-keep-local")?.addEventListener("click", () => resolveConflictReview("keep_local_history"));
   byId("divergence-export")?.addEventListener("click", exportDivergenceReportFromScreen);
@@ -3009,6 +3011,33 @@ async function resolveConflictReview(choice) {
   });
   state.conflictReview = result.conflict_review || state.conflictReview;
   state.importSummary = state.conflictReview || result;
+  openScreen("divergence-review");
+}
+
+async function createCorrectiveConflictNote() {
+  const review = await ensureOpenConflictReview();
+  if (!review) return;
+  const qsoId = window.prompt("QSO ID to annotate", "");
+  if (!qsoId?.trim()) return;
+  const note = window.prompt("Corrective note", "Manual conflict review corrective note.");
+  if (!note?.trim()) return;
+  const reviewNote = window.prompt("Review note", "Resolved with a corrective QSO note event.");
+  const result = await syncPost("/api/sync/conflict-reviews/corrective-events", {
+    review_id: review.review_id,
+    operator_note: reviewNote || "",
+    proposals: [
+      {
+        proposal_type: "proposal.qso.note.add",
+        entity_id: qsoId.trim(),
+        payload: {
+          note: note.trim(),
+        },
+      },
+    ],
+  });
+  state.conflictReview = result.conflict_review || state.conflictReview;
+  state.importSummary = result.conflict_review || result;
+  await refreshQsos();
   openScreen("divergence-review");
 }
 
