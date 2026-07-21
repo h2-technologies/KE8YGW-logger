@@ -100,6 +100,15 @@ Queued official events drain in deterministic logbook order, and a later event
 does not bypass an earlier blocked, failed, retrying, or dependency-missing
 operation.
 
+Manual/startup recovery uses a redacted `OfflineQueueRecoveryReport`. The shared
+Rust recovery path initializes absent or blank pre-v0.3/v0.2 queue state as an
+empty current queue, migrates conservative legacy `version: 0` queue records into
+current envelopes, promotes a valid interrupted atomic-write temp file when the
+main queue file is missing, removes stale temp writes, and quarantines corrupt
+queue JSON before creating a fresh empty current file. Unsupported current file
+versions, mutation schema versions, invalid dependencies, and duplicate
+per-logbook sequences still fail closed instead of being silently repaired.
+
 Station/equipment commands are queued as support-state mutations and marked
 accepted after the support store write succeeds. They remain support state and
 are not official logbook history.

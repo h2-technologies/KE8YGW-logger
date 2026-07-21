@@ -927,6 +927,13 @@ regression test covers a desktop-style restart/reconnect drain path, including
 ordered queued official events, accepted-by-hash cleanup, duplicate cloud replay,
 and local official-log duplicate prevention.
 
+The same Rust recovery command is used by desktop and iOS. It returns a redacted
+recovery report, initializes absent v0.2 queue state, migrates conservative
+legacy `version: 0` queue records, promotes interrupted atomic writes, removes
+stale temp writes, and quarantines corrupt queue JSON without exposing local
+machine paths. Unsupported current schemas and duplicate per-logbook sequences
+still fail closed.
+
 LAN trust records are durable support state. Pairing tokens require explicit
 operator approval, expire quickly, are single use, and are stored only as
 hashes. Trusted devices are scoped to logbooks, record only credential

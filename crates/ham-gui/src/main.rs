@@ -315,16 +315,19 @@ fn main() {
         OnlineSupportState::default(),
         "online support",
     );
-    match offline_queue.recover_interrupted_writes(chrono::Utc::now()) {
-        Ok(recovered) if recovered > 0 => {
+    match offline_queue.recover_or_initialize(chrono::Utc::now()) {
+        Ok(recovery) if recovery != Default::default() => {
             let _ = bridge.publish(RuntimeEventInput {
                 event_type: "sync.offline_queue.recovered".to_owned(),
                 severity: RuntimeEventSeverity::Info,
                 source: "ham-sync".to_owned(),
                 source_plugin_id: None,
                 workspace_id: Some("dashboard".to_owned()),
-                payload_summary: format!("Recovered {recovered} interrupted offline sync attempts"),
-                redacted_payload: Some(json!({"recovered_count": recovered})),
+                payload_summary: format!(
+                    "Recovered offline sync queue state: {} interrupted attempts, {} migrated legacy entries",
+                    recovery.recovered_interrupted_writes, recovery.migrated_legacy_mutations
+                ),
+                redacted_payload: Some(json!({"recovery": recovery})),
                 error: None,
             });
         }
@@ -4773,20 +4776,26 @@ fn handle_offline_queue_state(state: &AppState) -> Vec<u8> {
 
 fn handle_offline_queue_recover(state: &AppState) -> Vec<u8> {
     let now = chrono::Utc::now();
-    match state.offline_queue.recover_interrupted_writes(now) {
-        Ok(recovered_count) => {
+    match state.offline_queue.recover_or_initialize(now) {
+        Ok(recovery) => {
             let snapshot = state.offline_queue.load_snapshot(now).ok();
             let _ = publish_gui_runtime(
                 state,
                 "sync.offline_queue.recovered",
                 RuntimeEventSeverity::Info,
-                &format!("Recovered {recovered_count} interrupted offline sync attempts"),
-                Some(json!({"recovered_count": recovered_count})),
+                &format!(
+                    "Recovered offline sync queue state: {} interrupted attempts, {} migrated legacy entries",
+                    recovery.recovered_interrupted_writes, recovery.migrated_legacy_mutations
+                ),
+                Some(json!({"recovery": recovery})),
                 None,
             );
-            json_response(
-                &json!({"ok": true, "recovered_count": recovered_count, "offline_queue": snapshot}),
-            )
+            json_response(&json!({
+                "ok": true,
+                "recovered_count": recovery.recovered_interrupted_writes,
+                "recovery": recovery,
+                "offline_queue": snapshot
+            }))
         }
         Err(error) => {
             json_response_with_status(400, &json!({"ok": false, "error": error.to_string()}))

@@ -21,6 +21,7 @@ use crate::{PreviewPullResponse, ReplicationStatus};
 
 pub const OFFLINE_MUTATION_SCHEMA_VERSION: u32 = 1;
 pub const OFFLINE_QUEUE_FILE_VERSION: u32 = 1;
+pub const OFFLINE_QUEUE_LEGACY_V0_2_FILE_VERSION: u32 = 0;
 pub const LAN_TRUST_FILE_VERSION: u32 = 1;
 pub const CONFLICT_REVIEW_SCHEMA_VERSION: u32 = 1;
 pub const CONFLICT_REVIEW_FILE_VERSION: u32 = 1;
@@ -399,6 +400,41 @@ impl OfflineQueueFile {
     }
 }
 
+#[derive(Debug, Deserialize)]
+struct LegacyOfflineQueueFileV0 {
+    version: u32,
+    #[serde(default)]
+    pending_operations: Vec<LegacyOfflineMutationV0>,
+    #[serde(default)]
+    mutations: Vec<LegacyOfflineMutationV0>,
+}
+
+#[derive(Debug, Deserialize)]
+struct LegacyOfflineMutationV0 {
+    operation_id: Uuid,
+    #[serde(default)]
+    correlation_id: Option<Uuid>,
+    #[serde(default)]
+    client_id: Option<Uuid>,
+    device_id: Uuid,
+    logbook_id: Uuid,
+    #[serde(default)]
+    sequence: Option<u64>,
+    operation_type: String,
+    #[serde(default)]
+    idempotency_key: Option<String>,
+    #[serde(default)]
+    dependencies: Vec<OfflineMutationDependency>,
+    #[serde(default)]
+    payload: JsonValue,
+    #[serde(default)]
+    created_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    official_event_id: Option<Uuid>,
+    #[serde(default)]
+    local_event_hash: Option<String>,
+}
+
 #[derive(Debug, Clone)]
 pub struct JsonOfflineMutationQueue {
     path: PathBuf,
@@ -632,18 +668,73 @@ impl JsonOfflineMutationQueue {
         now: DateTime<Utc>,
     ) -> Result<usize, OfflineQueueError> {
         let mut file = self.load_file()?;
-        let mut recovered = 0;
-        for mutation in &mut file.mutations {
-            if mutation.status == OfflineMutationStatus::Sending {
-                mutation.status = OfflineMutationStatus::Retrying;
-                mutation.next_attempt_at = Some(now);
-                mutation.updated_at = now;
-                mutation.failure_reason = Some("recovered interrupted send attempt".to_owned());
-                recovered += 1;
-            }
-        }
+        let recovered = recover_interrupted_writes_in_file(&mut file, now);
         self.save_file(&file.sorted())?;
         Ok(recovered)
+    }
+
+    pub fn recover_or_initialize(
+        &self,
+        now: DateTime<Utc>,
+    ) -> Result<OfflineQueueRecoveryReport, OfflineQueueError> {
+        let mut report = OfflineQueueRecoveryReport::default();
+        if let Some(mut file) = self.recover_interrupted_atomic_write(now, &mut report)? {
+            report.recovered_interrupted_writes =
+                recover_interrupted_writes_in_file(&mut file, now);
+            self.save_file(&file.sorted())?;
+            return Ok(report);
+        }
+
+        if !self.path.exists() {
+            self.save_file(&OfflineQueueFile::default())?;
+            report.initialized_empty_queue = true;
+            report.migrated_v0_2_absent_queue = true;
+            return Ok(report);
+        }
+
+        let bytes = fs::read(&self.path)?;
+        if bytes.iter().all(u8::is_ascii_whitespace) {
+            self.save_file(&OfflineQueueFile::default())?;
+            report.initialized_empty_queue = true;
+            report.migrated_v0_2_absent_queue = true;
+            return Ok(report);
+        }
+
+        match migrate_legacy_v0_2_queue(&bytes, now) {
+            Ok(Some((mut file, migrated_count))) => {
+                report.migrated_legacy_mutations = migrated_count;
+                report.migrated_v0_2_file = true;
+                report.recovered_interrupted_writes =
+                    recover_interrupted_writes_in_file(&mut file, now);
+                self.save_file(&file.sorted())?;
+                return Ok(report);
+            }
+            Err(_) if is_legacy_v0_2_queue(&bytes).unwrap_or(false) => {
+                quarantine_file(&self.path, now)?;
+                self.save_file(&OfflineQueueFile::default())?;
+                report.quarantined_corrupt_file = true;
+                report.initialized_empty_queue = true;
+                return Ok(report);
+            }
+            Ok(None) | Err(_) => {}
+        }
+
+        match serde_json::from_slice::<OfflineQueueFile>(&bytes) {
+            Ok(mut file) => {
+                file.validate()?;
+                report.recovered_interrupted_writes =
+                    recover_interrupted_writes_in_file(&mut file, now);
+                self.save_file(&file.sorted())?;
+                Ok(report)
+            }
+            Err(_) => {
+                quarantine_file(&self.path, now)?;
+                self.save_file(&OfflineQueueFile::default())?;
+                report.quarantined_corrupt_file = true;
+                report.initialized_empty_queue = true;
+                Ok(report)
+            }
+        }
     }
 
     pub fn ready_to_send(
@@ -725,6 +816,41 @@ impl JsonOfflineMutationQueue {
         write_json_atomically(&self.path, file)?;
         Ok(())
     }
+
+    fn recover_interrupted_atomic_write(
+        &self,
+        now: DateTime<Utc>,
+        report: &mut OfflineQueueRecoveryReport,
+    ) -> Result<Option<OfflineQueueFile>, OfflineQueueError> {
+        let temp_path = atomic_temp_path(&self.path);
+        if !temp_path.exists() {
+            return Ok(None);
+        }
+        if !self.path.exists() {
+            let bytes = fs::read(&temp_path)?;
+            if let Ok(file) = serde_json::from_slice::<OfflineQueueFile>(&bytes) {
+                file.validate()?;
+                fs::rename(&temp_path, &self.path)?;
+                report.promoted_interrupted_atomic_write = true;
+                return Ok(Some(file.sorted()));
+            }
+        }
+        quarantine_file(&temp_path, now)?;
+        report.removed_stale_temp_file = true;
+        Ok(None)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct OfflineQueueRecoveryReport {
+    pub recovered_interrupted_writes: usize,
+    pub initialized_empty_queue: bool,
+    pub migrated_v0_2_absent_queue: bool,
+    pub migrated_v0_2_file: bool,
+    pub migrated_legacy_mutations: usize,
+    pub promoted_interrupted_atomic_write: bool,
+    pub removed_stale_temp_file: bool,
+    pub quarantined_corrupt_file: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -879,6 +1005,126 @@ fn retry_delay(mutation: &OfflineMutationEnvelope) -> ChronoDuration {
         .min(mutation.max_backoff_seconds)
         .max(1);
     ChronoDuration::seconds(seconds as i64)
+}
+
+fn recover_interrupted_writes_in_file(file: &mut OfflineQueueFile, now: DateTime<Utc>) -> usize {
+    let mut recovered = 0;
+    for mutation in &mut file.mutations {
+        if mutation.status == OfflineMutationStatus::Sending {
+            mutation.status = OfflineMutationStatus::Retrying;
+            mutation.next_attempt_at = Some(now);
+            mutation.updated_at = now;
+            mutation.failure_reason = Some("recovered interrupted send attempt".to_owned());
+            recovered += 1;
+        }
+    }
+    recovered
+}
+
+fn migrate_legacy_v0_2_queue(
+    bytes: &[u8],
+    now: DateTime<Utc>,
+) -> Result<Option<(OfflineQueueFile, usize)>, OfflineQueueError> {
+    let value: JsonValue = serde_json::from_slice(bytes)?;
+    if !is_legacy_v0_2_value(&value) {
+        return Ok(None);
+    }
+
+    let legacy: LegacyOfflineQueueFileV0 = serde_json::from_value(value)?;
+    if legacy.version != OFFLINE_QUEUE_LEGACY_V0_2_FILE_VERSION {
+        return Ok(None);
+    }
+
+    let legacy_mutations = if legacy.pending_operations.is_empty() {
+        legacy.mutations
+    } else {
+        legacy.pending_operations
+    };
+    let mut next_sequence_by_logbook = BTreeMap::new();
+    let mut mutations = Vec::with_capacity(legacy_mutations.len());
+    for record in legacy_mutations {
+        let created_at = record.created_at.unwrap_or(now);
+        let sequence = match record.sequence {
+            Some(sequence) => sequence,
+            None => {
+                let next = next_sequence_by_logbook
+                    .entry(record.logbook_id)
+                    .or_insert(1_u64);
+                let sequence = *next;
+                *next = next.saturating_add(1);
+                sequence
+            }
+        };
+        if sequence == 0 {
+            return Err(OfflineQueueError::InvalidSequence {
+                operation_id: record.operation_id,
+                sequence,
+            });
+        }
+        next_sequence_by_logbook
+            .entry(record.logbook_id)
+            .and_modify(|next| *next = (*next).max(sequence.saturating_add(1)))
+            .or_insert(sequence.saturating_add(1));
+        let mut envelope = OfflineMutationEnvelope {
+            schema_version: OFFLINE_MUTATION_SCHEMA_VERSION,
+            operation_id: record.operation_id,
+            correlation_id: record.correlation_id.unwrap_or(record.operation_id),
+            client_id: record.client_id.unwrap_or(record.device_id),
+            device_id: record.device_id,
+            logbook_id: record.logbook_id,
+            sequence,
+            operation_type: record.operation_type,
+            idempotency_key: record.idempotency_key.unwrap_or_else(|| {
+                format!(
+                    "legacy-v0.2:{}:{}:{}",
+                    record.logbook_id, record.device_id, record.operation_id
+                )
+            }),
+            dependencies: record.dependencies,
+            payload: record.payload,
+            status: OfflineMutationStatus::Pending,
+            attempts: 0,
+            max_attempts: DEFAULT_MAX_ATTEMPTS,
+            backoff_seconds: DEFAULT_BACKOFF_SECONDS,
+            max_backoff_seconds: DEFAULT_MAX_BACKOFF_SECONDS,
+            next_attempt_at: None,
+            created_at,
+            updated_at: now,
+            official_event_id: record.official_event_id,
+            local_event_hash: record.local_event_hash,
+            accepted_at: None,
+            failure_reason: Some("migrated from v0.2 offline queue state".to_owned()),
+            last_error_code: None,
+        };
+        if envelope.local_event_hash.is_some() {
+            envelope.status = OfflineMutationStatus::Retrying;
+            envelope.next_attempt_at = Some(now);
+        }
+        envelope.validate()?;
+        mutations.push(envelope);
+    }
+
+    let file = OfflineQueueFile {
+        version: OFFLINE_QUEUE_FILE_VERSION,
+        next_sequence_by_logbook,
+        mutations,
+    }
+    .sorted();
+    file.validate()?;
+    let migrated = file.mutations.len();
+    Ok(Some((file, migrated)))
+}
+
+fn is_legacy_v0_2_queue(bytes: &[u8]) -> Result<bool, serde_json::Error> {
+    serde_json::from_slice::<JsonValue>(bytes).map(|value| is_legacy_v0_2_value(&value))
+}
+
+fn is_legacy_v0_2_value(value: &JsonValue) -> bool {
+    value
+        .get("version")
+        .and_then(JsonValue::as_u64)
+        .map(|version| version as u32)
+        == Some(OFFLINE_QUEUE_LEGACY_V0_2_FILE_VERSION)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1810,6 +2056,40 @@ fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
     diff == 0
 }
 
+fn atomic_temp_path(path: &Path) -> PathBuf {
+    path.with_extension(format!(
+        "{}.tmp",
+        path.extension()
+            .and_then(|extension| extension.to_str())
+            .unwrap_or("json")
+    ))
+}
+
+fn quarantine_file(path: &Path, now: DateTime<Utc>) -> Result<(), io::Error> {
+    if !path.exists() {
+        return Ok(());
+    }
+    let mut quarantine_path = path.with_extension(format!(
+        "{}.corrupt-{}",
+        path.extension()
+            .and_then(|extension| extension.to_str())
+            .unwrap_or("json"),
+        now.format("%Y%m%d%H%M%S")
+    ));
+    if quarantine_path.exists() {
+        quarantine_path = path.with_extension(format!(
+            "{}.corrupt-{}-{}",
+            path.extension()
+                .and_then(|extension| extension.to_str())
+                .unwrap_or("json"),
+            now.format("%Y%m%d%H%M%S"),
+            Uuid::new_v4()
+        ));
+    }
+    fs::rename(path, quarantine_path)?;
+    Ok(())
+}
+
 fn write_json_atomically<T>(path: &Path, value: &T) -> Result<(), io::Error>
 where
     T: Serialize,
@@ -1817,12 +2097,7 @@ where
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-    let temp_path = path.with_extension(format!(
-        "{}.tmp",
-        path.extension()
-            .and_then(|extension| extension.to_str())
-            .unwrap_or("json")
-    ));
+    let temp_path = atomic_temp_path(path);
     {
         let mut file = fs::File::create(&temp_path)?;
         serde_json::to_writer_pretty(&mut file, value).map_err(io::Error::other)?;
@@ -1997,6 +2272,165 @@ mod tests {
             queue.load_snapshot(Utc::now()),
             Err(OfflineQueueError::UnsupportedMutationSchema { .. })
         ));
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn recover_or_initialize_migrates_absent_v0_2_queue_state() {
+        let (queue, dir) = queue();
+        let now = Utc::now();
+
+        let report = queue.recover_or_initialize(now).unwrap();
+
+        assert!(report.initialized_empty_queue);
+        assert!(report.migrated_v0_2_absent_queue);
+        assert_eq!(report.migrated_legacy_mutations, 0);
+        let snapshot = queue.load_snapshot(now).unwrap();
+        assert_eq!(snapshot.queue_schema_version, OFFLINE_QUEUE_FILE_VERSION);
+        assert_eq!(snapshot.health.total, 0);
+        assert!(queue.path().exists());
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn recover_or_initialize_migrates_legacy_v0_2_records() {
+        let (queue, dir) = queue();
+        fs::create_dir_all(&dir).unwrap();
+        let now = Utc::now();
+        let logbook_id = Uuid::new_v4();
+        let device_id = Uuid::new_v4();
+        let first_operation = Uuid::new_v4();
+        let second_operation = Uuid::new_v4();
+        let legacy = serde_json::json!({
+            "version": OFFLINE_QUEUE_LEGACY_V0_2_FILE_VERSION,
+            "pending_operations": [
+                {
+                    "operation_id": first_operation,
+                    "device_id": device_id,
+                    "logbook_id": logbook_id,
+                    "operation_type": OFFLINE_OP_QSO_CREATE,
+                    "payload": {"contacted_callsign": "K1LEGACY"},
+                    "local_event_hash": "legacy-event-hash"
+                },
+                {
+                    "operation_id": second_operation,
+                    "client_id": Uuid::new_v4(),
+                    "device_id": device_id,
+                    "logbook_id": logbook_id,
+                    "operation_type": OFFLINE_OP_QSO_DELETE,
+                    "idempotency_key": "legacy-delete"
+                }
+            ]
+        });
+        fs::write(queue.path(), serde_json::to_vec_pretty(&legacy).unwrap()).unwrap();
+
+        let report = queue.recover_or_initialize(now).unwrap();
+
+        assert!(report.migrated_v0_2_file);
+        assert_eq!(report.migrated_legacy_mutations, 2);
+        let snapshot = queue.load_snapshot(now).unwrap();
+        assert_eq!(snapshot.health.total, 2);
+        assert_eq!(snapshot.health.retrying, 1);
+        assert_eq!(snapshot.health.pending, 1);
+        assert_eq!(
+            snapshot
+                .mutations
+                .iter()
+                .map(|mutation| mutation.sequence)
+                .collect::<Vec<_>>(),
+            vec![1, 2]
+        );
+        assert!(snapshot
+            .mutations
+            .iter()
+            .all(|mutation| mutation.schema_version == OFFLINE_MUTATION_SCHEMA_VERSION));
+        let raw = fs::read_to_string(queue.path()).unwrap();
+        assert!(raw.contains("\"version\": 1"));
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn recover_or_initialize_quarantines_corrupt_queue_file() {
+        let (queue, dir) = queue();
+        fs::create_dir_all(&dir).unwrap();
+        let now = Utc::now();
+        fs::write(queue.path(), b"{\"version\": 1,").unwrap();
+
+        let report = queue.recover_or_initialize(now).unwrap();
+
+        assert!(report.quarantined_corrupt_file);
+        assert!(report.initialized_empty_queue);
+        assert_eq!(queue.load_snapshot(now).unwrap().health.total, 0);
+        let quarantined = fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(Result::ok)
+            .any(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with("offline-mutations.json.corrupt-")
+            });
+        assert!(quarantined);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn recover_or_initialize_quarantines_invalid_legacy_v0_2_records() {
+        let (queue, dir) = queue();
+        fs::create_dir_all(&dir).unwrap();
+        let now = Utc::now();
+        let legacy = serde_json::json!({
+            "version": OFFLINE_QUEUE_LEGACY_V0_2_FILE_VERSION,
+            "pending_operations": [{
+                "operation_id": Uuid::new_v4(),
+                "device_id": Uuid::new_v4(),
+                "logbook_id": Uuid::new_v4(),
+                "sequence": 0,
+                "operation_type": OFFLINE_OP_QSO_CREATE
+            }]
+        });
+        fs::write(queue.path(), serde_json::to_vec_pretty(&legacy).unwrap()).unwrap();
+
+        let report = queue.recover_or_initialize(now).unwrap();
+
+        assert!(report.quarantined_corrupt_file);
+        assert!(report.initialized_empty_queue);
+        assert_eq!(queue.load_snapshot(now).unwrap().health.total, 0);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn recover_or_initialize_promotes_interrupted_atomic_write() {
+        let (queue, dir) = queue();
+        fs::create_dir_all(&dir).unwrap();
+        let now = Utc::now();
+        let logbook_id = Uuid::new_v4();
+        let device_id = Uuid::new_v4();
+        let mut mutation = OfflineMutationEnvelope::new(
+            input(logbook_id, device_id, OFFLINE_OP_QSO_CREATE),
+            1,
+            now,
+        );
+        mutation.status = OfflineMutationStatus::Sending;
+        let file = OfflineQueueFile {
+            version: OFFLINE_QUEUE_FILE_VERSION,
+            next_sequence_by_logbook: BTreeMap::from([(logbook_id, 2)]),
+            mutations: vec![mutation],
+        };
+        fs::write(
+            atomic_temp_path(queue.path()),
+            serde_json::to_vec_pretty(&file).unwrap(),
+        )
+        .unwrap();
+
+        let report = queue.recover_or_initialize(now).unwrap();
+
+        assert!(report.promoted_interrupted_atomic_write);
+        assert_eq!(report.recovered_interrupted_writes, 1);
+        assert!(queue.path().exists());
+        assert!(!atomic_temp_path(queue.path()).exists());
+        let snapshot = queue.load_snapshot(now).unwrap();
+        assert_eq!(snapshot.health.retrying, 1);
         let _ = fs::remove_dir_all(dir);
     }
 

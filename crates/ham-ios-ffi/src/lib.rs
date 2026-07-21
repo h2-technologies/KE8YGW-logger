@@ -883,14 +883,15 @@ fn sync_offline_queue_recover_command(payload: Value) -> Result<Value, BridgeFau
         .ok_or_else(|| BridgeFault::invalid_input("app_support_dir is required"))?;
     let queue = offline_queue(app_support_dir)?;
     let now = Utc::now();
-    let recovered_count = queue
-        .recover_interrupted_writes(now)
+    let recovery = queue
+        .recover_or_initialize(now)
         .map_err(|error| BridgeFault::storage(error.to_string()))?;
     let mut snapshot = sync_snapshot_for_support(
         Some(app_support_dir),
         request.logbook_id.unwrap_or_else(default_logbook_id),
     )?;
-    snapshot["recovered_count"] = json!(recovered_count);
+    snapshot["recovered_count"] = json!(recovery.recovered_interrupted_writes);
+    snapshot["recovery"] = json!(recovery);
     Ok(snapshot)
 }
 

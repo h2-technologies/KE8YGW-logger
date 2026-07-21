@@ -12,6 +12,10 @@ Last audited: 2026-07-21
   queue-health metadata.
 - Crash-recoverable JSON queue support store with safe rejection of unsupported
   queue and mutation schema versions.
+- Shared queue recovery report for desktop and iOS that initializes absent
+  v0.2 queue state, migrates conservative legacy `version: 0` queue records,
+  promotes interrupted atomic writes, and quarantines corrupt queue JSON without
+  exposing machine-specific paths.
 - Desktop queue integration for QSO, activation, Net Control, and
   station-profile support-state mutations.
 - iOS FFI queue integration for QSO, activation, Net Control, station-profile,
@@ -55,6 +59,7 @@ Last audited: 2026-07-21
 ```powershell
 cargo test -p ham-sync
 cargo test -p ham-sync desktop_queue_recovers_restart_and_drains_to_cloud_without_duplicates
+cargo test -p ham-sync recover_or_initialize
 cargo test -p ham-gui
 cargo test -p ham-ios-ffi
 just version-check
