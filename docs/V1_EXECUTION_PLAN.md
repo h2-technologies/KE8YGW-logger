@@ -42,10 +42,13 @@ outside issue #2.
      rejection, revocation, HMAC-SHA256 signed LAN read endpoint authorization,
      GUI LAN auth credential rotation/recovery, and desktop/iOS
      corrective-event commands that submit explicit proposals and resolve
-     reviews with generated official event hashes. Deterministic shared sync
-     golden tests cover desktop-style crash recovery, transient network retry,
-     duplicate replay, reordered delivery rejection, iOS-style pull/projection
-     replay, clock-skewed timestamps ordered by event hashes, divergent heads,
+     reviews with generated official event hashes. The browser divergence screen
+     now exposes saved review selection, structured conflict summaries,
+     explicit recovery-path choices, and form-based corrective QSO note events
+     through the Rust desktop endpoints. Deterministic shared sync golden tests
+     cover desktop-style crash recovery, transient network retry, duplicate
+     replay, reordered delivery rejection, iOS-style pull/projection replay,
+     clock-skewed timestamps ordered by event hashes, divergent heads,
      concurrent correction and tombstone/restore review, v0.2 legacy queue
      migration, and LAN revocation.
      The iOS FFI bridge also exposes bounded background retry planning and
@@ -54,8 +57,8 @@ outside issue #2.
      acknowledgment, transient backoff, and user-action stops for auth,
      validation, divergence, missing-event, and permanent failures.
    - Remaining: production reciprocal pairing UX, stronger LAN key-exchange
-     hardening, full guided cross-client branch review and reconciliation UI,
-     physical-device LAN/iOS local-network
+     hardening, end-to-end cross-client branch review/reconciliation workflow
+     qualification, physical-device LAN/iOS local-network
      validation, release-device iOS background task and poor-network
      qualification, and real hosted web/desktop/iOS/self-hosted
      migration/recovery qualification.
@@ -147,9 +150,10 @@ outside issue #2.
 ## Next Three Goals
 
 1. Finish sync/reconciliation hardening: production reciprocal LAN pairing UX,
-   stronger LAN key-exchange hardening, full guided cross-client branch review
-   and reconciliation UI, physical-device LAN/iOS local-network validation, and
-   iOS background task and poor-network validation on release devices.
+   stronger LAN key-exchange hardening, end-to-end cross-client branch
+   review/reconciliation workflow qualification, physical-device LAN/iOS
+   local-network validation, and iOS background task and poor-network
+   validation on release devices.
 2. Complete production provider qualification and release-runner live validation
    for the issue #2 provider set.
 3. Wire hosted web, desktop, and iOS UI flows to the implemented account,

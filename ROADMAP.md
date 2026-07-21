@@ -44,13 +44,15 @@ workflows, Tauri desktop wrapper, native iOS SwiftUI/Rust bridge, provider
 framework, maps/GIS foundation, diagnostics, governance, version validation,
 cross-platform CI/security automation, and deterministic shared sync golden
 coverage for crash recovery, retry, duplicate/reordered delivery, conflict
-review, legacy queue migration, restore replay, and LAN revocation.
+review, legacy queue migration, restore replay, and LAN revocation, plus a
+guided browser conflict-review surface for saved review selection, structured
+conflict summaries, explicit recovery choices, and corrective QSO note events.
 
 Partial or incomplete v1 areas include hosted web/desktop/iOS account UX,
 production email/Turnstile deployment configuration, production reciprocal LAN
-pairing UX, stronger LAN key-exchange hardening, full guided cross-client branch
-review and reconciliation UI, physical-device LAN/iOS local-network validation,
-release-device iOS background task/poor-network qualification, production provider
+pairing UX, stronger LAN key-exchange hardening, end-to-end cross-client branch
+review/reconciliation workflow qualification, physical-device LAN/iOS
+local-network validation, release-device iOS background task/poor-network qualification, production provider
 qualification, cached/offline maps, contesting, EmComm forms, signed desktop
 updater, Apple signing/TestFlight/App Store distribution, operations, and
 release-candidate qualification.
@@ -61,9 +63,10 @@ See [docs/V1_EXECUTION_PLAN.md](docs/V1_EXECUTION_PLAN.md) for the
 dependency-ordered critical path. The next three implementation goals are:
 
 - Finish sync/reconciliation hardening: production reciprocal LAN pairing UX,
-  stronger LAN key-exchange hardening, full guided cross-client branch review
-  and reconciliation UI, physical-device LAN/iOS local-network validation, and
-  release-device iOS background task/poor-network qualification.
+  stronger LAN key-exchange hardening, end-to-end cross-client branch
+  review/reconciliation workflow qualification, physical-device LAN/iOS
+  local-network validation, and release-device iOS background task/poor-network
+  qualification.
 - Production provider qualification for QRZ, QRZ Logbook, LoTW, eQSL, Club
   Log, POTA, SOTAWatch, DX Cluster/RBN, maps, and propagation.
 - Hosted web, desktop, and iOS UI flows for the implemented account/session,

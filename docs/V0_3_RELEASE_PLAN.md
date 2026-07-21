@@ -44,6 +44,9 @@ Last audited: 2026-07-21
   bridge clients. They submit explicit corrective proposals through the normal
   proposal pipeline, persist the offline mutation, append official events, and
   resolve the review with the generated event hashes.
+- Guided browser conflict-review surface for saved review selection, structured
+  conflict summaries, explicit recovery-path decisions, and form-based
+  corrective QSO note events through the Rust desktop endpoints.
 - Durable LAN trust store with explicit approval, hashed short-lived single-use
   pairing tokens, logbook-scoped trusted devices, replay nonce rejection, and
   immediate revocation.
@@ -66,8 +69,9 @@ Last audited: 2026-07-21
 - Production reciprocal pairing UX across desktop and iOS.
 - Stronger LAN key-exchange hardening.
 - Physical-device LAN and iOS Local Network permission validation.
-- Full guided cross-client conflict review and reconciliation UI beyond the
-  current prompt/API corrective-event path.
+- End-to-end cross-client branch review and reconciliation workflow beyond the
+  current guided browser review surface and desktop/iOS corrective-event
+  endpoints.
 - Release-device iOS background task execution, poor-network behavior, and
   local-network permission validation.
 - Real hosted web/desktop/iOS/self-hosted end-to-end device qualification,

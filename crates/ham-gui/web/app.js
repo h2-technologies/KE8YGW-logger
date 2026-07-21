@@ -34,6 +34,7 @@ const state = {
   backupState: { lastBackup: null, dryRun: null, importResult: null },
   divergenceReview: null,
   conflictReview: null,
+  selectedConflictReviewId: null,
   reportPreview: null,
   lastReport: null,
   syncState: null,
@@ -1077,17 +1078,16 @@ function renderDivergencePanel() {
 }
 
 function renderDivergenceReviewScreen() {
+  const selectedReview = selectedConflictReview();
   return `<div class="stack">
     <div class="monitor-actions">
       <button id="divergence-refresh" class="toolbar-button" type="button">Refresh Review</button>
       <button id="divergence-save-review" class="toolbar-button" type="button">Save Manual Review</button>
-      <button id="divergence-corrective-note" class="toolbar-button" type="button">Corrective Note</button>
-      <button id="divergence-mark-action" class="toolbar-button" type="button">Mark User Action</button>
-      <button id="divergence-keep-local" class="toolbar-button" type="button">Keep Local</button>
       <button id="divergence-export" class="toolbar-button" type="button">Export Report</button>
     </div>
     ${state.divergenceReview ? renderDivergenceReview(state.divergenceReview) : `<p class="muted">Refresh to inspect current sync head state.</p>`}
-    ${state.conflictReview ? renderConflictReviewRecord(state.conflictReview) : ""}
+    ${renderConflictReviewList()}
+    ${selectedReview ? renderConflictReviewRecord(selectedReview) : ""}
   </div>`;
 }
 
@@ -1102,25 +1102,201 @@ function renderDivergenceReview(review) {
     <p>Revoked device state: ${review.revoked_device_state || "unknown"}</p>
     <p><strong>Recommended action:</strong> ${escapeHtml(review.recommended_action || "No action available.")}</p>
     ${review.divergence_detected ? `<p class="event-error">Automatic merge is intentionally unavailable. Export this report for manual review.</p>` : ""}
-    ${review.conflict_report ? `<pre class="path-block">${JSON.stringify(review.conflict_report, null, 2)}</pre>` : ""}
+    ${review.conflict_report ? renderConflictReport(review.conflict_report) : ""}
+  </div>`;
+}
+
+function conflictReviewSnapshot() {
+  return state.syncState?.conflict_reviews || { health: { total: 0, open: 0, resolved: 0 }, reviews: [] };
+}
+
+function conflictReviewList() {
+  return [...(conflictReviewSnapshot().reviews || [])].sort((left, right) => {
+    if (reviewStatus(left) !== reviewStatus(right)) return isOpenReview(left) ? -1 : 1;
+    return String(right.updated_at || right.created_at || "").localeCompare(String(left.updated_at || left.created_at || ""));
+  });
+}
+
+function findConflictReview(reviewId) {
+  return conflictReviewList().find((review) => review.review_id === reviewId) || null;
+}
+
+function reviewStatus(review) {
+  return String(review?.status || "").toLowerCase();
+}
+
+function isOpenReview(review) {
+  return reviewStatus(review) === "open";
+}
+
+function selectedConflictReview() {
+  const selected = state.selectedConflictReviewId ? findConflictReview(state.selectedConflictReviewId) : null;
+  if (selected) return selected;
+  const current = state.conflictReview?.review_id ? findConflictReview(state.conflictReview.review_id) || state.conflictReview : null;
+  if (current) return current;
+  return conflictReviewList().find(isOpenReview) || conflictReviewList()[0] || null;
+}
+
+function conflictKindLabel(kind) {
+  return String(kind || "manual_review_required")
+    .replace(/_/g, " ")
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function resolutionLabel(choice) {
+  const labels = {
+    keep_local_history: "Keep Local History",
+    pull_remote_after_review: "Record Pull Approval",
+    retry_after_dependency_arrives: "Retry After Dependency",
+    mark_user_action_required: "Mark User Action",
+  };
+  return labels[choice] || conflictKindLabel(choice);
+}
+
+function reportAllowsPullAfterReview(report) {
+  return Boolean(
+    report?.logbook_id &&
+      report.status !== "diverged" &&
+      (report.conflicts || []).every((conflict) => conflict.safe_auto_merge),
+  );
+}
+
+function reportHasMissingDependency(report) {
+  return Boolean(report && (report.conflicts || []).some((conflict) => conflict.kind === "missing_dependency"));
+}
+
+function renderConflictReviewList() {
+  const snapshot = conflictReviewSnapshot();
+  const reviews = conflictReviewList();
+  return `<div class="sync-summary">
+    <p><strong>Saved reviews:</strong> open ${snapshot.health?.open || 0} / resolved ${snapshot.health?.resolved || 0} / total ${snapshot.health?.total || 0}</p>
+    ${
+      reviews.length
+        ? `<div class="conflict-review-list">
+            ${reviews
+              .map((review) => {
+                const selected = selectedConflictReview()?.review_id === review.review_id ? " is-selected" : "";
+                const conflictCount = review.report?.conflicts?.length || 0;
+                return `<button class="event-row${selected}" type="button" data-conflict-review-id="${escapeHtml(review.review_id)}">
+                  <span class="event-main">
+                    <strong>${escapeHtml(review.report?.status || "unknown")}</strong>
+                    <span>${conflictCount} conflicts / ${escapeHtml(review.report?.peer_id || "unknown peer")}</span>
+                  </span>
+                  <span class="event-meta">
+                    <span class="severity severity-${isOpenReview(review) ? "warn" : "info"}">${escapeHtml(review.status)}</span>
+                    <small>${escapeHtml(review.updated_at || review.created_at || "unknown")}</small>
+                  </span>
+                </button>`;
+              })
+              .join("")}
+          </div>`
+        : `<p class="muted">No saved conflict reviews.</p>`
+    }
   </div>`;
 }
 
 function renderConflictReviewRecord(review) {
+  const report = review.report || {};
+  const selectedResolution = review.selected_resolution?.choice || "not selected";
+  const pullAllowed = reportAllowsPullAfterReview(report);
+  const dependencyRetryAllowed = reportHasMissingDependency(report);
   return `<div class="sync-summary">
-    <p><strong>Saved review:</strong> ${review.status} / <small>${review.review_id}</small></p>
-    <p>Resolution: ${review.selected_resolution?.choice || "not selected"}</p>
-    <p>Created: ${review.created_at || "unknown"} / resolved: ${review.resolved_at || "open"}</p>
+    <p><strong>Saved review:</strong> ${escapeHtml(review.status)} / <small>${escapeHtml(review.review_id)}</small></p>
+    <p>Resolution: ${escapeHtml(review.selected_resolution?.choice || "not selected")}</p>
+    <p>Created: ${escapeHtml(review.created_at || "unknown")} / resolved: ${escapeHtml(review.resolved_at || "open")}</p>
+    ${renderConflictReport(report)}
+    ${
+      isOpenReview(review)
+        ? `<div class="conflict-resolution-panel">
+            <label>Operator Note
+              <textarea id="conflict-resolution-note" class="placeholder-control conflict-note" maxlength="4096">${escapeHtml(
+                review.selected_resolution?.operator_note || "",
+              )}</textarea>
+            </label>
+            <div class="monitor-actions">
+              <button id="divergence-keep-local" class="toolbar-button" type="button">${resolutionLabel("keep_local_history")}</button>
+              <button id="divergence-pull-reviewed" class="toolbar-button" type="button" ${pullAllowed ? "" : "disabled"}>${resolutionLabel("pull_remote_after_review")}</button>
+              <button id="divergence-retry-dependency" class="toolbar-button" type="button" ${dependencyRetryAllowed ? "" : "disabled"}>${resolutionLabel("retry_after_dependency_arrives")}</button>
+              <button id="divergence-mark-action" class="toolbar-button" type="button">${resolutionLabel("mark_user_action_required")}</button>
+            </div>
+            <form id="conflict-corrective-form" class="qso-form">
+              <label>Corrective QSO
+                <input id="conflict-corrective-qso-id" class="placeholder-control" list="conflict-qso-options" />
+              </label>
+              <datalist id="conflict-qso-options">
+                ${(state.qsos || [])
+                  .map((qso) => `<option value="${escapeHtml(qso.qso_id)}">${escapeHtml(qso.payload?.contacted_callsign || qso.qso_id)}</option>`)
+                  .join("")}
+              </datalist>
+              <label>Corrective Note
+                <textarea id="conflict-corrective-note" class="placeholder-control conflict-note"></textarea>
+              </label>
+              <label>Review Note
+                <textarea id="conflict-corrective-review-note" class="placeholder-control conflict-note">Resolved with a corrective QSO note event.</textarea>
+              </label>
+              <button class="toolbar-button" type="submit">Create Corrective Note Event</button>
+            </form>
+          </div>`
+        : `<p><strong>Selected recovery:</strong> ${escapeHtml(selectedResolution)}</p>`
+    }
+  </div>`;
+}
+
+function renderConflictReport(report) {
+  if (!report) return "";
+  const conflicts = report.conflicts || [];
+  return `<div class="conflict-report">
+    <p><strong>Peer:</strong> ${escapeHtml(report.peer_id || "unknown")} / <strong>Status:</strong> ${escapeHtml(report.status || "unknown")}</p>
+    <p><strong>Logbook:</strong> <small>${escapeHtml(report.logbook_id || "unknown")}</small></p>
+    <p><strong>Local head:</strong> <small>${escapeHtml(report.local_head_hash || "genesis")}</small></p>
+    <p><strong>Remote head:</strong> <small>${escapeHtml(report.remote_head_hash || "unknown")}</small></p>
+    <p><strong>Missing events:</strong> ${report.missing_event_count || 0} / <strong>Pending operations:</strong> ${report.pending_operation_count || 0}</p>
+    <p><strong>Recommended action:</strong> ${escapeHtml(report.recommended_action || "Review required.")}</p>
+    <div class="conflict-list">
+      ${
+        conflicts.length
+          ? conflicts
+              .map(
+                (conflict) => `<div class="conflict-item">
+                  <p><strong>${escapeHtml(conflictKindLabel(conflict.kind))}</strong> <span class="severity severity-${conflict.requires_user_action ? "warn" : "info"}">${conflict.requires_user_action ? "action" : "review"}</span></p>
+                  <p>${escapeHtml(conflict.message || "")}</p>
+                  <p>Safe automatic merge: ${conflict.safe_auto_merge ? "yes" : "no"}</p>
+                  <p>Options: ${(conflict.resolution_options || []).map((option) => `<span class="pill">${escapeHtml(option)}</span>`).join("") || "none"}</p>
+                  ${
+                    conflict.related_operation_ids?.length
+                      ? `<p>Operations: ${conflict.related_operation_ids.map((id) => `<small>${escapeHtml(id)}</small>`).join(" ")}</p>`
+                      : ""
+                  }
+                  ${
+                    conflict.related_event_hashes?.length
+                      ? `<p>Events: ${conflict.related_event_hashes.map((hash) => `<small>${escapeHtml(hash)}</small>`).join(" ")}</p>`
+                      : ""
+                  }
+                </div>`,
+              )
+              .join("")
+          : `<p class="muted">No structured conflicts.</p>`
+      }
+    </div>
   </div>`;
 }
 
 function bindDivergenceControls() {
   byId("divergence-refresh")?.addEventListener("click", refreshDivergenceReview);
   byId("divergence-save-review")?.addEventListener("click", saveConflictReview);
-  byId("divergence-corrective-note")?.addEventListener("click", createCorrectiveConflictNote);
+  byId("conflict-corrective-form")?.addEventListener("submit", createCorrectiveConflictNote);
   byId("divergence-mark-action")?.addEventListener("click", () => resolveConflictReview("mark_user_action_required"));
   byId("divergence-keep-local")?.addEventListener("click", () => resolveConflictReview("keep_local_history"));
+  byId("divergence-pull-reviewed")?.addEventListener("click", () => resolveConflictReview("pull_remote_after_review"));
+  byId("divergence-retry-dependency")?.addEventListener("click", () => resolveConflictReview("retry_after_dependency_arrives"));
   byId("divergence-export")?.addEventListener("click", exportDivergenceReportFromScreen);
+  document.querySelectorAll("[data-conflict-review-id]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.selectedConflictReviewId = button.dataset.conflictReviewId;
+      state.conflictReview = findConflictReview(state.selectedConflictReviewId);
+      openScreen("divergence-review");
+    });
+  });
 }
 
 function redactionSummaryText(summary) {
@@ -2967,9 +3143,22 @@ async function importBackupFromScreen() {
 }
 
 async function refreshDivergenceReview() {
-  state.divergenceReview = await fetch("/api/sync/divergence/review").then((response) => response.json());
+  const [divergenceReview, conflictReviews] = await Promise.all([
+    fetch("/api/sync/divergence/review").then((response) => response.json()),
+    fetch("/api/sync/conflict-reviews").then((response) => response.json()),
+  ]);
+  state.divergenceReview = divergenceReview;
+  if (!state.syncState) await refreshSyncState();
+  if (conflictReviews.ok && state.syncState) {
+    state.syncState.conflict_reviews = conflictReviews.conflict_reviews;
+    state.syncState.conflict_reviews_error = null;
+  } else if (state.syncState) {
+    state.syncState.conflict_reviews_error = conflictReviews.error || "conflict review state unavailable";
+  }
+  const selected = selectedConflictReview();
+  state.selectedConflictReviewId = selected?.review_id || state.selectedConflictReviewId;
+  state.conflictReview = selected || state.conflictReview;
   openScreen("divergence-review");
-  render();
 }
 
 async function openDivergenceReview() {
@@ -2991,7 +3180,13 @@ async function exportDivergenceReportFromScreen() {
 
 async function saveConflictReview() {
   const result = await syncPost("/api/sync/conflict-reviews/create");
+  if (result.ok === false) {
+    state.importSummary = result;
+    openScreen("divergence-review");
+    return;
+  }
   state.conflictReview = result.conflict_review || state.conflictReview;
+  state.selectedConflictReviewId = state.conflictReview?.review_id || state.selectedConflictReviewId;
   state.importSummary = state.conflictReview || result;
   openScreen("divergence-review");
 }
@@ -2999,7 +3194,7 @@ async function saveConflictReview() {
 async function resolveConflictReview(choice) {
   const review = await ensureOpenConflictReview();
   if (!review) return;
-  const note = window.prompt("Review note", choice === "keep_local_history" ? "Keep local append-only history; do not merge remote branch automatically." : "Queue mutations require operator action before retry.");
+  const note = byId("conflict-resolution-note")?.value || "";
   const result = await syncPost("/api/sync/conflict-reviews/resolve", {
     review_id: review.review_id,
     resolution: {
@@ -3009,19 +3204,29 @@ async function resolveConflictReview(choice) {
       resolved_by_device_id: state.syncState?.identity?.device_id || null,
     },
   });
+  if (result.ok === false) {
+    state.importSummary = result;
+    openScreen("divergence-review");
+    return;
+  }
   state.conflictReview = result.conflict_review || state.conflictReview;
+  state.selectedConflictReviewId = state.conflictReview?.review_id || state.selectedConflictReviewId;
   state.importSummary = state.conflictReview || result;
   openScreen("divergence-review");
 }
 
-async function createCorrectiveConflictNote() {
+async function createCorrectiveConflictNote(event) {
+  event?.preventDefault();
   const review = await ensureOpenConflictReview();
   if (!review) return;
-  const qsoId = window.prompt("QSO ID to annotate", "");
-  if (!qsoId?.trim()) return;
-  const note = window.prompt("Corrective note", "Manual conflict review corrective note.");
-  if (!note?.trim()) return;
-  const reviewNote = window.prompt("Review note", "Resolved with a corrective QSO note event.");
+  const qsoId = byId("conflict-corrective-qso-id")?.value?.trim();
+  const note = byId("conflict-corrective-note")?.value?.trim();
+  const reviewNote = byId("conflict-corrective-review-note")?.value || "";
+  if (!qsoId || !note) {
+    state.importSummary = { ok: false, error: "corrective QSO ID and note are required" };
+    openScreen("divergence-review");
+    return;
+  }
   const result = await syncPost("/api/sync/conflict-reviews/corrective-events", {
     review_id: review.review_id,
     operator_note: reviewNote || "",
@@ -3035,21 +3240,29 @@ async function createCorrectiveConflictNote() {
       },
     ],
   });
+  if (result.ok === false) {
+    state.importSummary = result;
+    openScreen("divergence-review");
+    return;
+  }
   state.conflictReview = result.conflict_review || state.conflictReview;
+  state.selectedConflictReviewId = state.conflictReview?.review_id || state.selectedConflictReviewId;
   state.importSummary = result.conflict_review || result;
   await refreshQsos();
   openScreen("divergence-review");
 }
 
 async function ensureOpenConflictReview() {
-  if (state.conflictReview?.status === "open") return state.conflictReview;
-  const openReview = (state.syncState?.conflict_reviews?.reviews || []).find((review) => review.status === "open");
+  const selected = selectedConflictReview();
+  if (isOpenReview(selected)) return selected;
+  const openReview = (state.syncState?.conflict_reviews?.reviews || []).find(isOpenReview);
   if (openReview) {
     state.conflictReview = openReview;
+    state.selectedConflictReviewId = openReview.review_id;
     return openReview;
   }
   await saveConflictReview();
-  return state.conflictReview?.status === "open" ? state.conflictReview : null;
+  return isOpenReview(state.conflictReview) ? state.conflictReview : null;
 }
 
 async function verifyLogChain() {

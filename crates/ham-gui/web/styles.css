@@ -571,6 +571,31 @@ input {
   overflow-wrap: anywhere;
 }
 
+.conflict-review-list,
+.conflict-list,
+.conflict-resolution-panel {
+  display: grid;
+  gap: 10px;
+}
+
+.conflict-report {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.conflict-item {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #111316;
+  padding: 10px;
+}
+
+.conflict-note {
+  min-height: 76px;
+  resize: vertical;
+}
+
 .pill {
   display: inline-flex;
   align-items: center;

@@ -449,7 +449,7 @@ and the summit reference. Deleted/cancelled QSOs are excluded by default.
 Current MVP limitations: one active activation per station/operator is assumed;
 multi-op, multi-park/multi-summit, spotting integration, online reference
 lookups, GPS auto-detection, offline reference caches, award tracking, and
-full guided cross-client conflict review UX are future work.
+end-to-end cross-client conflict-review workflow qualification are future work.
 
 ## Callsign Lookup And Smart Autofill Plugin
 
@@ -906,11 +906,14 @@ review from the current preview and record explicit recovery-path decisions;
 iOS can create, resolve, and snapshot the same Rust-owned review records through
 the bridge. Desktop and iOS can also resolve reviews with corrective events by
 submitting explicit proposals through the normal proposal pipeline and storing
-the generated official event hashes on the review. LAN auth credential
-rotation/recovery is available through the GUI trust endpoint. Full guided
-cross-client branch review, signed events, production reciprocal LAN pairing
-UX, stronger LAN key-exchange hardening, and physical-device LAN/iOS
-local-network validation are still deferred.
+the generated official event hashes on the review. The browser divergence
+screen lists saved reviews, summarizes structured conflicts, records explicit
+recovery-path choices, and submits corrective QSO note events through the Rust
+desktop endpoints. LAN auth credential rotation/recovery is available through
+the GUI trust endpoint. End-to-end cross-client branch review workflow
+qualification, signed events, production reciprocal LAN pairing UX, stronger
+LAN key-exchange hardening, and physical-device LAN/iOS local-network
+validation are still deferred.
 
 ## Durable Offline Queue And LAN Trust
 
@@ -967,7 +970,8 @@ structured conflict reports and the operator-selected recovery path without
 rewriting official history. Unsafe divergent pulls are rejected by the shared
 Rust validator; corrective-event resolutions require event hashes as evidence,
 and the desktop/iOS corrective-event commands create those hashes by submitting
-normal core proposals before resolving a review.
+normal core proposals before resolving a review. The browser review surface is a
+client of those Rust records and endpoints; it does not merge history itself.
 
 Replication runtime events include:
 

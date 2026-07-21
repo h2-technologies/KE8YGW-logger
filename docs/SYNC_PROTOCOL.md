@@ -188,10 +188,12 @@ corrective event hashes before a review can be resolved as
 `create_corrective_events`. Desktop endpoints can create a review from the
 latest LAN/cloud preview, resolve it, mark related queued mutations as
 `user_action_required`, and resolve a review by submitting explicit corrective
-proposals through the normal core proposal pipeline. The GUI includes a
-prompt-based corrective QSO note action that records the resulting official
-event hash on the review. iOS can create, resolve, snapshot, and resolve with
-corrective proposal events through Rust bridge commands.
+proposals through the normal core proposal pipeline. The GUI includes a guided
+browser review surface for saved review selection, structured conflict
+summaries, explicit recovery-path choices, and form-based corrective QSO note
+events that record the resulting official event hash on the review. iOS can
+create, resolve, snapshot, and resolve with corrective proposal events through
+Rust bridge commands.
 
 ## LAN Trust
 
@@ -292,6 +294,6 @@ The current self-hosted server uses durable local storage by default: embedded S
 - End-to-end encrypted relay.
 - Stronger LAN key-exchange hardening and production reciprocal pairing UX.
 - Physical-device LAN and iOS Local Network permission validation.
-- Full guided cross-client branch review and reconciliation UI beyond the
-  current explicit corrective-event commands.
+- End-to-end cross-client branch review and reconciliation workflow beyond the
+  current guided browser review surface and explicit corrective-event commands.
 - Durable cloud server database.

@@ -107,15 +107,19 @@ wrapper is not the iOS client. See `V1_RELEASE_PLAN.md`,
      conflict-review records, direct LAN HTTP preview/pull, automatic LAN
      discovery, durable LAN trust state, and desktop/iOS corrective-event
      commands that submit explicit proposals and resolve reviews with generated
-     official event hashes. Deterministic shared sync golden tests cover crash
-     recovery, transient retry, duplicate/reordered delivery, iOS-style pull
-     replay, clock-skewed timestamps, divergent heads, conflict-review
-     resolution, legacy queue migration, restore replay, and LAN revocation.
+     official event hashes, plus a guided browser conflict-review surface for
+     saved reviews, structured conflict summaries, explicit recovery choices,
+     and corrective QSO note events. Deterministic shared sync golden tests
+     cover crash recovery, transient retry, duplicate/reordered delivery,
+     iOS-style pull replay, clock-skewed timestamps, divergent heads,
+     conflict-review resolution, legacy queue migration, restore replay, and
+     LAN revocation.
    - Status: implemented as a v0.3 foundation with HMAC-SHA256 signed LAN read
      endpoint authorization, GUI LAN auth credential rotation/recovery, and
      iOS FFI background retry planning/result classification.
      Production reciprocal pairing UX, stronger LAN key-exchange hardening,
-     full guided cross-client branch review and reconciliation UI,
+     end-to-end cross-client branch review/reconciliation workflow
+     qualification,
      physical-device LAN/iOS local-network validation, and release-device iOS
      background task/poor-network qualification remain planned.
 
@@ -127,7 +131,7 @@ rewrites:
 
 1. Finish the remaining sync/reconciliation hardening: production reciprocal
    LAN pairing UX, stronger LAN key-exchange hardening,
-   full guided cross-client branch review and reconciliation UI,
+   end-to-end cross-client branch review/reconciliation workflow qualification,
    physical-device LAN/iOS local-network validation, and release-device iOS
    background task/poor-network qualification before unattended desktop/iOS
    operation.
