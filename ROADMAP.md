@@ -50,7 +50,7 @@ Partial or incomplete v1 areas include hosted web/desktop/iOS account UX,
 production email/Turnstile deployment configuration, production reciprocal LAN
 pairing UX, stronger LAN key-exchange hardening, full guided cross-client branch
 review and reconciliation UI, physical-device LAN/iOS local-network validation,
-release-device iOS background retry qualification, production provider
+release-device iOS background task/poor-network qualification, production provider
 qualification, cached/offline maps, contesting, EmComm forms, signed desktop
 updater, Apple signing/TestFlight/App Store distribution, operations, and
 release-candidate qualification.
@@ -63,7 +63,7 @@ dependency-ordered critical path. The next three implementation goals are:
 - Finish sync/reconciliation hardening: production reciprocal LAN pairing UX,
   stronger LAN key-exchange hardening, full guided cross-client branch review
   and reconciliation UI, physical-device LAN/iOS local-network validation, and
-  release-device iOS background retry qualification.
+  release-device iOS background task/poor-network qualification.
 - Production provider qualification for QRZ, QRZ Logbook, LoTW, eQSL, Club
   Log, POTA, SOTAWatch, DX Cluster/RBN, maps, and propagation.
 - Hosted web, desktop, and iOS UI flows for the implemented account/session,

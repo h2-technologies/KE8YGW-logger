@@ -48,11 +48,17 @@ outside issue #2.
      replay, clock-skewed timestamps ordered by event hashes, divergent heads,
      concurrent correction and tombstone/restore review, v0.2 legacy queue
      migration, and LAN revocation.
+     The iOS FFI bridge also exposes bounded background retry planning and
+     result classification commands so Swift can use native transport while
+     Rust owns queue ordering, `sending` recovery, accepted-hash
+     acknowledgment, transient backoff, and user-action stops for auth,
+     validation, divergence, missing-event, and permanent failures.
    - Remaining: production reciprocal pairing UX, stronger LAN key-exchange
      hardening, full guided cross-client branch review and reconciliation UI,
      physical-device LAN/iOS local-network
-     validation, release-device iOS background retry qualification, and
-     real hosted web/desktop/iOS/self-hosted migration/recovery qualification.
+     validation, release-device iOS background task and poor-network
+     qualification, and real hosted web/desktop/iOS/self-hosted
+     migration/recovery qualification.
    - Blockers: local network permission behavior on iOS, trust-pairing UX,
      physical test devices, and acceptance criteria for manual conflict
      resolution.
@@ -143,7 +149,7 @@ outside issue #2.
 1. Finish sync/reconciliation hardening: production reciprocal LAN pairing UX,
    stronger LAN key-exchange hardening, full guided cross-client branch review
    and reconciliation UI, physical-device LAN/iOS local-network validation, and
-   iOS background retry validation on release devices.
+   iOS background task and poor-network validation on release devices.
 2. Complete production provider qualification and release-runner live validation
    for the issue #2 provider set.
 3. Wire hosted web, desktop, and iOS UI flows to the implemented account,

@@ -112,11 +112,12 @@ wrapper is not the iOS client. See `V1_RELEASE_PLAN.md`,
      replay, clock-skewed timestamps, divergent heads, conflict-review
      resolution, legacy queue migration, restore replay, and LAN revocation.
    - Status: implemented as a v0.3 foundation with HMAC-SHA256 signed LAN read
-     endpoint authorization and GUI LAN auth credential rotation/recovery.
+     endpoint authorization, GUI LAN auth credential rotation/recovery, and
+     iOS FFI background retry planning/result classification.
      Production reciprocal pairing UX, stronger LAN key-exchange hardening,
      full guided cross-client branch review and reconciliation UI,
      physical-device LAN/iOS local-network validation, and release-device iOS
-     background retry qualification remain planned.
+     background task/poor-network qualification remain planned.
 
 ## Dependency Order
 
@@ -128,7 +129,8 @@ rewrites:
    LAN pairing UX, stronger LAN key-exchange hardening,
    full guided cross-client branch review and reconciliation UI,
    physical-device LAN/iOS local-network validation, and release-device iOS
-   background retry qualification before unattended desktop/iOS operation.
+   background task/poor-network qualification before unattended desktop/iOS
+   operation.
 2. Complete provider runtime hardening and production provider qualification
    before release-candidate data migration or operations work.
 3. Build the remaining client surfaces on top of stable account, sync, provider,

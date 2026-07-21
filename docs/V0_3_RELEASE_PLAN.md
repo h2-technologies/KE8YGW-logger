@@ -20,6 +20,11 @@ Last audited: 2026-07-21
   station-profile support-state mutations.
 - iOS FFI queue integration for QSO, activation, Net Control, station-profile,
   and equipment commands.
+- iOS FFI background retry planning and result classification commands that
+  recover interrupted writes, bound native background batches, mark planned
+  work `sending`, return official event envelopes/hashes for native transport,
+  back off transient failures, and stop retry on auth, validation, divergence,
+  missing-local-event, and permanent failures.
 - Queue-aware cloud push acknowledgment for queued official events.
 - Deterministic desktop restart/reconnect queue-drain coverage for interrupted
   sends, ordered queued official events, accepted-by-hash handling, and
@@ -63,7 +68,8 @@ Last audited: 2026-07-21
 - Physical-device LAN and iOS Local Network permission validation.
 - Full guided cross-client conflict review and reconciliation UI beyond the
   current prompt/API corrective-event path.
-- Release-device iOS background retry and local-network permission validation.
+- Release-device iOS background task execution, poor-network behavior, and
+  local-network permission validation.
 - Real hosted web/desktop/iOS/self-hosted end-to-end device qualification,
   physical-device tests, and full migration matrix.
 
@@ -77,6 +83,7 @@ cargo test -p ham-sync recover_or_initialize
 cargo test -p ham-sync conflict_report
 cargo test -p ham-gui
 cargo test -p ham-ios-ffi
+cargo test -p ham-ios-ffi sync_retry
 just version-check
 just ci
 ```

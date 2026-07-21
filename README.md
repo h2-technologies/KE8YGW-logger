@@ -945,6 +945,13 @@ stale temp writes, and quarantines corrupt queue JSON without exposing local
 machine paths. Unsupported current schemas and duplicate per-logbook sequences
 still fail closed.
 
+The iOS bridge also exposes Rust-owned `sync.offline_queue.retry_plan` and
+`sync.offline_queue.retry_result` commands for native background transport.
+Swift can request a bounded official-event batch, mark planned work `sending`,
+record accepted hashes, back off transient network failures, and stop retry for
+auth, validation, divergence, missing-event, or permanent failures without
+owning sync domain rules.
+
 LAN trust records are durable support state. Pairing tokens require explicit
 operator approval, expire quickly, are single use, and are stored only as
 hashes. Trusted devices are scoped to logbooks, record only credential

@@ -5,6 +5,7 @@
 //! bounded JSON command ABI over stable C symbols.
 
 use std::{
+    collections::HashSet,
     ffi::{CStr, CString},
     os::raw::{c_char, c_uchar},
     panic::{catch_unwind, AssertUnwindSafe},
@@ -252,6 +253,89 @@ struct SyncSnapshotRequest {
 }
 
 #[derive(Debug, Deserialize)]
+struct IosRetryPlanRequest {
+    app_support_dir: String,
+    #[serde(default)]
+    logbook_id: Option<Uuid>,
+    #[serde(default)]
+    max_mutations: Option<usize>,
+    #[serde(default = "default_true")]
+    mark_sending: bool,
+    #[serde(default = "default_true")]
+    network_available: bool,
+    #[serde(default)]
+    background_time_budget_seconds: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct IosRetryResultRequest {
+    app_support_dir: String,
+    #[serde(default)]
+    logbook_id: Option<Uuid>,
+    #[serde(default)]
+    operation_ids: Vec<Uuid>,
+    #[serde(default)]
+    accepted_event_hashes: Vec<String>,
+    result: IosRetryResultKind,
+    #[serde(default)]
+    error_code: Option<String>,
+    #[serde(default)]
+    message: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum IosRetryResultKind {
+    Accepted,
+    TransientFailure,
+    AuthFailed,
+    ValidationFailed,
+    Diverged,
+    MissingLocalEvent,
+    PermanentFailure,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_ios_retry_result_code(result: IosRetryResultKind) -> &'static str {
+    match result {
+        IosRetryResultKind::Accepted => "accepted",
+        IosRetryResultKind::TransientFailure => "transient_transport_failure",
+        IosRetryResultKind::AuthFailed => "auth_failed",
+        IosRetryResultKind::ValidationFailed => "validation_failed",
+        IosRetryResultKind::Diverged => "diverged",
+        IosRetryResultKind::MissingLocalEvent => "missing_local_official_event",
+        IosRetryResultKind::PermanentFailure => "permanent_failure",
+    }
+}
+
+fn default_ios_retry_result_message(result: IosRetryResultKind) -> &'static str {
+    match result {
+        IosRetryResultKind::Accepted => "queued events were accepted by the sync peer",
+        IosRetryResultKind::TransientFailure => {
+            "transient sync transport failure; retry using bounded backoff"
+        }
+        IosRetryResultKind::AuthFailed => {
+            "sync authentication failed; operator action is required before retry"
+        }
+        IosRetryResultKind::ValidationFailed => {
+            "sync validation failed; operator action is required before retry"
+        }
+        IosRetryResultKind::Diverged => {
+            "sync histories diverged; manual review is required before retry"
+        }
+        IosRetryResultKind::MissingLocalEvent => {
+            "offline mutation has no matching local official event"
+        }
+        IosRetryResultKind::PermanentFailure => {
+            "permanent sync failure; operator action is required before retry"
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
 struct ConflictReviewCreateRequest {
     app_support_dir: String,
     report: SyncConflictReport,
@@ -486,6 +570,8 @@ fn dispatch_call(call: BridgeCall, correlation_id: Uuid) -> Result<Value, Bridge
         "sync.snapshot" => sync_snapshot_command(payload),
         "sync.offline_queue.snapshot" => sync_snapshot_command(payload),
         "sync.offline_queue.recover" => sync_offline_queue_recover_command(payload),
+        "sync.offline_queue.retry_plan" => sync_offline_queue_retry_plan_command(payload),
+        "sync.offline_queue.retry_result" => sync_offline_queue_retry_result_command(payload),
         "sync.conflict_reviews.snapshot" => sync_snapshot_command(payload),
         "sync.conflict_reviews.create" => sync_conflict_review_create_command(payload),
         "sync.conflict_reviews.resolve" => sync_conflict_review_resolve_command(payload),
@@ -927,6 +1013,223 @@ fn sync_offline_queue_recover_command(payload: Value) -> Result<Value, BridgeFau
     snapshot["recovered_count"] = json!(recovery.recovered_interrupted_writes);
     snapshot["recovery"] = json!(recovery);
     Ok(snapshot)
+}
+
+fn sync_offline_queue_retry_plan_command(payload: Value) -> Result<Value, BridgeFault> {
+    let request: IosRetryPlanRequest = serde_json::from_value(payload).map_err(|error| {
+        BridgeFault::invalid_json(format!("invalid sync retry plan payload: {error}"))
+    })?;
+    if request.max_mutations == Some(0) {
+        return Err(BridgeFault::invalid_input(
+            "max_mutations must be at least 1",
+        ));
+    }
+    let app_support_dir = request.app_support_dir.as_str();
+    let logbook_id = request.logbook_id.unwrap_or_else(default_logbook_id);
+    let max_mutations = request.max_mutations.unwrap_or(25).min(50);
+    let queue = offline_queue(app_support_dir)?;
+    let now = Utc::now();
+    let recovery = queue
+        .recover_or_initialize(now)
+        .map_err(|error| BridgeFault::storage(error.to_string()))?;
+
+    if !request.network_available {
+        let snapshot = queue
+            .load_snapshot(now)
+            .map_err(|error| BridgeFault::storage(error.to_string()))?;
+        return Ok(json!({
+            "retry_plan": {
+                "schema_version": BRIDGE_SCHEMA_VERSION,
+                "logbook_id": logbook_id,
+                "operation_ids": Vec::<Uuid>::new(),
+                "event_hashes": Vec::<String>::new(),
+                "events": Vec::<Value>::new(),
+                "missing_local_event_operation_ids": Vec::<Uuid>::new(),
+                "network_required": true,
+                "blocked_by_network": true,
+                "max_mutations": max_mutations,
+                "background_time_budget_seconds": request.background_time_budget_seconds.unwrap_or(25),
+                "mark_sending": false
+            },
+            "offline_queue": snapshot,
+            "recovery": recovery
+        }));
+    }
+
+    let runtime = Runtime::new().map_err(|error| BridgeFault::internal(error.to_string()))?;
+    let store = event_store(app_support_dir)?;
+    let local_events = runtime
+        .block_on(store.list_events(logbook_id))
+        .map_err(|error| BridgeFault::storage(error.to_string()))?;
+    let mut batch = queue
+        .ready_event_batch(logbook_id, &local_events, now)
+        .map_err(|error| BridgeFault::storage(error.to_string()))?;
+    let missing_local_event_operation_ids = batch.missing_local_event_operation_ids.clone();
+    for operation_id in &missing_local_event_operation_ids {
+        queue
+            .mark_user_action_required(
+                *operation_id,
+                "offline mutation has no matching local official event",
+                Some("missing_local_official_event".to_owned()),
+                now,
+            )
+            .map_err(|error| BridgeFault::storage(error.to_string()))?;
+    }
+    if !missing_local_event_operation_ids.is_empty() {
+        batch = queue
+            .ready_event_batch(logbook_id, &local_events, now)
+            .map_err(|error| BridgeFault::storage(error.to_string()))?;
+    }
+
+    if batch.operation_ids.len() > max_mutations {
+        batch.operation_ids.truncate(max_mutations);
+        batch.events.truncate(max_mutations);
+    }
+    if request.mark_sending {
+        for operation_id in &batch.operation_ids {
+            queue
+                .mark_sending(*operation_id, now)
+                .map_err(|error| BridgeFault::storage(error.to_string()))?;
+        }
+    }
+    let snapshot = queue
+        .load_snapshot(now)
+        .map_err(|error| BridgeFault::storage(error.to_string()))?;
+    let event_hashes = batch
+        .events
+        .iter()
+        .map(|event| event.event_hash.clone())
+        .collect::<Vec<_>>();
+
+    Ok(json!({
+        "retry_plan": {
+            "schema_version": BRIDGE_SCHEMA_VERSION,
+            "logbook_id": logbook_id,
+            "operation_ids": batch.operation_ids,
+            "event_hashes": event_hashes,
+            "events": batch.events,
+            "missing_local_event_operation_ids": missing_local_event_operation_ids,
+            "network_required": true,
+            "blocked_by_network": false,
+            "max_mutations": max_mutations,
+            "background_time_budget_seconds": request.background_time_budget_seconds.unwrap_or(25),
+            "mark_sending": request.mark_sending,
+            "permanent_failure_results": [
+                "auth_failed",
+                "validation_failed",
+                "diverged",
+                "missing_local_event",
+                "permanent_failure"
+            ]
+        },
+        "offline_queue": snapshot,
+        "recovery": recovery
+    }))
+}
+
+fn sync_offline_queue_retry_result_command(payload: Value) -> Result<Value, BridgeFault> {
+    let request: IosRetryResultRequest = serde_json::from_value(payload).map_err(|error| {
+        BridgeFault::invalid_json(format!("invalid sync retry result payload: {error}"))
+    })?;
+    if request.operation_ids.is_empty() {
+        return Err(BridgeFault::invalid_input(
+            "operation_ids must contain at least one operation",
+        ));
+    }
+    let queue = offline_queue(&request.app_support_dir)?;
+    let now = Utc::now();
+    let message = request
+        .message
+        .clone()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| default_ios_retry_result_message(request.result).to_owned());
+    let error_code = request
+        .error_code
+        .clone()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| default_ios_retry_result_code(request.result).to_owned());
+
+    let mut accepted_count = 0usize;
+    match request.result {
+        IosRetryResultKind::Accepted => {
+            if request.accepted_event_hashes.is_empty() {
+                return Err(BridgeFault::invalid_input(
+                    "accepted_event_hashes are required for accepted retry results",
+                ));
+            }
+            let accepted_hashes = request
+                .accepted_event_hashes
+                .iter()
+                .cloned()
+                .collect::<HashSet<_>>();
+            accepted_count = queue
+                .mark_accepted_by_event_hashes(&accepted_hashes, now)
+                .map_err(|error| BridgeFault::storage(error.to_string()))?;
+        }
+        IosRetryResultKind::TransientFailure => {
+            for operation_id in &request.operation_ids {
+                queue
+                    .record_transient_failure(
+                        *operation_id,
+                        message.clone(),
+                        Some(error_code.clone()),
+                        now,
+                    )
+                    .map_err(|error| BridgeFault::storage(error.to_string()))?;
+            }
+        }
+        IosRetryResultKind::Diverged => {
+            for operation_id in &request.operation_ids {
+                queue
+                    .mark_blocked(*operation_id, message.clone(), now)
+                    .map_err(|error| BridgeFault::storage(error.to_string()))?;
+            }
+        }
+        IosRetryResultKind::AuthFailed
+        | IosRetryResultKind::ValidationFailed
+        | IosRetryResultKind::MissingLocalEvent
+        | IosRetryResultKind::PermanentFailure => {
+            for operation_id in &request.operation_ids {
+                queue
+                    .mark_user_action_required(
+                        *operation_id,
+                        message.clone(),
+                        Some(error_code.clone()),
+                        now,
+                    )
+                    .map_err(|error| BridgeFault::storage(error.to_string()))?;
+            }
+        }
+    }
+
+    let snapshot = queue
+        .load_snapshot(now)
+        .map_err(|error| BridgeFault::storage(error.to_string()))?;
+    let operation_ids = request
+        .operation_ids
+        .iter()
+        .copied()
+        .collect::<HashSet<_>>();
+    let affected_mutations = snapshot
+        .mutations
+        .iter()
+        .filter(|mutation| operation_ids.contains(&mutation.operation_id))
+        .cloned()
+        .collect::<Vec<_>>();
+
+    Ok(json!({
+        "retry_result": {
+            "schema_version": BRIDGE_SCHEMA_VERSION,
+            "logbook_id": request.logbook_id.unwrap_or_else(default_logbook_id),
+            "result": request.result,
+            "operation_ids": request.operation_ids,
+            "accepted_count": accepted_count,
+            "error_code": error_code,
+            "message": message
+        },
+        "affected_mutations": affected_mutations,
+        "offline_queue": snapshot
+    }))
 }
 
 fn sync_conflict_review_create_command(payload: Value) -> Result<Value, BridgeFault> {
@@ -2632,6 +2935,220 @@ mod tests {
         assert_eq!(snapshot["ok"], true);
         assert_eq!(snapshot["data"]["offline_queue"]["health"]["pending"], 1);
         assert_eq!(snapshot["data"]["offline_queue"]["health"]["total"], 1);
+        let _ = std::fs::remove_dir_all(app_support_dir);
+    }
+
+    #[test]
+    fn sync_retry_plan_and_result_acknowledge_ios_background_batch() {
+        let app_support_dir = std::env::temp_dir().join(format!("ham-ios-{}", Uuid::new_v4()));
+        let logbook_id = default_logbook_id();
+        let operation_id = Uuid::new_v4();
+        let create = call_json(json!({
+            "command": "qso.create",
+            "payload": {
+                "app_support_dir": app_support_dir.to_string_lossy(),
+                "logbook_id": logbook_id,
+                "operation_id": operation_id.to_string(),
+                "qso": {
+                    "contacted_callsign": "k1retry",
+                    "station_callsign": "ke8ygw",
+                    "operator_callsign": "ke8ygw",
+                    "started_at": "2026-07-10T12:00:00Z",
+                    "mode": "ssb",
+                    "band": "20m"
+                }
+            }
+        }));
+        assert_eq!(create["ok"], true);
+
+        let plan = call_json(json!({
+            "command": "sync.offline_queue.retry_plan",
+            "payload": {
+                "app_support_dir": app_support_dir.to_string_lossy(),
+                "logbook_id": logbook_id,
+                "max_mutations": 5,
+                "background_time_budget_seconds": 20
+            }
+        }));
+        assert_eq!(plan["ok"], true);
+        assert_eq!(
+            plan["data"]["retry_plan"]["operation_ids"][0],
+            json!(operation_id)
+        );
+        assert_eq!(
+            plan["data"]["retry_plan"]["events"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(plan["data"]["offline_queue"]["health"]["sending"], 1);
+        let event_hash = plan["data"]["retry_plan"]["event_hashes"][0]
+            .as_str()
+            .unwrap()
+            .to_owned();
+
+        let result = call_json(json!({
+            "command": "sync.offline_queue.retry_result",
+            "payload": {
+                "app_support_dir": app_support_dir.to_string_lossy(),
+                "logbook_id": logbook_id,
+                "operation_ids": [operation_id],
+                "accepted_event_hashes": [event_hash],
+                "result": "accepted"
+            }
+        }));
+        assert_eq!(result["ok"], true);
+        assert_eq!(result["data"]["retry_result"]["accepted_count"], 1);
+        assert_eq!(
+            result["data"]["affected_mutations"][0]["status"],
+            "accepted"
+        );
+        assert_eq!(result["data"]["offline_queue"]["health"]["accepted"], 1);
+        assert_eq!(
+            result["data"]["offline_queue"]["health"]["ready_to_send"],
+            0
+        );
+        let _ = std::fs::remove_dir_all(app_support_dir);
+    }
+
+    #[test]
+    fn sync_retry_result_backs_off_transient_and_stops_auth_failures() {
+        let app_support_dir = std::env::temp_dir().join(format!("ham-ios-{}", Uuid::new_v4()));
+        let logbook_id = default_logbook_id();
+        let operation_id = Uuid::new_v4();
+        let create = call_json(json!({
+            "command": "qso.create",
+            "payload": {
+                "app_support_dir": app_support_dir.to_string_lossy(),
+                "logbook_id": logbook_id,
+                "operation_id": operation_id.to_string(),
+                "qso": {
+                    "contacted_callsign": "k1fail",
+                    "station_callsign": "ke8ygw",
+                    "operator_callsign": "ke8ygw",
+                    "started_at": "2026-07-10T12:00:00Z",
+                    "mode": "ssb",
+                    "band": "20m"
+                }
+            }
+        }));
+        assert_eq!(create["ok"], true);
+        let plan = call_json(json!({
+            "command": "sync.offline_queue.retry_plan",
+            "payload": {
+                "app_support_dir": app_support_dir.to_string_lossy(),
+                "logbook_id": logbook_id
+            }
+        }));
+        assert_eq!(plan["ok"], true);
+
+        let transient = call_json(json!({
+            "command": "sync.offline_queue.retry_result",
+            "payload": {
+                "app_support_dir": app_support_dir.to_string_lossy(),
+                "logbook_id": logbook_id,
+                "operation_ids": [operation_id],
+                "result": "transient_failure",
+                "error_code": "network_unavailable",
+                "message": "network unavailable"
+            }
+        }));
+        assert_eq!(transient["ok"], true);
+        assert_eq!(
+            transient["data"]["affected_mutations"][0]["status"],
+            "retrying"
+        );
+        assert_eq!(
+            transient["data"]["affected_mutations"][0]["last_error_code"],
+            "network_unavailable"
+        );
+        assert!(transient["data"]["affected_mutations"][0]["next_attempt_at"].is_string());
+
+        let auth_failed = call_json(json!({
+            "command": "sync.offline_queue.retry_result",
+            "payload": {
+                "app_support_dir": app_support_dir.to_string_lossy(),
+                "logbook_id": logbook_id,
+                "operation_ids": [operation_id],
+                "result": "auth_failed"
+            }
+        }));
+        assert_eq!(auth_failed["ok"], true);
+        assert_eq!(
+            auth_failed["data"]["affected_mutations"][0]["status"],
+            "user_action_required"
+        );
+        assert_eq!(
+            auth_failed["data"]["affected_mutations"][0]["last_error_code"],
+            "auth_failed"
+        );
+        assert_eq!(
+            auth_failed["data"]["offline_queue"]["health"]["user_action_required"],
+            1
+        );
+
+        let next_plan = call_json(json!({
+            "command": "sync.offline_queue.retry_plan",
+            "payload": {
+                "app_support_dir": app_support_dir.to_string_lossy(),
+                "logbook_id": logbook_id
+            }
+        }));
+        assert_eq!(next_plan["ok"], true);
+        assert_eq!(
+            next_plan["data"]["retry_plan"]["operation_ids"]
+                .as_array()
+                .unwrap()
+                .len(),
+            0
+        );
+        let _ = std::fs::remove_dir_all(app_support_dir);
+    }
+
+    #[test]
+    fn sync_retry_plan_marks_missing_local_event_user_action_required() {
+        let app_support_dir = std::env::temp_dir().join(format!("ham-ios-{}", Uuid::new_v4()));
+        let logbook_id = default_logbook_id();
+        let operation_id = Uuid::new_v4();
+        enqueue_ios_mutation(
+            app_support_dir.to_string_lossy().as_ref(),
+            logbook_id,
+            Uuid::new_v4(),
+            OFFLINE_OP_QSO_CREATE,
+            json!({
+                "contacted_callsign": "k1missing",
+                "station_callsign": "ke8ygw",
+                "operator_callsign": "ke8ygw",
+                "started_at": "2026-07-10T12:00:00Z",
+                "mode": "ssb",
+                "band": "20m"
+            }),
+            &operation_id.to_string(),
+            operation_id,
+        )
+        .unwrap();
+
+        let plan = call_json(json!({
+            "command": "sync.offline_queue.retry_plan",
+            "payload": {
+                "app_support_dir": app_support_dir.to_string_lossy(),
+                "logbook_id": logbook_id
+            }
+        }));
+        assert_eq!(plan["ok"], true);
+        assert_eq!(
+            plan["data"]["retry_plan"]["missing_local_event_operation_ids"][0],
+            json!(operation_id)
+        );
+        assert_eq!(
+            plan["data"]["offline_queue"]["health"]["user_action_required"],
+            1
+        );
+        assert_eq!(
+            plan["data"]["offline_queue"]["mutations"][0]["last_error_code"],
+            "missing_local_official_event"
+        );
         let _ = std::fs::remove_dir_all(app_support_dir);
     }
 

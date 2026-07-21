@@ -150,6 +150,18 @@ accepted-by-hash queue cleanup, duplicate cloud replay handling, and local
 official-log duplicate prevention. Divergence blocks the queued operations for
 manual review.
 
+iOS exposes the same Rust-owned drain policy through FFI commands.
+`sync.offline_queue.retry_plan` recovers interrupted writes, applies bounded
+batch sizing, optionally refuses to plan work while the native network monitor
+reports no connectivity, marks planned mutations `sending`, returns the exact
+official event envelopes and hashes for native transport, and moves queued
+mutations without matching local official events to `user_action_required`.
+`sync.offline_queue.retry_result` records accepted hashes, transient transport
+failures, auth or validation failures, divergence, and missing-event failures
+back into the queue. Transient failures move to bounded retry/backoff; auth,
+validation, missing-event, permanent, and divergence results stop unattended
+retry and require operator review.
+
 ### Manual Conflict Review
 
 `ham-sync::offline` defines durable conflict-review records persisted as
