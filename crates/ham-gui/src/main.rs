@@ -68,6 +68,8 @@ const APP_CSS: &str = include_str!("../web/styles.css");
 const APP_JS: &str = include_str!("../web/app.js");
 const LAN_DISCOVERY_LISTEN_WINDOW: Duration = Duration::from_millis(750);
 const LAN_DISCOVERY_SLEEP_SLICE: Duration = Duration::from_millis(250);
+const LAN_AUTH_DEVICE_ID_HEADER: &str = "x-ke8ygw-lan-device-id";
+const LAN_AUTH_REPLAY_NONCE_HEADER: &str = "x-ke8ygw-lan-replay-nonce";
 
 fn main() {
     let addr = env::args()
@@ -692,12 +694,10 @@ fn handle_client(state: Arc<AppState>, mut stream: TcpStream) {
                 .clone(),
         ),
         ("GET", "/api/sync/state") => json_response(&sync_state_payload(&state)),
-        ("GET", "/api/sync/list-logbooks") => json_response(&ListLogbooksResponse {
-            logbooks: vec![logbook_head_summary(&state)],
-        }),
-        ("GET", "/api/sync/get-head") => json_response(&logbook_head_summary(&state)),
-        ("GET", "/api/sync/events-since") => handle_sync_events_since(&state, query),
-        ("GET", "/api/sync/event-metadata") => handle_sync_event_metadata(&state, query),
+        ("GET", "/api/sync/list-logbooks") => handle_sync_list_logbooks(&state, &request),
+        ("GET", "/api/sync/get-head") => handle_sync_get_head(&state, query, &request),
+        ("GET", "/api/sync/events-since") => handle_sync_events_since(&state, query, &request),
+        ("GET", "/api/sync/event-metadata") => handle_sync_event_metadata(&state, query, &request),
         ("POST", "/api/sync/discovery/start") => handle_sync_discovery(&state, true),
         ("POST", "/api/sync/discovery/stop") => handle_sync_discovery(&state, false),
         ("POST", "/api/sync/peers/refresh") => handle_sync_refresh(&state),
@@ -752,6 +752,7 @@ fn handle_client(state: Arc<AppState>, mut stream: TcpStream) {
 struct HttpRequest {
     method: String,
     target: String,
+    headers: HashMap<String, String>,
     body: Vec<u8>,
 }
 
@@ -763,6 +764,7 @@ fn read_http_request(reader: &mut BufReader<&mut TcpStream>) -> std::io::Result<
     let target = parts.next().unwrap_or("/").to_owned();
 
     let mut content_length = 0usize;
+    let mut headers = HashMap::new();
     loop {
         let mut header = String::new();
         reader.read_line(&mut header)?;
@@ -771,9 +773,12 @@ fn read_http_request(reader: &mut BufReader<&mut TcpStream>) -> std::io::Result<
             break;
         }
         if let Some((name, value)) = header.split_once(':') {
+            let name = name.trim().to_ascii_lowercase();
+            let value = value.trim().to_owned();
             if name.eq_ignore_ascii_case("content-length") {
-                content_length = value.trim().parse().unwrap_or(0);
+                content_length = value.parse().unwrap_or(0);
             }
+            headers.insert(name, value);
         }
     }
 
@@ -785,6 +790,7 @@ fn read_http_request(reader: &mut BufReader<&mut TcpStream>) -> std::io::Result<
     Ok(HttpRequest {
         method,
         target,
+        headers,
         body,
     })
 }
@@ -1093,6 +1099,12 @@ struct LanPairingAcceptRequest {
 #[derive(Debug, Deserialize)]
 struct LanTrustRevokeRequest {
     device_id: uuid::Uuid,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LanEndpointAuth {
+    device_id: uuid::Uuid,
+    replay_nonce: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -5466,12 +5478,44 @@ fn handle_sync_add_peer(state: &AppState, body: &[u8]) -> Vec<u8> {
     }
 }
 
-fn handle_sync_events_since(state: &AppState, query: &str) -> Vec<u8> {
+fn handle_sync_list_logbooks(state: &AppState, request: &HttpRequest) -> Vec<u8> {
+    if let Err(response) = require_lan_endpoint_auth(
+        state,
+        request,
+        state.logbook_id,
+        "sync.lan.list_logbooks.rejected",
+    ) {
+        return response;
+    }
+    json_response(&ListLogbooksResponse {
+        logbooks: vec![logbook_head_summary(state)],
+    })
+}
+
+fn handle_sync_get_head(state: &AppState, query: &str, request: &HttpRequest) -> Vec<u8> {
+    let logbook_id = match requested_sync_logbook_id(state, query) {
+        Ok(logbook_id) => logbook_id,
+        Err(response) => return response,
+    };
+    if let Err(response) =
+        require_lan_endpoint_auth(state, request, logbook_id, "sync.lan.get_head.rejected")
+    {
+        return response;
+    }
+    json_response(&logbook_head_summary(state))
+}
+
+fn handle_sync_events_since(state: &AppState, query: &str, request: &HttpRequest) -> Vec<u8> {
+    let logbook_id = match requested_sync_logbook_id(state, query) {
+        Ok(logbook_id) => logbook_id,
+        Err(response) => return response,
+    };
+    if let Err(response) =
+        require_lan_endpoint_auth(state, request, logbook_id, "sync.lan.events_since.rejected")
+    {
+        return response;
+    }
     let params = parse_query(query);
-    let logbook_id = params
-        .get("logbook_id")
-        .and_then(|value| uuid::Uuid::parse_str(value).ok())
-        .unwrap_or(state.logbook_id);
     let after_hash = params
         .get("after_hash")
         .filter(|value| !value.is_empty())
@@ -5487,12 +5531,20 @@ fn handle_sync_events_since(state: &AppState, query: &str) -> Vec<u8> {
     }
 }
 
-fn handle_sync_event_metadata(state: &AppState, query: &str) -> Vec<u8> {
+fn handle_sync_event_metadata(state: &AppState, query: &str, request: &HttpRequest) -> Vec<u8> {
+    let logbook_id = match requested_sync_logbook_id(state, query) {
+        Ok(logbook_id) => logbook_id,
+        Err(response) => return response,
+    };
+    if let Err(response) = require_lan_endpoint_auth(
+        state,
+        request,
+        logbook_id,
+        "sync.lan.event_metadata.rejected",
+    ) {
+        return response;
+    }
     let params = parse_query(query);
-    let logbook_id = params
-        .get("logbook_id")
-        .and_then(|value| uuid::Uuid::parse_str(value).ok())
-        .unwrap_or(state.logbook_id);
     let after_hash = params
         .get("after_hash")
         .filter(|value| !value.is_empty())
@@ -5509,6 +5561,112 @@ fn handle_sync_event_metadata(state: &AppState, query: &str) -> Vec<u8> {
             json_response_with_status(400, &json!({"ok": false, "error": error.to_string()}))
         }
     }
+}
+
+fn requested_sync_logbook_id(state: &AppState, query: &str) -> Result<uuid::Uuid, Vec<u8>> {
+    let params = parse_query(query);
+    let Some(value) = params.get("logbook_id").filter(|value| !value.is_empty()) else {
+        return Ok(state.logbook_id);
+    };
+    let Ok(logbook_id) = uuid::Uuid::parse_str(value) else {
+        return Err(json_response_with_status(
+            400,
+            &json!({"ok": false, "error": "invalid logbook_id"}),
+        ));
+    };
+    if logbook_id != state.logbook_id {
+        return Err(json_response_with_status(
+            403,
+            &json!({"ok": false, "error": "requested logbook is not served by this peer"}),
+        ));
+    }
+    Ok(logbook_id)
+}
+
+fn require_lan_endpoint_auth(
+    state: &AppState,
+    request: &HttpRequest,
+    logbook_id: uuid::Uuid,
+    event_type: &str,
+) -> Result<(), Vec<u8>> {
+    let auth = match lan_endpoint_auth_from_headers(&request.headers) {
+        Ok(auth) => auth,
+        Err(error) => {
+            record_lan_endpoint_auth_failure(state, event_type, None, error.clone());
+            return Err(json_response_with_status(
+                403,
+                &json!({"ok": false, "error": error}),
+            ));
+        }
+    };
+    match state.lan_trust_store.authorize_peer(
+        auth.device_id,
+        logbook_id,
+        &auth.replay_nonce,
+        chrono::Utc::now(),
+    ) {
+        Ok(_) => Ok(()),
+        Err(error) => {
+            let message = error.to_string();
+            record_lan_endpoint_auth_failure(
+                state,
+                event_type,
+                Some(auth.device_id),
+                message.clone(),
+            );
+            Err(json_response_with_status(
+                403,
+                &json!({"ok": false, "error": message}),
+            ))
+        }
+    }
+}
+
+fn lan_endpoint_auth_from_headers(
+    headers: &HashMap<String, String>,
+) -> Result<LanEndpointAuth, String> {
+    let device_id = headers
+        .get(LAN_AUTH_DEVICE_ID_HEADER)
+        .ok_or_else(|| "trusted LAN request is missing device id".to_owned())
+        .and_then(|value| {
+            uuid::Uuid::parse_str(value)
+                .map_err(|_| "trusted LAN request device id is invalid".to_owned())
+        })?;
+    let replay_nonce = headers
+        .get(LAN_AUTH_REPLAY_NONCE_HEADER)
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "trusted LAN request is missing replay nonce".to_owned())?;
+    if replay_nonce.len() > 128 {
+        return Err("trusted LAN request replay nonce is too long".to_owned());
+    }
+    Ok(LanEndpointAuth {
+        device_id,
+        replay_nonce: replay_nonce.to_owned(),
+    })
+}
+
+fn record_lan_endpoint_auth_failure(
+    state: &AppState,
+    event_type: &str,
+    device_id: Option<uuid::Uuid>,
+    error: String,
+) {
+    {
+        let mut sync = state
+            .sync
+            .lock()
+            .expect("sync state mutex should not be poisoned");
+        sync.warning_count += 1;
+    }
+    let _ = publish_gui_runtime(
+        state,
+        event_type,
+        RuntimeEventSeverity::Warn,
+        "LAN sync endpoint rejected an unauthorized peer",
+        Some(json!({"device_id": device_id})),
+        Some(error),
+    );
 }
 
 fn handle_sync_handshake(state: &AppState, body: &[u8]) -> Vec<u8> {
@@ -6309,8 +6467,9 @@ fn remote_events_for_peer(
     peer: &PeerRecord,
 ) -> Result<Vec<CoreEventEnvelope>, String> {
     let mut last_error = None;
+    let requesting_device_id = local_sync_device_id(state);
     for address in sorted_peer_api_addresses(peer) {
-        match fetch_lan_peer_events(address, state.logbook_id) {
+        match fetch_lan_peer_events(address, state.logbook_id, requesting_device_id) {
             Ok(events) => {
                 let _ = publish_gui_runtime(
                     state,
@@ -6345,8 +6504,9 @@ fn remote_events_for_peer(
 
 fn remote_head_for_peer(state: &AppState, peer: &PeerRecord) -> Result<LogbookHeadSummary, String> {
     let mut last_error = None;
+    let requesting_device_id = local_sync_device_id(state);
     for address in sorted_peer_api_addresses(peer) {
-        match fetch_lan_peer_head(address, state.logbook_id) {
+        match fetch_lan_peer_head(address, state.logbook_id, requesting_device_id) {
             Ok(head) => return Ok(head),
             Err(error) => last_error = Some(error),
         }
@@ -6394,7 +6554,7 @@ fn lan_api_address_rank(address: SocketAddr) -> u8 {
 }
 
 fn fetch_lan_peer_identity(address: SocketAddr) -> Result<LocalPeerIdentity, String> {
-    let state: Value = lan_http_get_json(address, "/api/sync/state")?;
+    let state: Value = lan_http_get_json(address, "/api/sync/state", &[])?;
     serde_json::from_value(
         state
             .get("identity")
@@ -6407,8 +6567,11 @@ fn fetch_lan_peer_identity(address: SocketAddr) -> Result<LocalPeerIdentity, Str
 fn fetch_lan_peer_head(
     address: SocketAddr,
     logbook_id: uuid::Uuid,
+    requesting_device_id: uuid::Uuid,
 ) -> Result<LogbookHeadSummary, String> {
-    let response: LogbookHeadSummary = lan_http_get_json(address, "/api/sync/get-head")?;
+    let path = format!("/api/sync/get-head?logbook_id={logbook_id}");
+    let headers = trusted_lan_request_headers(requesting_device_id);
+    let response: LogbookHeadSummary = lan_http_get_json(address, &path, &headers)?;
     if response.logbook_id != logbook_id {
         return Err(format!(
             "LAN peer returned head for logbook {}, expected {logbook_id}",
@@ -6421,9 +6584,11 @@ fn fetch_lan_peer_head(
 fn fetch_lan_peer_events(
     address: SocketAddr,
     logbook_id: uuid::Uuid,
+    requesting_device_id: uuid::Uuid,
 ) -> Result<Vec<CoreEventEnvelope>, String> {
     let path = format!("/api/sync/events-since?logbook_id={logbook_id}");
-    let response: GetEventRangeResponse = lan_http_get_json(address, &path)?;
+    let headers = trusted_lan_request_headers(requesting_device_id);
+    let response: GetEventRangeResponse = lan_http_get_json(address, &path, &headers)?;
     if response.logbook_id != logbook_id {
         return Err(format!(
             "LAN peer returned events for logbook {}, expected {logbook_id}",
@@ -6433,7 +6598,30 @@ fn fetch_lan_peer_events(
     Ok(response.events)
 }
 
-fn lan_http_get_json<T>(address: SocketAddr, path: &str) -> Result<T, String>
+fn local_sync_device_id(state: &AppState) -> uuid::Uuid {
+    state
+        .sync
+        .lock()
+        .expect("sync state mutex should not be poisoned")
+        .identity
+        .device_id
+}
+
+fn trusted_lan_request_headers(device_id: uuid::Uuid) -> Vec<(String, String)> {
+    vec![
+        (LAN_AUTH_DEVICE_ID_HEADER.to_owned(), device_id.to_string()),
+        (
+            LAN_AUTH_REPLAY_NONCE_HEADER.to_owned(),
+            uuid::Uuid::new_v4().to_string(),
+        ),
+    ]
+}
+
+fn lan_http_get_json<T>(
+    address: SocketAddr,
+    path: &str,
+    extra_headers: &[(String, String)],
+) -> Result<T, String>
 where
     T: DeserializeOwned,
 {
@@ -6446,8 +6634,9 @@ where
         .set_write_timeout(Some(Duration::from_secs(5)))
         .map_err(|error| format!("failed to set LAN peer write timeout: {error}"))?;
     let request = format!(
-        "GET {path} HTTP/1.1\r\nHost: {}\r\nAccept: application/json\r\nConnection: close\r\n\r\n",
-        lan_host_header(address)
+        "GET {path} HTTP/1.1\r\nHost: {}\r\nAccept: application/json\r\nConnection: close\r\n{}\r\n",
+        lan_host_header(address),
+        lan_http_extra_headers(extra_headers)
     );
     stream
         .write_all(request.as_bytes())
@@ -6458,6 +6647,17 @@ where
         .map_err(|error| format!("failed to read LAN peer response: {error}"))?;
     let body = http_response_body(&response)?;
     serde_json::from_slice(body).map_err(|error| format!("LAN peer JSON was invalid: {error}"))
+}
+
+fn lan_http_extra_headers(extra_headers: &[(String, String)]) -> String {
+    let mut headers = String::new();
+    for (name, value) in extra_headers {
+        headers.push_str(name);
+        headers.push_str(": ");
+        headers.push_str(value);
+        headers.push_str("\r\n");
+    }
+    headers
 }
 
 fn http_response_body(response: &[u8]) -> Result<&[u8], String> {
@@ -6833,6 +7033,73 @@ mod tests {
         let rejected = b"HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\n\r\n";
         assert!(http_response_body(rejected).is_err());
         assert!(http_response_body(b"not http").is_err());
+    }
+
+    #[test]
+    fn lan_endpoint_auth_from_headers_requires_device_and_nonce() {
+        let device_id = uuid::Uuid::new_v4();
+        let mut headers = HashMap::new();
+        headers.insert(LAN_AUTH_DEVICE_ID_HEADER.to_owned(), device_id.to_string());
+        headers.insert(
+            LAN_AUTH_REPLAY_NONCE_HEADER.to_owned(),
+            "request-nonce".to_owned(),
+        );
+
+        let auth = lan_endpoint_auth_from_headers(&headers).unwrap();
+        assert_eq!(auth.device_id, device_id);
+        assert_eq!(auth.replay_nonce, "request-nonce");
+
+        headers.remove(LAN_AUTH_REPLAY_NONCE_HEADER);
+        assert!(lan_endpoint_auth_from_headers(&headers)
+            .unwrap_err()
+            .contains("replay nonce"));
+
+        headers.insert(LAN_AUTH_REPLAY_NONCE_HEADER.to_owned(), "x".repeat(129));
+        assert!(lan_endpoint_auth_from_headers(&headers)
+            .unwrap_err()
+            .contains("too long"));
+
+        headers.insert(
+            LAN_AUTH_DEVICE_ID_HEADER.to_owned(),
+            "not-a-uuid".to_owned(),
+        );
+        assert!(lan_endpoint_auth_from_headers(&headers)
+            .unwrap_err()
+            .contains("device id"));
+    }
+
+    #[test]
+    fn trusted_lan_request_headers_emit_fresh_replay_nonces() {
+        let device_id = uuid::Uuid::new_v4();
+        let first = trusted_lan_request_headers(device_id);
+        let second = trusted_lan_request_headers(device_id);
+
+        assert!(first.contains(&(LAN_AUTH_DEVICE_ID_HEADER.to_owned(), device_id.to_string())));
+        assert!(second.contains(&(LAN_AUTH_DEVICE_ID_HEADER.to_owned(), device_id.to_string())));
+        let first_nonce = first
+            .iter()
+            .find(|(name, _)| name == LAN_AUTH_REPLAY_NONCE_HEADER)
+            .map(|(_, value)| value)
+            .unwrap();
+        let second_nonce = second
+            .iter()
+            .find(|(name, _)| name == LAN_AUTH_REPLAY_NONCE_HEADER)
+            .map(|(_, value)| value)
+            .unwrap();
+        assert_ne!(first_nonce, second_nonce);
+        uuid::Uuid::parse_str(first_nonce).unwrap();
+        uuid::Uuid::parse_str(second_nonce).unwrap();
+    }
+
+    #[test]
+    fn lan_http_extra_headers_renders_http_header_lines() {
+        let headers = vec![
+            (LAN_AUTH_DEVICE_ID_HEADER.to_owned(), "device".to_owned()),
+            (LAN_AUTH_REPLAY_NONCE_HEADER.to_owned(), "nonce".to_owned()),
+        ];
+        let rendered = lan_http_extra_headers(&headers);
+        assert!(rendered.contains("x-ke8ygw-lan-device-id: device\r\n"));
+        assert!(rendered.contains("x-ke8ygw-lan-replay-nonce: nonce\r\n"));
     }
 
     #[test]

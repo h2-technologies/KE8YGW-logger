@@ -28,12 +28,15 @@ Last audited: 2026-07-21
 - Manual direct LAN HTTP peer add, handshake, preview, and trusted pull between
   GUI instances using `/api/sync/state`, `/api/sync/get-head`, and
   `/api/sync/events-since`.
+- Trust-scoped LAN HTTP read endpoint authorization for logbook/head/event
+  requests using requester device IDs and fresh replay nonce headers.
 - Automatic IPv4/IPv6 multicast discovery worker that probes reachable peer
   identity before recording peers.
 
 ## Still Incomplete For v1
 
-- Production pairing UX and LAN endpoint authentication across desktop and iOS.
+- Production reciprocal pairing UX and shared-secret or signed mutual LAN
+  endpoint authentication across desktop and iOS.
 - Physical-device LAN and iOS Local Network permission validation.
 - Corrective-event conflict-resolution UX on top of the durable manual review
   commands.

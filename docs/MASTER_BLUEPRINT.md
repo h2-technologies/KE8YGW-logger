@@ -204,8 +204,8 @@ Sync is local-first. LAN discovery and replication are preferred when reachable;
   per-logbook order and record accepted local event hashes for transport
   acknowledgment.
 - LAN Trust: mutating LAN replication requires durable trust records,
-  short-lived single-use pairing tokens, logbook scoping, replay nonce checks,
-  and immediate revocation.
+  short-lived single-use pairing tokens, logbook scoping, trust-scoped LAN read
+  endpoint authorization, replay nonce checks, and immediate revocation.
 - Divergence: detect and report; do not auto-merge in MVP.
 
 ## GUI Architecture

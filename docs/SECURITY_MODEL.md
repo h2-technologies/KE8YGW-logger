@@ -92,10 +92,16 @@ metadata.
 Self-hosted sync and support upload routes still use pairing-code/token
 sessions for compatibility-only sync/report flows.
 
+GUI LAN sync read endpoints for logbook lists, heads, event ranges, and event
+metadata require trusted-device and replay-nonce headers. The serving peer checks
+those headers against durable LAN trust records, logbook scope, revocation state,
+and replay history before returning logbook or event data. The discovery
+identity endpoint remains unauthenticated and must stay secret-free.
+
 Future work:
 
-- production pairing UX on top of the durable LAN trust store
-- LAN HTTP endpoint authentication
+- production reciprocal pairing UX on top of the durable LAN trust store
+- shared-secret or signed mutual LAN HTTP endpoint authentication
 - signed official events
 - end-to-end encrypted relay
 - organization-managed policies

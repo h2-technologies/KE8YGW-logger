@@ -171,8 +171,14 @@ The GUI exposes trust-state, pairing-token, pairing-accept, and revoke
 endpoints. It also exposes a manual LAN peer-add endpoint that probes another
 GUI instance over a numeric loopback/private/link-local `http://ip:port`, reads
 `/api/sync/state` for the peer identity, stores the peer with its advertised API
-port, then uses `/api/sync/get-head` and `/api/sync/events-since` for direct
-preview/pull.
+port, then uses protected `/api/sync/get-head` and `/api/sync/events-since`
+requests for direct preview/pull. LAN `list-logbooks`, `get-head`,
+`events-since`, and `event-metadata` requests must include
+`x-ke8ygw-lan-device-id` and a fresh `x-ke8ygw-lan-replay-nonce`; the serving
+peer authorizes those headers against its durable trust store, logbook scope,
+revocation state, and replay-nonce history before returning logbook or event
+data. `/api/sync/state` remains unauthenticated for discovery identity probes
+and must not include secrets or log contents.
 
 When LAN discovery is started, the GUI runs an IPv4/IPv6 multicast discovery
 worker. Each cycle binds reusable discovery sockets, sends the local discovery
@@ -186,13 +192,18 @@ LAN-reachable bind address; loopback-only peers remain supported through manual
 loopback URLs.
 
 Mutating LAN pull rejects untrusted, revoked, wrong-logbook, or replayed peers
-before appending any remote official events. The current threat boundary is:
-discovery packets contain no secrets or log contents; discovery identity probes
-prove reachability and reduce spoofing; official event writes remain local and
-trust-gated; but LAN HTTP sync endpoints are not yet mutually authenticated and
-must not be exposed outside trusted local networks. Production pairing UX,
-endpoint authentication, physical-device LAN validation, and iOS Local Network
-permission validation remain before unattended LAN sync is considered complete.
+before appending any remote official events, and serving LAN read endpoints
+reject untrusted, revoked, wrong-logbook, or replayed requesters before
+returning logbook or event data. The current threat boundary is: discovery
+packets contain no secrets or log contents; discovery identity probes prove
+reachability and reduce spoofing; official event writes remain local and
+trust-gated; protected LAN read endpoints require reciprocal trust state and
+fresh nonces; but the current LAN HTTP transport is not yet cryptographically
+mutually authenticated with a shared secret or signed request proof and must not
+be exposed outside trusted local networks. Production reciprocal pairing UX,
+mutual endpoint authentication, physical-device LAN validation, and iOS Local
+Network permission validation remain before unattended LAN sync is considered
+complete.
 
 ## Cloud Relay and Self-Hosted Sync
 
@@ -214,10 +225,10 @@ The current self-hosted server uses durable local storage by default: embedded S
 
 ## Deferred Work
 
-- Production LAN pairing UX over the durable trust store.
+- Production reciprocal LAN pairing UX over the durable trust store.
 - Signed official events.
 - End-to-end encrypted relay.
-- LAN endpoint authentication.
+- Shared-secret or signed mutual LAN endpoint authentication.
 - Physical-device LAN and iOS Local Network permission validation.
 - Corrective-event conflict-resolution UX and full cross-client branch review.
 - Durable cloud server database.

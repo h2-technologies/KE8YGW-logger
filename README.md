@@ -854,8 +854,8 @@ Runtime events include:
 
 Security limitations for MVP: peers are untrusted until they pass the durable
 LAN trust store, no destructive commands are accepted, automatic replication is
-disabled, and production pairing UX plus LAN endpoint authentication remain
-TODOs before unattended LAN sync.
+disabled, and production reciprocal pairing UX plus mutual cryptographic LAN
+endpoint authentication remain TODOs before unattended LAN sync.
 
 ## Safe LAN Event Replication
 
@@ -901,9 +901,9 @@ sync UI state, shown in the Sync Status panel, and emitted as
 review. Desktop can save a durable manual review from the current preview and
 record explicit recovery-path decisions; iOS can create, resolve, and snapshot
 the same Rust-owned review records through the bridge. Corrective-event conflict
-UX, full cross-client branch review, signed events, production LAN pairing UX,
-LAN endpoint authentication, and physical-device LAN/iOS local-network
-validation are still deferred.
+UX, full cross-client branch review, signed events, production reciprocal LAN
+pairing UX, mutual cryptographic LAN endpoint authentication, and
+physical-device LAN/iOS local-network validation are still deferred.
 
 ## Durable Offline Queue And LAN Trust
 
@@ -926,8 +926,11 @@ startup or through the Sync panel recovery action.
 LAN trust records are durable support state. Pairing tokens require explicit
 operator approval, expire quickly, are single use, and are stored only as
 hashes. Trusted devices are scoped to logbooks, replay nonces are rejected, and
-revocation is immediate. Mutating LAN pull rejects untrusted, revoked,
-wrong-logbook, or replayed peers before appending remote official events.
+revocation is immediate. LAN list/head/event read endpoints require requester
+device ID and fresh replay nonce headers that the serving peer checks against
+its durable trust store before returning logbook or event data. Mutating LAN
+pull rejects untrusted, revoked, wrong-logbook, or replayed peers before
+appending remote official events.
 Manual conflict-review records are also durable support state. They store
 structured conflict reports and the operator-selected recovery path without
 rewriting official history. Unsafe divergent pulls are rejected by the shared
@@ -969,8 +972,8 @@ running and the peer being discovered must bind its GUI API to a LAN-reachable
 address such as `0.0.0.0:<port>` or a specific private interface; loopback-only
 peers can still use manual loopback URLs. Mutating LAN pull also requires the
 explicit `sync.lan.pull` permission and durable peer trust. Production pairing
-UX, endpoint authentication, and physical iOS Local Network permission
-validation remain next sync tasks.
+UX, mutual cryptographic endpoint authentication, and physical iOS Local Network
+permission validation remain next sync tasks.
 
 ## Cloud Relay And Self-Hosted Sync
 
