@@ -93,15 +93,18 @@ Self-hosted sync and support upload routes still use pairing-code/token
 sessions for compatibility-only sync/report flows.
 
 GUI LAN sync read endpoints for logbook lists, heads, event ranges, and event
-metadata require trusted-device and replay-nonce headers. The serving peer checks
-those headers against durable LAN trust records, logbook scope, revocation state,
-and replay history before returning logbook or event data. The discovery
-identity endpoint remains unauthenticated and must stay secret-free.
+metadata require trusted-device, replay-nonce, signature-version, and
+HMAC-SHA256 signature headers. The serving peer verifies those headers against a
+pairing-derived credential stored through `CredentialStore`, durable LAN trust
+records, logbook scope, revocation state, and replay history before returning
+logbook or event data. LAN trust JSON stores only credential references, not raw
+pairing codes. The discovery identity endpoint remains unauthenticated and must
+stay secret-free.
 
 Future work:
 
 - production reciprocal pairing UX on top of the durable LAN trust store
-- shared-secret or signed mutual LAN HTTP endpoint authentication
+- LAN auth credential rotation/recovery and stronger key-exchange hardening
 - signed official events
 - end-to-end encrypted relay
 - organization-managed policies
@@ -113,6 +116,6 @@ Future work:
 - Grant scopes are recorded but not fully enforced across every subsystem.
 - The GUI assumes a local-admin posture for permission review.
 - The self-hosted sync/report server now uses durable local storage by default; production migration, retention, and hosted-operations hardening still remain.
-- LAN sync writes are trust-gated, but the LAN HTTP sync endpoints are not yet mutually authenticated and must stay on trusted local networks.
+- LAN sync writes are trust-gated and protected LAN reads require HMAC-SHA256 request proof after pairing, but the LAN HTTP transport is not encrypted and must stay on trusted local networks.
 - Native OS credential backends are implemented, but clean release-runner and packaged-app validation still remain.
 - Net Control template UI and ICS-style exports are not complete.

@@ -26,7 +26,7 @@ This root roadmap summarizes the current implementation plan. Detailed architect
 - Offline Sync v0.3 foundation: durable versioned mutation envelopes, JSON queue
   store, desktop and iOS queue hooks for implemented mutations, queue-aware
   cloud push acknowledgments, structured conflict reports, and durable LAN trust
-  records with single-use pairing tokens, trust-scoped LAN read endpoint
+  records with single-use pairing tokens, HMAC-SHA256 signed LAN read endpoint
   authorization, replay nonce rejection, and revocation.
 
 ## Current Milestone
@@ -44,7 +44,7 @@ and cross-platform CI/security automation.
 
 Partial or incomplete v1 areas include hosted web/desktop/iOS account UX,
 production email/Turnstile deployment configuration, production reciprocal LAN
-pairing UX, mutual cryptographic LAN endpoint authentication, corrective-event
+pairing UX, LAN auth credential rotation/recovery, corrective-event
 conflict-resolution UX, physical-device LAN/iOS local-network validation,
 release-device iOS background retry qualification, production provider
 qualification, cached/offline maps, contesting, EmComm forms, signed desktop
@@ -57,7 +57,7 @@ See [docs/V1_EXECUTION_PLAN.md](docs/V1_EXECUTION_PLAN.md) for the
 dependency-ordered critical path. The next three implementation goals are:
 
 - Finish sync/reconciliation hardening: production reciprocal LAN pairing UX,
-  mutual cryptographic endpoint authentication, corrective-event
+  LAN auth credential rotation/recovery, corrective-event
   conflict-resolution UX, physical-device LAN/iOS local-network validation, and
   release-device iOS background retry qualification.
 - Production provider qualification for QRZ, QRZ Logbook, LoTW, eQSL, Club

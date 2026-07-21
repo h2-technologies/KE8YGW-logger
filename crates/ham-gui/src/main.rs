@@ -41,19 +41,20 @@ use ham_plugin_sdk::{
     PROPOSAL_QSO_DELETE, PROPOSAL_QSO_NOTE_ADD, PROPOSAL_QSO_RESTORE,
 };
 use ham_sync::{
-    build_handshake_response, conflict_report_from_preview, metadata_for_event,
-    preview_pull_from_events, pull_missing_events, CloudAuth, CloudConnectionState,
-    CloudPreviewPullRequest, CloudPullEventsRequest, CloudPullEventsResponse,
+    build_handshake_response, conflict_report_from_preview, lan_auth_signature, metadata_for_event,
+    preview_pull_from_events, pull_missing_events, verify_lan_auth_signature, CloudAuth,
+    CloudConnectionState, CloudPreviewPullRequest, CloudPullEventsRequest, CloudPullEventsResponse,
     CloudPushEventsRequest, CloudPushEventsResponse, CloudServerConfig, CloudSyncConfig,
     CloudSyncStatusResponse, ConflictReviewSnapshot, DiagnosticReportUploadRequest,
     DiagnosticReportUploadResponse, DiagnosticReportUploadType, DiscoveryPacket,
     GetEventMetadataResponse, GetEventRangeResponse, HandshakeRequest, InMemoryCloudSyncServer,
     JsonConflictReviewStore, JsonLanTrustStore, JsonOfflineMutationQueue, LanDiscoveryService,
-    LanPairingAcceptance, LanTrustSnapshot, ListLogbooksResponse, LocalPeerIdentity,
-    LogbookHeadSummary, ManualConflictResolution, ManualConflictResolutionChoice,
-    OfflineMutationEnvelope, OfflineMutationInput, OfflineQueueSnapshot, PairDeviceRequest,
-    PeerObservation, PeerRecord, PeerRegistry, PreviewPullRequest, PreviewPullResponse,
-    PullEventsRequest, PullEventsResponse, ReplicationStatus, SyncConfig, SyncConflictReport,
+    LanPairingAcceptance, LanPeerTrustUpdate, LanTrustSnapshot, ListLogbooksResponse,
+    LocalPeerIdentity, LogbookHeadSummary, ManualConflictResolution,
+    ManualConflictResolutionChoice, OfflineMutationEnvelope, OfflineMutationInput,
+    OfflineQueueSnapshot, PairDeviceRequest, PeerObservation, PeerRecord, PeerRegistry,
+    PreviewPullRequest, PreviewPullResponse, PullEventsRequest, PullEventsResponse,
+    ReplicationStatus, SyncConfig, SyncConflictReport, LAN_AUTH_SIGNATURE_VERSION,
     OFFLINE_OP_ACTIVATION_END, OFFLINE_OP_ACTIVATION_START, OFFLINE_OP_NET_CHECKIN_CREATE,
     OFFLINE_OP_NET_CHECKIN_DELETE, OFFLINE_OP_NET_SESSION_END, OFFLINE_OP_NET_SESSION_START,
     OFFLINE_OP_NET_TRAFFIC_CREATE, OFFLINE_OP_QSO_CREATE, OFFLINE_OP_QSO_DELETE,
@@ -70,6 +71,8 @@ const LAN_DISCOVERY_LISTEN_WINDOW: Duration = Duration::from_millis(750);
 const LAN_DISCOVERY_SLEEP_SLICE: Duration = Duration::from_millis(250);
 const LAN_AUTH_DEVICE_ID_HEADER: &str = "x-ke8ygw-lan-device-id";
 const LAN_AUTH_REPLAY_NONCE_HEADER: &str = "x-ke8ygw-lan-replay-nonce";
+const LAN_AUTH_SIGNATURE_VERSION_HEADER: &str = "x-ke8ygw-lan-signature-version";
+const LAN_AUTH_SIGNATURE_HEADER: &str = "x-ke8ygw-lan-signature";
 
 fn main() {
     let addr = env::args()
@@ -717,6 +720,9 @@ fn handle_client(state: Arc<AppState>, mut stream: TcpStream) {
         ("POST", "/api/sync/lan/pairing-accept") => {
             handle_lan_pairing_accept(&state, &request.body)
         }
+        ("POST", "/api/sync/lan/pairing-complete") => {
+            handle_lan_pairing_complete(&state, &request.body)
+        }
         ("POST", "/api/sync/lan/revoke") => handle_lan_trust_revoke(&state, &request.body),
         ("POST", "/api/sync/cloud/connect") => handle_cloud_connect(&state, &request.body),
         ("POST", "/api/sync/cloud/push") => handle_cloud_push(&state),
@@ -1086,13 +1092,21 @@ struct LanPairingTokenRequest {
     display_name: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct LanPairingAcceptRequest {
     token_id: uuid::Uuid,
     pairing_code: String,
     peer_device_id: uuid::Uuid,
     peer_display_name: String,
     logbook_id: Option<uuid::Uuid>,
+    public_key_fingerprint: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct LanPairingCompleteRequest {
+    peer_id: Option<String>,
+    token_id: uuid::Uuid,
+    pairing_code: String,
     public_key_fingerprint: Option<String>,
 }
 
@@ -1105,6 +1119,7 @@ struct LanTrustRevokeRequest {
 struct LanEndpointAuth {
     device_id: uuid::Uuid,
     replay_nonce: String,
+    signature: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -4927,7 +4942,7 @@ fn handle_lan_pairing_token(state: &AppState, body: &[u8]) -> Vec<u8> {
         .display_name
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| "KE8YGW Logger Local".to_owned());
-    let device_id = state.bridge.status().device_id;
+    let device_id = local_sync_identity(state).device_id;
     match state.lan_trust_store.issue_pairing_token(
         device_id,
         state.logbook_id,
@@ -4965,14 +4980,25 @@ fn handle_lan_pairing_accept(state: &AppState, body: &[u8]) -> Vec<u8> {
         return json_error(400, "invalid LAN pairing accept JSON");
     };
     let logbook_id = request.logbook_id.unwrap_or(state.logbook_id);
+    let pairing_code = request.pairing_code.trim().to_owned();
+    let auth_credential_id = match store_lan_auth_credential(
+        state,
+        request.peer_device_id,
+        &request.peer_display_name,
+        &pairing_code,
+    ) {
+        Ok(credential_id) => credential_id,
+        Err(error) => return json_response_with_status(500, &json!({"ok": false, "error": error})),
+    };
     match state.lan_trust_store.accept_pairing_token(
         LanPairingAcceptance {
             token_id: request.token_id,
-            pairing_code: request.pairing_code,
+            pairing_code,
             peer_device_id: request.peer_device_id,
             peer_display_name: request.peer_display_name,
             requested_logbooks: vec![logbook_id],
             public_key_fingerprint: request.public_key_fingerprint,
+            auth_credential_id: Some(auth_credential_id),
         },
         chrono::Utc::now(),
     ) {
@@ -4988,6 +5014,99 @@ fn handle_lan_pairing_accept(state: &AppState, body: &[u8]) -> Vec<u8> {
             json_response(&json!({"ok": true, "trusted_device": device}))
         }
         Err(error) => {
+            delete_lan_auth_credential(state, auth_credential_id);
+            json_response_with_status(400, &json!({"ok": false, "error": error.to_string()}))
+        }
+    }
+}
+
+fn handle_lan_pairing_complete(state: &AppState, body: &[u8]) -> Vec<u8> {
+    if let Err(response) = ensure_gui_permission(
+        state,
+        &core_gui_manifest(),
+        PluginCapability::SyncLanDiscovery,
+        "LAN reciprocal pairing permission check",
+    ) {
+        return response;
+    }
+    let Ok(request) = serde_json::from_slice::<LanPairingCompleteRequest>(body) else {
+        return json_error(400, "invalid LAN pairing complete JSON");
+    };
+    let Some(peer) = selected_peer_record(state, request.peer_id) else {
+        return sync_no_peer_error(state, "sync.lan.pairing_complete.failed");
+    };
+    let pairing_code = request.pairing_code.trim().to_owned();
+    if pairing_code.is_empty() {
+        return json_error(400, "pairing code is required");
+    }
+    let local_identity = local_sync_identity(state);
+    let remote_accept = LanPairingAcceptRequest {
+        token_id: request.token_id,
+        pairing_code: pairing_code.clone(),
+        peer_device_id: local_identity.device_id,
+        peer_display_name: local_identity.display_name,
+        logbook_id: Some(state.logbook_id),
+        public_key_fingerprint: request.public_key_fingerprint.clone(),
+    };
+
+    let mut last_error = None;
+    let mut remote_response = None;
+    for address in sorted_peer_api_addresses(&peer) {
+        match post_lan_peer_pairing_accept(address, &remote_accept) {
+            Ok(response) => {
+                remote_response = Some(response);
+                break;
+            }
+            Err(error) => last_error = Some(error),
+        }
+    }
+    let Some(remote_response) = remote_response else {
+        return sync_lan_transport_error(
+            state,
+            "sync.lan.pairing_complete.failed",
+            last_error.unwrap_or_else(|| "LAN peer has no usable API addresses".to_owned()),
+        );
+    };
+
+    let auth_credential_id =
+        match store_lan_auth_credential(state, peer.device_id, &peer.display_name, &pairing_code) {
+            Ok(credential_id) => credential_id,
+            Err(error) => {
+                return json_response_with_status(500, &json!({"ok": false, "error": error}));
+            }
+        };
+    match state.lan_trust_store.trust_peer_with_auth_credential(
+        LanPeerTrustUpdate {
+            peer_device_id: peer.device_id,
+            peer_display_name: peer.display_name.clone(),
+            logbook_id: state.logbook_id,
+            pairing_token_id: Some(request.token_id),
+            public_key_fingerprint: request.public_key_fingerprint,
+            auth_credential_id,
+        },
+        chrono::Utc::now(),
+    ) {
+        Ok(device) => {
+            let _ = publish_gui_runtime(
+                state,
+                "sync.lan.device.trusted",
+                RuntimeEventSeverity::Info,
+                "LAN peer device paired with endpoint authentication",
+                Some(json!({
+                    "device_id": device.device_id,
+                    "logbook_ids": device.logbook_ids,
+                    "auth_credential_id": device.auth_credential_id
+                })),
+                None,
+            );
+            json_response(&json!({
+                "ok": true,
+                "trusted_device": device,
+                "remote": remote_response
+            }))
+        }
+        Err(error) => {
+            delete_lan_auth_credential(state, auth_credential_id);
             json_response_with_status(400, &json!({"ok": false, "error": error.to_string()}))
         }
     }
@@ -5010,6 +5129,9 @@ fn handle_lan_trust_revoke(state: &AppState, body: &[u8]) -> Vec<u8> {
         .revoke_device(request.device_id, chrono::Utc::now())
     {
         Ok(device) => {
+            if let Some(credential_id) = device.auth_credential_id {
+                delete_lan_auth_credential(state, credential_id);
+            }
             let _ = publish_gui_runtime(
                 state,
                 "sync.lan.device.revoked",
@@ -5024,6 +5146,52 @@ fn handle_lan_trust_revoke(state: &AppState, body: &[u8]) -> Vec<u8> {
             json_response_with_status(400, &json!({"ok": false, "error": error.to_string()}))
         }
     }
+}
+
+fn store_lan_auth_credential(
+    state: &AppState,
+    peer_device_id: uuid::Uuid,
+    peer_display_name: &str,
+    secret: &str,
+) -> Result<uuid::Uuid, String> {
+    let secret = secret.trim();
+    if secret.len() < 32 {
+        return Err("LAN pairing code is too short for endpoint authentication".to_owned());
+    }
+    let mut metadata = CredentialMetadata::new(
+        "lan-sync-peer",
+        peer_device_id.to_string(),
+        ServiceType::Authentication,
+        format!("LAN sync auth for {peer_display_name}"),
+    );
+    metadata.metadata = json!({
+        "purpose": "lan_sync_endpoint_auth",
+        "peer_device_id": peer_device_id,
+    });
+    let stored = state
+        .credential_store
+        .lock()
+        .expect("credential store mutex should not be poisoned")
+        .store_credential(metadata, secret)
+        .map_err(|error| format!("failed to store LAN endpoint auth credential: {error}"))?;
+    Ok(stored.credential_id)
+}
+
+fn retrieve_lan_auth_secret(state: &AppState, credential_id: uuid::Uuid) -> Result<String, String> {
+    state
+        .credential_store
+        .lock()
+        .expect("credential store mutex should not be poisoned")
+        .retrieve_secret(credential_id)
+        .map_err(|error| format!("failed to retrieve LAN endpoint auth credential: {error}"))
+}
+
+fn delete_lan_auth_credential(state: &AppState, credential_id: uuid::Uuid) {
+    let _ = state
+        .credential_store
+        .lock()
+        .expect("credential store mutex should not be poisoned")
+        .delete_credential(credential_id);
 }
 
 fn handle_sync_discovery(state: &Arc<AppState>, running: bool) -> Vec<u8> {
@@ -5599,6 +5767,64 @@ fn require_lan_endpoint_auth(
             ));
         }
     };
+    let trusted = match state
+        .lan_trust_store
+        .trusted_peer(auth.device_id, logbook_id)
+    {
+        Ok(trusted) => trusted,
+        Err(error) => {
+            let message = error.to_string();
+            record_lan_endpoint_auth_failure(
+                state,
+                event_type,
+                Some(auth.device_id),
+                message.clone(),
+            );
+            return Err(json_response_with_status(
+                403,
+                &json!({"ok": false, "error": message}),
+            ));
+        }
+    };
+    let Some(credential_id) = trusted.auth_credential_id else {
+        let message = "trusted LAN device is missing endpoint auth credential".to_owned();
+        record_lan_endpoint_auth_failure(state, event_type, Some(auth.device_id), message.clone());
+        return Err(json_response_with_status(
+            403,
+            &json!({"ok": false, "error": message}),
+        ));
+    };
+    let secret = match retrieve_lan_auth_secret(state, credential_id) {
+        Ok(secret) => secret,
+        Err(error) => {
+            record_lan_endpoint_auth_failure(
+                state,
+                event_type,
+                Some(auth.device_id),
+                error.clone(),
+            );
+            return Err(json_response_with_status(
+                403,
+                &json!({"ok": false, "error": error}),
+            ));
+        }
+    };
+    if !verify_lan_auth_signature(
+        &secret,
+        auth.device_id,
+        logbook_id,
+        &request.method,
+        &request.target,
+        &auth.replay_nonce,
+        &auth.signature,
+    ) {
+        let message = "trusted LAN request signature is invalid".to_owned();
+        record_lan_endpoint_auth_failure(state, event_type, Some(auth.device_id), message.clone());
+        return Err(json_response_with_status(
+            403,
+            &json!({"ok": false, "error": message}),
+        ));
+    }
     match state.lan_trust_store.authorize_peer(
         auth.device_id,
         logbook_id,
@@ -5640,9 +5866,25 @@ fn lan_endpoint_auth_from_headers(
     if replay_nonce.len() > 128 {
         return Err("trusted LAN request replay nonce is too long".to_owned());
     }
+    let signature_version = headers
+        .get(LAN_AUTH_SIGNATURE_VERSION_HEADER)
+        .map(|value| value.trim())
+        .ok_or_else(|| "trusted LAN request is missing signature version".to_owned())?;
+    if signature_version != LAN_AUTH_SIGNATURE_VERSION {
+        return Err("trusted LAN request signature version is unsupported".to_owned());
+    }
+    let signature = headers
+        .get(LAN_AUTH_SIGNATURE_HEADER)
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "trusted LAN request is missing signature".to_owned())?;
+    if signature.len() != 64 || !signature.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err("trusted LAN request signature is malformed".to_owned());
+    }
     Ok(LanEndpointAuth {
         device_id,
         replay_nonce: replay_nonce.to_owned(),
+        signature: signature.to_ascii_lowercase(),
     })
 }
 
@@ -6467,9 +6709,8 @@ fn remote_events_for_peer(
     peer: &PeerRecord,
 ) -> Result<Vec<CoreEventEnvelope>, String> {
     let mut last_error = None;
-    let requesting_device_id = local_sync_device_id(state);
     for address in sorted_peer_api_addresses(peer) {
-        match fetch_lan_peer_events(address, state.logbook_id, requesting_device_id) {
+        match fetch_lan_peer_events(state, address, peer.device_id, state.logbook_id) {
             Ok(events) => {
                 let _ = publish_gui_runtime(
                     state,
@@ -6504,9 +6745,8 @@ fn remote_events_for_peer(
 
 fn remote_head_for_peer(state: &AppState, peer: &PeerRecord) -> Result<LogbookHeadSummary, String> {
     let mut last_error = None;
-    let requesting_device_id = local_sync_device_id(state);
     for address in sorted_peer_api_addresses(peer) {
-        match fetch_lan_peer_head(address, state.logbook_id, requesting_device_id) {
+        match fetch_lan_peer_head(state, address, peer.device_id, state.logbook_id) {
             Ok(head) => return Ok(head),
             Err(error) => last_error = Some(error),
         }
@@ -6565,12 +6805,13 @@ fn fetch_lan_peer_identity(address: SocketAddr) -> Result<LocalPeerIdentity, Str
 }
 
 fn fetch_lan_peer_head(
+    state: &AppState,
     address: SocketAddr,
+    peer_device_id: uuid::Uuid,
     logbook_id: uuid::Uuid,
-    requesting_device_id: uuid::Uuid,
 ) -> Result<LogbookHeadSummary, String> {
     let path = format!("/api/sync/get-head?logbook_id={logbook_id}");
-    let headers = trusted_lan_request_headers(requesting_device_id);
+    let headers = trusted_lan_request_headers(state, peer_device_id, logbook_id, "GET", &path)?;
     let response: LogbookHeadSummary = lan_http_get_json(address, &path, &headers)?;
     if response.logbook_id != logbook_id {
         return Err(format!(
@@ -6582,12 +6823,13 @@ fn fetch_lan_peer_head(
 }
 
 fn fetch_lan_peer_events(
+    state: &AppState,
     address: SocketAddr,
+    peer_device_id: uuid::Uuid,
     logbook_id: uuid::Uuid,
-    requesting_device_id: uuid::Uuid,
 ) -> Result<Vec<CoreEventEnvelope>, String> {
     let path = format!("/api/sync/events-since?logbook_id={logbook_id}");
-    let headers = trusted_lan_request_headers(requesting_device_id);
+    let headers = trusted_lan_request_headers(state, peer_device_id, logbook_id, "GET", &path)?;
     let response: GetEventRangeResponse = lan_http_get_json(address, &path, &headers)?;
     if response.logbook_id != logbook_id {
         return Err(format!(
@@ -6598,23 +6840,63 @@ fn fetch_lan_peer_events(
     Ok(response.events)
 }
 
+fn post_lan_peer_pairing_accept(
+    address: SocketAddr,
+    request: &LanPairingAcceptRequest,
+) -> Result<Value, String> {
+    lan_http_post_json(address, "/api/sync/lan/pairing-accept", request, &[])
+}
+
 fn local_sync_device_id(state: &AppState) -> uuid::Uuid {
+    local_sync_identity(state).device_id
+}
+
+fn local_sync_identity(state: &AppState) -> LocalPeerIdentity {
     state
         .sync
         .lock()
         .expect("sync state mutex should not be poisoned")
         .identity
-        .device_id
+        .clone()
 }
 
-fn trusted_lan_request_headers(device_id: uuid::Uuid) -> Vec<(String, String)> {
-    vec![
-        (LAN_AUTH_DEVICE_ID_HEADER.to_owned(), device_id.to_string()),
+fn trusted_lan_request_headers(
+    state: &AppState,
+    peer_device_id: uuid::Uuid,
+    logbook_id: uuid::Uuid,
+    method: &str,
+    target: &str,
+) -> Result<Vec<(String, String)>, String> {
+    let trusted = state
+        .lan_trust_store
+        .trusted_peer(peer_device_id, logbook_id)
+        .map_err(|error| error.to_string())?;
+    let credential_id = trusted
+        .auth_credential_id
+        .ok_or_else(|| "trusted LAN peer is missing endpoint auth credential".to_owned())?;
+    let secret = retrieve_lan_auth_secret(state, credential_id)?;
+    let requester_device_id = local_sync_device_id(state);
+    let replay_nonce = uuid::Uuid::new_v4().to_string();
+    let signature = lan_auth_signature(
+        &secret,
+        requester_device_id,
+        logbook_id,
+        method,
+        target,
+        &replay_nonce,
+    );
+    Ok(vec![
         (
-            LAN_AUTH_REPLAY_NONCE_HEADER.to_owned(),
-            uuid::Uuid::new_v4().to_string(),
+            LAN_AUTH_DEVICE_ID_HEADER.to_owned(),
+            requester_device_id.to_string(),
         ),
-    ]
+        (LAN_AUTH_REPLAY_NONCE_HEADER.to_owned(), replay_nonce),
+        (
+            LAN_AUTH_SIGNATURE_VERSION_HEADER.to_owned(),
+            LAN_AUTH_SIGNATURE_VERSION.to_owned(),
+        ),
+        (LAN_AUTH_SIGNATURE_HEADER.to_owned(), signature),
+    ])
 }
 
 fn lan_http_get_json<T>(
@@ -6640,6 +6922,44 @@ where
     );
     stream
         .write_all(request.as_bytes())
+        .map_err(|error| format!("failed to write LAN peer request: {error}"))?;
+    let mut response = Vec::new();
+    stream
+        .read_to_end(&mut response)
+        .map_err(|error| format!("failed to read LAN peer response: {error}"))?;
+    let body = http_response_body(&response)?;
+    serde_json::from_slice(body).map_err(|error| format!("LAN peer JSON was invalid: {error}"))
+}
+
+fn lan_http_post_json<T, B>(
+    address: SocketAddr,
+    path: &str,
+    body: &B,
+    extra_headers: &[(String, String)],
+) -> Result<T, String>
+where
+    T: DeserializeOwned,
+    B: Serialize,
+{
+    let mut stream = TcpStream::connect_timeout(&address, Duration::from_secs(2))
+        .map_err(|error| format!("failed to connect to LAN peer {address}: {error}"))?;
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .map_err(|error| format!("failed to set LAN peer read timeout: {error}"))?;
+    stream
+        .set_write_timeout(Some(Duration::from_secs(5)))
+        .map_err(|error| format!("failed to set LAN peer write timeout: {error}"))?;
+    let body = serde_json::to_vec(body)
+        .map_err(|error| format!("LAN peer request JSON failed: {error}"))?;
+    let request = format!(
+        "POST {path} HTTP/1.1\r\nHost: {}\r\nAccept: application/json\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n{}\r\n",
+        lan_host_header(address),
+        body.len(),
+        lan_http_extra_headers(extra_headers)
+    );
+    stream
+        .write_all(request.as_bytes())
+        .and_then(|_| stream.write_all(&body))
         .map_err(|error| format!("failed to write LAN peer request: {error}"))?;
     let mut response = Vec::new();
     stream
@@ -7044,10 +7364,16 @@ mod tests {
             LAN_AUTH_REPLAY_NONCE_HEADER.to_owned(),
             "request-nonce".to_owned(),
         );
+        headers.insert(
+            LAN_AUTH_SIGNATURE_VERSION_HEADER.to_owned(),
+            LAN_AUTH_SIGNATURE_VERSION.to_owned(),
+        );
+        headers.insert(LAN_AUTH_SIGNATURE_HEADER.to_owned(), "a".repeat(64));
 
         let auth = lan_endpoint_auth_from_headers(&headers).unwrap();
         assert_eq!(auth.device_id, device_id);
         assert_eq!(auth.replay_nonce, "request-nonce");
+        assert_eq!(auth.signature, "a".repeat(64));
 
         headers.remove(LAN_AUTH_REPLAY_NONCE_HEADER);
         assert!(lan_endpoint_auth_from_headers(&headers)
@@ -7066,29 +7392,16 @@ mod tests {
         assert!(lan_endpoint_auth_from_headers(&headers)
             .unwrap_err()
             .contains("device id"));
-    }
 
-    #[test]
-    fn trusted_lan_request_headers_emit_fresh_replay_nonces() {
-        let device_id = uuid::Uuid::new_v4();
-        let first = trusted_lan_request_headers(device_id);
-        let second = trusted_lan_request_headers(device_id);
-
-        assert!(first.contains(&(LAN_AUTH_DEVICE_ID_HEADER.to_owned(), device_id.to_string())));
-        assert!(second.contains(&(LAN_AUTH_DEVICE_ID_HEADER.to_owned(), device_id.to_string())));
-        let first_nonce = first
-            .iter()
-            .find(|(name, _)| name == LAN_AUTH_REPLAY_NONCE_HEADER)
-            .map(|(_, value)| value)
-            .unwrap();
-        let second_nonce = second
-            .iter()
-            .find(|(name, _)| name == LAN_AUTH_REPLAY_NONCE_HEADER)
-            .map(|(_, value)| value)
-            .unwrap();
-        assert_ne!(first_nonce, second_nonce);
-        uuid::Uuid::parse_str(first_nonce).unwrap();
-        uuid::Uuid::parse_str(second_nonce).unwrap();
+        headers.insert(LAN_AUTH_DEVICE_ID_HEADER.to_owned(), device_id.to_string());
+        headers.insert(
+            LAN_AUTH_REPLAY_NONCE_HEADER.to_owned(),
+            "request-nonce".to_owned(),
+        );
+        headers.insert(LAN_AUTH_SIGNATURE_HEADER.to_owned(), "not-hex".to_owned());
+        assert!(lan_endpoint_auth_from_headers(&headers)
+            .unwrap_err()
+            .contains("signature"));
     }
 
     #[test]
@@ -7096,10 +7409,17 @@ mod tests {
         let headers = vec![
             (LAN_AUTH_DEVICE_ID_HEADER.to_owned(), "device".to_owned()),
             (LAN_AUTH_REPLAY_NONCE_HEADER.to_owned(), "nonce".to_owned()),
+            (
+                LAN_AUTH_SIGNATURE_VERSION_HEADER.to_owned(),
+                LAN_AUTH_SIGNATURE_VERSION.to_owned(),
+            ),
+            (LAN_AUTH_SIGNATURE_HEADER.to_owned(), "signature".to_owned()),
         ];
         let rendered = lan_http_extra_headers(&headers);
         assert!(rendered.contains("x-ke8ygw-lan-device-id: device\r\n"));
         assert!(rendered.contains("x-ke8ygw-lan-replay-nonce: nonce\r\n"));
+        assert!(rendered.contains("x-ke8ygw-lan-signature-version: hmac-sha256-v1\r\n"));
+        assert!(rendered.contains("x-ke8ygw-lan-signature: signature\r\n"));
     }
 
     #[test]

@@ -2,6 +2,7 @@
 
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
+    fmt::Write as FmtWrite,
     fs,
     io::{self, Write},
     path::{Path, PathBuf},
@@ -9,6 +10,7 @@ use std::{
 
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use ham_core::CoreEventEnvelope;
+use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use sha2::{Digest, Sha256};
@@ -22,6 +24,7 @@ pub const OFFLINE_QUEUE_FILE_VERSION: u32 = 1;
 pub const LAN_TRUST_FILE_VERSION: u32 = 1;
 pub const CONFLICT_REVIEW_SCHEMA_VERSION: u32 = 1;
 pub const CONFLICT_REVIEW_FILE_VERSION: u32 = 1;
+pub const LAN_AUTH_SIGNATURE_VERSION: &str = "hmac-sha256-v1";
 pub const DEFAULT_PAIRING_TOKEN_TTL_SECONDS: i64 = 10 * 60;
 pub const DEFAULT_REPLAY_NONCE_TTL_SECONDS: i64 = 10 * 60;
 
@@ -1394,6 +1397,8 @@ pub struct TrustedPeerDevice {
     pub revoked_at: Option<DateTime<Utc>>,
     pub pairing_token_id: Option<Uuid>,
     pub public_key_fingerprint: Option<String>,
+    #[serde(default)]
+    pub auth_credential_id: Option<Uuid>,
     pub last_seen_at: Option<DateTime<Utc>>,
 }
 
@@ -1475,6 +1480,18 @@ pub struct LanPairingAcceptance {
     pub peer_display_name: String,
     pub requested_logbooks: Vec<Uuid>,
     pub public_key_fingerprint: Option<String>,
+    #[serde(default)]
+    pub auth_credential_id: Option<Uuid>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LanPeerTrustUpdate {
+    pub peer_device_id: Uuid,
+    pub peer_display_name: String,
+    pub logbook_id: Uuid,
+    pub pairing_token_id: Option<Uuid>,
+    pub public_key_fingerprint: Option<String>,
+    pub auth_credential_id: Uuid,
 }
 
 #[derive(Debug, Clone)]
@@ -1572,19 +1589,57 @@ impl JsonLanTrustStore {
             revoked_at: None,
             pairing_token_id: Some(request.token_id),
             public_key_fingerprint: request.public_key_fingerprint,
+            auth_credential_id: request.auth_credential_id,
             last_seen_at: None,
         };
-        if let Some(existing) = file
-            .trusted_devices
-            .iter_mut()
-            .find(|device| device.device_id == request.peer_device_id)
-        {
-            *existing = device.clone();
-        } else {
-            file.trusted_devices.push(device.clone());
-        }
+        upsert_trusted_device(&mut file, device.clone());
         self.save_file(&file)?;
         Ok(device)
+    }
+
+    pub fn trust_peer_with_auth_credential(
+        &self,
+        request: LanPeerTrustUpdate,
+        now: DateTime<Utc>,
+    ) -> Result<TrustedPeerDevice, LanTrustError> {
+        let mut file = self.load_file()?;
+        let device = TrustedPeerDevice {
+            device_id: request.peer_device_id,
+            display_name: request.peer_display_name,
+            logbook_ids: vec![request.logbook_id],
+            trusted_at: now,
+            revoked_at: None,
+            pairing_token_id: request.pairing_token_id,
+            public_key_fingerprint: request.public_key_fingerprint,
+            auth_credential_id: Some(request.auth_credential_id),
+            last_seen_at: None,
+        };
+        upsert_trusted_device(&mut file, device.clone());
+        self.save_file(&file)?;
+        Ok(device)
+    }
+
+    pub fn trusted_peer(
+        &self,
+        device_id: Uuid,
+        logbook_id: Uuid,
+    ) -> Result<TrustedPeerDevice, LanTrustError> {
+        let file = self.load_file()?;
+        let device = file
+            .trusted_devices
+            .iter()
+            .find(|device| device.device_id == device_id)
+            .ok_or(LanTrustError::DeviceNotFound(device_id))?;
+        if device.revoked_at.is_some() {
+            return Err(LanTrustError::DeviceRevoked(device_id));
+        }
+        if !device.logbook_ids.contains(&logbook_id) {
+            return Err(LanTrustError::WrongLogbook {
+                device_id,
+                logbook_id,
+            });
+        }
+        Ok(device.clone())
     }
 
     pub fn authorize_peer(
@@ -1668,6 +1723,18 @@ impl JsonLanTrustStore {
     }
 }
 
+fn upsert_trusted_device(file: &mut LanTrustFile, device: TrustedPeerDevice) {
+    if let Some(existing) = file
+        .trusted_devices
+        .iter_mut()
+        .find(|existing| existing.device_id == device.device_id)
+    {
+        *existing = device;
+    } else {
+        file.trusted_devices.push(device);
+    }
+}
+
 fn prune_expired_nonces(file: &mut LanTrustFile, now: DateTime<Utc>) {
     file.replay_nonces.retain(|nonce| nonce.expires_at >= now);
 }
@@ -1680,9 +1747,67 @@ fn replay_nonce_hash(device_id: Uuid, replay_nonce: &str) -> String {
     hex_sha256(format!("{device_id}:{replay_nonce}").as_bytes())
 }
 
+type HmacSha256 = Hmac<Sha256>;
+
+pub fn lan_auth_signature(
+    secret: &str,
+    device_id: Uuid,
+    logbook_id: Uuid,
+    method: &str,
+    target: &str,
+    replay_nonce: &str,
+) -> String {
+    let mut mac =
+        HmacSha256::new_from_slice(secret.as_bytes()).expect("HMAC accepts keys of any size");
+    mac.update(LAN_AUTH_SIGNATURE_VERSION.as_bytes());
+    mac.update(b"\n");
+    mac.update(device_id.to_string().as_bytes());
+    mac.update(b"\n");
+    mac.update(logbook_id.to_string().as_bytes());
+    mac.update(b"\n");
+    mac.update(method.to_ascii_uppercase().as_bytes());
+    mac.update(b"\n");
+    mac.update(target.as_bytes());
+    mac.update(b"\n");
+    mac.update(replay_nonce.as_bytes());
+    bytes_to_hex(&mac.finalize().into_bytes())
+}
+
+pub fn verify_lan_auth_signature(
+    secret: &str,
+    device_id: Uuid,
+    logbook_id: Uuid,
+    method: &str,
+    target: &str,
+    replay_nonce: &str,
+    signature: &str,
+) -> bool {
+    let expected = lan_auth_signature(secret, device_id, logbook_id, method, target, replay_nonce);
+    constant_time_eq(expected.as_bytes(), signature.as_bytes())
+}
+
 fn hex_sha256(bytes: &[u8]) -> String {
     let digest = Sha256::digest(bytes);
-    format!("{digest:x}")
+    bytes_to_hex(&digest)
+}
+
+fn bytes_to_hex(bytes: &[u8]) -> String {
+    let mut output = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        let _ = write!(&mut output, "{byte:02x}");
+    }
+    output
+}
+
+fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
+    if left.len() != right.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (left, right) in left.iter().zip(right) {
+        diff |= left ^ right;
+    }
+    diff == 0
 }
 
 fn write_json_atomically<T>(path: &Path, value: &T) -> Result<(), io::Error>
@@ -2092,6 +2217,7 @@ mod tests {
         let issuer = Uuid::new_v4();
         let peer = Uuid::new_v4();
         let logbook_id = Uuid::new_v4();
+        let credential_id = Uuid::new_v4();
         let token = store
             .issue_pairing_token(issuer, logbook_id, "desktop", true, now)
             .unwrap();
@@ -2104,11 +2230,20 @@ mod tests {
                     peer_display_name: "ios".to_owned(),
                     requested_logbooks: vec![logbook_id],
                     public_key_fingerprint: Some("fingerprint".to_owned()),
+                    auth_credential_id: Some(credential_id),
                 },
                 now,
             )
             .unwrap();
         assert_eq!(trusted.device_id, peer);
+        assert_eq!(trusted.auth_credential_id, Some(credential_id));
+        assert_eq!(
+            store
+                .trusted_peer(peer, logbook_id)
+                .unwrap()
+                .auth_credential_id,
+            Some(credential_id)
+        );
         assert!(matches!(
             store.accept_pairing_token(
                 LanPairingAcceptance {
@@ -2118,6 +2253,7 @@ mod tests {
                     peer_display_name: "other".to_owned(),
                     requested_logbooks: vec![logbook_id],
                     public_key_fingerprint: None,
+                    auth_credential_id: None,
                 },
                 now,
             ),
@@ -2162,6 +2298,7 @@ mod tests {
                     peer_display_name: "ios".to_owned(),
                     requested_logbooks: vec![Uuid::new_v4()],
                     public_key_fingerprint: None,
+                    auth_credential_id: None,
                 },
                 now,
             ),
@@ -2179,11 +2316,87 @@ mod tests {
                     peer_display_name: "ios".to_owned(),
                     requested_logbooks: vec![logbook_id],
                     public_key_fingerprint: None,
+                    auth_credential_id: None,
                 },
                 now + ChronoDuration::seconds(DEFAULT_PAIRING_TOKEN_TTL_SECONDS + 1),
             ),
             Err(LanTrustError::PairingTokenExpired)
         ));
         let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn lan_trust_can_record_peer_auth_credentials_without_raw_secret() {
+        let (store, dir) = trust_store();
+        let now = Utc::now();
+        let peer = Uuid::new_v4();
+        let logbook_id = Uuid::new_v4();
+        let credential_id = Uuid::new_v4();
+
+        let trusted = store
+            .trust_peer_with_auth_credential(
+                LanPeerTrustUpdate {
+                    peer_device_id: peer,
+                    peer_display_name: "desktop".to_owned(),
+                    logbook_id,
+                    pairing_token_id: Some(Uuid::new_v4()),
+                    public_key_fingerprint: None,
+                    auth_credential_id: credential_id,
+                },
+                now,
+            )
+            .unwrap();
+        assert_eq!(trusted.auth_credential_id, Some(credential_id));
+        assert_eq!(
+            store
+                .trusted_peer(peer, logbook_id)
+                .unwrap()
+                .auth_credential_id,
+            Some(credential_id)
+        );
+        let raw = fs::read_to_string(dir.join("lan-trust.json")).unwrap();
+        assert!(!raw.contains("TEST_SECRET_SHOULD_NOT_APPEAR"));
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn lan_auth_signature_covers_request_context() {
+        let device = Uuid::new_v4();
+        let logbook = Uuid::new_v4();
+        let signature = lan_auth_signature(
+            "TEST_SECRET_SHOULD_NOT_APPEAR",
+            device,
+            logbook,
+            "GET",
+            "/api/sync/events-since?logbook_id=abc",
+            "nonce",
+        );
+        assert!(verify_lan_auth_signature(
+            "TEST_SECRET_SHOULD_NOT_APPEAR",
+            device,
+            logbook,
+            "get",
+            "/api/sync/events-since?logbook_id=abc",
+            "nonce",
+            &signature,
+        ));
+        assert!(!verify_lan_auth_signature(
+            "TEST_SECRET_SHOULD_NOT_APPEAR",
+            device,
+            logbook,
+            "GET",
+            "/api/sync/get-head?logbook_id=abc",
+            "nonce",
+            &signature,
+        ));
+        assert!(!verify_lan_auth_signature(
+            "other-secret",
+            device,
+            logbook,
+            "GET",
+            "/api/sync/events-since?logbook_id=abc",
+            "nonce",
+            &signature,
+        ));
     }
 }

@@ -29,14 +29,17 @@ Last audited: 2026-07-21
   GUI instances using `/api/sync/state`, `/api/sync/get-head`, and
   `/api/sync/events-since`.
 - Trust-scoped LAN HTTP read endpoint authorization for logbook/head/event
-  requests using requester device IDs and fresh replay nonce headers.
+  requests using requester device IDs, fresh replay nonce headers, and
+  HMAC-SHA256 request signatures backed by credential-store secrets.
 - Automatic IPv4/IPv6 multicast discovery worker that probes reachable peer
   identity before recording peers.
+- Older trust records without an `auth_credential_id` remain readable but must
+  be re-paired before protected LAN reads can authorize.
 
 ## Still Incomplete For v1
 
-- Production reciprocal pairing UX and shared-secret or signed mutual LAN
-  endpoint authentication across desktop and iOS.
+- Production reciprocal pairing UX across desktop and iOS.
+- LAN auth credential rotation/recovery and stronger key-exchange hardening.
 - Physical-device LAN and iOS Local Network permission validation.
 - Corrective-event conflict-resolution UX on top of the durable manual review
   commands.

@@ -854,8 +854,9 @@ Runtime events include:
 
 Security limitations for MVP: peers are untrusted until they pass the durable
 LAN trust store, no destructive commands are accepted, automatic replication is
-disabled, and production reciprocal pairing UX plus mutual cryptographic LAN
-endpoint authentication remain TODOs before unattended LAN sync.
+disabled, protected LAN reads require HMAC-SHA256 request proof after pairing,
+and production reciprocal pairing UX, credential rotation/recovery, plus
+physical-device LAN/iOS validation remain TODOs before unattended LAN sync.
 
 ## Safe LAN Event Replication
 
@@ -902,8 +903,8 @@ review. Desktop can save a durable manual review from the current preview and
 record explicit recovery-path decisions; iOS can create, resolve, and snapshot
 the same Rust-owned review records through the bridge. Corrective-event conflict
 UX, full cross-client branch review, signed events, production reciprocal LAN
-pairing UX, mutual cryptographic LAN endpoint authentication, and
-physical-device LAN/iOS local-network validation are still deferred.
+pairing UX, LAN auth credential rotation/recovery, and physical-device LAN/iOS
+local-network validation are still deferred.
 
 ## Durable Offline Queue And LAN Trust
 
@@ -925,12 +926,14 @@ startup or through the Sync panel recovery action.
 
 LAN trust records are durable support state. Pairing tokens require explicit
 operator approval, expire quickly, are single use, and are stored only as
-hashes. Trusted devices are scoped to logbooks, replay nonces are rejected, and
-revocation is immediate. LAN list/head/event read endpoints require requester
-device ID and fresh replay nonce headers that the serving peer checks against
-its durable trust store before returning logbook or event data. Mutating LAN
-pull rejects untrusted, revoked, wrong-logbook, or replayed peers before
-appending remote official events.
+hashes. Trusted devices are scoped to logbooks, record only credential
+references for their shared LAN auth secret, reject replayed nonces, and revoke
+immediately. LAN list/head/event read endpoints require requester device ID,
+fresh replay nonce, signature-version, and HMAC-SHA256 signature headers. The
+serving peer verifies the signature against the pairing-derived credential,
+logbook scope, revocation state, and replay history before returning logbook or
+event data. Mutating LAN pull rejects untrusted, revoked, wrong-logbook, or
+replayed peers before appending remote official events.
 Manual conflict-review records are also durable support state. They store
 structured conflict reports and the operator-selected recovery path without
 rewriting official history. Unsafe divergent pulls are rejected by the shared
@@ -959,21 +962,22 @@ To try the current GUI workflow locally:
 2. Open the Dashboard Sync Status panel.
 3. Click `Refresh Peers` to add the demo LAN peer.
 4. Click `Preview Pull` to inspect available remote events.
-5. Click `Trust Selected` to create and consume a one-time local trust token for
-   the selected demo peer.
+5. Use the Sync panel pairing actions to issue a one-time code on one peer and
+   complete pairing from the other peer.
 6. Click `Pull Missing` to append verified missing events and rebuild QSOs.
 
 For two real local instances, run two GUI processes on different ports and set
 separate `HAM_PLATFORM_EVENT_LOG` paths so they do not share the same JSONL
 store. For manual same-machine testing, enter the other instance URL such as
-`http://127.0.0.1:9468`, click `Add Peer`, trust the added peer, then preview
-and pull. For automatic LAN discovery, both GUI instances must have discovery
-running and the peer being discovered must bind its GUI API to a LAN-reachable
-address such as `0.0.0.0:<port>` or a specific private interface; loopback-only
-peers can still use manual loopback URLs. Mutating LAN pull also requires the
-explicit `sync.lan.pull` permission and durable peer trust. Production pairing
-UX, mutual cryptographic endpoint authentication, and physical iOS Local Network
-permission validation remain next sync tasks.
+`http://127.0.0.1:9468`, click `Add Peer`, issue a pairing code on one peer,
+complete pairing from the other peer, then preview and pull. For automatic LAN
+discovery, both GUI instances must have discovery running and the peer being
+discovered must bind its GUI API to a LAN-reachable address such as
+`0.0.0.0:<port>` or a specific private interface; loopback-only peers can still
+use manual loopback URLs. Mutating LAN pull also requires the explicit
+`sync.lan.pull` permission, durable peer trust, and signed remote read requests.
+Production pairing UX, LAN auth credential rotation/recovery, and physical iOS
+Local Network permission validation remain next sync tasks.
 
 ## Cloud Relay And Self-Hosted Sync
 

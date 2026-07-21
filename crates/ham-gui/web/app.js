@@ -1281,6 +1281,7 @@ function bindPanelControls() {
     byId("sync-handshake").addEventListener("click", handshakeSelectedPeer);
     byId("sync-preview-pull").addEventListener("click", previewPullSelectedPeer);
     byId("sync-pull-events").addEventListener("click", pullSelectedPeer);
+    byId("sync-issue-pairing").addEventListener("click", issueLanPairingCode);
     byId("sync-trust-peer").addEventListener("click", trustSelectedPeer);
     byId("sync-revoke-peer").addEventListener("click", revokeSelectedPeer);
     byId("sync-recover-queue").addEventListener("click", recoverOfflineQueue);
@@ -3055,7 +3056,8 @@ function renderSyncStatus() {
       <button id="sync-handshake" class="toolbar-button" type="button">Handshake</button>
       <button id="sync-preview-pull" class="toolbar-button" type="button">Preview Pull</button>
       <button id="sync-pull-events" class="toolbar-button" type="button">Pull Missing</button>
-      <button id="sync-trust-peer" class="toolbar-button" type="button">Trust Selected</button>
+      <button id="sync-issue-pairing" class="toolbar-button" type="button">Issue Code</button>
+      <button id="sync-trust-peer" class="toolbar-button" type="button">Complete Pairing</button>
       <button id="sync-revoke-peer" class="toolbar-button" type="button">Revoke Selected</button>
       <button id="sync-copy-identity" class="toolbar-button" type="button">Copy Identity</button>
     </div>
@@ -3200,23 +3202,25 @@ async function pullSelectedPeer() {
   render();
 }
 
-async function trustSelectedPeer() {
-  const peer = selectedPeer();
-  if (!peer) return;
+async function issueLanPairingCode() {
   const pairing = await syncPost("/api/sync/lan/pairing-token", {
     approved_by_operator: true,
     display_name: state.syncState?.identity?.display_name || "KE8YGW Logger Local",
   });
-  if (!pairing.ok) {
-    state.importSummary = pairing;
-    return;
-  }
-  const trusted = await syncPost("/api/sync/lan/pairing-accept", {
-    token_id: pairing.pairing.token_id,
-    pairing_code: pairing.pairing.pairing_code,
-    peer_device_id: peer.device_id,
-    peer_display_name: peer.display_name,
-    logbook_id: state.syncState?.local_head?.logbook_id,
+  state.importSummary = pairing.pairing || pairing;
+}
+
+async function trustSelectedPeer() {
+  const peer = selectedPeer();
+  if (!peer) return;
+  const tokenId = window.prompt("Peer pairing token ID", "");
+  if (!tokenId) return;
+  const pairingCode = window.prompt("Peer pairing code", "");
+  if (!pairingCode) return;
+  const trusted = await syncPost("/api/sync/lan/pairing-complete", {
+    peer_id: peer.peer_id,
+    token_id: tokenId.trim(),
+    pairing_code: pairingCode.trim(),
     public_key_fingerprint: null,
   });
   state.importSummary = trusted.trusted_device || trusted;
