@@ -11,9 +11,7 @@ on:
       - main
   workflow_dispatch:
 
-permissions:
-  contents: read
-  actions: read
+permissions: {}
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
@@ -59,16 +57,20 @@ jobs:
   changes:
     name: Detect changed areas
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     outputs:
       rust: ${{ steps.detect.outputs.rust }}
       api: ${{ steps.detect.outputs.api }}
       governance: ${{ steps.detect.outputs.governance }}
+      docs_links: ${{ steps.detect.outputs.docs_links }}
+      version: ${{ steps.detect.outputs.version }}
       tauri: ${{ steps.detect.outputs.tauri }}
       ios: ${{ steps.detect.outputs.ios }}
       container: ${{ steps.detect.outputs.container }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
           fetch-depth: 0
 
@@ -97,6 +99,8 @@ jobs:
           rust=false
           api=false
           governance=false
+          docs_links=false
+          version=false
           tauri=false
           ios=false
           container=false
@@ -104,30 +108,42 @@ jobs:
 
           while IFS= read -r file; do
             [[ -z "$file" ]] && continue
-            case "$file" in
-              .github/workflows/*|Cargo.toml|Cargo.lock|rust-toolchain.toml|rust-toolchain)
-                all_expensive=true ;;
-              openapi/*|scripts/check_api_contract.py|crates/ham-api-contract/**|crates/ham-server/**)
-                api=true; rust=true ;;
-              AGENTS.md|GOVERNANCE.md|CONTRIBUTING.md|SECURITY.md|RELEASE.md|SUPPORT.md|CODE_OF_CONDUCT.md|docs/**|.github/CODEOWNERS|.github/ISSUE_TEMPLATE/**|.github/PULL_REQUEST_TEMPLATE.md|scripts/governance-check.ps1)
-                governance=true ;;
-              crates/**/*.rs|src-tauri/**|crates/*/Cargo.toml|crates/ham-gui/web/**)
-                rust=true ;;
-            esac
-            case "$file" in
-              src-tauri/**|crates/ham-desktop/**|crates/ham-gui/**|crates/ham-core/**)
-                tauri=true ;;
-              ios/**|scripts/ios/**|crates/ham-ios-ffi/**|crates/ham-core/**|crates/ham-sync/**|Cargo.toml|Cargo.lock|rust-toolchain.toml)
-                ios=true ;;
-              Dockerfile.sync-server|.dockerignore|crates/ham-sync-server/**|crates/ham-sync/**|crates/ham-core/**|crates/ham-api-contract/**|Cargo.toml|Cargo.lock|rust-toolchain.toml)
-                container=true ;;
-            esac
+            if [[ "$file" == .github/workflows/* || "$file" == Cargo.toml || "$file" == Cargo.lock || "$file" == rust-toolchain.toml || "$file" == rust-toolchain ]]; then
+              all_expensive=true
+            fi
+            if [[ "$file" == *.md ]]; then
+              docs_links=true
+            fi
+            if [[ "$file" == openapi/* || "$file" == scripts/check_api_contract.py || "$file" == crates/ham-api-contract/* || "$file" == crates/ham-server/* ]]; then
+              api=true
+              rust=true
+            fi
+            if [[ "$file" == *.md || "$file" == .github/CODEOWNERS || "$file" == .github/ISSUE_TEMPLATE/* || "$file" == .github/PULL_REQUEST_TEMPLATE.md || "$file" == scripts/governance-check.ps1 ]]; then
+              governance=true
+            fi
+            if [[ "$file" == Cargo.toml || "$file" == crates/*/Cargo.toml || "$file" == src-tauri/Cargo.toml || "$file" == src-tauri/tauri.conf.json || "$file" == ios/KE8YGWLogger/KE8YGWLogger.xcodeproj/project.pbxproj || "$file" == ios/KE8YGWLogger/KE8YGWLogger/Resources/Info.plist || "$file" == openapi/api-v1.yaml || "$file" == openapi/api-v1-baseline.json || "$file" == .github/workflows/ci.yml || "$file" == .github/workflows/release.yml || "$file" == scripts/check_versions.py || "$file" == RELEASE.md || "$file" == docs/BRANCHING_AND_RELEASE_CHANNELS.md ]]; then
+              version=true
+            fi
+            if [[ "$file" == crates/* || "$file" == src-tauri/* ]]; then
+              rust=true
+            fi
+            if [[ "$file" == src-tauri/* || "$file" == crates/ham-desktop/* || "$file" == crates/ham-gui/* || "$file" == crates/ham-core/* ]]; then
+              tauri=true
+            fi
+            if [[ "$file" == ios/* || "$file" == scripts/ios/* || "$file" == crates/ham-ios-ffi/* || "$file" == crates/ham-core/* || "$file" == crates/ham-sync/* || "$file" == Cargo.toml || "$file" == Cargo.lock || "$file" == rust-toolchain.toml ]]; then
+              ios=true
+            fi
+            if [[ "$file" == Dockerfile.sync-server || "$file" == .dockerignore || "$file" == crates/ham-sync-server/* || "$file" == crates/ham-sync/* || "$file" == crates/ham-core/* || "$file" == crates/ham-api-contract/* || "$file" == Cargo.toml || "$file" == Cargo.lock || "$file" == rust-toolchain.toml ]]; then
+              container=true
+            fi
           done <<< "$files"
 
           if [[ "$all_expensive" == true ]]; then
             rust=true
             api=true
             governance=true
+            docs_links=true
+            version=true
             tauri=true
             ios=true
             container=true
@@ -137,6 +153,8 @@ jobs:
             echo "rust=$rust"
             echo "api=$api"
             echo "governance=$governance"
+            echo "docs_links=$docs_links"
+            echo "version=$version"
             echo "tauri=$tauri"
             echo "ios=$ios"
             echo "container=$container"
@@ -148,20 +166,22 @@ jobs:
     name: Ubuntu preflight and policy
     runs-on: ubuntu-latest
     needs: changes
+    permissions:
+      contents: read
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
 
       - name: Install Rust
         if: needs.changes.outputs.rust == 'true'
-        uses: dtolnay/rust-toolchain@master
+        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
         with:
           toolchain: 1.96.0
           components: rustfmt, clippy
 
       - name: Cache Cargo
         if: needs.changes.outputs.rust == 'true'
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           shared-key: linux-debug
           save-if: ${{ github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/main' }}
@@ -174,13 +194,21 @@ jobs:
         if: needs.changes.outputs.api == 'true'
         run: python scripts/check_api_contract.py
 
+      - name: Version consistency
+        if: needs.changes.outputs.version == 'true'
+        run: python scripts/check_versions.py
+
+      - name: Documentation links
+        if: needs.changes.outputs.docs_links == 'true'
+        run: python scripts/check_docs_links.py
+
       - name: Governance
         if: needs.changes.outputs.governance == 'true'
         shell: pwsh
         run: ./scripts/governance-check.ps1
 
       - name: No expensive work selected
-        if: needs.changes.outputs.rust != 'true' && needs.changes.outputs.api != 'true' && needs.changes.outputs.governance != 'true'
+        if: needs.changes.outputs.rust != 'true' && needs.changes.outputs.api != 'true' && needs.changes.outputs.governance != 'true' && needs.changes.outputs.docs_links != 'true' && needs.changes.outputs.version != 'true'
         run: echo "Only files outside CI validation scopes changed."
 
   rust-quality:
@@ -190,12 +218,14 @@ jobs:
       - changes
       - preflight
     if: needs.changes.outputs.rust == 'true'
+    permissions:
+      contents: read
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@master
+        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
         with:
           toolchain: 1.96.0
           components: rustfmt, clippy
@@ -210,7 +240,7 @@ jobs:
             patchelf
 
       - name: Cache Cargo
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           shared-key: linux-debug
           save-if: ${{ github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/main' }}
@@ -231,6 +261,8 @@ jobs:
       - changes
       - preflight
     if: needs.changes.outputs.rust == 'true'
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:
@@ -239,16 +271,16 @@ jobs:
           - macos-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@master
+        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
         with:
           toolchain: 1.96.0
           components: rustfmt, clippy
 
       - name: Cache Cargo
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           shared-key: ${{ runner.os }}-debug
           save-if: ${{ github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/main' }}
@@ -269,12 +301,14 @@ jobs:
       - changes
       - preflight
     if: needs.changes.outputs.tauri == 'true'
+    permissions:
+      contents: read
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@master
+        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
         with:
           toolchain: 1.96.0
           components: rustfmt, clippy
@@ -289,7 +323,7 @@ jobs:
             patchelf
 
       - name: Cache Cargo
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           shared-key: linux-debug
           save-if: ${{ github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/main' }}
@@ -304,9 +338,11 @@ jobs:
       - changes
       - preflight
     if: needs.changes.outputs.container == 'true'
+    permissions:
+      contents: read
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
 
       - name: Build image
         run: docker build -f Dockerfile.sync-server -t ham-sync-server:ci .
@@ -369,24 +405,31 @@ jobs:
     needs: ci-result
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+
       - name: Write internal build manifest
         shell: bash
         run: |
           set -euo pipefail
+          version="$(python scripts/check_versions.py --print-version)"
           mkdir -p dist/internal
+          artifact="internal-dev-${version}-${GITHUB_SHA}-${GITHUB_RUN_NUMBER}"
           {
             echo "channel=internal-dev"
+            echo "version=${version}"
             echo "sha=${GITHUB_SHA}"
             echo "run_number=${GITHUB_RUN_NUMBER}"
             echo "run_id=${GITHUB_RUN_ID}"
-            echo "artifact=internal-dev-build-${GITHUB_SHA}-${GITHUB_RUN_NUMBER}"
+            echo "artifact=${artifact}"
             echo "note=Internal validation artifact only. Not a beta or production release."
           } > dist/internal/BUILD-MANIFEST.txt
+          echo "ARTIFACT_NAME=${artifact}" >> "$GITHUB_ENV"
 
       - name: Upload internal build manifest
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: internal-dev-${{ github.sha }}-${{ github.run_number }}
+          name: ${{ env.ARTIFACT_NAME }}
           path: dist/internal
           retention-days: 7
 
@@ -396,23 +439,30 @@ jobs:
     needs: ci-result
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+
       - name: Write beta build manifest
         shell: bash
         run: |
           set -euo pipefail
+          version="$(python scripts/check_versions.py --print-version)"
           mkdir -p dist/beta
+          artifact="beta-main-${version}-${GITHUB_SHA}-${GITHUB_RUN_NUMBER}"
           {
             echo "channel=beta-main"
+            echo "version=${version}"
             echo "sha=${GITHUB_SHA}"
             echo "run_number=${GITHUB_RUN_NUMBER}"
             echo "run_id=${GITHUB_RUN_ID}"
-            echo "artifact=beta-main-build-${GITHUB_SHA}-${GITHUB_RUN_NUMBER}"
+            echo "artifact=${artifact}"
             echo "note=Beta tester artifact metadata only. Not a production release."
           } > dist/beta/BUILD-MANIFEST.txt
+          echo "ARTIFACT_NAME=${artifact}" >> "$GITHUB_ENV"
 
       - name: Upload beta build manifest
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: beta-main-${{ github.sha }}-${{ github.run_number }}
+          name: ${{ env.ARTIFACT_NAME }}
           path: dist/beta
           retention-days: 30

@@ -70,7 +70,7 @@ Provider reality check:
 - Many map, weather, propagation, and spotting providers are metadata-only, mock, or placeholder implementations.
 
 Native iOS status:
-- Native SwiftUI, Rust FFI, Xcode project, Apple build scripts, and iOS workflow files are present as of July 16, 2026.
+- Native SwiftUI, Rust FFI, Xcode project, Apple build scripts, and iOS workflow files are present as of July 21, 2026.
 - iOS release hardening, signing, TestFlight/App Store distribution, and full production validation remain incomplete.
 
 ## 3. Source-Of-Truth Hierarchy
@@ -103,18 +103,18 @@ When sources disagree:
 | `README.md` | Contributor and product overview | Current high-level behavior and entry docs | Detailed operating rules better suited to `AGENTS.md` | Start-here guide | Manual review | Docs only |
 | `PROJECT_STATE.md` | Implementation-state ledger | Verified state, debt, recent validation history | Aspirational claims not proven by code | Current milestone snapshot | Manual review | Docs only |
 | `ROADMAP.md` | Root milestone summary | High-level milestone direction | Detailed architecture | Milestone summary | Manual review | Docs only |
-| `.github/workflows/` | CI and release automation | Actual enforced validation and release steps | Local-only experiments | `ci.yml`, `release.yml` | GitHub Actions | Cargo / just |
+| `.github/workflows/` | CI, security, scorecard, iOS, and release automation | Actual enforced validation and release steps | Local-only experiments | `ci.yml`, `security.yml`, `ios.yml`, `release.yml`, `scorecard.yml` | GitHub Actions | Cargo / just / Semgrep / actionlint |
+| `.github/dependabot.yml` | Dependency update automation | Scheduled update policy for Cargo, GitHub Actions, and Docker | Auto-merge policy or invented labels | Weekly updates targeting `dev` | Dependabot | N/A |
 | `docs/` | Architecture, security, protocols, release plans | Stable subsystem docs | Runtime code, generated outputs | See sections below | Manual review | N/A |
 | `crates/` | Workspace crates | Rust implementation | Generated assets | See crate table below | Cargo tests/builds | Inter-crate deps only |
 | `src-tauri/` | Tauri v2 desktop runtime wrapper | Tauri config, command bridge, packaging assets | Domain logic | `src-tauri/src/main.rs`, `tauri.conf.json` | `cargo tauri info`, `cargo tauri build` | `ham-desktop` |
 | `.env.example` | Runtime env reference | Supported server env vars | Secrets | Sync/server env names | Manual review | N/A |
-| `Dockerfile.sync-server` | Sync-server container build | Self-hosted sync packaging | Hosted API containerization for unrelated services | `ham-sync-server` release binary | `docker build -f Dockerfile.sync-server .` | `ham-sync-server` |
+| `Dockerfile.sync-server` | Sync-server container build | Self-hosted sync packaging with digest-pinned base images | Hosted API containerization for unrelated services | `ham-sync-server` release binary | `docker build -f Dockerfile.sync-server .` | `ham-sync-server` |
+| `deny.toml` | Cargo advisory policy | Narrow, documented advisory exceptions with review dates | Broad vulnerability suppressions or dependency hiding | `cargo deny check advisories` | cargo-deny | N/A |
 | `target/` | Generated build artifacts | Nothing by hand | Source, docs, fixtures | None | Ignore in reviews unless build artifact debugging is requested | N/A |
 
 Repository absences that matter:
-- No `scripts/` directory is present.
 - No `migrations/` directory is present.
-- No native iOS, Swift, Xcode, FFI, or bridge source directories are present.
 
 ### Workspace Crates And Runtime Directories
 
@@ -394,10 +394,11 @@ Require all of the following:
 ### Adding Native iOS Functionality
 
 Current repository status:
-- No native iOS source tree exists yet.
-- Any first iOS implementation must add explicit new directories/crates and update this file, the Master Blueprint, the API client contract, and release plans in the same change.
+- Native SwiftUI source, SwiftData cache models, Rust FFI bridge code, Xcode project files, Apple build scripts, and an iOS simulator workflow exist under `ios/`, `crates/ham-ios-ffi`, `scripts/ios`, and `.github/workflows/ios.yml`.
+- Native iOS is part of the locked v1 scope for the November 24, 2026 release, alongside hosted web and Windows/macOS/Linux desktop.
+- iOS release hardening, signing, TestFlight/App Store distribution, and complete offline/sync/provider validation remain incomplete.
 
-If native iOS code is introduced later, mandatory rules are:
+Mandatory rules are:
 - Rust remains authoritative for shared domain behavior.
 - SwiftUI views must not reproduce event validation or persistence rules.
 - Bridge calls must go through a centralized Rust bridge/store layer.
@@ -540,6 +541,11 @@ just fmt-check
 just check
 just clippy
 just test
+just feature-matrix
+just api-contract
+just version-check
+just docs-link-check
+just governance-check
 just build
 just release
 just gui
@@ -558,6 +564,10 @@ cargo check --locked -p ham-sync --no-default-features --all-targets
 cargo test --locked -p ham-sync --features surreal-storage
 cargo build --workspace
 cargo build --release --workspace
+python scripts/check_api_contract.py
+python scripts/check_versions.py
+python scripts/check_docs_links.py
+pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/governance-check.ps1
 cargo run -p ham-gui --bin ham-gui
 cargo run -p ham-sync-server --bin ham-sync-server
 cargo run -p ham-server --bin ham-server
@@ -565,17 +575,20 @@ node --check crates\ham-gui\web\app.js
 git diff --check
 cargo tauri info
 cargo tauri build
+cargo audit --ignore RUSTSEC-2023-0071
+cargo deny check advisories
+actionlint .github/workflows/*.yml
 ```
 
 ### Mandatory Baseline By Change Type
 
 | Change Type | Minimum Required Validation |
 | --- | --- |
-| Docs-only changes | `git diff --check` |
+| Docs-only changes | `python scripts/check_docs_links.py`, `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/governance-check.ps1`, `git diff --check` |
 | Rust code changes | `cargo fmt --all -- --check`, `cargo check --workspace --all-targets`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`, `git diff --check` |
 | GUI web asset changes | Rust baseline if Rust changed; always `node --check crates\ham-gui\web\app.js`; `git diff --check` |
 | Desktop/Tauri changes | Relevant Rust baseline plus `cargo tauri info` and `cargo tauri build` when host prerequisites exist |
-| Release work | `just ci`, `just release`, plus any subsystem-specific packaging commands |
+| Release work | `just ci`, `just release`, `python scripts/check_versions.py`, plus any subsystem-specific packaging commands |
 
 ### Targeted Validation By Subsystem
 
@@ -592,8 +605,8 @@ cargo tauri build
 
 Platform-prerequisite notes:
 - `cargo tauri info` and `cargo tauri build` require Tauri host prerequisites and may be unavailable on some machines.
-- The release workflow in GitHub Actions currently packages `ham-gui` release archives; it does not run Tauri packaging.
-- There is no repository-native docs link checker today.
+- The release workflow in GitHub Actions currently packages versioned `ham-gui` release archives; full signed Tauri package publishing remains future release work.
+- Repository-native docs link checking is `python scripts/check_docs_links.py`; governance validation also checks local Markdown links.
 - There are no migration commands because the repo has no dedicated migrations directory.
 
 Validation reporting rules:
@@ -616,7 +629,7 @@ Update documentation in the same change as the implementation.
 | Hosted or native API contract changes | `docs/API_CLIENT_CONTRACT.md` |
 | Desktop/Tauri behavior or packaging | `docs/DESKTOP_RELEASE.md`, `src-tauri/README.md` |
 | Hosted API release readiness | `docs/HOSTED_WEB_RELEASE.md` |
-| iOS planning or readiness | `docs/V1_1_IOS_NATIVE_PLAN.md`, `docs/IOS_APPSTORE_READINESS.md` |
+| iOS planning or readiness | `docs/V1_IOS_NATIVE_PLAN.md`, `docs/IOS_APPSTORE_READINESS.md` |
 | Release scope or milestone shifts | `ROADMAP.md`, `docs/ROADMAP.md`, release-plan docs |
 | Workflow, structure, or policy changes | This `AGENTS.md` |
 
@@ -760,15 +773,15 @@ Never state that the repository is fully complete unless the evidence supports t
 
 ## 22. Current Repository-Specific Notes
 
-This section is a verified snapshot of the repository as inspected on July 16, 2026. Update it whenever implementation status materially changes.
+This section is a verified snapshot of the repository as inspected on July 21, 2026. Update it whenever implementation status materially changes.
 
 - Current workspace version: `0.2.0`.
-- Current milestone: `v0.2` almost-v1 beta.
-- Workspace members: `crates/ham-core`, `crates/ham-plugin-sdk`, `crates/ham-sync`, `crates/ham-sync-server`, `crates/ham-server`, `crates/ham-cli`, `crates/ham-gui`, `crates/ham-desktop`, and `src-tauri`.
+- Current release target: v1 ships on November 24, 2026 with hosted web, native iOS, and Windows/macOS/Linux desktop.
+- Workspace members: `crates/ham-api-contract`, `crates/ham-core`, `crates/ham-plugin-sdk`, `crates/ham-sync`, `crates/ham-sync-server`, `crates/ham-server`, `crates/ham-cli`, `crates/ham-gui`, `crates/ham-desktop`, `crates/ham-ios-ffi`, and `src-tauri`.
 - Actual desktop state: a real Tauri v2 wrapper exists, bundles `crates/ham-gui/web`, exposes native dialog commands plus a restricted `/api/*` proxy, and packages desktop installers. The local backend is not yet embedded in-process or sidecar-launched automatically.
 - Actual hosted-server state: `ham-server` is the hosted API boundary with durable SurrealDB metadata, route tests, role-scoped logbook access, provider settings, upload execution foundation, backups, divergence review, and sync endpoints. It is still beta, not production-hardened.
 - Actual synchronization state: `ham-sync` implements LAN discovery and verification models, preview/pull/push logic, cloud/self-hosted sync models, durable self-hosted sync/report storage, and guarded replay rules. Real LAN peer-to-peer HTTP transport and trust pairing are still missing.
-- Actual iOS state: documentation only. No native code is present.
+- Actual iOS state: native SwiftUI, SwiftData cache/projection models, Rust FFI bridge, Xcode project, Apple build/link scripts, shared scheme, unit tests, and iOS CI are present. App Store signing, TestFlight/App Store distribution, full offline/sync reconciliation, and production validation remain incomplete.
 - Real versus mock providers:
   - Real but gated live transports: Club Log upload, QRZ Logbook upload, eQSL upload, QRZ XML lookup, HamQTH lookup, POTA spot fetch, DX Cluster bounded runtime controls.
   - Deferred live transports: LoTW upload, SOTAWatch live access.
@@ -781,14 +794,16 @@ This section is a verified snapshot of the repository as inspected on July 16, 2
   - Browser-level GUI tests.
   - Remaining production provider adapters and confirmation reconciliation.
 - Validation currently supported by CI:
-  - `just ci` on `ubuntu-latest`, `windows-latest`, and `macos-latest`.
-  - CI runs formatting check, Clippy, tests, and debug build through `just ci`.
-  - The tagged release workflow builds release `ham-gui` archives; it does not build Tauri packages.
+  - Change-aware CI on `ubuntu-latest`, `windows-latest`, and `macos-latest` runs formatting, API contract, governance, Clippy, tests, JavaScript syntax, platform builds, Tauri checks, and sync-server container validation as applicable.
+  - The Security scanning workflow runs Cargo advisory checks, checked-in Semgrep rules with SARIF upload, and actionlint on pull requests and pushes to `dev`/`main`, weekly, and manually.
+  - The Scorecard workflow publishes Scorecard SARIF from `main`.
+  - The tagged release workflow builds release `ham-gui` archives and adds GitHub artifact attestations for future release archives and checksums before publishing assets.
 - Current release blockers:
   - Production provider completeness and validation.
   - LAN trust pairing.
   - Desktop packaging hardening outside local Windows validation.
   - Permission-scope cleanup.
   - Browser-level GUI coverage.
+  - Native iOS signing, App Store/TestFlight readiness, and full offline/sync/provider validation.
 
 **Update this section whenever implementation status materially changes.**

@@ -1,7 +1,9 @@
 # iOS App Store Readiness
 
-This checklist applies to the v1.1 native SwiftUI iOS app. It is not a v1.0
-release requirement.
+Last audited: 2026-07-21
+
+This checklist applies to the v1 native SwiftUI iOS app shipping with hosted
+web and desktop on November 24, 2026.
 
 ## App Target
 
@@ -10,6 +12,11 @@ release requirement.
 - TestFlight build pipeline.
 - Same API contracts as hosted web and desktop.
 - No PWA, pinned web app, or Home Screen install positioning.
+
+Current repository status: native SwiftUI source, Rust FFI, Xcode project files,
+build scripts, and simulator CI are present. Signing, provisioning, TestFlight,
+App Store metadata, privacy manifest, physical-device validation, and full v1
+offline/sync/provider qualification remain incomplete.
 
 ## Bundle and Signing
 

@@ -2,12 +2,13 @@
 
 Each pass should ship a vertical slice across core, GUI or client models, tests, documentation, and CI health. Future prompts should reference `docs/MASTER_BLUEPRINT.md` and preserve the locked decisions.
 
-Release scope correction: v0.2 is the almost-v1 beta, and v1.0 is hosted web plus installable desktop with a
-shared Rust core, shared hosted/self-hosted API, sync, production providers, and
-production credential storage. v1.0 must not ship or document a PWA as the iOS
-client. v1.1 is the native SwiftUI iOS release. See `V1_RELEASE_PLAN.md`,
-`V0_2_RELEASE_PLAN.md`, `V1_1_IOS_NATIVE_PLAN.md`, `API_CLIENT_CONTRACT.md`,
-`HOSTED_WEB_RELEASE.md`, `DESKTOP_RELEASE.md`, and `IOS_APPSTORE_READINESS.md`.
+Release scope correction: v1 ships November 24, 2026 with hosted web, native
+iOS, and Windows/macOS/Linux desktop. `Cargo.toml` `[workspace.package].version`
+is the canonical product version. A PWA, pinned hosted website, or thin web
+wrapper is not the iOS client. See `V1_RELEASE_PLAN.md`,
+`V1_EXECUTION_PLAN.md`, `V1_IOS_NATIVE_PLAN.md`, `API_CLIENT_CONTRACT.md`,
+`HOSTED_WEB_RELEASE.md`, `DESKTOP_RELEASE.md`, and
+`IOS_APPSTORE_READINESS.md`.
 
 ## Passes
 
@@ -64,12 +65,14 @@ client. v1.1 is the native SwiftUI iOS release. See `V1_RELEASE_PLAN.md`,
     - Credential store abstraction, OS keychain/secret-store backend wiring, explicit dev fallback, credential manager UI, net roster/check-ins/traffic queue, tactical callsigns, and reports.
     - Status: implemented at foundation level. Clean-platform credential validation, ICS exports, and EmComm workspace remain planned.
 
-14. **Contesting MVP**
-    - Contest framework, exchange templates, dupes, scoring, multiplier projections, Cabrillo export, keyboard-first contest workspace, Field Day template.
-    - Status: planned.
+14. **Contesting**
+   - Contest framework, exchange templates, dupes, scoring, multiplier projections, Cabrillo export, keyboard-first contest workspace, Field Day template.
+   - Status: unimplemented for the v1 product surface; Field Day, Winter Field
+     Day, generic serial/grid templates, and December/January contest packs are
+     locked v1 scope.
 
 15. **Maps/Propagation + Polish**
-    - Map plugin framework, Maidenhead overlays, great-circle/bearing, grayline placeholder, layout editor, theme polish, performance pass, migrations, v1.0 hardening.
+    - Map plugin framework, Maidenhead overlays, great-circle/bearing, grayline placeholder, layout editor, theme polish, performance pass, migrations, v1 hardening.
     - Status: implemented at foundation level. Full tile/vector renderer and live providers remain planned.
 
 16. **Online Services Ecosystem**
@@ -86,15 +89,18 @@ client. v1.1 is the native SwiftUI iOS release. See `V1_RELEASE_PLAN.md`,
 
 ## Dependency Order
 
-The next high-impact work should minimize future rewrites:
+The dependency-ordered v1 critical path is tracked in
+`V1_EXECUTION_PLAN.md`. The next high-impact work should minimize future
+rewrites:
 
-1. Extract shared plugin/UI manifests only when static plugin definitions become a blocker.
-2. Validate Tauri package builds, add browser tests, and add CI release checks
-   before public tester use.
-3. Add real peer-to-peer LAN transport and trust pairing before unattended sync.
-4. Add role/account/session models before broad multi-operator workflows.
-5. Complete provider runtime hardening on top of the Online Services adapter
-   boundary: real-account validation for hosted QRZ XML/HamQTH lookup, POTA
-   spot fetch, DX Cluster read-once behavior, and Club Log/QRZ/eQSL uploads;
-   approved SOTAWatch access; LoTW/TQSL upload; real propagation/weather
-   providers; and automatic upload processing.
+1. Finish accounts and deployment-mode hardening before broad hosted/web/iOS
+   client workflows.
+2. Finish sync/offline reconciliation, LAN trust pairing, and conflict review
+   before unattended desktop/iOS operation.
+3. Complete provider runtime hardening and production provider qualification
+   before release-candidate data migration or operations work.
+4. Build the remaining client surfaces on top of stable account, sync, provider,
+   and API contracts.
+5. Complete maps, contesting, EmComm, signed updater, signing/notarization,
+   App Store, operations, and release qualification after the shared foundations
+   are stable.

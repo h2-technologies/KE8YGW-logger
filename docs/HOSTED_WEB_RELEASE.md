@@ -1,7 +1,7 @@
 # Hosted Web Release
 
-v1.0 includes a hosted web app with login and the same API contract used by
-desktop and future native iOS clients.
+v1 includes a hosted web app with login and the same API contract used by
+desktop and native iOS clients.
 
 ## Target
 
