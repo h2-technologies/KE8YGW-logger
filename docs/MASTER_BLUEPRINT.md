@@ -8,6 +8,24 @@ Build a local-first, plugin-based amateur radio operations platform that replace
 
 The MVP focus is Casual Logging, POTA/SOTA, and Sync.
 
+## v1 Release Scope
+
+The locked v1 release target is November 24, 2026. v1 includes hosted web,
+native iOS, and signed desktop clients for Windows, macOS, and broad Linux
+distribution support.
+
+v1 scope is bounded by issue #2: hosted web is online-only; desktop and iOS are
+offline-capable and reconcile later; personal hosted, public hosted, and
+self-hosted deployments are supported; registration is invite-only by default
+with an administrator open-registration switch, verified email, and Cloudflare
+Turnstile for public registration; required providers are QRZ, QRZ Logbook,
+LoTW, eQSL, Club Log, POTA, SOTAWatch, DX Cluster/RBN, maps, and propagation;
+maps support cached/offline regions on desktop and iOS; contesting includes the
+locked release contest set; EmComm includes the locked ICS/personnel/assignment
+and message-record set; desktop update behavior is signed and operator-mediated;
+Windows uses Microsoft Trusted Signing; Apple releases use Apple
+signing/notarization/App Store distribution. v1.1 adds a TUI.
+
 ## Locked Decisions
 
 | Area | Decision |

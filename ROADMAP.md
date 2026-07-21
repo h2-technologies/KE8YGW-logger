@@ -26,83 +26,41 @@ This root roadmap summarizes the current implementation plan. Detailed architect
 
 ## Current Milestone
 
-v0.2 almost-v1 beta is underway. The hosted API now has durable SurrealDB
-metadata/support storage plus beta routes for account/session/device/logbook
-scaffolding, role-scoped logbook access, proposal-backed QSO lifecycle,
-station/equipment profiles, ADIF import/export, provider settings/test, upload
-queue execution foundation, activation/Net Control routes, map summaries,
-backup export/dry-run/import, divergence review, sync preview/push/pull, and
-route tests. The GUI now has backup/restore and divergence review surfaces, and
-the repository has a `ham-desktop` crate plus a real `src-tauri` Tauri runtime
-wrapper with native dialog commands and bundled shared web assets. Tier 1
-provider adapter boundaries and hosted upload execution are now wired with
-deterministic fake mode and credential-reference validation. Club Log, QRZ
-Logbook, and eQSL now have gated live HTTP upload transports plus ignored
-release-runner validation hooks that skip without explicit live/upload env vars
-and provider credentials. QRZ XML and HamQTH hosted lookup execution, POTA
-hosted spot fetching, and DX Cluster bounded connect/read/disconnect/status
-runtime controls are wired with redacted error-code mapping. SOTAWatch live access remains deferred pending
-explicit API approval/terms handling, and LoTW production upload remains
-deferred until a safe TQSL/certificate-signing flow is modeled.
+The current `0.2.0` workspace is the v1 foundation baseline, not the complete
+v1 product. The locked v1 release ships on November 24, 2026 with hosted web,
+native iOS, and Windows/macOS/Linux desktop. A PWA, pinned hosted website, or
+thin web wrapper is not the iOS client. v1.1 adds a TUI.
 
-Native iOS parity is implemented at an MVP surface level and key mutation paths
-now prefer Rust authority. Rust verification passes in this Windows workspace,
-but Apple target compilation, XCFramework assembly, Xcode simulator/device
-builds, archive validation, and Swift tests still need to run on macOS.
+Implemented foundations include the hosted `/api/v1` route slices, durable
+hosted and self-hosted metadata, proposal-backed QSO/POTA/SOTA/Net Control
+workflows, Tauri desktop wrapper, native iOS SwiftUI/Rust bridge, provider
+framework, maps/GIS foundation, diagnostics, governance, version validation,
+and cross-platform CI/security automation.
 
-## Release Scope Correction
-
-v1.0 targets hosted web, installable desktop, shared Rust core, shared hosted/self-hosted API, cloud/self-hosted sync, production provider integrations, and production credential storage. iOS is not part of v1.0, and PWA installability is not a release target.
-
-v1.1 is the first native iOS target: SwiftUI, App Store-ready Xcode project, native offline queue, Keychain, native ADIF document flows, native Maps, iPhone/iPad layouts, and TestFlight. See `docs/V1_RELEASE_PLAN.md`, `docs/V1_1_IOS_NATIVE_PLAN.md`, `docs/API_CLIENT_CONTRACT.md`, and `docs/IOS_APPSTORE_READINESS.md`.
+Partial or incomplete v1 areas include hosted web/desktop/iOS account UX,
+production email/Turnstile deployment configuration, real LAN trust pairing,
+full offline/reconciliation on desktop and iOS, production provider
+qualification, cached/offline maps, contesting, EmComm forms, signed desktop
+updater, Apple signing/TestFlight/App Store distribution, operations, and
+release-candidate qualification.
 
 ## Recommended Next Milestone
 
-Provider Runtime Hardening, Credentials, and Desktop Runtime:
+See [docs/V1_EXECUTION_PLAN.md](docs/V1_EXECUTION_PLAN.md) for the
+dependency-ordered critical path. The next three implementation goals are:
 
-- Validate Tauri package builds on clean release runners.
-- Validate production OS credential backends on release runners.
-- Validate gated Club Log, QRZ Logbook, and eQSL live uploads on explicit
-  release-runner credentials.
-- Browser-level GUI tests.
-
-iOS Native Validation and Sync/Restore Authority:
-
-- Run the new macOS workflow or local macOS commands to validate Apple Rust targets, XCFramework contents, simulator build/test, generic device build, and archive behavior.
-- Add QSO correction/update and richer projection rebuild commands through Rust FFI.
-- Route hosted sync push/pull/merge/conflict resolution through `ham-sync` FFI commands.
-- Route JSON/ZIP backup inspect, dry-run restore, and apply restore through Rust when the repository exposes those workflows.
-- Add Xcode UI/snapshot/offline/provider mock/sync/map tests and run them in the macOS workflow.
-
-Then continue Live Provider Adapters and Production Credential Backends:
-
-- Native OS keychain/secret-store release hardening.
-- Real-account validation for hosted QRZ XML/HamQTH lookup and POTA/DX runtime
-  behavior.
-- LoTW/TQSL and HRDLog upload transports; release-runner validation for Club
-  Log, QRZ Logbook, and eQSL.
-- Real LoTW/eQSL/Club Log/QRZ confirmation download clients.
-- DX Cluster background reconnect lifecycle if needed after read-once runtime.
-- Approved SOTAWatch live feed adapter.
-- NOAA/Open-Meteo/space-weather live providers.
-- Upload queue execution against real providers and scheduler execution.
+- Sync/offline reconciliation across desktop and iOS, including LAN trust
+  pairing and conflict review.
+- Production provider qualification for QRZ, QRZ Logbook, LoTW, eQSL, Club
+  Log, POTA, SOTAWatch, DX Cluster/RBN, maps, and propagation.
+- Hosted web, desktop, and iOS UI flows for the implemented account/session,
+  recovery, device, and admin APIs.
 
 ## Future Milestones
 
-- v0.2 almost-v1 beta completion: live provider adapter work, Tauri package validation, LAN trust pairing, station/equipment GUI polish, interactive map polish, browser tests, and CI release hardening.
-- v1.0 web + desktop production release: hosted web, installable desktop, stabilized API/storage/sync/providers, production credentials, docs cleanup, and beta bug fixes.
-- v1.1 native iOS release: SwiftUI app, native offline queue, Keychain, native ADIF document flows, native Maps, iPhone/iPad layouts, and TestFlight/App Store readiness.
-- LoTW upload/download and confirmation pull.
-- eQSL upload.
-- Club Log upload.
-- QRZ Logbook upload.
-- QRZ/HamQTH real callsign lookup.
-- OS keychain/secret-store release-runner validation.
-
-- Tauri installer/signing polish and release-runner package validation.
-- iOS parity with the Rust core event/proposal/sync architecture.
-- Award rule databases and needed-list intelligence.
-- Durable upload queue and provider settings.
-- LAN trust pairing UX and real peer-to-peer transport.
-- Conflict/divergence review UI hardening.
-- Net Control, EmComm, Contesting, Maps, Propagation, and AI plugins.
+- v1 platform completion: accounts, sync/reconciliation, providers, hosted web,
+  signed desktop, native iOS, maps, contesting, EmComm, operations, and release
+  qualification for November 24, 2026.
+- v1.1 TUI release.
+- Post-v1 enhancements such as award rule databases, rig-control expansion,
+  weather expansion, AI assistant workflows, and plugin marketplace/sandboxing.

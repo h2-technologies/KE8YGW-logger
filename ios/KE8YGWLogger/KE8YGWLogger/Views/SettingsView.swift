@@ -29,6 +29,9 @@ struct SettingsView: View {
     private var appSettings: AppSettings? { settings.first }
     private var visibleProfiles: [StationProfile] { profiles.filter { !$0.isTombstoned } }
     private var visibleEquipment: [StationEquipment] { equipment.filter { !$0.isTombstoned } }
+    private var appVersion: String {
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "unknown"
+    }
 
     @ViewBuilder
     private var statusSection: some View {
@@ -278,7 +281,7 @@ struct SettingsView: View {
 
                 Section("About") {
                     DetailRow(title: "App", value: "KE8YGW Logger")
-                    DetailRow(title: "Version", value: "0.2.0")
+                    DetailRow(title: "Version", value: appVersion)
                 }
                 }
             }

@@ -5,6 +5,10 @@ Provider integrations must assume credentials are sensitive and runtime diagnost
 ## Credential Rules
 
 - Do not store passwords, API keys, sync tokens, session tokens, or certificates in provider metadata.
+- Hosted session, refresh, invitation, email-verification, recovery, and API
+  tokens must be persisted only as hashes. Raw token values may appear only in
+  the immediate creation/consumption response or the test email outbox used by
+  deterministic unit tests.
 - Do not log credential values.
 - Do not include credentials in runtime events.
 - Do not include credentials in diagnostic bundles.

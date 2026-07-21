@@ -1,0 +1,65 @@
+[graph]
+all-features = false
+no-default-features = false
+
+[advisories]
+ignore = [
+    { id = "RUSTSEC-2023-0071", reason = "No patched rsa release exists. Transitive through surrealdb-core -> jsonwebtoken; review by 2026-10-18 or when SurrealDB/jsonwebtoken migrates away from RustCrypto rsa." },
+    { id = "RUSTSEC-2023-0089", reason = "Informational unmaintained advisory. Target-specific transitive dependency from SurrealDB; review by 2026-10-18 or the next SurrealDB 3.x milestone." },
+    { id = "RUSTSEC-2024-0411", reason = "Informational GTK3/Wayland binding advisory from Tauri Linux desktop stack; no patched GTK3 line exists. Review by 2026-10-18 with Tauri/wry Linux backend updates." },
+    { id = "RUSTSEC-2024-0412", reason = "Informational GTK3 binding advisory from Tauri Linux desktop stack; no patched GTK3 line exists. Review by 2026-10-18 with Tauri/wry Linux backend updates." },
+    { id = "RUSTSEC-2024-0413", reason = "Informational GTK3 binding advisory from Tauri Linux desktop stack; no patched GTK3 line exists. Review by 2026-10-18 with Tauri/wry Linux backend updates." },
+    { id = "RUSTSEC-2024-0414", reason = "Informational GTK3/X11 binding advisory from Tauri Linux desktop stack; no patched GTK3 line exists. Review by 2026-10-18 with Tauri/wry Linux backend updates." },
+    { id = "RUSTSEC-2024-0415", reason = "Informational GTK3 binding advisory from Tauri Linux desktop stack; no patched GTK3 line exists. Review by 2026-10-18 with Tauri/wry Linux backend updates." },
+    { id = "RUSTSEC-2024-0416", reason = "Informational GTK3 binding advisory from Tauri Linux desktop stack; no patched GTK3 line exists. Review by 2026-10-18 with Tauri/wry Linux backend updates." },
+    { id = "RUSTSEC-2024-0417", reason = "Informational GTK3/X11 binding advisory from Tauri Linux desktop stack; no patched GTK3 line exists. Review by 2026-10-18 with Tauri/wry Linux backend updates." },
+    { id = "RUSTSEC-2024-0418", reason = "Informational GTK3 binding advisory from Tauri Linux desktop stack; no patched GTK3 line exists. Review by 2026-10-18 with Tauri/wry Linux backend updates." },
+    { id = "RUSTSEC-2024-0419", reason = "Informational GTK3 macro advisory from Tauri Linux desktop stack; no patched GTK3 line exists. Review by 2026-10-18 with Tauri/wry Linux backend updates." },
+    { id = "RUSTSEC-2024-0420", reason = "Informational GTK3 sys advisory from Tauri Linux desktop stack; no patched GTK3 line exists. Review by 2026-10-18 with Tauri/wry Linux backend updates." },
+    { id = "RUSTSEC-2024-0429", reason = "glib VariantStrIter unsoundness is transitive through Tauri GTK3 Linux backend; no repository code calls VariantStrIter. Review by 2026-10-18 with Tauri/wry Linux backend updates." },
+    { id = "RUSTSEC-2024-0370", reason = "Informational proc-macro-error advisory inherited through GTK3 macros; build-time only. Review by 2026-10-18 with Tauri/wry Linux backend updates." },
+    { id = "RUSTSEC-2025-0075", reason = "Informational rust-unic advisory inherited through Tauri urlpattern; no direct repository usage. Review by 2026-10-18 with Tauri urlpattern updates." },
+    { id = "RUSTSEC-2025-0080", reason = "Informational rust-unic advisory inherited through Tauri urlpattern; no direct repository usage. Review by 2026-10-18 with Tauri urlpattern updates." },
+    { id = "RUSTSEC-2025-0081", reason = "Informational rust-unic advisory inherited through Tauri urlpattern; no direct repository usage. Review by 2026-10-18 with Tauri urlpattern updates." },
+    { id = "RUSTSEC-2025-0098", reason = "Informational rust-unic advisory inherited through Tauri urlpattern; no direct repository usage. Review by 2026-10-18 with Tauri urlpattern updates." },
+    { id = "RUSTSEC-2025-0100", reason = "Informational rust-unic advisory inherited through Tauri urlpattern; no direct repository usage. Review by 2026-10-18 with Tauri urlpattern updates." },
+    { id = "RUSTSEC-2025-0141", reason = "Informational bincode advisory inherited through surrealdb-core -> surrealmx. Review by 2026-10-18 or the next SurrealDB 3.x milestone." },
+]
+
+[licenses]
+confidence-threshold = 0.8
+allow = [
+    "0BSD",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-1-Clause",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "BUSL-1.1",
+    "CC0-1.0",
+    "CDLA-Permissive-2.0",
+    "ISC",
+    "LGPL-2.1-or-later",
+    "MIT",
+    "MIT-0",
+    "MPL-2.0",
+    "Unicode-3.0",
+    "Unlicense",
+    "Zlib",
+]
+
+[licenses.private]
+ignore = true
+
+[bans]
+multiple-versions = "warn"
+wildcards = "warn"
+workspace-default-features = "allow"
+external-default-features = "allow"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

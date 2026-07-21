@@ -1,17 +1,17 @@
 # v0.2 Release Plan
 
-v0.2 is the "almost v1.0" beta. The goal is to make KE8YGW Logger functionally
-close to the v1.0 web + desktop release while leaving v1.0 for polish,
-packaging/signing, documentation cleanup, provider refinement, and beta bug
-fixes.
+v0.2 is the "almost v1" foundation baseline. The current v1 target is the
+November 24, 2026 release with hosted web, native iOS, and Windows/macOS/Linux
+desktop.
 
-v0.2 must not start native iOS work and must not use PWA/mobile web as an iOS
-substitute. The hosted API should be clean enough for a future native SwiftUI
-iOS client in v1.1.
+This document is retained to describe the already-built `0.2.0` foundation. It
+is not the v1 product checklist and must not override issue #2 or
+`docs/V1_RELEASE_PLAN.md`.
 
 ## Feature Checklist
 
-- [x] Release-scope docs split v0.2, v1.0, and v1.1.
+- [x] Release-scope docs distinguish the `0.2.0` foundation from the locked v1
+  release.
 - [x] Dedicated `ham-server` hosted API crate scaffold.
 - [x] Hosted API status, auth, session, logbook, QSO, station/equipment, ADIF,
   provider, upload, sync, and device route boundary.
@@ -56,6 +56,8 @@ iOS client in v1.1.
   Log, QRZ Logbook, and eQSL with explicit env gating and redacted output.
 - [x] Stable redacted provider runtime error-code mapping for lookup/spot/DX
   validation paths.
+- [x] Native iOS SwiftUI/Rust-bridge foundation, Xcode project, Apple build
+  scripts, shared scheme, unit tests, and simulator CI.
 - [ ] Approved SOTAWatch live endpoint and terms handling.
 - [ ] LoTW TQSL/certificate-signing upload flow.
 - [ ] Confirmation download/reconciliation UI.
@@ -68,7 +70,8 @@ iOS client in v1.1.
 - [ ] Station/equipment GUI completion.
 - [ ] Interactive map renderer.
 - [ ] Browser-level GUI tests.
-- [ ] Hardened CI/release artifacts.
+- [x] Cross-platform CI/release baseline with API, governance, version,
+  documentation-link, security, container, Tauri, and iOS checks.
 
 ## Acceptance Criteria
 
@@ -113,7 +116,6 @@ iOS client in v1.1.
 
 ## Intentionally Deferred
 
-- Native iOS app.
 - PWA as an iOS release target.
 - Tauri mobile.
 - Plugin marketplace, signed plugin distribution, and plugin sandboxing.
@@ -129,7 +131,7 @@ iOS client in v1.1.
 ## Known Risks
 
 - SurrealDB schema evolution is intentionally minimal and needs production
-  migration policy hardening before v1.0.
+  migration policy hardening before v1.
 - Session expiry/refresh policy is still beta-level.
 - OS credential backends are implemented through platform APIs/tools, but
   environment-specific validation is still needed on clean Windows, macOS, and
@@ -145,19 +147,29 @@ iOS client in v1.1.
 - Backup import is intentionally conservative: it supports same-logbook clean
   append/idempotent replay and blocks divergent targets rather than merging.
 - GUI browser tests are not yet present.
-- Tauri installer/package validation is not wired into CI yet; the runtime
-  crate, bundled UI config, desktop crate, and command helpers are present.
+- Tauri runtime validation is wired into CI; full signed package validation,
+  notarization, update-channel validation, and clean release-runner installer
+  qualification remain v1 work.
 - Permission scopes are enforced in the implemented hosted slices but not yet
   consistently across every older GUI/local route.
+- Native iOS exists, but signing, TestFlight/App Store distribution,
+  offline/reconciliation parity, cached maps, and full production validation
+  remain v1 work.
 
-## v1.0 Delta After v0.2
+## v1 Delta After v0.2
 
+- Wire hosted web account/registration/verification/recovery/device/admin UX to
+  the implemented server APIs, configure production email/Turnstile, and finish
+  deployment operations hardening.
+- Complete native iOS offline/reconciliation, signing, TestFlight/App Store,
+  maps, provider, contesting, and EmComm release requirements.
 - Validate production credential backends on release runners.
 - Validate hosted lookup/spot/DX runtime on provider-approved accounts or
   fixtures, complete LoTW TQSL signing, and run live-provider release-runner
   validation.
 - Harden backup import UX and add browser-level coverage.
-- Finish Tauri package validation, signing, and notarization decisions.
+- Finish Tauri package validation, signing, notarization, and signed updater
+  decisions.
 - Add browser-level GUI tests and release artifact checks.
 - Tighten documentation and operator-facing setup guides.
 - Fix beta bugs found during real hosted/self-hosted testing.

@@ -1,14 +1,16 @@
 # Desktop Release
 
-v1.0 includes an installable desktop app. v0.2 now has a real Tauri runtime
+v1 includes signed desktop clients for Windows, macOS, and broad Linux
+distribution support. The `0.2.0` workspace now has a real Tauri runtime
 wrapper and keeps signing, notarization, updater policy, and installer branding
-as v1.0 polish.
+as v1 work.
 
 ## Target
 
-- Installable desktop app for Windows x64 first.
-- Linux x64 package where feasible.
-- macOS x64/arm64 package where feasible.
+- Installable signed desktop app for Windows.
+- Signed/notarized macOS app for supported Intel and Apple Silicon targets.
+- Broad Linux distribution packages where the Tauri/WebKitGTK stack supports
+  them.
 - Shared Rust core and shared web UI.
 - Bundled web assets in release mode; no frontend dev server is required.
 - Local or hosted/self-hosted API connection through `HAM_DESKTOP_SERVER_URL`
@@ -144,9 +146,11 @@ prerequisites rather than repository configuration errors.
 
 ## Remaining Desktop Work
 
-- Embed or sidecar the local GUI backend if v1.0 should run fully local without
+- Embed or sidecar the local GUI backend if v1 should run fully local without
   an already-running local/hosted API.
 - Validate installer/package builds on clean Windows, Linux, and macOS runners.
 - Validate OS credential backends on clean release runners.
-- Add release artifact hardening, checksums, and optional SBOM.
-- Finish signing/notarization/updater decisions.
+- Preserve versioned release artifact names, checksums, and attestations.
+- Finish signing/notarization/updater decisions, including the issue #2 policy:
+  automatic signed downloads on unmetered connections, metered downloads by
+  opt-in, and prompt before installation.

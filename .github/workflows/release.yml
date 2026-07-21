@@ -11,21 +11,22 @@ on:
         required: true
         type: string
 
-permissions:
-  contents: write
-  actions: read
+permissions: {}
 
 jobs:
   validate-production-tag:
     name: Validate production tag
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
     outputs:
       tag: ${{ steps.tag.outputs.tag }}
       sha: ${{ steps.tag.outputs.sha }}
       version: ${{ steps.version.outputs.version }}
     steps:
       - name: Checkout full history
-        uses: actions/checkout@v4
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
           fetch-depth: 0
 
@@ -56,11 +57,8 @@ jobs:
         run: |
           set -euo pipefail
           tag="${{ steps.tag.outputs.tag }}"
-          version="$(python -c 'import re; text=open("Cargo.toml", encoding="utf-8").read(); m=re.search(r"(?m)^\[workspace\.package\][\s\S]*?^version\s*=\s*\"([^\"]+)\"", text); print(m.group(1) if m else "")')"
-          if [[ -z "$version" ]]; then
-            echo "workspace package version not found" >&2
-            exit 1
-          fi
+          python scripts/check_versions.py --release-tag "$tag"
+          version="$(python scripts/check_versions.py --print-version)"
           if [[ "v$version" != "$tag" ]]; then
             echo "Tag $tag does not match workspace version $version." >&2
             exit 1
@@ -81,9 +79,11 @@ jobs:
           fi
 
   release:
-    name: Release (${{ matrix.os }})
+    name: Release build (${{ matrix.os }})
     needs: validate-production-tag
     runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:
@@ -103,18 +103,18 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
           ref: ${{ needs.validate-production-tag.outputs.sha }}
           fetch-depth: 0
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@master
+        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
         with:
           toolchain: 1.96.0
 
       - name: Cache Cargo
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
 
       - name: Build release binary
         run: cargo build --locked --release -p ham-gui --bin ham-gui
@@ -133,15 +133,15 @@ jobs:
             }
           }
 
-          $artifactBase = "ham-platform-$platform"
+          $artifactBase = "ke8ygw-logger-${{ needs.validate-production-tag.outputs.version }}-$platform"
           $dist = "dist/$artifactBase"
           New-Item -ItemType Directory -Force -Path $dist | Out-Null
 
           $sourceBinary = "target/release/${{ matrix.binary }}"
           $destBinary = if ("${{ runner.os }}" -eq "Windows") {
-            "$dist/ham-platform.exe"
+            "$dist/ke8ygw-logger.exe"
           } else {
-            "$dist/ham-platform"
+            "$dist/ke8ygw-logger"
           }
           Copy-Item $sourceBinary $destBinary
 
@@ -166,7 +166,7 @@ jobs:
           "$hash  $(Split-Path $artifact -Leaf)" | Set-Content -NoNewline "$artifact.sha256"
 
       - name: Upload workflow artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: ${{ steps.package.outputs.artifact_name }}
           path: |
@@ -174,12 +174,59 @@ jobs:
             ${{ steps.package.outputs.artifact }}.sha256
           compression-level: 0
 
-      - name: Upload GitHub Release asset
-        if: github.event_name == 'push'
-        uses: softprops/action-gh-release@v2
+  attest-release-artifacts:
+    name: Attest release artifacts
+    if: github.event_name == 'push'
+    needs:
+      - validate-production-tag
+      - release
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      attestations: write
+      contents: read
+      id-token: write
+    steps:
+      - name: Download release artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: ke8ygw-logger-*
+          path: dist/release-assets
+          merge-multiple: true
+
+      - name: Attest release archives and checksums
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        with:
+          subject-path: |
+            dist/release-assets/*.tar.gz
+            dist/release-assets/*.zip
+            dist/release-assets/*.sha256
+
+  publish-release:
+    name: Publish GitHub Release
+    if: github.event_name == 'push'
+    needs:
+      - validate-production-tag
+      - release
+      - attest-release-artifacts
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - name: Download release artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: ke8ygw-logger-*
+          path: dist/release-assets
+          merge-multiple: true
+
+      - name: Upload GitHub Release assets
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           tag_name: ${{ needs.validate-production-tag.outputs.tag }}
           files: |
-            ${{ steps.package.outputs.artifact }}
-            ${{ steps.package.outputs.artifact }}.sha256
+            dist/release-assets/*.tar.gz
+            dist/release-assets/*.zip
+            dist/release-assets/*.sha256
           fail_on_unmatched_files: true

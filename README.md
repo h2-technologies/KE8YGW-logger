@@ -1,8 +1,16 @@
 # Ham Radio Operations Platform
 
+[![OpenSSF Best Practices](https://www.bestpractices.dev/projects/13656/badge)](https://www.bestpractices.dev/projects/13656)
+
 This workspace is the first foundation for a local-first, plugin-based amateur
 radio operations platform. The MVP direction is casual logging, POTA/SOTA, and
 sync, with room for emergency communications, net control, and contesting.
+
+The locked v1 release target is November 24, 2026. v1 includes hosted web,
+native iOS, and signed desktop clients for Windows, macOS, and broad Linux
+distribution support. The current workspace version is `0.2.0`; that value in
+`Cargo.toml` is the canonical product version until a release branch or tag
+updates it.
 
 ## Start Here
 
@@ -12,20 +20,24 @@ passes should start with these documents:
 - [Master Blueprint](docs/MASTER_BLUEPRINT.md): locked architecture decisions,
   system model, MVP scope, and crate migration notes.
 - [v0.2 Release Plan](docs/V0_2_RELEASE_PLAN.md): almost-v1 beta checklist,
-  acceptance criteria, risks, and v1.0 delta.
-- [v1.0 Release Plan](docs/V1_RELEASE_PLAN.md): hosted web, desktop,
-  shared core/API, sync, providers, and credential storage scope.
-- [v1.1 Native iOS Plan](docs/V1_1_IOS_NATIVE_PLAN.md): SwiftUI iOS app
-  scope, offline queue, native ADIF flows, Maps, and TestFlight target.
+  acceptance criteria, risks, and v1 delta.
+- [v1 Release Plan](docs/V1_RELEASE_PLAN.md): November 24, 2026 hosted web,
+  native iOS, Windows/macOS/Linux desktop, shared core/API, sync, providers,
+  contesting, EmComm, and release qualification scope.
+- [v1 Native iOS Plan](docs/V1_IOS_NATIVE_PLAN.md): SwiftUI iOS app scope,
+  Rust bridge, offline operation, native ADIF flows, Maps, and TestFlight/App
+  Store readiness.
 - [API Client Contract](docs/API_CLIENT_CONTRACT.md): hosted/self-hosted API
   rules, route inventory, OpenAPI location, and future native-client contract
   requirements.
 - [Hosted Web Release](docs/HOSTED_WEB_RELEASE.md): hosted web/server mode,
   implemented API slice, and production gaps.
 - [Desktop Release](docs/DESKTOP_RELEASE.md): installable desktop target,
-  Tauri/native dialog expectations, and v1.0 polish.
-- [iOS App Store Readiness](docs/IOS_APPSTORE_READINESS.md): v1.1 native iOS
-  App Store, privacy, entitlement, and review checklist.
+  Tauri/native dialog expectations, and v1 polish.
+- [iOS App Store Readiness](docs/IOS_APPSTORE_READINESS.md): v1 native iOS App
+  Store, privacy, entitlement, signing, and review checklist.
+- [v1 Execution Plan](docs/V1_EXECUTION_PLAN.md): dependency-ordered critical
+  path, parallel workstreams, external blockers, and next implementation goals.
 - [Roadmap](docs/ROADMAP.md): compressed vertical implementation passes and
   current pass status.
 - [Event Catalog](docs/EVENT_CATALOG.md): official event, proposal, and runtime
@@ -96,37 +108,43 @@ passes should start with these documents:
 - `ham-plugin-sdk`: public plugin manifest, capability, proposal, and event constant types.
 - `ham-sync`: local-first discovery, handshake, head comparison, and safe pull replication models.
 - `ham-sync-server`: self-hostable cloud relay/sync service binary using the shared safe replication protocol.
-- `ham-server`: hosted web/server API boundary with beta account, session,
-  device, logbook, QSO, station/equipment, ADIF, provider, upload, sync, and
-  device routes.
+- `ham-server`: hosted web/server API boundary with server-admin bootstrap,
+  hosting modes, registration, verified email, recovery, session/device,
+  logbook, QSO, station/equipment, ADIF, provider, upload, sync, and audit
+  routes.
 - `ham-cli`: placeholder command-line entry point.
 - `ham-gui`: initial GUI shell, workspace model, panel registry, command registry,
   and static web shell served by a small Rust binary.
-- `ios/KE8YGWLogger`: native iOS SwiftUI/SwiftData app skeleton for manual
-  Xcode builds.
+- `ham-ios-ffi`: Rust FFI bridge used by the native iOS client.
+- `ios/KE8YGWLogger`: native iOS SwiftUI/SwiftData app with Rust bridge,
+  feature workspaces, Keychain/local-notification plumbing, and Xcode tests.
 
 ## v0.2 Almost-v1 Beta Status
 
-The current v0.2 line has a dedicated hosted API/server crate and release
-planning docs. The `ham-server` crate exposes `/api/v1` hosted routes, bearer
-login/session handling, device identity/revocation, logbook membership roles,
-proposal-backed QSO create/edit/delete/restore/note flows, hosted
+The current `0.2.0` workspace is the v1 foundation baseline, not the complete
+v1 product. The `ham-server` crate exposes `/api/v1` hosted routes, one-time
+server-admin bootstrap, personal/public/self-hosted configuration, invite-only
+registration by default, administrator open/disabled registration switches,
+verified email, Turnstile fail-closed public registration, recovery, bearer and
+secure-cookie session handling, rotation/logout-all, account deletion, device
+identity/revocation, durable request IDs/audits/rate limits, logbook membership
+roles, proposal-backed QSO create/edit/delete/restore/note flows, hosted
 station/equipment support metadata, ADIF import/export, provider settings/test
 routes, upload queue execution foundation, activation and Net Control workflow
 routes, map summaries/settings, backup export/dry-run/import, divergence review,
 and sync preview/push/pull.
 
 This is not yet a production hosted release. Server account/session/device
-metadata is now durable SurrealDB beta storage and sync/report storage is
-durable. Production OS credential backend wiring now exists for Windows
+metadata is now durable SurrealDB storage with raw account tokens stored only as
+hashes, and sync/report storage is durable. Production OS credential backend
+wiring now exists for Windows
 Credential Manager, macOS Keychain, and Linux Secret Service/libsecret tooling,
 but release-runner validation is still pending. Tier 1 provider adapter
-contracts and hosted upload execution now exist for QRZ XML, HamQTH, POTA
-spots, SOTAWatch, Club Log, QRZ Logbook, eQSL, LoTW, and DX Cluster. Default
-tests use deterministic fake execution. Club Log, QRZ Logbook, and eQSL have
-gated live HTTP upload transports plus ignored release-runner validation hooks
-that skip safely unless explicit live/upload env vars and provider credentials
-are present.
+metadata/contracts now cover QRZ XML, HamQTH, POTA spots, SOTAWatch, Club Log,
+QRZ Logbook, eQSL, LoTW, and DX Cluster. Default tests use deterministic fake
+execution. Club Log, QRZ Logbook, and eQSL have gated live HTTP upload
+transports plus ignored release-runner validation hooks that skip safely unless
+explicit live/upload env vars and provider credentials are present.
 QRZ XML/HamQTH hosted lookup execution, POTA hosted spot fetching, and DX
 Cluster bounded connect/read/disconnect/status routes are wired through the
 provider runtime with fake mode as the default, live mode gated by settings and
@@ -136,7 +154,10 @@ API approval/terms handling, and LoTW live upload remains deferred until a
 safe TQSL/certificate-signing flow is modeled. A real `src-tauri`
 Tauri runtime now wraps the shared web UI, delegates native
 dialog flows to `ham-desktop`, and bundles static assets for release mode.
-Installer/package validation on clean release runners remains v0.2 work.
+Installer/package validation on clean release runners, signed updates, hosted
+production hardening, native iOS release hardening, maps, contesting, EmComm,
+and full provider coverage remain v1 work tracked in the roadmap and execution
+plan.
 
 ## Architecture
 
@@ -304,7 +325,9 @@ The implementation is credential-aware and offline-testable:
   config keys, and credential references.
 - Upload execution uses ADIF generated from projections, retry policy, provider
   health, upload statistics, notification models, and a Tier 1 adapter boundary
-  for Club Log, QRZ Logbook, eQSL, and LoTW.
+  for Club Log, QRZ Logbook, eQSL, and LoTW. Club Log, QRZ Logbook, and eQSL
+  have gated live HTTP transports; LoTW remains fake/scaffold-only until the
+  TQSL/certificate-signing model is completed.
 - Confirmation downloads parse ADIF-style records and append official upload
   status events through the core event store.
 - DX Cluster lines and POTA/SOTA records are normalized into the common `Spot`
@@ -317,8 +340,10 @@ Live network adapters are intentionally isolated behind provider boundaries so
 tests and CI do not require external credentials or internet access. The v0.2
 Tier 1 layer provides fake/mock execution, credential validation, redacted
 diagnostics, upload retry/dedupe behavior, QRZ XML/HamQTH lookup scaffolding,
-POTA/SOTAWatch/DX spot scaffolding, and a documented LoTW TQSL/certificate
-limitation. Provider-specific live transports remain v1.0-hardening work.
+hosted QRZ XML/HamQTH lookup execution, hosted POTA spot fetch execution, DX
+Cluster bounded runtime controls, SOTAWatch fixture-only scaffolding, and a
+documented LoTW TQSL/certificate limitation. Remaining provider-specific live
+transports are v1 hardening work.
 
 ## Official QSO Workflow
 
@@ -997,10 +1022,11 @@ docker build -f Dockerfile.sync-server -t ke8ygw-sync-server .
 docker run --rm -p 9740:9740 -e HAM_SYNC_PAIRING_CODE=change-me ke8ygw-sync-server
 ```
 
-Current limitations: pairing is token-based MVP auth, events are not signed,
-end-to-end encryption is not implemented, automatic merge/conflict resolution is
-deferred, and production deployment hardening such as rate limits, token
-rotation, and hosted observability is still pending.
+Current limitations: self-hosted sync pairing is token-based MVP auth, events
+are not signed, end-to-end encryption is not implemented, automatic
+merge/conflict resolution is deferred, and production deployment hardening such
+as hosted observability, retention, infrastructure sizing, and external
+email/Turnstile/provider credentials is still pending.
 
 Run the hosted beta API:
 
@@ -1012,11 +1038,16 @@ Default hosted API settings:
 
 ```text
 HAM_SERVER_BIND=127.0.0.1:9750
+HAM_SERVER_OPERATION_MODE=personal_hosted
+HAM_SERVER_REGISTRATION_MODE=invite_only
+HAM_SERVER_EMAIL_MODE=test
 HAM_SERVER_SURREAL_PATH=<platform-data-dir>/server/surrealdb
 ```
 
-`ham-server` persists account, login session, device, logbook, membership, API
-token, invite, and schema migration metadata in SurrealDB. Set
+`ham-server` persists server admins, accounts, login sessions with token hashes,
+devices, logbooks, memberships, API token hashes, invite/verification/recovery
+token hashes, rate-limit buckets, audits, support metadata, and schema migration
+metadata in SurrealDB. Set
 `HAM_SERVER_SURREAL_ENDPOINT`, `HAM_SERVER_SURREAL_USER`,
 `HAM_SERVER_SURREAL_PASS`, `HAM_SERVER_SURREAL_NAMESPACE`, and
 `HAM_SERVER_SURREAL_DATABASE` to use remote SurrealDB. Official QSO mutations
@@ -1131,13 +1162,15 @@ just clippy   # clippy for all workspace crates and targets, warnings are errors
 just test     # run all workspace tests
 just build    # debug build for all workspace crates
 just release  # release build for all workspace crates
-just governance-check # repository governance, template, metadata, and link checks
+just version-check # product version consistency across Cargo, Tauri, iOS, API metadata, artifacts, and tags
+just docs-link-check # local Markdown link validation
+just governance-check # repository governance, templates, metadata, license, secrets, and link checks
 just gui      # run the local GUI shell at http://127.0.0.1:9467
 just sync-server # run the self-hosted sync server at http://127.0.0.1:9740
 cargo run -p ham-server --bin ham-server # run hosted beta API at http://127.0.0.1:9750
 cargo tauri dev   # run the Tauri desktop wrapper
 cargo tauri build # package the Tauri desktop wrapper
-just ci       # formatting check, clippy, tests, and debug build
+just ci       # formatting, clippy, tests, feature matrix, API, version, docs-link, and governance checks
 ```
 
 If `just` is not installed, the underlying commands are standard Cargo commands:
@@ -1149,6 +1182,8 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 cargo build --workspace
 cargo build --release --workspace
+python scripts/check_versions.py
+python scripts/check_docs_links.py
 pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/governance-check.ps1
 cargo run -p ham-gui --bin ham-gui
 cargo run -p ham-sync-server --bin ham-sync-server
@@ -1157,15 +1192,21 @@ cargo run -p ham-server --bin ham-server
 
 ## CI
 
-GitHub Actions runs on pushes to `main` and on pull requests. The CI workflow
-uses a Windows, Linux, and macOS matrix, caches Cargo dependencies, installs
-`just`, and runs:
+GitHub Actions runs on pull requests and pushes to `dev` and `main`. Feature
+and fix PRs target `dev`; `dev` is the internal channel, `main` is beta, and
+production releases come only from validated semantic-version tags contained in
+`main`. The change-aware CI baseline covers formatting, Clippy, Rust tests,
+feature-matrix checks, API contract validation, version consistency, Markdown
+links, governance/license checks, JavaScript syntax, Tauri validation,
+Windows/macOS platform checks, and sync-server container smoke validation.
 
 ```powershell
 just ci
 ```
 
-CI fails on formatting drift, clippy warnings, test failures, or build failures.
+The separate iOS workflow runs Rust FFI and iOS simulator validation on macOS.
+The security workflow runs Cargo advisory checks, cargo-deny advisories, local
+Semgrep rules, SARIF upload, and workflow linting.
 
 ## Release Builds
 
@@ -1182,16 +1223,19 @@ git tag v0.2.0
 git push origin v0.2.0
 ```
 
-The release workflow builds `ham-gui` in release mode on:
+The release workflow validates that the production tag matches the workspace
+version and points to a commit contained in `main`, then builds `ham-gui` in
+release mode on:
 
 - `ubuntu-latest`
 - `windows-latest`
 - `macos-latest`
 
-It packages the binary as `ham-platform` and uploads archives to the GitHub
-Release:
+It packages the binary as `ke8ygw-logger` and uploads versioned archives to the
+GitHub Release:
 
-- `ham-platform-linux-x86_64.tar.gz`
-- `ham-platform-windows-x86_64.zip`
-- `ham-platform-macos-aarch64.tar.gz` or `ham-platform-macos-x86_64.tar.gz`,
+- `ke8ygw-logger-<version>-linux-x86_64.tar.gz`
+- `ke8ygw-logger-<version>-windows-x86_64.zip`
+- `ke8ygw-logger-<version>-macos-aarch64.tar.gz` or
+  `ke8ygw-logger-<version>-macos-x86_64.tar.gz`,
   depending on the runner architecture

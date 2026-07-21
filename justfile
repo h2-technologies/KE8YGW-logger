@@ -1,3 +1,5 @@
+set windows-shell := ["powershell.exe", "-NoLogo", "-NoProfile", "-Command"]
+
 fmt:
     cargo fmt --all
 
@@ -20,6 +22,12 @@ feature-matrix:
 api-contract:
     python scripts/check_api_contract.py
 
+version-check:
+    python scripts/check_versions.py
+
+docs-link-check:
+    python scripts/check_docs_links.py
+
 governance-check:
     pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/governance-check.ps1
 
@@ -35,4 +43,4 @@ gui:
 sync-server:
     cargo run -p ham-sync-server --bin ham-sync-server
 
-ci: fmt-check clippy test feature-matrix api-contract governance-check
+ci: fmt-check clippy test feature-matrix api-contract version-check docs-link-check governance-check

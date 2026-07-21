@@ -1,0 +1,115 @@
+name: Security scanning
+
+on:
+  pull_request:
+    branches:
+      - dev
+      - main
+  push:
+    branches:
+      - dev
+      - main
+  schedule:
+    - cron: "37 4 * * 1"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: security-${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_AUDIT_VERSION: "0.22.2"
+  CARGO_DENY_VERSION: "0.20.2"
+  SEMGREP_IMAGE: "semgrep/semgrep:1.170.0@sha256:c98f8829eea377274ee4b10656458b078b88232469b2ff913f091c2317347c9d"
+
+jobs:
+  rust-dependencies:
+    name: Rust dependency advisories
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
+        with:
+          toolchain: 1.96.0
+
+      - name: Install cargo-audit and cargo-deny
+        run: |
+          cargo install cargo-audit --version "$CARGO_AUDIT_VERSION" --locked
+          cargo install cargo-deny --version "$CARGO_DENY_VERSION" --locked
+
+      - name: Audit Cargo.lock
+        run: cargo audit --ignore RUSTSEC-2023-0071
+
+      - name: Check advisory ledger exceptions
+        run: cargo deny check advisories
+
+      - name: Verify patched quick-xml only
+        shell: bash
+        run: |
+          set -euo pipefail
+          if cargo tree --locked --target all -i quick-xml@0.39.4 >/tmp/quick-xml-tree.txt 2>&1; then
+            cat /tmp/quick-xml-tree.txt >&2
+            echo "quick-xml 0.39.4 remains in the dependency graph." >&2
+            exit 1
+          fi
+          cargo tree --locked --target all -i quick-xml@0.41.0
+
+  semgrep:
+    name: Semgrep SAST
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+
+      - name: Generate SARIF
+        run: |
+          docker run --rm \
+            -v "${{ github.workspace }}:/src" \
+            -w /src \
+            "$SEMGREP_IMAGE" \
+            semgrep scan --metrics=off --config .semgrep --sarif --output semgrep.sarif .
+
+      - name: Upload Semgrep SARIF artifact
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: semgrep-sarif-${{ github.sha }}
+          path: semgrep.sarif
+          retention-days: 14
+
+      - name: Upload Semgrep SARIF to code scanning
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+        uses: github/codeql-action/upload-sarif@b7351df727350dca84cb9d725d57dcf5bc82ba26 # v3.37.1
+        with:
+          sarif_file: semgrep.sarif
+          category: semgrep-local
+
+      - name: Block high-risk Semgrep findings
+        run: |
+          docker run --rm \
+            -v "${{ github.workspace }}:/src" \
+            -w /src \
+            "$SEMGREP_IMAGE" \
+            semgrep scan --metrics=off --config .semgrep --error --severity ERROR .
+
+  workflow-lint:
+    name: Workflow lint
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+
+      - name: Run actionlint
+        uses: raven-actions/actionlint@3d39aea434753780c3b3d4a1a31c854b4dbf49d7 # v2.2.0

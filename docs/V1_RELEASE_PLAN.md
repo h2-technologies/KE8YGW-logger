@@ -1,109 +1,104 @@
-# v1.0 Release Plan
+# v1 Release Plan
 
-v1.0 is a hosted web and installable desktop release. iOS is not part of v1.0,
-and the project must not treat a PWA, pinned website, or Home Screen install as
-the iOS client.
+Last audited: 2026-07-21
 
-## Target
+v1 ships on November 24, 2026 with hosted web, native iOS, and signed desktop
+clients for Windows, macOS, and broad Linux distribution support. This plan
+preserves the locked scope in issue #2 and does not add features outside that
+scope.
 
-- Hosted web app with login.
-- Installable desktop app.
-- Shared Rust core.
-- Shared hosted/self-hosted API.
-- Cloud/self-hosted sync.
-- Production provider integrations.
-- Production credential storage.
-- API contracts clean enough for a future native iOS client.
+## Locked Product Scope
 
-## Explicit Non-Goals
+- Hosted web is online-only.
+- Native iOS and desktop are fully usable offline and reconcile later.
+- Desktop supports Windows, macOS, and Linux.
+- Deployments include personal hosted, public hosted, and documented
+  self-hosted modes.
+- Public registration is invite-only by default, with an administrator switch
+  for open registration, verified email, and Cloudflare Turnstile.
+- Required providers are QRZ, QRZ Logbook, LoTW, eQSL, Club Log, POTA,
+  SOTAWatch, DX Cluster/RBN, maps, and propagation.
+- Maps support cached/offline regions on desktop and iOS.
+- Contesting includes Field Day, Winter Field Day, generic serial/grid
+  templates, and release-adjacent December/January contest packs.
+- EmComm includes ICS 211, 213, 213RR, 214, personnel, assignments, and
+  message/communications records.
+- Desktop automatically downloads signed updates on unmetered connections,
+  allows metered downloads by opt-in, and prompts before installation.
+- Windows uses Microsoft Trusted Signing. Apple releases use Apple
+  signing/notarization/App Store distribution.
+- v1.1 adds a TUI. Awards, rig control, and weather do not block v1.
 
-- No native iOS app work.
-- No PWA release target.
-- No iOS Home Screen install documentation.
-- No service-worker offline queue as the required mobile strategy.
-- No claim that a pinned web app is the iOS client.
-- No Rust FFI work for iOS in v1.0.
+## Current Implementation State
 
-## Stabilization Focus
+Implemented:
+- Shared Rust workspace, append-only official events, proposal validation,
+  projections, ADIF import/export, POTA/SOTA activation events, Net Control
+  events, maps/GIS foundations, provider framework, upload queue foundation,
+  diagnostics, hosted `/api/v1` route slices, self-hosted sync/report server,
+  Tauri desktop wrapper, and native iOS SwiftUI/Rust-bridge foundation.
 
-- Hosted API and self-hosted API compatibility.
-- Durable account/session/device/logbook storage.
-- Durable sync/report storage.
-- Sync safety and divergence reporting.
-- Production credential backends.
-- Provider adapter reliability and failure surfaces.
-- Desktop packaging and native file flows.
-- Documentation cleanup and beta bug fixes.
+Partial:
+- Hosted web/desktop/iOS UX for the implemented account/session/device/admin
+  APIs, production email/Turnstile deployment configuration, hosted
+  backup/divergence UX, provider runtime execution, cloud/self-hosted sync,
+  desktop packaging, native iOS projection/cache flows, and release automation.
 
-## Product Surfaces
+Test-only or fake/default paths:
+- Mock lookup/rig providers, placeholder map/weather/propagation providers,
+  deterministic fake provider execution, in-memory hosted/sync test stores, and
+  GUI demo peer/runtime data.
 
-### Hosted Web App
+Deferred or unimplemented:
+- Real LAN trust pairing and peer-to-peer HTTP transport, LoTW/TQSL live upload,
+  SOTAWatch approved live access, RBN/background DX lifecycle, cached/offline map
+  regions, full contesting, full EmComm forms, signed desktop updater, production
+  signing/notarization/App Store distribution, full production provider
+  qualification, and release-candidate operations hardening.
 
-The hosted web app is the browser-accessible client for v1.0. It must support
-login, account/session handling, logbook selection, QSO workflows, POTA/SOTA,
-Net Control, ADIF import/export, provider configuration, sync status, and
-diagnostics from the browser.
+## Schedule Gates
 
-The web app may use browser capabilities where appropriate, but PWA
-installability is not a release requirement and must not be described as the
-mobile strategy.
+- Repository/release reset: July 31, 2026.
+- Platform foundation: August 21, 2026.
+- Providers: September 18, 2026.
+- Web/desktop feature complete: September 25, 2026.
+- iOS feature complete: October 9, 2026.
+- Maps/contesting/EmComm complete: October 16, 2026.
+- Integrated beta and feature freeze: November 6, 2026.
+- Protected stabilization buffer: November 7-20, 2026.
+- Final approval: November 21-23, 2026.
+- Launch: November 24, 2026.
 
-### Desktop App
+## Release Gates
 
-The desktop app is the installable local client for v1.0. It must package and
-run on the supported desktop platforms, reuse the shared Rust core, use
-production credential storage, and expose native desktop affordances where they
-matter for file import/export and local operation.
+- All v1 child epics from issue #2 are complete.
+- No v1-required provider is stub-backed.
+- Desktop and iOS pass offline/reconciliation scenarios.
+- Managed LoTW certificate mode passes security review.
+- Offline map source permits caching.
+- Signed desktop update path passes upgrade and rollback tests.
+- Personal, public, and self-hosted deployments pass backup/restore tests.
+- iOS passes TestFlight/App Store review.
+- No open critical or high-severity defects.
+- Release candidate remains stable for at least seven days.
 
-### Shared Rust Core
+## Baseline Validation
 
-The Rust core remains the source of truth for official event validation,
-append-only logbook storage rules, projections, sync verification, provider
-metadata, credential abstractions, ADIF import/export, POTA/SOTA, and Net
-Control models.
+The v1 baseline uses `Cargo.toml` `[workspace.package].version` as the canonical
+product version. Run:
 
-### Hosted/Self-Hosted API
+```powershell
+just version-check
+just api-contract
+just docs-link-check
+just governance-check
+just ci
+```
 
-The hosted and self-hosted server must expose the same API contract. Deployment
-mode may change URLs, storage backends, and operational controls, but it must
-not create incompatible client behavior.
+`just version-check` validates Cargo crate versions, Tauri version metadata, iOS
+marketing/build versions, OpenAPI product metadata, release artifact names, and
+release-tag policy. The OpenAPI `info.version` remains `1.0.0` for the `/api/v1`
+contract; `info.x-product-version` tracks the product version.
 
-## v1.0 Engineering Work
-
-- Add production login/session support for the hosted web app.
-- Replace in-memory hosted/self-hosted sync storage with a durable server
-  backend before real hosted use.
-- Keep the existing safe replication checks for all sync paths.
-- Add production credential backends for Windows Credential Manager, macOS
-  Keychain, and Linux Secret Service.
-- Replace mock/provider stubs with production adapters for the v1.0 provider
-  set.
-- Package the desktop client as an installable app.
-- Document and test the API contract in `docs/API_CLIENT_CONTRACT.md`.
-- Keep the API shape suitable for a future native iOS client without beginning
-  native iOS implementation.
-
-## Acceptance
-
-- Web app works in a browser.
-- Hosted web app supports login.
-- Desktop app packages and runs.
-- Hosted server works.
-- Self-hosted server works.
-- Cloud/self-hosted sync works against durable storage.
-- API is documented and tested.
-- API is suitable for a future native iOS client.
-- Production provider integrations are available for the v1.0 provider set.
-- Production credential storage is wired.
-- No PWA-specific iOS deliverables are required.
-
-## Release Blockers
-
-- A required v1.0 workflow depends on PWA installability or iOS Home Screen
-  install.
-- Hosted and self-hosted APIs diverge.
-- Server storage is still in-memory for hosted/self-hosted release use.
-- Credentials require the insecure development fallback.
-- Provider workflows still rely on mock-only implementations where production
-  integration is part of the v1.0 target.
-- API behavior is undocumented or lacks contract tests for future clients.
+See [v1 Execution Plan](V1_EXECUTION_PLAN.md) for the dependency-ordered
+remaining work.

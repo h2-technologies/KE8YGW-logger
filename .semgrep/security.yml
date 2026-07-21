@@ -1,0 +1,59 @@
+rules:
+  - id: ke8ygw.github-actions.unpinned-action
+    languages:
+      - generic
+    severity: ERROR
+    message: GitHub Actions must be pinned to a full 40-character commit SHA.
+    paths:
+      include:
+        - /.github/workflows/*.yml
+        - /.github/workflows/*.yaml
+    pattern-regex: 'uses:\s+[^@\s]+@(?![0-9a-f]{40}\s*(#|$))[^\s#]+'
+
+  - id: ke8ygw.shell.unverified-pipe-to-shell
+    languages:
+      - generic
+    severity: ERROR
+    message: Downloaded scripts must be verified before execution.
+    paths:
+      include:
+        - "*.sh"
+        - "**/*.sh"
+        - "/.github/workflows/*.yml"
+        - "/.github/workflows/*.yaml"
+    pattern-regex: '(curl|wget)[^\n|]*\|[ \t]*(sh|bash)\b'
+
+  - id: ke8ygw.docker.unpinned-base-image
+    languages:
+      - generic
+    severity: ERROR
+    message: Docker base images must include an immutable sha256 digest.
+    paths:
+      include:
+        - /Dockerfile.sync-server
+    pattern-regex: '^FROM\s+(?!.*@sha256:).*$'
+
+  - id: ke8ygw.javascript.localstorage-sensitive-value
+    languages:
+      - javascript
+    severity: ERROR
+    message: Do not persist secrets, tokens, passwords, or keys in browser localStorage.
+    paths:
+      include:
+        - /crates/ham-gui/web/app.js
+    pattern-regex: '(?i)localStorage\.setItem\([^)]*(secret|token|password|api[_-]?key|credential)'
+
+  - id: ke8ygw.rust.shell-command-boundary
+    languages:
+      - rust
+    severity: WARNING
+    message: Review shell command execution for argument separation, redaction, and bounded inputs.
+    pattern-either:
+      - pattern: std::process::Command::new("sh")
+      - pattern: std::process::Command::new("bash")
+      - pattern: std::process::Command::new("cmd")
+      - pattern: std::process::Command::new("powershell")
+      - pattern: Command::new("sh")
+      - pattern: Command::new("bash")
+      - pattern: Command::new("cmd")
+      - pattern: Command::new("powershell")
