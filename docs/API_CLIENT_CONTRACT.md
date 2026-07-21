@@ -58,22 +58,32 @@ and sync preview/push/pull slices first.
 
 ## Authentication
 
-The current sync API uses a pairing request that returns a `sync_token`.
-Production v1 login may replace or supplement pairing for hosted web and
-desktop sessions, but the resulting client token contract must remain stable for
-future native clients.
+The self-hosted sync API still uses a pairing request that returns a
+`sync_token` for compatibility-only sync/report routes.
 
-The hosted beta API uses bearer sessions:
+The hosted `/api/v1` API uses bearer sessions:
 
-- `POST /api/v1/auth/login` creates or restores a beta account session.
-- `GET /api/v1/auth/session` returns account, session, device, and membership
-  data.
-- `POST /api/v1/auth/logout` invalidates the session.
+- `POST /api/v1/admin/bootstrap` creates the first verified server
+  administrator only before bootstrap is complete.
+- `POST /api/v1/auth/register` creates an unverified account through the
+  configured registration mode. Registration is invite-only by default; public
+  open registration is administrator-controlled and fails closed behind
+  Cloudflare Turnstile when enabled.
+- `POST /api/v1/auth/verify-email` consumes an expiring single-use verification
+  token before login is allowed.
+- `POST /api/v1/auth/login` creates a session only for an existing verified
+  account.
+- `POST /api/v1/auth/session/rotate` rotates an active session using its
+  refresh token.
+- `POST /api/v1/auth/logout`, `POST /api/v1/auth/logout-all`, and device
+  revocation routes invalidate sessions.
 - Authenticated requests use `Authorization: Bearer <token>`.
 
-Hosted beta sessions are persisted in the SurrealDB server metadata store. A server
-restart must not invalidate an active session by itself. Logout persists the
-inactive session state, so a logged-out token remains invalid after restart.
+Hosted sessions are persisted in the SurrealDB server metadata store by token
+hash. Raw session, refresh, invite, verification, recovery, and API tokens are
+not persisted. A server restart must not invalidate an active unexpired session
+by itself. Logout, rotation, expiration, device revocation, and account deletion
+remain invalid after restart.
 
 Current token transport:
 
@@ -81,13 +91,15 @@ Current token transport:
 - Some `GET` endpoints accept `?token=<sync_token>`.
 - Some `POST` endpoints include `{ "auth": { "sync_token": "..." } }`.
 
-v1 hardening target:
+Token rules:
 
 - Prefer `Authorization: Bearer <token>` for new authenticated endpoints.
 - Keep any query-token compatibility documented if retained.
 - Never log tokens or include them in diagnostic bundles.
 - Tokens must be revocable and scoped to account, user, device, and authorized
   logbooks.
+- `Set-Cookie` carries the hosted session token as `HttpOnly`, `Secure`, and
+  `SameSite=Lax`; clients that cannot use cookies must use the bearer token.
 
 ## Account, Device, and Logbook Scope
 
@@ -383,12 +395,15 @@ Official replicated event envelopes are stored append-only in JSONL. Clients
 should expect preview, push, pull, and status responses to survive server
 restart without requiring re-pairing, unless the device or token was revoked.
 
-## Hosted Beta Client Routes
+## Hosted Client Routes
 
-The hosted `/api/v1` beta surface uses bearer sessions and currently implements:
+The hosted `/api/v1` surface uses bearer sessions and currently implements:
 
-- Account/session/device/logbook routes for login, logout, session discovery,
-  logbook membership scoping, and device revocation.
+- Instance-admin routes for one-time bootstrap, hosting configuration,
+  invitation create/list/inspect/resend/expire/revoke, and audit inspection.
+- Account/session/device/logbook routes for invite-only or open registration,
+  verified email, login, logout, logout-all, session rotation, account deletion,
+  session discovery, logbook membership scoping, and device revocation.
 - QSO create, list, get, edit, delete, restore, and note routes backed by
   proposals and official projections.
 - Station profile and equipment profile support routes scoped by
@@ -479,18 +494,17 @@ The current v1 sync API is enough for replication, but hosted web, desktop, and
 native iOS also need stable CRUD-oriented client surfaces before v1 ships. v1
 must define and test endpoints or equivalent proposal APIs for:
 
-- Hosted login/session refresh/logout.
 - Account, operator role, and permission discovery.
-- List, create, and select logbooks.
 - Read QSO projections with pagination and filters.
 - Submit QSO create, edit, delete, restore, and note proposals.
 - Pagination/filter hardening for QSO, activation, Net Control, map, backup, and
   provider history endpoints.
 - Backup restore/import UX hardening after the conservative v0.2 same-logbook
   import foundation.
-- Provider-specific credential setup flows, health checks, and server-side
-  secret-vault design if hosted deployments need to resolve provider
-  credentials directly.
+- Hosted web, desktop, and native iOS UX for the implemented account lifecycle,
+  session rotation, device revocation, and account deletion routes.
+- Provider-specific credential setup flows and server-side secret-vault design
+  if hosted deployments need to resolve provider credentials directly.
 - Native-client divergence report presentation.
 
 Those endpoints must use the same semantics as the Rust proposal pipeline and

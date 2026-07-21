@@ -16,7 +16,8 @@ The self-hosted sync server intentionally has no nonstandard `QUERY` method.
 | Surface | Routes | Auth | Authorization | Request data | Success | Stability |
 | --- | --- | --- | --- | --- | --- | --- |
 | Health/status/catalog | `GET /health`, `GET /api/v1/status`, `GET /api/v1/routes` | none | none | `Accept`, `X-Request-ID` | 200 JSON | stable |
-| Auth/session | `POST /api/v1/auth/login`, `POST /api/v1/auth/logout`, `GET /api/v1/auth/session` | none or bearer | active session for logout/session | JSON login/logout body | 200 login/session/ok | stable |
+| Admin/account | bootstrap, hosting config, invitation create/list/inspect/resend/expire/revoke, audit routes | none for first bootstrap; bearer after bootstrap | server admin | hosting/invitation JSON, path UUIDs | 200 config/invitation/audit/login | stable |
+| Auth/session | register, verify-email, recovery start/complete, login, logout, logout-all, session rotate, account delete, session discovery | none or bearer | verified account and active session where required | JSON account/session bodies | 200 login/session/ok | stable |
 | Logbooks | `GET/POST /api/v1/logbooks`, `GET/PATCH /api/v1/logbooks/{id}` | bearer | visible/read/admin | path UUIDs, create/update JSON | 200 list/logbook | stable |
 | QSOs | `GET/POST /api/v1/qsos`, `GET/PATCH /api/v1/qsos/{id}`, `POST /api/v1/qsos/{id}/delete`, `/restore`, `/notes` | bearer | read/operator | `logbook_id`, `include_deleted`, QSO/action JSON | 200 list/QSO/proposal | stable |
 | Station/equipment | station profile and equipment list/create/get/patch/archive/default routes | bearer | read/admin | `logbook_id`, path UUIDs, profile/equipment/action JSON | 200 list/item | stable |
@@ -28,7 +29,7 @@ The self-hosted sync server intentionally has no nonstandard `QUERY` method.
 | Providers | list/detail/update/test/lookup/spots plus DX Cluster connect/read/disconnect/status | bearer | read/admin | provider IDs, `logbook_id`, provider JSON | 200 provider/runtime result | stable |
 | Uploads | `GET /api/v1/uploads`, `POST /api/v1/uploads/run`, `POST /api/v1/uploads/{id}/retry` | bearer | read/admin | `logbook_id`, run/retry JSON | 200 upload list/job | stable |
 | Sync/divergence | status/preview/push/pull/divergence review/get/export | bearer | read/operator | sync/divergence JSON, report IDs | 200 sync/report result | stable |
-| Devices | `GET/POST /api/v1/devices`, `POST /api/v1/devices/{id}/revoke` | bearer | active session/owner | register/revoke JSON | 200 devices/device/ok | stable |
+| Devices | `GET/POST /api/v1/devices`, `POST /api/v1/devices/revoke-all`, `POST /api/v1/devices/{id}/revoke` | bearer | active session/owner | register/revoke JSON | 200 devices/device/ok | stable |
 
 ## Self-Hosted Sync/Report Routes
 
