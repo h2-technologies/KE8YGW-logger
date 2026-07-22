@@ -170,7 +170,10 @@ queue snapshot, recovery report, retry plan, retry result, and affected
 mutations. The iOS Sync workspace displays Rust queue health/mutation status
 and asks Rust for retry plans using the native network monitor state; it does
 not mark mutations `sending` until a transport is ready to process the returned
-events. `sync_retry_plan_recovers_terminated_send_and_blocks_without_network`
+events. Swift also decodes the Rust-planned official event envelopes and can
+construct the documented hosted `/api/v1/logbooks/{logbook_id}/push` request
+from those envelopes without creating or validating official history itself.
+`sync_retry_plan_recovers_terminated_send_and_blocks_without_network`
 proves a terminated `sending` operation is recovered before planning and that a
 poor-network state returns a blocked no-op plan without losing queued work.
 

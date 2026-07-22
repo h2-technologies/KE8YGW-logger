@@ -134,7 +134,7 @@ struct SyncWorkspaceView: View {
             } else if result.retryPlan.operationIds.isEmpty {
                 syncMessage = "No ready offline changes."
             } else {
-                syncMessage = "Prepared \(result.retryPlan.operationIds.count) queued changes for native sync transport."
+                syncMessage = "Prepared \(result.retryPlan.operationIds.count) queued changes and \(result.retryPlan.transportableEvents.count) event envelopes for native sync transport."
             }
         } catch {
             syncMessage = error.localizedDescription

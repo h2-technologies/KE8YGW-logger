@@ -26,9 +26,10 @@ Last audited: 2026-07-21
   back off transient failures, and stop retry on auth, validation, divergence,
   missing-local-event, and permanent failures.
 - Native Swift bridge methods and typed sync snapshots now expose queue
-  recovery, retry planning, retry results, queue health, and affected mutations
-  to the iOS Sync workspace without moving queue ordering or failure
-  classification out of Rust.
+  recovery, retry planning, retry results, queue health, affected mutations,
+  Rust-planned official event envelopes, and hosted push request construction
+  to the iOS Sync workspace without moving queue ordering, event creation, or
+  failure classification out of Rust.
 - Queue-aware cloud push acknowledgment for queued official events.
 - Deterministic desktop restart/reconnect queue-drain coverage for interrupted
   sends, ordered queued official events, accepted-by-hash handling, and
@@ -88,7 +89,8 @@ Last audited: 2026-07-21
   current guided browser review surface, native saved-review display, and
   desktop/iOS corrective-event endpoints.
 - Release-device iOS background task execution, poor-network behavior, and
-  local-network permission validation.
+  local-network permission validation, including actual native push execution
+  against hosted/self-hosted endpoints.
 - Real hosted web/desktop/iOS/self-hosted end-to-end device qualification,
   physical-device tests, and full migration matrix.
 

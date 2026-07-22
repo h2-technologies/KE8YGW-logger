@@ -688,6 +688,7 @@ struct FallbackRustBridgeClient: RustBridgeClient {
                     "logbook_id": payload["logbook_id"] as? String ?? UUID().uuidString,
                     "operation_ids": [],
                     "event_hashes": [],
+                    "events": [],
                     "missing_local_event_operation_ids": [],
                     "network_required": true,
                     "blocked_by_network": !networkAvailable,
@@ -1816,6 +1817,7 @@ struct SyncRetryPlan: Decodable {
     var logbookId: String?
     var operationIds: [String]
     var eventHashes: [String]
+    var events: [SyncOfficialEvent]?
     var missingLocalEventOperationIds: [String]
     var networkRequired: Bool
     var blockedByNetwork: Bool
@@ -1823,6 +1825,185 @@ struct SyncRetryPlan: Decodable {
     var backgroundTimeBudgetSeconds: Int?
     var markSending: Bool
     var permanentFailureResults: [SyncRetryResultKind]?
+
+    var transportableEvents: [SyncOfficialEvent] {
+        events ?? []
+    }
+}
+
+enum SyncJSONValue: Codable, Equatable {
+    case string(String)
+    case number(Double)
+    case bool(Bool)
+    case object([String: SyncJSONValue])
+    case array([SyncJSONValue])
+    case null
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if container.decodeNil() {
+            self = .null
+        } else if let value = try? container.decode(Bool.self) {
+            self = .bool(value)
+        } else if let value = try? container.decode(Double.self) {
+            self = .number(value)
+        } else if let value = try? container.decode(String.self) {
+            self = .string(value)
+        } else if let value = try? container.decode([SyncJSONValue].self) {
+            self = .array(value)
+        } else {
+            self = .object(try container.decode([String: SyncJSONValue].self))
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        switch self {
+        case .string(let value):
+            try container.encode(value)
+        case .number(let value):
+            try container.encode(value)
+        case .bool(let value):
+            try container.encode(value)
+        case .object(let value):
+            try container.encode(value)
+        case .array(let value):
+            try container.encode(value)
+        case .null:
+            try container.encodeNil()
+        }
+    }
+}
+
+struct SyncOfficialEvent: Codable, Identifiable, Equatable {
+    var id: String { eventId }
+    var eventId: String
+    var eventType: String
+    var logbookId: String
+    var entityId: String?
+    var previousHash: String?
+    var eventHash: String
+    var timestamp: String
+    var authorOperatorId: String?
+    var stationCallsign: String
+    var operatorCallsign: String?
+    var authorDeviceId: String
+    var sourceDeviceId: String
+    var correlationId: String
+    var sourcePluginId: String?
+    var schemaVersion: Int
+    var payload: SyncJSONValue
+}
+
+struct SyncPushAuth: Encodable, Equatable {
+    var syncToken: String
+}
+
+struct SyncPushRequest: Encodable, Equatable {
+    var auth: SyncPushAuth?
+    var logbookId: String
+    var events: [SyncOfficialEvent]
+}
+
+struct SyncPushResponse: Decodable, Equatable {
+    var status: String?
+    var acceptedCount: Int?
+    var ignoredDuplicateCount: Int?
+    var rejectedCount: Int?
+    var serverHeadHash: String?
+    var errors: [String]?
+}
+
+enum SyncHTTPTransportError: LocalizedError, Equatable {
+    case emptyEventBatch
+    case invalidServerURL
+    case invalidHTTPResponse
+    case serverRejected(statusCode: Int, message: String)
+
+    var errorDescription: String? {
+        switch self {
+        case .emptyEventBatch:
+            return "The sync retry plan did not include any official events to push."
+        case .invalidServerURL:
+            return "The sync server URL is invalid."
+        case .invalidHTTPResponse:
+            return "The sync server returned an invalid HTTP response."
+        case .serverRejected(let statusCode, let message):
+            return "The sync server rejected the push with HTTP \(statusCode): \(message)"
+        }
+    }
+}
+
+struct SyncHTTPTransport {
+    func makePushRequest(
+        serverURL: URL,
+        bearerToken: String?,
+        syncToken: String?,
+        logbookId: String,
+        events: [SyncOfficialEvent]
+    ) throws -> URLRequest {
+        guard !events.isEmpty else {
+            throw SyncHTTPTransportError.emptyEventBatch
+        }
+        guard var components = URLComponents(url: serverURL, resolvingAgainstBaseURL: false),
+              components.scheme != nil,
+              components.host != nil
+        else {
+            throw SyncHTTPTransportError.invalidServerURL
+        }
+
+        let basePath = components.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        let pushPath = "api/v1/logbooks/\(logbookId)/push"
+        components.path = "/" + ([basePath, pushPath].filter { !$0.isEmpty }.joined(separator: "/"))
+        guard let url = components.url else {
+            throw SyncHTTPTransportError.invalidServerURL
+        }
+
+        let body = SyncPushRequest(
+            auth: syncToken.map { SyncPushAuth(syncToken: $0) },
+            logbookId: logbookId,
+            events: events
+        )
+        let encoder = JSONEncoder()
+        encoder.keyEncodingStrategy = .convertToSnakeCase
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        if let bearerToken, !bearerToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            request.setValue("Bearer \(bearerToken)", forHTTPHeaderField: "Authorization")
+        }
+        request.httpBody = try encoder.encode(body)
+        return request
+    }
+
+    func push(
+        serverURL: URL,
+        bearerToken: String?,
+        syncToken: String?,
+        logbookId: String,
+        events: [SyncOfficialEvent]
+    ) async throws -> SyncPushResponse {
+        let request = try makePushRequest(
+            serverURL: serverURL,
+            bearerToken: bearerToken,
+            syncToken: syncToken,
+            logbookId: logbookId,
+            events: events
+        )
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw SyncHTTPTransportError.invalidHTTPResponse
+        }
+        guard (200..<300).contains(http.statusCode) else {
+            let message = String(data: data, encoding: .utf8) ?? "sync push failed"
+            throw SyncHTTPTransportError.serverRejected(statusCode: http.statusCode, message: message)
+        }
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        return try decoder.decode(SyncPushResponse.self, from: data)
+    }
 }
 
 struct SyncRetryResultBridgeRequest: Encodable {

@@ -82,6 +82,7 @@ final class RustBridgeTests: XCTestCase {
         XCTAssertEqual(result.retryPlan.maxMutations, 3)
         XCTAssertEqual(result.retryPlan.backgroundTimeBudgetSeconds, 12)
         XCTAssertEqual(result.retryPlan.operationIds.count, 0)
+        XCTAssertEqual(result.retryPlan.transportableEvents.count, 0)
         XCTAssertEqual(result.offlineQueue.health.total, 0)
     }
 
@@ -152,6 +153,92 @@ final class RustBridgeTests: XCTestCase {
         XCTAssertEqual(resolved.conflictReview.selectedResolution?.operatorNote, "Reviewed on iOS.")
         XCTAssertEqual(resolved.conflictReviews.health?.open, 0)
         XCTAssertEqual(resolved.conflictReviews.health?.resolved, 1)
+    }
+
+    func testSyncRetryPlanDecodesTransportableOfficialEvents() throws {
+        let event = officialEventPayload()
+        let envelope: [String: Any] = [
+            "ok": true,
+            "bridge_version": 1,
+            "abi_version": 1,
+            "schema_version": 1,
+            "generated_at": "2026-07-21T12:00:00Z",
+            "correlation_id": UUID().uuidString,
+            "error": NSNull(),
+            "data": [
+                "retry_plan": [
+                    "schema_version": 1,
+                    "logbook_id": event["logbook_id"] ?? "",
+                    "operation_ids": [UUID().uuidString],
+                    "event_hashes": [event["event_hash"] ?? ""],
+                    "events": [event],
+                    "missing_local_event_operation_ids": [],
+                    "network_required": true,
+                    "blocked_by_network": false,
+                    "max_mutations": 1,
+                    "background_time_budget_seconds": 20,
+                    "mark_sending": true,
+                    "permanent_failure_results": ["auth_failed", "diverged"]
+                ],
+                "offline_queue": FallbackBridgeData.offlineQueue(),
+                "recovery": FallbackBridgeData.offlineQueueRecovery()
+            ]
+        ]
+        let data = try JSONSerialization.data(withJSONObject: envelope)
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        let decoded = try decoder.decode(RustBridgeEnvelope<SyncRetryPlanBridgeResult>.self, from: data)
+        let plan = try XCTUnwrap(decoded.data?.retryPlan)
+        let decodedEvent = try XCTUnwrap(plan.transportableEvents.first)
+
+        XCTAssertEqual(decodedEvent.eventHash, event["event_hash"] as? String)
+        XCTAssertEqual(decodedEvent.eventType, "official.log.qso.created")
+        XCTAssertEqual(plan.eventHashes, [decodedEvent.eventHash])
+        guard case .object(let payload) = decodedEvent.payload else {
+            return XCTFail("Expected object payload")
+        }
+        XCTAssertEqual(payload["contacted_callsign"], .string("K1ABC"))
+        XCTAssertEqual(payload["portable"], .bool(true))
+    }
+
+    func testSyncHTTPTransportBuildsHostedPushRequestFromPlannedEvents() throws {
+        let event = sampleOfficialEvent()
+        let request = try SyncHTTPTransport().makePushRequest(
+            serverURL: try XCTUnwrap(URL(string: "https://sync.example.test/root/")),
+            bearerToken: "secret-bearer",
+            syncToken: nil,
+            logbookId: event.logbookId,
+            events: [event]
+        )
+        let body = try XCTUnwrap(request.httpBody)
+        let bodyString = String(decoding: body, as: UTF8.self)
+        let object = try JSONSerialization.jsonObject(with: body) as? [String: Any]
+        let events = object?["events"] as? [[String: Any]]
+
+        XCTAssertEqual(request.httpMethod, "POST")
+        XCTAssertEqual(
+            request.url?.absoluteString,
+            "https://sync.example.test/root/api/v1/logbooks/\(event.logbookId)/push"
+        )
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer secret-bearer")
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
+        XCTAssertEqual(object?["logbook_id"] as? String, event.logbookId)
+        XCTAssertEqual(events?.first?["event_hash"] as? String, event.eventHash)
+        XCTAssertFalse(bodyString.contains("secret-bearer"))
+    }
+
+    func testSyncHTTPTransportRejectsEmptyEventBatches() throws {
+        XCTAssertThrowsError(
+            try SyncHTTPTransport().makePushRequest(
+                serverURL: try XCTUnwrap(URL(string: "https://sync.example.test")),
+                bearerToken: nil,
+                syncToken: nil,
+                logbookId: UUID().uuidString,
+                events: []
+            )
+        ) { error in
+            XCTAssertEqual(error as? SyncHTTPTransportError, .emptyEventBatch)
+        }
     }
 
     func testRustBridgeStoreMapsStructuredErrors() async throws {
@@ -301,6 +388,58 @@ final class RustBridgeTests: XCTestCase {
             ],
             "recommended_action": "Manual review required before syncing."
         ]
+    }
+
+    private func officialEventPayload() -> [String: Any] {
+        let logbookID = UUID().uuidString
+        return [
+            "event_id": UUID().uuidString,
+            "event_type": "official.log.qso.created",
+            "logbook_id": logbookID,
+            "entity_id": UUID().uuidString,
+            "previous_hash": NSNull(),
+            "event_hash": "event-hash-\(UUID().uuidString)",
+            "timestamp": "2026-07-21T12:00:00Z",
+            "author_operator_id": NSNull(),
+            "station_callsign": "KE8YGW",
+            "operator_callsign": "KE8YGW",
+            "author_device_id": UUID().uuidString,
+            "source_device_id": UUID().uuidString,
+            "correlation_id": UUID().uuidString,
+            "source_plugin_id": "ios.ke8ygw.logger",
+            "schema_version": 1,
+            "payload": [
+                "contacted_callsign": "K1ABC",
+                "rst": 59,
+                "portable": true,
+                "tags": ["pota", "field"]
+            ]
+        ]
+    }
+
+    private func sampleOfficialEvent() -> SyncOfficialEvent {
+        SyncOfficialEvent(
+            eventId: UUID().uuidString,
+            eventType: "official.log.qso.created",
+            logbookId: UUID().uuidString,
+            entityId: UUID().uuidString,
+            previousHash: nil,
+            eventHash: "sample-event-hash",
+            timestamp: "2026-07-21T12:00:00Z",
+            authorOperatorId: nil,
+            stationCallsign: "KE8YGW",
+            operatorCallsign: "KE8YGW",
+            authorDeviceId: UUID().uuidString,
+            sourceDeviceId: UUID().uuidString,
+            correlationId: UUID().uuidString,
+            sourcePluginId: "ios.ke8ygw.logger",
+            schemaVersion: 1,
+            payload: .object([
+                "contacted_callsign": .string("K1ABC"),
+                "band": .string("20m"),
+                "mode": .string("SSB")
+            ])
+        )
     }
 }
 

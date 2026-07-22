@@ -60,15 +60,17 @@ outside issue #2.
      acknowledgment, transient backoff, and user-action stops for auth,
      validation, divergence, missing-event, and permanent failures. Native
      Swift bridge methods and the iOS Sync workspace now decode Rust queue
-     health/mutations, request retry plans with native network monitor state,
+     health/mutations, Rust-planned official event envelopes, hosted push
+     request bodies, request retry plans with native network monitor state,
      display saved conflict-review records with recommended actions and
      structured conflict messages, and surface no-network/user-action retry
-     outcomes without owning domain rules.
+     outcomes without owning event creation or domain rules.
    - Remaining: production iOS reciprocal LAN pairing UX, stronger LAN
      key-exchange hardening, end-to-end cross-client branch review/reconciliation workflow
      qualification, physical-device LAN/iOS local-network
      validation, release-device iOS background task and poor-network
-     qualification, and real hosted web/desktop/iOS/self-hosted
+     qualification, actual native push execution against hosted/self-hosted
+     endpoints, and real hosted web/desktop/iOS/self-hosted
      migration/recovery qualification.
    - Blockers: local network permission behavior on iOS, iOS reciprocal LAN
      pairing UX, physical test devices, and acceptance criteria for manual conflict
