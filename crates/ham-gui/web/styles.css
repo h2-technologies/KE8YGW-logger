@@ -596,6 +596,21 @@ input {
   resize: vertical;
 }
 
+.lan-pairing-grid {
+  margin-top: 10px;
+}
+
+.lan-pairing-issued {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #111316;
+  padding: 10px;
+}
+
+.lan-pairing-issued code {
+  overflow-wrap: anywhere;
+}
+
 .pill {
   display: inline-flex;
   align-items: center;

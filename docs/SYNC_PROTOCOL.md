@@ -210,7 +210,11 @@ Rust bridge commands.
 - replay nonce hashing and rejection
 
 The GUI exposes trust-state, pairing-token, pairing-accept, pairing-complete,
-auth-rotation, and revoke endpoints. `pairing-complete` posts the
+auth-rotation, and revoke endpoints. The browser Sync panel wraps those
+endpoints in guided LAN pairing/trust controls for issuing local one-time
+codes, entering peer token/code/fingerprint values, completing reciprocal
+pairing, generating replacement auth codes, rotating LAN auth, and revoking
+trusted peers. `pairing-complete` posts the
 operator-entered peer token and pairing code to the selected peer, stores the
 accepted pairing code as a LAN auth credential through `CredentialStore`, and
 records only the resulting credential ID in durable trust state.
@@ -265,7 +269,7 @@ reachability and reduce spoofing; official event writes remain local and
 trust-gated; protected LAN read endpoints require reciprocal trust state,
 fresh nonces, and HMAC-SHA256 request proof. The current LAN HTTP transport is
 still not encrypted and must not be exposed outside trusted local networks.
-Production reciprocal pairing UX, stronger LAN key-exchange hardening,
+Production iOS reciprocal LAN pairing UX, stronger LAN key-exchange hardening,
 physical-device LAN validation, and iOS Local Network permission validation
 remain before unattended LAN sync is considered complete.
 
@@ -289,10 +293,10 @@ The current self-hosted server uses durable local storage by default: embedded S
 
 ## Deferred Work
 
-- Production reciprocal LAN pairing UX over the durable trust store.
+- Production iOS reciprocal LAN pairing UX over the durable trust store.
 - Signed official events.
 - End-to-end encrypted relay.
-- Stronger LAN key-exchange hardening and production reciprocal pairing UX.
+- Stronger LAN key-exchange hardening and production iOS reciprocal LAN pairing UX.
 - Physical-device LAN and iOS Local Network permission validation.
 - End-to-end cross-client branch review and reconciliation workflow beyond the
   current guided browser review surface and explicit corrective-event commands.

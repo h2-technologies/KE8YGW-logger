@@ -35,6 +35,7 @@ const state = {
   divergenceReview: null,
   conflictReview: null,
   selectedConflictReviewId: null,
+  lanPairingIssued: null,
   reportPreview: null,
   lastReport: null,
   syncState: null,
@@ -1461,6 +1462,7 @@ function bindPanelControls() {
     byId("sync-pull-events").addEventListener("click", pullSelectedPeer);
     byId("sync-issue-pairing").addEventListener("click", issueLanPairingCode);
     byId("sync-trust-peer").addEventListener("click", trustSelectedPeer);
+    byId("sync-generate-auth-code")?.addEventListener("click", generateSelectedPeerAuthCode);
     byId("sync-rotate-auth").addEventListener("click", rotateSelectedPeerAuth);
     byId("sync-revoke-peer").addEventListener("click", revokeSelectedPeer);
     byId("sync-recover-queue").addEventListener("click", recoverOfflineQueue);
@@ -3299,10 +3301,6 @@ function renderSyncStatus() {
       <button id="sync-handshake" class="toolbar-button" type="button">Handshake</button>
       <button id="sync-preview-pull" class="toolbar-button" type="button">Preview Pull</button>
       <button id="sync-pull-events" class="toolbar-button" type="button">Pull Missing</button>
-      <button id="sync-issue-pairing" class="toolbar-button" type="button">Issue Code</button>
-      <button id="sync-trust-peer" class="toolbar-button" type="button">Complete Pairing</button>
-      <button id="sync-rotate-auth" class="toolbar-button" type="button">Rotate Auth</button>
-      <button id="sync-revoke-peer" class="toolbar-button" type="button">Revoke Selected</button>
       <button id="sync-copy-identity" class="toolbar-button" type="button">Copy Identity</button>
     </div>
     <div class="sync-summary">
@@ -3320,6 +3318,7 @@ function renderSyncStatus() {
         <button class="toolbar-button" type="button" onclick="openDivergenceReview()">Open Review</button>
       </div>
     </div>
+    ${renderLanPairingPanel(sync)}
     <div class="sync-summary">
       <p><strong>LAN trust:</strong> ${trustedCount} trusted / ${(sync.lan_trust?.trusted_devices || []).length} known devices</p>
       ${sync.lan_trust_error ? `<p class="event-error">${sync.lan_trust_error}</p>` : ""}
@@ -3388,6 +3387,49 @@ function renderSyncStatus() {
   </div>`;
 }
 
+function renderLanPairingPanel(sync) {
+  const peer = selectedPeer();
+  const trustedDevice = selectedTrustedDevice();
+  const issued = state.lanPairingIssued;
+  const activeTokens = (sync.lan_trust?.pairing_tokens || []).filter((token) => !token.consumed_at);
+  return `<div class="sync-summary">
+    <p><strong>LAN pairing:</strong> ${peer ? escapeHtml(peer.display_name) : "select or add a peer first"}</p>
+    <p><strong>Active local tokens:</strong> ${activeTokens.length}</p>
+    ${
+      issued
+        ? `<div class="lan-pairing-issued">
+            <p><strong>Give this one-time code to the other device.</strong></p>
+            <p>Token ID: <small>${escapeHtml(issued.token_id)}</small></p>
+            <p>Pairing code: <code>${escapeHtml(issued.pairing_code)}</code></p>
+            <p>Expires: ${escapeHtml(issued.expires_at || "unknown")}</p>
+          </div>`
+        : `<p class="muted">Issue a local token here, or enter a peer token and code to complete reciprocal trust.</p>`
+    }
+    <div class="qso-form lan-pairing-grid">
+      <button id="sync-issue-pairing" class="toolbar-button" type="button">Issue Local Code</button>
+      <label>Peer Token ID
+        <input id="sync-pairing-token-id" class="placeholder-control" autocomplete="off" />
+      </label>
+      <label>Peer Pairing Code
+        <input id="sync-pairing-code" class="placeholder-control" autocomplete="off" spellcheck="false" />
+      </label>
+      <label>Peer Public-Key Fingerprint
+        <input id="sync-pairing-fingerprint" class="placeholder-control" autocomplete="off" />
+      </label>
+      <button id="sync-trust-peer" class="toolbar-button" type="button" ${peer ? "" : "disabled"}>Complete Pairing</button>
+    </div>
+    <div class="qso-form lan-pairing-grid">
+      <p><strong>Selected trusted peer:</strong> ${trustedDevice ? `${escapeHtml(trustedDevice.display_name)} / <small>${escapeHtml(trustedDevice.device_id)}</small>` : "none"}</p>
+      <label>Replacement LAN Auth Code
+        <input id="sync-rotate-auth-code" class="placeholder-control" autocomplete="off" spellcheck="false" />
+      </label>
+      <button id="sync-generate-auth-code" class="toolbar-button" type="button" ${trustedDevice ? "" : "disabled"}>Generate Code</button>
+      <button id="sync-rotate-auth" class="toolbar-button" type="button" ${trustedDevice ? "" : "disabled"}>Rotate Auth</button>
+      <button id="sync-revoke-peer" class="toolbar-button" type="button" ${trustedDevice ? "" : "disabled"}>Revoke Selected</button>
+    </div>
+  </div>`;
+}
+
 async function refreshSyncState() {
   state.syncState = await fetch("/api/sync/state").then((response) => response.json());
 }
@@ -3451,23 +3493,30 @@ async function issueLanPairingCode() {
     approved_by_operator: true,
     display_name: state.syncState?.identity?.display_name || "KE8YGW Logger Local",
   });
+  state.lanPairingIssued = pairing.pairing || null;
   state.importSummary = pairing.pairing || pairing;
+  render();
 }
 
 async function trustSelectedPeer() {
   const peer = selectedPeer();
   if (!peer) return;
-  const tokenId = window.prompt("Peer pairing token ID", "");
-  if (!tokenId) return;
-  const pairingCode = window.prompt("Peer pairing code", "");
-  if (!pairingCode) return;
+  const tokenId = byId("sync-pairing-token-id")?.value?.trim();
+  const pairingCode = byId("sync-pairing-code")?.value?.trim();
+  const publicKeyFingerprint = byId("sync-pairing-fingerprint")?.value?.trim() || null;
+  if (!tokenId || !pairingCode) {
+    state.importSummary = { ok: false, error: "peer token ID and pairing code are required" };
+    render();
+    return;
+  }
   const trusted = await syncPost("/api/sync/lan/pairing-complete", {
     peer_id: peer.peer_id,
-    token_id: tokenId.trim(),
-    pairing_code: pairingCode.trim(),
-    public_key_fingerprint: null,
+    token_id: tokenId,
+    pairing_code: pairingCode,
+    public_key_fingerprint: publicKeyFingerprint,
   });
   state.importSummary = trusted.trusted_device || trusted;
+  render();
 }
 
 async function revokeSelectedPeer() {
@@ -3475,18 +3524,32 @@ async function revokeSelectedPeer() {
   if (!peer) return;
   const result = await syncPost("/api/sync/lan/revoke", { device_id: peer.device_id });
   state.importSummary = result.trusted_device || result;
+  render();
 }
 
 async function rotateSelectedPeerAuth() {
   const trustedDevice = selectedTrustedDevice();
   if (!trustedDevice) return;
-  const pairingCode = window.prompt("Replacement LAN auth code", "");
-  if (!pairingCode) return;
+  const pairingCode = byId("sync-rotate-auth-code")?.value?.trim();
+  if (!pairingCode) {
+    state.importSummary = { ok: false, error: "replacement LAN auth code is required" };
+    render();
+    return;
+  }
   const result = await syncPost("/api/sync/lan/rotate-auth", {
     device_id: trustedDevice.device_id,
-    pairing_code: pairingCode.trim(),
+    pairing_code: pairingCode,
   });
   state.importSummary = result.rotation || result.trusted_device || result;
+  render();
+}
+
+function generateSelectedPeerAuthCode() {
+  const input = byId("sync-rotate-auth-code");
+  if (!input) return;
+  input.value = strongLocalAuthCode();
+  input.focus();
+  input.select?.();
 }
 
 async function recoverOfflineQueue() {
@@ -3508,6 +3571,13 @@ function selectedTrustedDevice() {
 function randomNonce() {
   if (window.crypto?.randomUUID) return window.crypto.randomUUID();
   return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function strongLocalAuthCode() {
+  if (window.crypto?.randomUUID) {
+    return `${window.crypto.randomUUID().replace(/-/g, "")}${window.crypto.randomUUID().replace(/-/g, "")}`;
+  }
+  return `${Date.now().toString(36)}${Math.random().toString(36).slice(2)}${Math.random().toString(36).slice(2)}`;
 }
 
 function copyLocalSyncIdentity() {

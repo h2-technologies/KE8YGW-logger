@@ -59,6 +59,10 @@ Last audited: 2026-07-21
 - GUI LAN auth credential rotation/recovery for trusted peers, with replacement
   secrets stored through `CredentialStore` and old credential references
   deleted after trust state updates.
+- Guided browser LAN pairing/trust panel for issuing local one-time codes,
+  entering peer token/code/fingerprint values, completing reciprocal pairing,
+  generating replacement auth codes, rotating LAN auth, and revoking selected
+  trusted peers without prompt-only handling.
 - Automatic IPv4/IPv6 multicast discovery worker that probes reachable peer
   identity before recording peers.
 - Older trust records without an `auth_credential_id` remain readable but must
@@ -66,7 +70,8 @@ Last audited: 2026-07-21
 
 ## Still Incomplete For v1
 
-- Production reciprocal pairing UX across desktop and iOS.
+- Production iOS reciprocal LAN pairing UX and full release-device pairing
+  qualification.
 - Stronger LAN key-exchange hardening.
 - Physical-device LAN and iOS Local Network permission validation.
 - End-to-end cross-client branch review and reconciliation workflow beyond the

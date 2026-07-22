@@ -89,8 +89,11 @@ operations, and release qualification.
   official event hashes, guided browser conflict-review selection, structured
   conflict summaries, explicit recovery-path buttons, form-based corrective QSO
   note events, and automatic IPv4/IPv6 multicast discovery that probes peer
-  identity before recording reachable peers. Production reciprocal trust-pairing
-  UX, stronger LAN key-exchange hardening, end-to-end cross-device
+  identity before recording reachable peers, plus a guided browser LAN
+  pairing/trust panel for issuing one-time codes, completing reciprocal pairing,
+  rotating LAN auth credentials, and revoking trusted peers without prompt-only
+  handling. Production iOS reciprocal LAN pairing UX, stronger LAN
+  key-exchange hardening, end-to-end cross-device
   reconciliation workflow qualification, physical-device LAN/iOS local-network
   validation, and iOS background scheduler validation are incomplete.
 - Providers have metadata, fake/default execution, credential references,
@@ -120,9 +123,9 @@ operations, and release qualification.
 
 ## Deferred Or Unimplemented For v1
 
-- Production reciprocal LAN pairing UX beyond prompt-based token completion,
-  stronger LAN key-exchange hardening, and physical-device validation beyond
-  the current HMAC-SHA256 signed LAN read endpoints and GUI auth-rotation path.
+- Production iOS reciprocal LAN pairing UX, stronger LAN key-exchange
+  hardening, and physical-device validation beyond the current browser pairing
+  panel, HMAC-SHA256 signed LAN read endpoints, and GUI auth-rotation path.
 - End-to-end cross-device branch review and reconciliation workflow
   qualification beyond the current guided browser review surface, plus
   release-device iOS background task and poor-network validation.
@@ -203,12 +206,12 @@ Known manual repository/external settings remain in
 | #27 Persistent desktop offline queue | Partially satisfied | GUI persists queue entries before QSO/activation/Net Control/station support mutations, recovers/interprets queue state at startup, exposes queue state/recovery, and cloud push acknowledges queued official event hashes. `desktop_queue_recovers_restart_and_drains_to_cloud_without_duplicates` proves a desktop-style restart/reconnect drain path recovers a `sending` operation, drains queued official events in order, marks accepted entries by event hash, and ignores duplicate cloud replay without creating local duplicates. Shared recovery now initializes v0.2 absent queues, migrates legacy `version: 0` records, promotes interrupted atomic writes, and quarantines corrupt queue JSON. Full reconnect automation and browser-level desktop recovery tests remain. |
 | #28 Persistent iOS offline queue | Partially satisfied | `ham-ios-ffi` queues QSO/activation/Net Control/station/equipment commands and exposes queue snapshots/recovery plus Rust-owned conflict-review create/resolve commands. The iOS recovery command now uses the shared migration/quarantine recovery report. New `sync.offline_queue.retry_plan` and `sync.offline_queue.retry_result` commands give Swift a Rust-owned background retry contract: bounded batches, sending-state recovery, accepted-hash acknowledgment, transient-failure backoff, and user-action stops for auth, validation, divergence, missing-local-event, and permanent failures. Release-device background task execution, local-network permission behavior, and termination/poor-network validation remain. |
 | #29 Push/pull/divergence/manual conflict review | Partially satisfied | Existing verified preview/pull/push remains, queue-aware cloud push was added, structured conflict reports classify divergent heads, missing dependencies, unsupported remote schemas, concurrent QSO corrections, and tombstone/restore overlaps, durable manual conflict-review create/resolve commands reject unsafe divergent pulls, desktop/iOS corrective-event commands submit explicit proposals through the normal proposal pipeline before resolving reviews with generated event hashes, and the browser divergence screen now lists saved reviews, summarizes conflicts, records explicit recovery choices, and submits corrective QSO note events through Rust endpoints without prompt-only handling. End-to-end cross-client branch review/reconciliation workflow qualification remains. |
-| #30 Device pairing/trust/revocation/LAN transport decision | Partially satisfied | `JsonLanTrustStore` provides explicit approval, hashed expiring single-use tokens, logbook-scoped trusted devices, auth credential references, auth credential rotation, replay nonce rejection, and immediate revocation; GUI exposes trust endpoints, reciprocal prompt-based pairing completion, manual direct LAN HTTP peer add/preview/pull, automatic IPv4/IPv6 multicast discovery with reachable identity probing, advertised API-port normalization, HMAC-SHA256 signed LAN list/head/event read endpoints, LAN auth rotation/recovery, and LAN pull rejects untrusted/revoked/replayed peers before local append. Production reciprocal pairing UX, stronger key-exchange hardening, and physical LAN/iOS local-network validation remain. |
+| #30 Device pairing/trust/revocation/LAN transport decision | Partially satisfied | `JsonLanTrustStore` provides explicit approval, hashed expiring single-use tokens, logbook-scoped trusted devices, auth credential references, auth credential rotation, replay nonce rejection, and immediate revocation; GUI exposes trust endpoints, guided browser pairing/trust controls for issuing one-time local codes, entering peer token/code/fingerprint values, completing reciprocal pairing, generating replacement auth codes, rotating LAN auth, and revoking selected trusted peers, manual direct LAN HTTP peer add/preview/pull, automatic IPv4/IPv6 multicast discovery with reachable identity probing, advertised API-port normalization, HMAC-SHA256 signed LAN list/head/event read endpoints, LAN auth rotation/recovery, and LAN pull rejects untrusted/revoked/replayed peers before local append. Production iOS reciprocal LAN pairing UX, stronger key-exchange hardening, and physical LAN/iOS local-network validation remain. |
 | #31 Cross-client sync recovery/migration test suite | Partially satisfied | New deterministic `ham-sync` golden scenarios cover desktop-style crash recovery, transient network retry, accepted-by-hash drain, duplicate replay, reordered delivery rejection, iOS-style pull/projection replay, clock-skewed event timestamps ordered by hashes, divergent heads, concurrent correction and tombstone/restore conflict reports, manual corrective-event review resolution, v0.2 legacy queue migration, and LAN revocation. Existing queue/trust/recovery/conflict-review tests, desktop restart/reconnect drain coverage, queued target-entity persistence/backfill tests, unsupported-schema tests, corrupt queue quarantine tests, interrupted atomic-write promotion tests, and iOS FFI queue/conflict-review assertions remain in place. Real hosted web/desktop/iOS/self-hosted end-to-end device qualification, physical-device tests, and full migration matrix remain. |
 
 ## Next Recommended Goal
 
-Finish the remaining sync/reconciliation hardening: production reciprocal
+Finish the remaining sync/reconciliation hardening: production iOS reciprocal
 pairing UX, stronger LAN key-exchange hardening, end-to-end cross-client branch
 review and reconciliation workflow qualification, physical LAN/iOS local-network
 validation, and release-device iOS background task and poor-network qualification. That goal unblocks

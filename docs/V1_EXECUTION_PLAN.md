@@ -45,7 +45,9 @@ outside issue #2.
      reviews with generated official event hashes. The browser divergence screen
      now exposes saved review selection, structured conflict summaries,
      explicit recovery-path choices, and form-based corrective QSO note events
-     through the Rust desktop endpoints. Deterministic shared sync golden tests
+     through the Rust desktop endpoints; the browser Sync panel exposes guided
+     LAN pairing/trust controls for local one-time codes, reciprocal pairing,
+     auth rotation, and trust revocation. Deterministic shared sync golden tests
      cover desktop-style crash recovery, transient network retry, duplicate
      replay, reordered delivery rejection, iOS-style pull/projection replay,
      clock-skewed timestamps ordered by event hashes, divergent heads,
@@ -56,14 +58,14 @@ outside issue #2.
      Rust owns queue ordering, `sending` recovery, accepted-hash
      acknowledgment, transient backoff, and user-action stops for auth,
      validation, divergence, missing-event, and permanent failures.
-   - Remaining: production reciprocal pairing UX, stronger LAN key-exchange
-     hardening, end-to-end cross-client branch review/reconciliation workflow
+   - Remaining: production iOS reciprocal LAN pairing UX, stronger LAN
+     key-exchange hardening, end-to-end cross-client branch review/reconciliation workflow
      qualification, physical-device LAN/iOS local-network
      validation, release-device iOS background task and poor-network
      qualification, and real hosted web/desktop/iOS/self-hosted
      migration/recovery qualification.
-   - Blockers: local network permission behavior on iOS, trust-pairing UX,
-     physical test devices, and acceptance criteria for manual conflict
+   - Blockers: local network permission behavior on iOS, iOS reciprocal LAN
+     pairing UX, physical test devices, and acceptance criteria for manual conflict
      resolution.
 
 4. Production provider qualification
@@ -149,8 +151,8 @@ outside issue #2.
 
 ## Next Three Goals
 
-1. Finish sync/reconciliation hardening: production reciprocal LAN pairing UX,
-   stronger LAN key-exchange hardening, end-to-end cross-client branch
+1. Finish sync/reconciliation hardening: production iOS reciprocal LAN pairing
+   UX, stronger LAN key-exchange hardening, end-to-end cross-client branch
    review/reconciliation workflow qualification, physical-device LAN/iOS
    local-network validation, and iOS background task and poor-network
    validation on release devices.

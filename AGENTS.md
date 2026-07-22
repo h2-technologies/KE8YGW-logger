@@ -46,10 +46,10 @@ Foundational or partial functionality:
 
 Planned but not implemented end-to-end:
 - Real runtime plugin loading, sandboxing, and signatures.
-- Production reciprocal LAN pairing UX, stronger LAN key-exchange hardening,
+- Production iOS reciprocal LAN pairing UX, stronger LAN key-exchange hardening,
   and physical-device validation beyond the automatic discovery/manual direct
   LAN HTTP peer paths, HMAC-SHA256 signed LAN read endpoint authorization, and
-  GUI auth-credential rotation/recovery path.
+  browser pairing/auth-credential rotation/recovery panel.
 - Conflict resolution UI and automatic merge policy.
 - Full production provider coverage for LoTW/TQSL, SOTAWatch live access, NOAA/Open-Meteo, FCC ULS, RBN, and other placeholder providers.
 - Swift projection cache and production App Store packaging.
@@ -783,7 +783,7 @@ This section is a verified snapshot of the repository as inspected on July 21, 2
 - Workspace members: `crates/ham-api-contract`, `crates/ham-core`, `crates/ham-plugin-sdk`, `crates/ham-sync`, `crates/ham-sync-server`, `crates/ham-server`, `crates/ham-cli`, `crates/ham-gui`, `crates/ham-desktop`, `crates/ham-ios-ffi`, and `src-tauri`.
 - Actual desktop state: a real Tauri v2 wrapper exists, bundles `crates/ham-gui/web`, exposes native dialog commands plus a restricted `/api/*` proxy, and packages desktop installers. The local backend is not yet embedded in-process or sidecar-launched automatically.
 - Actual hosted-server state: `ham-server` is the hosted API boundary with durable SurrealDB metadata, route tests, role-scoped logbook access, provider settings, upload execution foundation, backups, divergence review, and sync endpoints. It is still beta, not production-hardened.
-- Actual synchronization state: `ham-sync` implements LAN discovery and verification models, preview/pull/push logic, cloud/self-hosted sync models, durable self-hosted sync/report storage, guarded replay rules, durable offline mutation queue models with optional target-entity metadata, v0.2 absent/legacy queue migration, corrupt queue quarantine, interrupted atomic-write promotion, desktop/iOS queue hooks, iOS FFI background retry planning/result classification, queue-aware cloud push acknowledgment, structured conflict reports for divergent heads, missing dependencies, unsupported schemas, concurrent QSO corrections, and tombstone/restore overlaps, durable manual conflict-review records, explicit recovery-path decisions, deterministic shared sync golden tests for crash recovery, retry, duplicate/reordered delivery, clock-skewed timestamps, divergent heads, review resolution, legacy migration, restore replay, and LAN revocation, desktop/iOS corrective-event commands that submit normal proposals and resolve reviews with generated official event hashes, a guided browser conflict-review surface for saved reviews, structured conflict summaries, explicit recovery choices, and corrective QSO note events, durable LAN trust records with auth-credential rotation, GUI manual direct LAN HTTP preview/pull transport, HMAC-SHA256 signed LAN read endpoint authorization, and a GUI automatic IPv4/IPv6 multicast discovery worker that probes reachable peer identity before recording peers. Production reciprocal pairing UX, stronger LAN key-exchange hardening, end-to-end cross-client branch review/reconciliation workflow qualification, physical-device LAN/iOS local-network validation, real hosted web/desktop/iOS/self-hosted migration/recovery qualification, and release-device iOS background task/poor-network validation are still missing.
+- Actual synchronization state: `ham-sync` implements LAN discovery and verification models, preview/pull/push logic, cloud/self-hosted sync models, durable self-hosted sync/report storage, guarded replay rules, durable offline mutation queue models with optional target-entity metadata, v0.2 absent/legacy queue migration, corrupt queue quarantine, interrupted atomic-write promotion, desktop/iOS queue hooks, iOS FFI background retry planning/result classification, queue-aware cloud push acknowledgment, structured conflict reports for divergent heads, missing dependencies, unsupported schemas, concurrent QSO corrections, and tombstone/restore overlaps, durable manual conflict-review records, explicit recovery-path decisions, deterministic shared sync golden tests for crash recovery, retry, duplicate/reordered delivery, clock-skewed timestamps, divergent heads, review resolution, legacy migration, restore replay, and LAN revocation, desktop/iOS corrective-event commands that submit normal proposals and resolve reviews with generated official event hashes, a guided browser conflict-review surface for saved reviews, structured conflict summaries, explicit recovery choices, and corrective QSO note events, durable LAN trust records with guided browser pairing/trust controls and auth-credential rotation, GUI manual direct LAN HTTP preview/pull transport, HMAC-SHA256 signed LAN read endpoint authorization, and a GUI automatic IPv4/IPv6 multicast discovery worker that probes reachable peer identity before recording peers. Production iOS reciprocal LAN pairing UX, stronger LAN key-exchange hardening, end-to-end cross-client branch review/reconciliation workflow qualification, physical-device LAN/iOS local-network validation, real hosted web/desktop/iOS/self-hosted migration/recovery qualification, and release-device iOS background task/poor-network validation are still missing.
 - Actual iOS state: native SwiftUI, SwiftData cache/projection models, Rust FFI bridge, Xcode project, Apple build/link scripts, shared scheme, unit tests, and iOS CI are present. App Store signing, TestFlight/App Store distribution, full offline/sync reconciliation, and production validation remain incomplete.
 - Real versus mock providers:
   - Real but gated live transports: Club Log upload, QRZ Logbook upload, eQSL upload, QRZ XML lookup, HamQTH lookup, POTA spot fetch, DX Cluster bounded runtime controls.
@@ -791,7 +791,7 @@ This section is a verified snapshot of the repository as inspected on July 21, 2
   - Placeholder or fake-first providers remain for many map, weather, propagation, and other online-service categories.
 - Known critical and high-priority gaps:
   - Consistent permission-scope enforcement across all workflows.
-  - Production reciprocal LAN pairing UX, stronger LAN key-exchange hardening, physical-device LAN validation, and end-to-end sync branch-review/reconciliation workflow qualification.
+  - Production iOS reciprocal LAN pairing UX, stronger LAN key-exchange hardening, physical-device LAN validation, and end-to-end sync branch-review/reconciliation workflow qualification.
   - Cross-OS Tauri package validation and release hardening.
   - Clean release-runner validation for OS credential backends.
   - Browser-level GUI tests.
@@ -803,7 +803,7 @@ This section is a verified snapshot of the repository as inspected on July 21, 2
   - The tagged release workflow builds release `ham-gui` archives and adds GitHub artifact attestations for future release archives and checksums before publishing assets.
 - Current release blockers:
   - Production provider completeness and validation.
-  - LAN trust pairing UX, stronger LAN key-exchange hardening, and physical-device validation.
+  - iOS LAN trust pairing UX, stronger LAN key-exchange hardening, and physical-device validation.
   - Desktop packaging hardening outside local Windows validation.
   - Permission-scope cleanup.
   - Browser-level GUI coverage.

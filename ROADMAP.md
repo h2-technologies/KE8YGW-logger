@@ -49,9 +49,9 @@ guided browser conflict-review surface for saved review selection, structured
 conflict summaries, explicit recovery choices, and corrective QSO note events.
 
 Partial or incomplete v1 areas include hosted web/desktop/iOS account UX,
-production email/Turnstile deployment configuration, production reciprocal LAN
-pairing UX, stronger LAN key-exchange hardening, end-to-end cross-client branch
-review/reconciliation workflow qualification, physical-device LAN/iOS
+production email/Turnstile deployment configuration, production iOS reciprocal
+LAN pairing UX, stronger LAN key-exchange hardening, end-to-end cross-client
+branch review/reconciliation workflow qualification, physical-device LAN/iOS
 local-network validation, release-device iOS background task/poor-network qualification, production provider
 qualification, cached/offline maps, contesting, EmComm forms, signed desktop
 updater, Apple signing/TestFlight/App Store distribution, operations, and
@@ -62,7 +62,7 @@ release-candidate qualification.
 See [docs/V1_EXECUTION_PLAN.md](docs/V1_EXECUTION_PLAN.md) for the
 dependency-ordered critical path. The next three implementation goals are:
 
-- Finish sync/reconciliation hardening: production reciprocal LAN pairing UX,
+- Finish sync/reconciliation hardening: production iOS reciprocal LAN pairing UX,
   stronger LAN key-exchange hardening, end-to-end cross-client branch
   review/reconciliation workflow qualification, physical-device LAN/iOS
   local-network validation, and release-device iOS background task/poor-network

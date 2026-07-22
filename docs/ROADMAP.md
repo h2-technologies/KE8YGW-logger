@@ -37,9 +37,10 @@ wrapper is not the iOS client. See `V1_RELEASE_PLAN.md`,
      device ID, replay nonce, and HMAC-SHA256 signature headers;
      manual direct LAN HTTP preview/pull is available between GUI instances;
      the GUI also runs IPv4/IPv6 multicast discovery with reachable identity
-     probing, plus GUI LAN auth credential rotation/recovery. Production
-     reciprocal pairing UX, stronger LAN key-exchange hardening, and
-     physical-device LAN/iOS local-network validation remain high priority.
+     probing, plus guided browser LAN pairing/trust controls and GUI LAN auth
+     credential rotation/recovery. Production iOS reciprocal LAN pairing UX,
+     stronger LAN key-exchange hardening, and physical-device LAN/iOS
+     local-network validation remain high priority.
 
 6. **Cloud/Self-Hosted Sync**
    - Sync server/client, pairing-token MVP auth, push/pull/preview via cloud, self-hosted config/Docker, GUI cloud settings, tests.
@@ -107,9 +108,11 @@ wrapper is not the iOS client. See `V1_RELEASE_PLAN.md`,
      conflict-review records, direct LAN HTTP preview/pull, automatic LAN
      discovery, durable LAN trust state, and desktop/iOS corrective-event
      commands that submit explicit proposals and resolve reviews with generated
-     official event hashes, plus a guided browser conflict-review surface for
-     saved reviews, structured conflict summaries, explicit recovery choices,
-     and corrective QSO note events. Deterministic shared sync golden tests
+     official event hashes, plus guided browser conflict-review and LAN
+     pairing/trust surfaces for saved reviews, structured conflict summaries,
+     explicit recovery choices, corrective QSO note events, local one-time
+     pairing codes, reciprocal pairing completion, auth rotation, and trust
+     revocation. Deterministic shared sync golden tests
      cover crash recovery, transient retry, duplicate/reordered delivery,
      iOS-style pull replay, clock-skewed timestamps, divergent heads,
      conflict-review resolution, legacy queue migration, restore replay, and
@@ -117,8 +120,8 @@ wrapper is not the iOS client. See `V1_RELEASE_PLAN.md`,
    - Status: implemented as a v0.3 foundation with HMAC-SHA256 signed LAN read
      endpoint authorization, GUI LAN auth credential rotation/recovery, and
      iOS FFI background retry planning/result classification.
-     Production reciprocal pairing UX, stronger LAN key-exchange hardening,
-     end-to-end cross-client branch review/reconciliation workflow
+     Production iOS reciprocal LAN pairing UX, stronger LAN key-exchange
+     hardening, end-to-end cross-client branch review/reconciliation workflow
      qualification,
      physical-device LAN/iOS local-network validation, and release-device iOS
      background task/poor-network qualification remain planned.
@@ -129,7 +132,7 @@ The dependency-ordered v1 critical path is tracked in
 `V1_EXECUTION_PLAN.md`. The next high-impact work should minimize future
 rewrites:
 
-1. Finish the remaining sync/reconciliation hardening: production reciprocal
+1. Finish the remaining sync/reconciliation hardening: production iOS reciprocal
    LAN pairing UX, stronger LAN key-exchange hardening,
    end-to-end cross-client branch review/reconciliation workflow qualification,
    physical-device LAN/iOS local-network validation, and release-device iOS

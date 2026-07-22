@@ -833,14 +833,19 @@ exchanged, the MVP treats the result as unknown or diverged until the later
 replication protocol can compare event ancestry safely.
 
 The GUI Sync Status panel can start/stop discovery, refresh peers, handshake
-with a selected peer, manually add a direct LAN HTTP peer, preview a pull, trust
-or revoke a selected peer, recover the offline queue, pull missing events from
-trusted peers, and copy the local sync identity. The current implementation
+with a selected peer, manually add a direct LAN HTTP peer, preview a pull, issue
+local one-time pairing codes, enter peer token/code/fingerprint values,
+complete reciprocal pairing, generate replacement LAN auth codes, rotate trust
+credentials, revoke a selected peer, recover the offline queue, pull missing
+events from trusted peers, and copy the local sync identity. The current implementation
 keeps peers in memory, includes a demo refresh path for local testing, and can
 discover reachable GUI peers over IPv4/IPv6 multicast or preview/pull from a
 manually entered numeric loopback/private/link-local `http://ip:port`.
 Discovered peers are recorded only after their advertised API port serves a
 matching `/api/sync/state` identity.
+
+Pairing-derived LAN auth secrets are stored through the Rust credential path.
+Durable LAN trust state stores credential IDs, not raw secrets.
 
 Runtime events include:
 
@@ -855,7 +860,7 @@ Runtime events include:
 Security limitations for MVP: peers are untrusted until they pass the durable
 LAN trust store, no destructive commands are accepted, automatic replication is
 disabled, protected LAN reads require HMAC-SHA256 request proof after pairing,
-and production reciprocal pairing UX, stronger LAN key-exchange hardening, plus
+and production iOS reciprocal LAN pairing UX, stronger LAN key-exchange hardening, plus
 physical-device LAN/iOS validation remain TODOs before unattended LAN sync.
 
 ## Safe LAN Event Replication
@@ -911,9 +916,9 @@ screen lists saved reviews, summarizes structured conflicts, records explicit
 recovery-path choices, and submits corrective QSO note events through the Rust
 desktop endpoints. LAN auth credential rotation/recovery is available through
 the GUI trust endpoint. End-to-end cross-client branch review workflow
-qualification, signed events, production reciprocal LAN pairing UX, stronger
-LAN key-exchange hardening, and physical-device LAN/iOS local-network
-validation are still deferred.
+qualification, signed events, production iOS reciprocal LAN pairing UX, stronger
+LAN key-exchange hardening, and physical-device LAN/iOS local-network validation
+are still deferred.
 
 ## Durable Offline Queue And LAN Trust
 
@@ -996,22 +1001,22 @@ To try the current GUI workflow locally:
 2. Open the Dashboard Sync Status panel.
 3. Click `Refresh Peers` to add the demo LAN peer.
 4. Click `Preview Pull` to inspect available remote events.
-5. Use the Sync panel pairing actions to issue a one-time code on one peer and
-   complete pairing from the other peer.
+5. Use the Sync panel LAN pairing controls to issue a one-time code on one peer
+   and complete pairing from the other peer.
 6. Click `Pull Missing` to append verified missing events and rebuild QSOs.
 
 For two real local instances, run two GUI processes on different ports and set
 separate `HAM_PLATFORM_EVENT_LOG` paths so they do not share the same JSONL
 store. For manual same-machine testing, enter the other instance URL such as
 `http://127.0.0.1:9468`, click `Add Peer`, issue a pairing code on one peer,
-complete pairing from the other peer, then preview and pull. For automatic LAN
+complete pairing from the other peer in the guided LAN pairing panel, then preview and pull. For automatic LAN
 discovery, both GUI instances must have discovery running and the peer being
 discovered must bind its GUI API to a LAN-reachable address such as
 `0.0.0.0:<port>` or a specific private interface; loopback-only peers can still
 use manual loopback URLs. Mutating LAN pull also requires the explicit
 `sync.lan.pull` permission, durable peer trust, and signed remote read requests.
-Production pairing UX, stronger LAN key-exchange hardening, and physical iOS
-Local Network permission validation remain next sync tasks.
+Production iOS reciprocal LAN pairing UX, stronger LAN key-exchange hardening,
+and physical iOS Local Network permission validation remain next sync tasks.
 
 ## Cloud Relay And Self-Hosted Sync
 
