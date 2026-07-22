@@ -46,9 +46,9 @@ framework, maps/GIS foundation, diagnostics, governance, version validation,
 cross-platform CI/security automation, and deterministic shared sync golden
 coverage for crash recovery, retry, duplicate/reordered delivery, conflict
 review, partial push accepted-prefix/rejected-tail queue recovery, desktop
-reconnect auto-drain, legacy queue migration, restore replay, and LAN
-revocation, plus a guided browser conflict-review surface for saved review
-selection, structured
+reconnect auto-drain, revoked cloud-auth user-action recovery, legacy queue
+migration, restore replay, and LAN revocation, plus a guided browser
+conflict-review surface for saved review selection, structured
 conflict summaries, explicit recovery choices, and corrective QSO note events.
 
 Partial or incomplete v1 areas include hosted web/desktop/iOS account UX,

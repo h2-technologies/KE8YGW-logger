@@ -49,8 +49,9 @@ wrapper.
   self-hosted/logbook-scoped push execution coordination, hosted
   `/api/v1/sync/push` request construction, accepted-prefix/rejected-tail retry
   result recording with shared Rust golden coverage for accepted-prefix
-  queue acknowledgment and rejected-tail user-action stops, Rust-owned
-  pulled-event apply through `sync.remote_events.apply`,
+  queue acknowledgment, rejected-tail user-action stops, and revoked cloud-auth
+  re-pair recovery, Rust-owned pulled-event apply through
+  `sync.remote_events.apply`,
   self-hosted/logbook-scoped and hosted pull request
   construction, native pull fetch -> Rust apply coordination, saved
   conflict-review records, selected recovery paths, and structured conflict

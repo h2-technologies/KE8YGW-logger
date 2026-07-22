@@ -943,7 +943,10 @@ reports round-trip through JSON, persist in desktop and iOS review stores,
 reject unsafe pull-after-review decisions, mark queued work as user-action
 required, refuse to append a divergent remote branch, and handle a partial push
 by accepting a valid prefix, blocking the rejected tail, avoiding duplicates,
-and completing the reviewed tail by accepted event hash. LAN auth credential
+and completing the reviewed tail by accepted event hash. They also prove a
+revoked cloud-auth push appends nothing remotely, stops queued work as
+user-action-required, plans no unattended retry, and resumes only after
+re-pairing plus accepted-hash acknowledgment. LAN auth credential
 rotation/recovery is available through the GUI trust endpoint. Release-device
 cross-client branch review workflow qualification, signed events, Apple
 multicast entitlement/provisioning, physical-device LAN/iOS local-network

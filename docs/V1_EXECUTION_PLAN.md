@@ -51,9 +51,10 @@ outside issue #2.
      auth rotation, and trust revocation. Deterministic shared sync golden tests
      cover desktop-style crash recovery, transient network retry, duplicate
      replay, reordered delivery rejection, iOS-style pull/projection replay,
-     partial push accepted-prefix/rejected-tail queue recovery, clock-skewed
-     timestamps ordered by event hashes, divergent heads, concurrent correction
-     and tombstone/restore review, client-ready
+     partial push accepted-prefix/rejected-tail queue recovery, revoked
+     cloud-auth user-action recovery, clock-skewed timestamps ordered by event
+     hashes, divergent heads, concurrent correction and tombstone/restore
+     review, client-ready
      conflict-report JSON portability across desktop and iOS review stores,
      unsafe-resolution rejection, user-action queue marking, no-mutation
      divergent pull rejection, v0.2 legacy queue migration, and LAN revocation.

@@ -182,6 +182,10 @@ accepts early events and rejects a later event.
 proves the shared Rust cloud/queue path accepts the valid prefix, blocks the
 rejected tail as `user_action_required`, avoids local and cloud duplicates, and
 can complete the reviewed tail by accepted event hash.
+`cross_client_golden_revoked_cloud_auth_blocks_queue_until_repaired` proves a
+queued push whose cloud auth is revoked stops as `user_action_required`, appends
+nothing remotely, plans no unattended retry, and drains only after re-pairing
+and accepted-hash acknowledgment.
 `sync_retry_plan_recovers_terminated_send_and_blocks_without_network`
 proves a terminated `sending` operation is recovered before planning and that a
 poor-network state returns a blocked no-op plan without losing queued work.

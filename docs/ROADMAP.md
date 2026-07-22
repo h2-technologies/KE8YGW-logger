@@ -119,8 +119,9 @@ wrapper is not the iOS client. See `V1_RELEASE_PLAN.md`,
      revocation. Deterministic shared sync golden tests
      cover crash recovery, transient retry, duplicate/reordered delivery,
      iOS-style pull replay, partial push accepted-prefix/rejected-tail queue
-     recovery, clock-skewed timestamps, divergent heads, conflict-review
-     resolution, legacy queue migration, restore replay, and LAN revocation.
+     recovery, revoked cloud-auth user-action recovery, clock-skewed
+     timestamps, divergent heads, conflict-review resolution, legacy queue
+     migration, restore replay, and LAN revocation.
    - Status: implemented as a v0.3 foundation with HMAC-SHA256 signed LAN read
      endpoint authorization, GUI LAN auth credential rotation/recovery, desktop
      cloud reconnect auto-drain when auto-push is enabled, iOS FFI background

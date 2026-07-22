@@ -2059,6 +2059,13 @@ impl InMemoryCloudSyncServer {
         }
         Ok(session)
     }
+
+    pub async fn revoke_device(&self, device_id: Uuid) -> Result<(), CloudSyncError> {
+        let mut auth = self.auth.write().await;
+        auth.sessions_by_token
+            .retain(|_, session| session.device_id != device_id);
+        Ok(())
+    }
 }
 
 #[cfg(feature = "surreal-storage")]
@@ -4035,6 +4042,139 @@ mod tests {
         assert_eq!(duplicate_full_chain.ignored_duplicate_count, 2);
         let cloud_pull = client.pull_events(logbook_id, None).await.unwrap();
         assert_eq!(cloud_pull.events.len(), 2);
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn cross_client_golden_revoked_cloud_auth_blocks_queue_until_repaired() {
+        let logbook_id = Uuid::new_v4();
+        let qso_id = Uuid::new_v4();
+        let desktop_device = Uuid::new_v4();
+        let server = cloud_server();
+        let client = paired_client_for_device(
+            server.clone(),
+            logbook_id,
+            desktop_device,
+            "Desktop".to_owned(),
+        )
+        .await;
+        let root =
+            std::env::temp_dir().join(format!("ke8ygw-ham-sync-revoked-auth-{}", Uuid::new_v4()));
+        let queue_path = root.join("offline-mutations.json");
+        let queue = JsonOfflineMutationQueue::new(&queue_path);
+        let local_store = InMemoryLogbookEventStore::new();
+        let now = fixed_time(21_000);
+
+        let created = qso_create_event(
+            logbook_id,
+            qso_id,
+            None,
+            desktop_device,
+            fixed_time(0),
+            "K1AUTH",
+        );
+        local_store
+            .append_verified_remote_event(created.clone())
+            .await
+            .unwrap();
+        local_store.verify_chain(logbook_id).await.unwrap();
+
+        let operation_id = Uuid::new_v4();
+        enqueue_event_for_sync(&queue, &created, OFFLINE_OP_QSO_CREATE, operation_id, now);
+        let local_events = local_store.list_events(logbook_id).await.unwrap();
+        let batch = queue
+            .ready_event_batch(logbook_id, &local_events, now)
+            .unwrap();
+        assert_eq!(batch.operation_ids, vec![operation_id]);
+        assert_eq!(batch.events, vec![created.clone()]);
+
+        queue
+            .mark_sending(operation_id, now + chrono::Duration::seconds(1))
+            .unwrap();
+        server.revoke_device(desktop_device).await.unwrap();
+        let error = client
+            .push_events(logbook_id, batch.events.clone())
+            .await
+            .unwrap_err();
+        assert_eq!(error, CloudSyncError::Unauthenticated);
+
+        let blocked_at = now + chrono::Duration::seconds(2);
+        let blocked = queue
+            .mark_user_action_required(
+                operation_id,
+                "cloud sync auth revoked; re-pair before retry",
+                Some("auth_failed".to_owned()),
+                blocked_at,
+            )
+            .unwrap();
+        assert_eq!(blocked.status, OfflineMutationStatus::UserActionRequired);
+        let blocked_snapshot = queue.load_snapshot(blocked_at).unwrap();
+        assert_eq!(blocked_snapshot.health.user_action_required, 1);
+        assert_eq!(blocked_snapshot.health.ready_to_send, 0);
+        let ready_after_auth_failure = queue
+            .ready_event_batch(logbook_id, &local_events, blocked_at)
+            .unwrap();
+        assert!(ready_after_auth_failure.operation_ids.is_empty());
+        assert!(ready_after_auth_failure.events.is_empty());
+
+        let verifier = paired_client_for_device(
+            server.clone(),
+            logbook_id,
+            Uuid::new_v4(),
+            "Verifier".to_owned(),
+        )
+        .await;
+        let remote_after_auth_failure = verifier.pull_events(logbook_id, None).await.unwrap();
+        assert_eq!(
+            remote_after_auth_failure.events.len(),
+            0,
+            "revoked cloud auth must not append queued events remotely"
+        );
+        assert_eq!(
+            local_store.list_events(logbook_id).await.unwrap(),
+            vec![created.clone()],
+            "auth failure must not rewrite or duplicate local official history"
+        );
+
+        let repaired_client = paired_client_for_device(
+            server.clone(),
+            logbook_id,
+            desktop_device,
+            "Desktop Repaired".to_owned(),
+        )
+        .await;
+        let reviewed_push = repaired_client
+            .push_events(logbook_id, batch.events.clone())
+            .await
+            .unwrap();
+        assert_eq!(reviewed_push.status, ReplicationStatus::Pulled);
+        assert_eq!(reviewed_push.accepted_count, 1);
+        assert_eq!(
+            reviewed_push.server_head_hash,
+            Some(created.event_hash.clone())
+        );
+
+        let accepted_hashes = HashSet::from([created.event_hash.clone()]);
+        assert_eq!(
+            queue
+                .mark_accepted_by_event_hashes(&accepted_hashes, now + chrono::Duration::seconds(3))
+                .unwrap(),
+            1
+        );
+        let drained = queue
+            .load_snapshot(now + chrono::Duration::seconds(3))
+            .unwrap();
+        assert_eq!(drained.health.accepted, 1);
+        assert_eq!(drained.health.user_action_required, 0);
+        assert_eq!(drained.health.ready_to_send, 0);
+
+        let duplicate_after_repair = repaired_client
+            .push_events(logbook_id, batch.events)
+            .await
+            .unwrap();
+        assert_eq!(duplicate_after_repair.accepted_count, 0);
+        assert_eq!(duplicate_after_repair.ignored_duplicate_count, 1);
 
         let _ = std::fs::remove_dir_all(root);
     }
