@@ -2876,6 +2876,11 @@ struct SyncLogbookHeadSummary: Decodable, Equatable {
     var eventCount: Int?
 }
 
+struct SyncLanPeerStateResponse: Decodable, Equatable {
+    var identity: SyncPeerIdentity?
+    var localHead: SyncLogbookHeadSummary?
+}
+
 struct SyncLanEventRangeResponse: Decodable, Equatable {
     var logbookId: String
     var events: [SyncOfficialEvent]
@@ -3023,6 +3028,8 @@ enum SyncLanHTTPTransportError: LocalizedError, Equatable {
     case untrustedPeer
     case revokedTrustedPeer
     case missingLanAuthCredential
+    case missingPeerIdentity
+    case peerIdentityMismatch(expectedDeviceId: String, actualDeviceId: String)
     case invalidPeerPayload
     case invalidHTTPResponse
     case peerRejected(statusCode: Int, message: String)
@@ -3045,6 +3052,13 @@ enum SyncLanHTTPTransportError: LocalizedError, Equatable {
             return "The selected LAN peer has been revoked."
         case .missingLanAuthCredential:
             return "The selected LAN peer is missing its endpoint auth credential."
+        case .missingPeerIdentity:
+            return "The LAN peer did not publish a sync identity."
+        case .peerIdentityMismatch(let expectedDeviceId, let actualDeviceId):
+            return """
+            The LAN peer identity does not match the selected trusted peer. \
+            Expected \(expectedDeviceId), got \(actualDeviceId).
+            """
         case .invalidPeerPayload:
             return "The LAN peer returned an invalid sync payload."
         case .invalidHTTPResponse:
@@ -3062,6 +3076,33 @@ private let syncLanSignatureVersionHeader = "x-ke8ygw-lan-signature-version"
 private let syncLanSignatureHeader = "x-ke8ygw-lan-signature"
 
 struct SyncLanHTTPTransport: SyncLanPullTransporting {
+    func makeStateRequest(peerURL: URL) throws -> URLRequest {
+        guard var components = URLComponents(url: peerURL, resolvingAgainstBaseURL: false),
+              let scheme = components.scheme?.lowercased(),
+              (scheme == "http" || scheme == "https"),
+              components.host != nil,
+              components.query == nil,
+              components.fragment == nil
+        else {
+            throw SyncLanHTTPTransportError.invalidPeerURL
+        }
+        let basePath = components.percentEncodedPath.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        guard basePath.isEmpty else {
+            throw SyncLanHTTPTransportError.invalidPeerURL
+        }
+
+        components.path = "/api/sync/state"
+        guard let url = components.url else {
+            throw SyncLanHTTPTransportError.invalidPeerURL
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.timeoutInterval = 8
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        return request
+    }
+
     func makeHeadRequest(
         peerURL: URL,
         localDeviceId: String,
@@ -3167,6 +3208,29 @@ struct SyncLanHTTPTransport: SyncLanPullTransporting {
         return request
     }
 
+    func validatePeerState(
+        _ state: SyncLanPeerStateResponse,
+        trustedDevice: SyncTrustedPeerDevice
+    ) throws {
+        let expectedDeviceId = try canonicalUUIDString(
+            trustedDevice.deviceId ?? "",
+            error: .untrustedPeer
+        )
+        guard let publishedDeviceId = state.identity?.deviceId else {
+            throw SyncLanHTTPTransportError.missingPeerIdentity
+        }
+        let actualDeviceId = try canonicalUUIDString(
+            publishedDeviceId,
+            error: .invalidPeerPayload
+        )
+        guard expectedDeviceId == actualDeviceId else {
+            throw SyncLanHTTPTransportError.peerIdentityMismatch(
+                expectedDeviceId: expectedDeviceId,
+                actualDeviceId: actualDeviceId
+            )
+        }
+    }
+
     func pull(
         peerURL: URL,
         localIdentity: SyncPeerIdentity,
@@ -3176,6 +3240,16 @@ struct SyncLanHTTPTransport: SyncLanPullTransporting {
         localHeadHash: String?
     ) async throws -> SyncPullResponse {
         let localDeviceId = localIdentity.deviceId
+        _ = try canonicalUUIDString(localDeviceId, error: .invalidLocalIdentity)
+        _ = try canonicalUUIDString(logbookId, error: .invalidLogbookID)
+        guard !authSecret.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw SyncLanHTTPTransportError.missingLanAuthCredential
+        }
+
+        let stateRequest = try makeStateRequest(peerURL: peerURL)
+        let peerState: SyncLanPeerStateResponse = try await fetchJSON(stateRequest)
+        try validatePeerState(peerState, trustedDevice: trustedDevice)
+
         let headRequest = try makeHeadRequest(
             peerURL: peerURL,
             localDeviceId: localDeviceId,

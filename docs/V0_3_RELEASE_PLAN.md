@@ -91,10 +91,11 @@ Last audited: 2026-07-22
   returns the durable local identity, and the bundle declares Local Network
   usage plus local networking for paired-device sync. Pairing codes are returned
   only by the issue command; snapshots and `lan-trust.json` do not store raw
-  pairing codes or LAN auth secrets. The native Swift LAN pull executor can
-  sign protected `get-head` and `events-since` requests for a trusted peer URL
-  with the Keychain-backed auth secret, then pass pulled official envelopes
-  through `sync.remote_events.apply` for Rust verification before append.
+  pairing codes or LAN auth secrets. The native Swift LAN pull executor probes
+  `/api/sync/state` to verify the selected trusted peer identity before it
+  signs protected `get-head` and `events-since` requests with the
+  Keychain-backed auth secret, then passes pulled official envelopes through
+  `sync.remote_events.apply` for Rust verification before append.
 - Automatic IPv4/IPv6 multicast discovery worker that probes reachable peer
   identity before recording peers.
 - Older trust records without an `auth_credential_id` remain readable but must

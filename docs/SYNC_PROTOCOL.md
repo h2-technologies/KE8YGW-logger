@@ -320,6 +320,9 @@ reachability and reduce spoofing; official event writes remain local and
 trust-gated; protected LAN read endpoints require reciprocal trust state,
 fresh nonces, and HMAC-SHA256 request proof. The current LAN HTTP transport is
 still not encrypted and must not be exposed outside trusted local networks.
+Native iOS manual LAN pull also probes `/api/sync/state` and rejects a peer
+whose published device ID does not match the selected trusted peer before
+sending signed `get-head` or `events-since` reads.
 Production iOS reciprocal pairing/address-discovery UX, stronger LAN
 key-exchange hardening, physical-device LAN validation, and physical iOS Local
 Network permission validation remain before unattended LAN sync is considered

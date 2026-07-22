@@ -876,9 +876,10 @@ Runtime events include:
 Security limitations for MVP: peers are untrusted until they pass the durable
 LAN trust store, no destructive commands are accepted, automatic replication is
 disabled, protected LAN reads require HMAC-SHA256 request proof after pairing,
-and production iOS reciprocal LAN pairing/address-discovery UX, stronger LAN
-key-exchange hardening, plus physical-device LAN/iOS Local Network validation
-remain TODOs before unattended LAN sync.
+and native iOS manual LAN pull verifies the peer's published device ID before
+sending signed reads. Production iOS reciprocal LAN pairing/address-discovery
+UX, stronger LAN key-exchange hardening, plus physical-device LAN/iOS Local
+Network validation remain TODOs before unattended LAN sync.
 
 ## Safe LAN Event Replication
 
@@ -1065,7 +1066,8 @@ discovery running and the peer being discovered must bind its GUI API to a
 LAN-reachable address such as
 `0.0.0.0:<port>` or a specific private interface; loopback-only peers can still
 use manual loopback URLs. Mutating LAN pull also requires the explicit
-`sync.lan.pull` permission, durable peer trust, and signed remote read requests.
+`sync.lan.pull` permission, durable peer trust, a matching peer identity probe,
+and signed remote read requests.
 Production iOS reciprocal LAN pairing/address-discovery UX, stronger LAN
 key-exchange hardening, and physical iOS Local Network permission validation
 remain next sync tasks.

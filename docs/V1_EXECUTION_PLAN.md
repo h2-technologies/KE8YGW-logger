@@ -65,11 +65,12 @@ outside issue #2.
      `/api/v1/sync/push` request bodies, accepted-prefix/rejected-tail retry
      result recording, Rust-owned pulled-event apply through
      `sync.remote_events.apply`, self-hosted/logbook-scoped and hosted pull
-     request construction, native hosted/self-hosted and signed LAN pull
-     fetch -> Rust apply coordination, request retry plans with native network monitor state, display saved conflict-review
+     request construction, native hosted/self-hosted and peer-identity-gated
+     signed LAN pull fetch -> Rust apply coordination, request retry plans with native network monitor state, display saved conflict-review
      records with recommended actions and structured conflict messages, expose
      Rust-owned LAN trust snapshots, local one-time code issue/acceptance,
-     direct peer trust, Keychain-backed LAN auth rotation, and revocation, and surface
+     direct peer trust, Keychain-backed LAN auth rotation, revocation, and
+     trusted-peer identity probing before signed LAN reads, and surface
      no-network/user-action retry and pull outcomes without owning event
      creation or domain rules.
    - Remaining: production iOS reciprocal LAN pairing/address-discovery UX, stronger LAN

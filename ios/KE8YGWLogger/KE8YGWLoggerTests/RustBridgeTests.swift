@@ -480,6 +480,112 @@ final class RustBridgeTests: XCTestCase {
         )
     }
 
+    func testSyncLanHTTPTransportBuildsUnsignedStateRequest() throws {
+        let request = try SyncLanHTTPTransport().makeStateRequest(
+            peerURL: try XCTUnwrap(URL(string: "http://192.168.1.20:17673"))
+        )
+
+        XCTAssertEqual(request.httpMethod, "GET")
+        XCTAssertEqual(request.url?.absoluteString, "http://192.168.1.20:17673/api/sync/state")
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "application/json")
+        XCTAssertNil(request.value(forHTTPHeaderField: "x-ke8ygw-lan-device-id"))
+        XCTAssertNil(request.value(forHTTPHeaderField: "x-ke8ygw-lan-replay-nonce"))
+        XCTAssertNil(request.value(forHTTPHeaderField: "x-ke8ygw-lan-signature-version"))
+        XCTAssertNil(request.value(forHTTPHeaderField: "x-ke8ygw-lan-signature"))
+    }
+
+    func testSyncLanHTTPTransportAcceptsMatchingPeerIdentity() throws {
+        let peerDeviceID = "00000000-0000-4000-8000-0000000000f3"
+        let trustedDevice = SyncTrustedPeerDevice(
+            deviceId: peerDeviceID.uppercased(),
+            displayName: "Desktop LAN Peer",
+            logbookIds: nil,
+            trustedAt: "2026-07-21T12:00:00Z",
+            revokedAt: nil,
+            pairingTokenId: nil,
+            publicKeyFingerprint: nil,
+            authCredentialId: "credential-id",
+            authRotatedAt: nil,
+            lastSeenAt: nil
+        )
+        let state = SyncLanPeerStateResponse(
+            identity: SyncPeerIdentity(
+                deviceId: peerDeviceID,
+                sessionId: "00000000-0000-4000-8000-0000000000aa",
+                userHash: nil,
+                displayName: "Desktop LAN Peer",
+                capabilities: ["discovery.v1", "handshake.v1"],
+                localApiPort: 17673
+            ),
+            localHead: nil
+        )
+
+        XCTAssertNoThrow(
+            try SyncLanHTTPTransport().validatePeerState(state, trustedDevice: trustedDevice)
+        )
+    }
+
+    func testSyncLanHTTPTransportRejectsMismatchedPeerIdentity() throws {
+        let expectedDeviceID = "00000000-0000-4000-8000-0000000000f3"
+        let actualDeviceID = "00000000-0000-4000-8000-0000000000f4"
+        let trustedDevice = SyncTrustedPeerDevice(
+            deviceId: expectedDeviceID,
+            displayName: "Desktop LAN Peer",
+            logbookIds: nil,
+            trustedAt: "2026-07-21T12:00:00Z",
+            revokedAt: nil,
+            pairingTokenId: nil,
+            publicKeyFingerprint: nil,
+            authCredentialId: "credential-id",
+            authRotatedAt: nil,
+            lastSeenAt: nil
+        )
+        let state = SyncLanPeerStateResponse(
+            identity: SyncPeerIdentity(
+                deviceId: actualDeviceID,
+                sessionId: "00000000-0000-4000-8000-0000000000aa",
+                userHash: nil,
+                displayName: "Wrong LAN Peer",
+                capabilities: ["discovery.v1", "handshake.v1"],
+                localApiPort: 17673
+            ),
+            localHead: nil
+        )
+
+        XCTAssertThrowsError(
+            try SyncLanHTTPTransport().validatePeerState(state, trustedDevice: trustedDevice)
+        ) { error in
+            XCTAssertEqual(
+                error as? SyncLanHTTPTransportError,
+                .peerIdentityMismatch(expectedDeviceId: expectedDeviceID, actualDeviceId: actualDeviceID)
+            )
+        }
+    }
+
+    func testSyncLanHTTPTransportRejectsMissingPeerIdentity() throws {
+        let trustedDevice = SyncTrustedPeerDevice(
+            deviceId: "00000000-0000-4000-8000-0000000000f3",
+            displayName: "Desktop LAN Peer",
+            logbookIds: nil,
+            trustedAt: "2026-07-21T12:00:00Z",
+            revokedAt: nil,
+            pairingTokenId: nil,
+            publicKeyFingerprint: nil,
+            authCredentialId: "credential-id",
+            authRotatedAt: nil,
+            lastSeenAt: nil
+        )
+
+        XCTAssertThrowsError(
+            try SyncLanHTTPTransport().validatePeerState(
+                SyncLanPeerStateResponse(identity: nil, localHead: nil),
+                trustedDevice: trustedDevice
+            )
+        ) { error in
+            XCTAssertEqual(error as? SyncLanHTTPTransportError, .missingPeerIdentity)
+        }
+    }
+
     func testSyncHTTPTransportRejectsEmptyEventBatches() throws {
         XCTAssertThrowsError(
             try SyncHTTPTransport().makePushRequest(

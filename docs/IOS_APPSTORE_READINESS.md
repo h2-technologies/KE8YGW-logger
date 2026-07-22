@@ -22,8 +22,8 @@ Rust-planned official event envelopes, self-hosted/logbook-scoped push
 execution coordination, hosted `/api/v1/sync/push` request construction,
 accepted-prefix/rejected-tail retry result recording, Rust-owned pulled-event
 apply through `sync.remote_events.apply`, self-hosted/logbook-scoped and hosted
-pull request construction, native hosted/self-hosted and signed LAN pull
-fetch -> Rust apply coordination, saved conflict-review records, selected
+pull request construction, native hosted/self-hosted and peer-identity-gated
+signed LAN pull fetch -> Rust apply coordination, saved conflict-review records, selected
 recovery paths, and structured conflict messages, and LAN trust
 snapshot/issue/accept/trust/rotate/revoke controls that keep LAN auth secrets
 in Keychain and store only credential IDs in Rust support state.
@@ -114,8 +114,9 @@ network, or background modes speculatively.
   trust/revoke peers, and rotate LAN auth credentials without storing raw
   pairing codes or LAN auth secrets in Rust support state, logs, diagnostics,
   or SwiftData.
-- The Sync workspace can pull from a trusted LAN peer URL using signed protected
-  LAN reads and Rust-owned event-chain verification before append.
+- The Sync workspace can pull from a trusted LAN peer URL by first checking
+  the peer's published sync identity, then using signed protected LAN reads and
+  Rust-owned event-chain verification before append.
 - The app declares the Local Network permission copy used for paired-device
   LAN sync and allows local networking for those connections.
 - ADIF import/export works through native document flows.
