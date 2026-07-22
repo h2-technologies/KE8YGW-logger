@@ -151,7 +151,9 @@ Last audited: 2026-07-22
 ## Still Incomplete For v1
 
 - Apple multicast entitlement/provisioning and full release-device iOS LAN
-  discovery/pairing qualification.
+  discovery/pairing qualification. See
+  [iOS Multicast Provisioning](IOS_MULTICAST_PROVISIONING.md) for the
+  maintainer-controlled Apple entitlement gate and validation sequence.
 - Physical-device LAN and iOS Local Network permission prompt validation.
 - Release-device cross-client branch review and reconciliation workflow beyond
   the current deterministic shared golden tests, guided browser review surface,

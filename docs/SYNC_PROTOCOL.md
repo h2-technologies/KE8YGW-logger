@@ -367,6 +367,8 @@ the discovery packet, and lets the operator copy that discovered peer into the
 existing pairing/pull controls. Apple multicast entitlement/provisioning,
 physical-device LAN validation, and physical iOS Local Network permission
 validation remain before unattended LAN sync is considered complete.
+The Apple-controlled provisioning steps for enabling the entitlement are tracked
+in [iOS Multicast Provisioning](IOS_MULTICAST_PROVISIONING.md).
 
 ## Cloud Relay and Self-Hosted Sync
 

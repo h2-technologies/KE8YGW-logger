@@ -52,6 +52,9 @@ physical-device validation, release-device BGTask execution, real
 hosted/self-hosted native sync endpoint qualification, Apple multicast
 entitlement/provisioning, and full v1 offline/sync/provider qualification
 remain incomplete.
+See [iOS Multicast Provisioning](IOS_MULTICAST_PROVISIONING.md) for the
+Apple-controlled entitlement approval/provisioning steps and the failed
+App Store Connect archive evidence from the PR #113 entitlement wiring attempt.
 
 ## Bundle and Signing
 

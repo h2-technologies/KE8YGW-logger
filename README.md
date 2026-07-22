@@ -881,8 +881,9 @@ and native iOS manual LAN pull verifies the peer's published device ID before
 sending signed reads. Native iOS can complete reciprocal pairing against an
 operator-entered peer URL and scan LAN discovery packets into probed peer URLs,
 while Apple multicast entitlement/provisioning plus physical-device LAN/iOS
-Local Network validation remain TODOs
-before unattended LAN sync.
+Local Network validation remain a release gate documented in
+[iOS Multicast Provisioning](docs/IOS_MULTICAST_PROVISIONING.md) before
+unattended LAN sync.
 
 ## Safe LAN Event Replication
 
@@ -1097,8 +1098,8 @@ and signed remote read requests.
 Native iOS can scan the same discovery packets, probe `/api/sync/state`, and
 fill the existing peer URL fields only when the probed device/session identity
 matches the packet. Apple multicast entitlement/provisioning and physical iOS
-Local Network permission validation
-remain next sync tasks.
+Local Network permission validation remain release gates documented in
+[iOS Multicast Provisioning](docs/IOS_MULTICAST_PROVISIONING.md).
 
 ## Cloud Relay And Self-Hosted Sync
 

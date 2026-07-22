@@ -197,7 +197,9 @@ operations, and release qualification.
   sync identity store, GUI auth-rotation path, and native iOS LAN trust
   snapshot/issue/accept/trust/rotate/revoke, reciprocal peer-URL pairing,
   multicast discovery peer selection, plus peer-identity-gated signed LAN pull
-  bridge and Sync workspace controls.
+  bridge and Sync workspace controls. The maintainer-controlled Apple approval
+  and provisioning sequence is tracked in
+  `docs/IOS_MULTICAST_PROVISIONING.md`.
 - Release-device cross-device branch review and reconciliation workflow
   qualification beyond the current deterministic shared golden tests, guided
   browser review surface, and desktop/iOS review stores, plus release-device

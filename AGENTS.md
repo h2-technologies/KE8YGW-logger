@@ -52,7 +52,9 @@ Planned but not implemented end-to-end:
   endpoint authorization, browser pairing/auth-credential rotation/recovery
   panel, and native iOS LAN trust snapshot/issue/accept/trust/rotate/revoke
   plus reciprocal peer-URL pairing, multicast discovery peer selection, and
-  peer-identity-gated signed LAN pull bridge.
+  peer-identity-gated signed LAN pull bridge. The maintainer-controlled Apple
+  provisioning sequence is tracked in
+  [iOS Multicast Provisioning](docs/IOS_MULTICAST_PROVISIONING.md).
 - Conflict resolution UI and automatic merge policy.
 - Full production provider coverage for LoTW/TQSL, SOTAWatch live access, NOAA/Open-Meteo, FCC ULS, RBN, and other placeholder providers.
 - Swift projection cache and production App Store packaging.
@@ -806,7 +808,8 @@ This section is a verified snapshot of the repository as inspected on July 22, 2
   - The tagged release workflow builds release `ham-gui` archives and adds GitHub artifact attestations for future release archives and checksums before publishing assets.
 - Current release blockers:
   - Production provider completeness and validation.
-  - iOS multicast entitlement/provisioning and physical-device validation.
+  - iOS multicast entitlement/provisioning and physical-device validation;
+    see [iOS Multicast Provisioning](docs/IOS_MULTICAST_PROVISIONING.md).
   - Desktop packaging hardening outside local Windows validation.
   - Permission-scope cleanup.
   - Browser-level GUI coverage.
