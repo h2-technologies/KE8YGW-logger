@@ -62,6 +62,9 @@ Last audited: 2026-07-22
   clock-skewed event timestamps ordered by hashes, divergent heads, concurrent
   correction and tombstone/restore review, v0.2 legacy queue migration, and LAN
   revocation.
+- Self-hosted sync-server route coverage for pairing, scoped logbook listing,
+  durable canonical-event push, duplicate replay, missing-event pull, invalid
+  tokens, and expired sync-token sessions.
 - Structured conflict reports for divergent previews, dependency-blocked queued
   mutations, unsupported remote schema versions, concurrent QSO corrections, and
   remote QSO tombstone/restore events that overlap local pending mutations.
