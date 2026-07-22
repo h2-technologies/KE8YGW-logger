@@ -244,6 +244,9 @@ the path.
 - `HAM_SYNC_PUBLIC_URL`: public sync service URL returned to clients.
 - `HAM_SYNC_SERVICE_MODE`: `self_hosted` or `hosted`.
 - `HAM_SYNC_PAIRING_CODE`: development pairing code.
+- `HAM_SYNC_SESSION_TTL_SECONDS`: sync-token session lifetime for new paired
+  devices, default `2592000` seconds. Existing legacy session records without
+  `expires_at` remain readable for compatibility.
 - `HAM_SYNC_SURREAL_PATH`: embedded local SurrealDB path. Stores sync sessions,
   known devices, revocation state, logbook access, pairing token records, sync
   heads, sync event references, report metadata, provider settings without

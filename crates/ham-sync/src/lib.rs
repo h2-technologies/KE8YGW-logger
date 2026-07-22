@@ -43,6 +43,7 @@ use uuid::Uuid;
 
 pub const PROTOCOL_NAME: &str = "ke8ygw-logger-sync";
 pub const PROTOCOL_VERSION: u16 = 1;
+pub const DEFAULT_CLOUD_SYNC_SESSION_TTL_SECONDS: i64 = 2_592_000;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SyncConfig {
@@ -846,6 +847,8 @@ pub struct CloudSession {
     pub sync_token: String,
     pub authorized_logbooks: Vec<Uuid>,
     pub issued_at: DateTime<Utc>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -975,6 +978,8 @@ pub struct CloudServerConfig {
     pub mode: CloudServiceMode,
     pub public_url: String,
     pub pairing_code: String,
+    /// `None` is accepted for legacy/local compatibility; production configs should use a bounded TTL.
+    pub sync_session_ttl_seconds: Option<i64>,
 }
 
 impl Default for CloudServerConfig {
@@ -983,8 +988,22 @@ impl Default for CloudServerConfig {
             mode: CloudServiceMode::SelfHosted,
             public_url: "http://127.0.0.1:9740".to_owned(),
             pairing_code: "local-dev-pairing-code".to_owned(),
+            sync_session_ttl_seconds: Some(DEFAULT_CLOUD_SYNC_SESSION_TTL_SECONDS),
         }
     }
+}
+
+fn cloud_session_expiry(
+    issued_at: DateTime<Utc>,
+    ttl_seconds: Option<i64>,
+) -> Option<DateTime<Utc>> {
+    ttl_seconds.and_then(|seconds| issued_at.checked_add_signed(chrono::Duration::seconds(seconds)))
+}
+
+fn cloud_session_is_expired(session: &CloudSession, now: DateTime<Utc>) -> bool {
+    session
+        .expires_at
+        .is_some_and(|expires_at| expires_at <= now)
 }
 
 #[derive(Debug, Default)]
@@ -1282,6 +1301,9 @@ impl SurrealCloudMetadataStore {
             else {
                 return Err(CloudSyncError::Unauthenticated);
             };
+            if cloud_session_is_expired(&session, Utc::now()) {
+                return Err(CloudSyncError::Unauthenticated);
+            }
             let devices = select_cloud_payloads::<CloudSession>(&client, "sync_devices").await?;
             let Some(device) = devices
                 .into_iter()
@@ -1738,6 +1760,7 @@ impl InMemoryCloudSyncServer {
         }
 
         let token = format!("sync-{}-{}", request.account_id, Uuid::new_v4());
+        let issued_at = Utc::now();
         let session = CloudSession {
             account_id: request.account_id,
             user_id: request.user_id,
@@ -1745,7 +1768,8 @@ impl InMemoryCloudSyncServer {
             device_name: request.device_name,
             sync_token: token.clone(),
             authorized_logbooks: request.requested_logbooks,
-            issued_at: Utc::now(),
+            issued_at,
+            expires_at: cloud_session_expiry(issued_at, self.config.sync_session_ttl_seconds),
         };
         let mut auth = self.auth.write().await;
         auth.account_logbooks
@@ -2039,13 +2063,18 @@ impl InMemoryCloudSyncServer {
     }
 
     async fn authorize(&self, auth: &CloudAuth) -> Result<CloudSession, CloudSyncError> {
-        self.auth
+        let session = self
+            .auth
             .read()
             .await
             .sessions_by_token
             .get(&auth.sync_token)
             .cloned()
-            .ok_or(CloudSyncError::Unauthenticated)
+            .ok_or(CloudSyncError::Unauthenticated)?;
+        if cloud_session_is_expired(&session, Utc::now()) {
+            return Err(CloudSyncError::Unauthenticated);
+        }
+        Ok(session)
     }
 
     async fn authorize_logbook(
@@ -2064,6 +2093,20 @@ impl InMemoryCloudSyncServer {
         let mut auth = self.auth.write().await;
         auth.sessions_by_token
             .retain(|_, session| session.device_id != device_id);
+        Ok(())
+    }
+
+    #[cfg(test)]
+    async fn expire_device_session(&self, device_id: Uuid) -> Result<(), CloudSyncError> {
+        let mut auth = self.auth.write().await;
+        let expires_at = Utc::now() - chrono::Duration::seconds(1);
+        for session in auth
+            .sessions_by_token
+            .values_mut()
+            .filter(|session| session.device_id == device_id)
+        {
+            session.expires_at = Some(expires_at);
+        }
         Ok(())
     }
 }
@@ -2110,6 +2153,7 @@ impl DurableCloudSyncServer {
         }
 
         let token = format!("sync-{}-{}", request.account_id, Uuid::new_v4());
+        let issued_at = Utc::now();
         let session = CloudSession {
             account_id: request.account_id,
             user_id: request.user_id,
@@ -2117,7 +2161,8 @@ impl DurableCloudSyncServer {
             device_name: request.device_name,
             sync_token: token,
             authorized_logbooks: request.requested_logbooks,
-            issued_at: Utc::now(),
+            issued_at,
+            expires_at: cloud_session_expiry(issued_at, self.config.sync_session_ttl_seconds),
         };
         if let Err(error) = self.metadata.save_session(&session) {
             return PairDeviceResponse {
@@ -2882,8 +2927,19 @@ mod tests {
         device_id: Uuid,
         device_name: String,
     ) -> CloudSyncClient {
+        paired_client_and_session_for_device(server, logbook_id, device_id, device_name)
+            .await
+            .0
+    }
+
+    async fn paired_client_and_session_for_device(
+        server: InMemoryCloudSyncServer,
+        logbook_id: Uuid,
+        device_id: Uuid,
+        device_name: String,
+    ) -> (CloudSyncClient, CloudSession) {
         let mut client = CloudSyncClient::in_memory(server);
-        client
+        let session = client
             .pair(PairDeviceRequest {
                 pairing_code: "local-dev-pairing-code".to_owned(),
                 account_id: "acct-1".to_owned(),
@@ -2895,7 +2951,7 @@ mod tests {
             })
             .await
             .unwrap();
-        client
+        (client, session)
     }
 
     fn enqueue_event_for_sync(
@@ -3197,6 +3253,26 @@ mod tests {
     }
 
     #[test]
+    fn cloud_session_deserializes_legacy_without_expiry() {
+        let session: CloudSession = serde_json::from_value(json!({
+            "account_id": "account",
+            "user_id": "user",
+            "device_id": Uuid::new_v4(),
+            "device_name": "Legacy Device",
+            "sync_token": "sync-token",
+            "authorized_logbooks": [Uuid::new_v4()],
+            "issued_at": fixed_time(0)
+        }))
+        .unwrap();
+
+        assert_eq!(session.expires_at, None);
+        assert!(
+            !cloud_session_is_expired(&session, fixed_time(1)),
+            "legacy sessions without expiry remain readable for compatibility"
+        );
+    }
+
+    #[test]
     fn preview_pull_with_no_missing_events_is_in_sync() {
         let logbook_id = Uuid::new_v4();
         let remote = remote_chain(logbook_id, 2);
@@ -3453,6 +3529,36 @@ mod tests {
             .await;
 
         assert!(!rejected.accepted);
+    }
+
+    #[tokio::test]
+    async fn cloud_pairing_sets_expiring_sessions_and_rejects_expired_auth() {
+        let logbook_id = Uuid::new_v4();
+        let server = InMemoryCloudSyncServer::new(CloudServerConfig {
+            sync_session_ttl_seconds: Some(0),
+            ..CloudServerConfig::default()
+        });
+        let response = server
+            .pair_device(PairDeviceRequest {
+                pairing_code: "local-dev-pairing-code".to_owned(),
+                account_id: "acct".to_owned(),
+                user_id: "user".to_owned(),
+                device_id: Uuid::new_v4(),
+                device_name: "Expired Device".to_owned(),
+                requested_logbooks: vec![logbook_id],
+                role_hints: Vec::new(),
+            })
+            .await;
+        let session = response.session.expect("pairing should issue a session");
+        assert!(session.expires_at.is_some());
+
+        let error = server
+            .list_logbooks(&CloudAuth {
+                sync_token: session.sync_token,
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(error, CloudSyncError::Unauthenticated);
     }
 
     #[tokio::test]
@@ -4144,6 +4250,147 @@ mod tests {
             "Desktop Repaired".to_owned(),
         )
         .await;
+        let reviewed_push = repaired_client
+            .push_events(logbook_id, batch.events.clone())
+            .await
+            .unwrap();
+        assert_eq!(reviewed_push.status, ReplicationStatus::Pulled);
+        assert_eq!(reviewed_push.accepted_count, 1);
+        assert_eq!(
+            reviewed_push.server_head_hash,
+            Some(created.event_hash.clone())
+        );
+
+        let accepted_hashes = HashSet::from([created.event_hash.clone()]);
+        assert_eq!(
+            queue
+                .mark_accepted_by_event_hashes(&accepted_hashes, now + chrono::Duration::seconds(3))
+                .unwrap(),
+            1
+        );
+        let drained = queue
+            .load_snapshot(now + chrono::Duration::seconds(3))
+            .unwrap();
+        assert_eq!(drained.health.accepted, 1);
+        assert_eq!(drained.health.user_action_required, 0);
+        assert_eq!(drained.health.ready_to_send, 0);
+
+        let duplicate_after_repair = repaired_client
+            .push_events(logbook_id, batch.events)
+            .await
+            .unwrap();
+        assert_eq!(duplicate_after_repair.accepted_count, 0);
+        assert_eq!(duplicate_after_repair.ignored_duplicate_count, 1);
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn cross_client_golden_expired_cloud_auth_blocks_queue_until_repaired() {
+        let logbook_id = Uuid::new_v4();
+        let qso_id = Uuid::new_v4();
+        let desktop_device = Uuid::new_v4();
+        let server = cloud_server();
+        let (client, session) = paired_client_and_session_for_device(
+            server.clone(),
+            logbook_id,
+            desktop_device,
+            "Desktop".to_owned(),
+        )
+        .await;
+        assert!(
+            session.expires_at.is_some(),
+            "new cloud pairings must carry a bounded session expiry"
+        );
+        let root =
+            std::env::temp_dir().join(format!("ke8ygw-ham-sync-expired-auth-{}", Uuid::new_v4()));
+        let queue_path = root.join("offline-mutations.json");
+        let queue = JsonOfflineMutationQueue::new(&queue_path);
+        let local_store = InMemoryLogbookEventStore::new();
+        let now = fixed_time(22_000);
+
+        let created = qso_create_event(
+            logbook_id,
+            qso_id,
+            None,
+            desktop_device,
+            fixed_time(0),
+            "K1EXPIRED",
+        );
+        local_store
+            .append_verified_remote_event(created.clone())
+            .await
+            .unwrap();
+        local_store.verify_chain(logbook_id).await.unwrap();
+
+        let operation_id = Uuid::new_v4();
+        enqueue_event_for_sync(&queue, &created, OFFLINE_OP_QSO_CREATE, operation_id, now);
+        let local_events = local_store.list_events(logbook_id).await.unwrap();
+        let batch = queue
+            .ready_event_batch(logbook_id, &local_events, now)
+            .unwrap();
+        assert_eq!(batch.operation_ids, vec![operation_id]);
+        assert_eq!(batch.events, vec![created.clone()]);
+
+        queue
+            .mark_sending(operation_id, now + chrono::Duration::seconds(1))
+            .unwrap();
+        server.expire_device_session(desktop_device).await.unwrap();
+        let error = client
+            .push_events(logbook_id, batch.events.clone())
+            .await
+            .unwrap_err();
+        assert_eq!(error, CloudSyncError::Unauthenticated);
+
+        let blocked_at = now + chrono::Duration::seconds(2);
+        let blocked = queue
+            .mark_user_action_required(
+                operation_id,
+                "cloud sync auth expired; re-pair before retry",
+                Some("auth_expired".to_owned()),
+                blocked_at,
+            )
+            .unwrap();
+        assert_eq!(blocked.status, OfflineMutationStatus::UserActionRequired);
+        let blocked_snapshot = queue.load_snapshot(blocked_at).unwrap();
+        assert_eq!(blocked_snapshot.health.user_action_required, 1);
+        assert_eq!(blocked_snapshot.health.ready_to_send, 0);
+        let ready_after_auth_failure = queue
+            .ready_event_batch(logbook_id, &local_events, blocked_at)
+            .unwrap();
+        assert!(ready_after_auth_failure.operation_ids.is_empty());
+        assert!(ready_after_auth_failure.events.is_empty());
+
+        let verifier = paired_client_for_device(
+            server.clone(),
+            logbook_id,
+            Uuid::new_v4(),
+            "Verifier".to_owned(),
+        )
+        .await;
+        let remote_after_auth_failure = verifier.pull_events(logbook_id, None).await.unwrap();
+        assert_eq!(
+            remote_after_auth_failure.events.len(),
+            0,
+            "expired cloud auth must not append queued events remotely"
+        );
+        assert_eq!(
+            local_store.list_events(logbook_id).await.unwrap(),
+            vec![created.clone()],
+            "expired auth failure must not rewrite or duplicate local official history"
+        );
+
+        let (repaired_client, repaired_session) = paired_client_and_session_for_device(
+            server.clone(),
+            logbook_id,
+            desktop_device,
+            "Desktop Repaired".to_owned(),
+        )
+        .await;
+        assert!(
+            repaired_session.expires_at.is_some(),
+            "re-pairing must issue a replacement bounded session"
+        );
         let reviewed_push = repaired_client
             .push_events(logbook_id, batch.events.clone())
             .await

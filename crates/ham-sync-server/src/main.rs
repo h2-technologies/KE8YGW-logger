@@ -12,6 +12,7 @@ use ham_sync::{
     CloudAuth, CloudHealthResponse, CloudPreviewPullRequest, CloudPullEventsRequest,
     CloudPushEventsRequest, CloudServerConfig, CloudServiceMode, DiagnosticReportUploadRequest,
     DurableCloudSyncPaths, DurableCloudSyncServer, PairDeviceRequest,
+    DEFAULT_CLOUD_SYNC_SESSION_TTL_SECONDS,
 };
 use serde::Serialize;
 use uuid::Uuid;
@@ -21,6 +22,16 @@ fn main() {
     let public_url = env::var("HAM_SYNC_PUBLIC_URL").unwrap_or_else(|_| format!("http://{addr}"));
     let pairing_code =
         env::var("HAM_SYNC_PAIRING_CODE").unwrap_or_else(|_| "local-dev-pairing-code".to_owned());
+    let sync_session_ttl_seconds = match env::var("HAM_SYNC_SESSION_TTL_SECONDS") {
+        Ok(value) => match value.parse::<i64>() {
+            Ok(seconds) if seconds > 0 => Some(seconds),
+            _ => {
+                eprintln!("HAM_SYNC_SESSION_TTL_SECONDS must be a positive integer");
+                process::exit(1);
+            }
+        },
+        Err(_) => Some(DEFAULT_CLOUD_SYNC_SESSION_TTL_SECONDS),
+    };
     let mode = match env::var("HAM_SYNC_SERVICE_MODE")
         .unwrap_or_else(|_| "self_hosted".to_owned())
         .as_str()
@@ -35,6 +46,7 @@ fn main() {
             mode,
             public_url,
             pairing_code,
+            sync_session_ttl_seconds,
         },
         paths.clone(),
     ) {

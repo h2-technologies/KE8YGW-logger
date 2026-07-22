@@ -186,6 +186,10 @@ can complete the reviewed tail by accepted event hash.
 queued push whose cloud auth is revoked stops as `user_action_required`, appends
 nothing remotely, plans no unattended retry, and drains only after re-pairing
 and accepted-hash acknowledgment.
+`cross_client_golden_expired_cloud_auth_blocks_queue_until_repaired` proves the
+same queue behavior for a bounded cloud session whose token has expired; the
+remote remains unchanged until the device re-pairs and accepted hashes drain the
+queue.
 `sync_retry_plan_recovers_terminated_send_and_blocks_without_network`
 proves a terminated `sending` operation is recovered before planning and that a
 poor-network state returns a blocked no-op plan without losing queued work.
@@ -347,7 +351,12 @@ validation remain before unattended LAN sync is considered complete.
 
 ## Cloud Relay and Self-Hosted Sync
 
-Cloud sync reuses the same event envelopes and verification path. MVP auth uses pairing-code/token sessions.
+Cloud sync reuses the same event envelopes and verification path. MVP auth uses
+pairing-code/token sessions scoped to account, user, device, explicit logbook
+IDs, and a bounded `expires_at` value. New self-hosted sessions default to a
+30-day TTL through `HAM_SYNC_SESSION_TTL_SECONDS`; legacy stored sessions that
+lack `expires_at` still deserialize for compatibility, but new bounded sessions
+are rejected after expiry before any logbook read or write.
 
 Current REST surface:
 

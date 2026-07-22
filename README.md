@@ -943,9 +943,9 @@ reports round-trip through JSON, persist in desktop and iOS review stores,
 reject unsafe pull-after-review decisions, mark queued work as user-action
 required, refuse to append a divergent remote branch, and handle a partial push
 by accepting a valid prefix, blocking the rejected tail, avoiding duplicates,
-and completing the reviewed tail by accepted event hash. They also prove a
-revoked cloud-auth push appends nothing remotely, stops queued work as
-user-action-required, plans no unattended retry, and resumes only after
+and completing the reviewed tail by accepted event hash. They also prove
+revoked and expired cloud-auth pushes append nothing remotely, stop queued work
+as user-action-required, plan no unattended retry, and resume only after
 re-pairing plus accepted-hash acknowledgment. LAN auth credential
 rotation/recovery is available through the GUI trust endpoint. Release-device
 cross-client branch review workflow qualification, signed events, Apple
@@ -1100,11 +1100,14 @@ tests, and a durable server backend used by the self-hosted binary. Hosted and
 self-hosted deployments use the same API semantics.
 
 MVP auth uses pairing-code/token sessions. A paired device receives a sync token
-scoped to an account, user, device, and explicit logbook IDs. The server rejects
-unauthenticated requests, unauthorized logbooks, invalid event hashes,
-unsupported schema versions, divergent chains, and duplicate event IDs with
-different content. The server may track relay metadata separately, but it never
-rewrites official event metadata that participates in the event hash.
+scoped to an account, user, device, explicit logbook IDs, and a bounded
+`expires_at` value. New self-hosted sessions default to a 30-day TTL; legacy
+stored sessions without `expires_at` still deserialize for compatibility. The
+server rejects unauthenticated requests, expired tokens, unauthorized logbooks,
+invalid event hashes, unsupported schema versions, divergent chains, and
+duplicate event IDs with different content. The server may track relay metadata
+separately, but it never rewrites official event metadata that participates in
+the event hash.
 
 Cloud API surface:
 
@@ -1172,6 +1175,7 @@ HAM_SYNC_SERVER_BIND=127.0.0.1:9740
 HAM_SYNC_PUBLIC_URL=http://127.0.0.1:9740
 HAM_SYNC_SERVICE_MODE=self_hosted
 HAM_SYNC_PAIRING_CODE=local-dev-pairing-code
+HAM_SYNC_SESSION_TTL_SECONDS=2592000
 HAM_SYNC_SURREAL_PATH=<platform-data-dir>/sync-server/surrealdb
 HAM_SYNC_EVENT_LOG=<platform-data-dir>/sync-server/official-events.jsonl
 HAM_SYNC_REPORT_DIR=<platform-data-dir>/sync-server/reports

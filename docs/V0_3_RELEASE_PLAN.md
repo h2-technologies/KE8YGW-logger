@@ -37,6 +37,10 @@ Last audited: 2026-07-22
 - Shared sync golden coverage proves a revoked cloud-auth push appends nothing
   remotely, stops queued work as `user_action_required`, plans no unattended
   retry, and resumes only after re-pairing plus accepted-hash acknowledgment.
+- Shared sync golden coverage proves bounded cloud sync sessions carry
+  `expires_at`, expire safely, append nothing remotely after expiry, stop queued
+  work as `user_action_required`, and resume only after re-pairing plus
+  accepted-hash acknowledgment.
 - Shared pull application accepts verified missing-tail responses that directly
   follow the actual local head as well as full remote chains, and iOS exposes
   `sync.remote_events.apply` so native transports can apply pulled official
@@ -54,9 +58,10 @@ Last audited: 2026-07-22
 - Deterministic shared sync golden scenarios for desktop-style crash recovery,
   transient network retry, duplicate replay, reordered delivery rejection,
   iOS-style pull/projection replay, partial push accepted-prefix/rejected-tail
-  queue recovery, revoked cloud-auth user-action recovery, clock-skewed event
-  timestamps ordered by hashes, divergent heads, concurrent correction and
-  tombstone/restore review, v0.2 legacy queue migration, and LAN revocation.
+  queue recovery, revoked and expired cloud-auth user-action recovery,
+  clock-skewed event timestamps ordered by hashes, divergent heads, concurrent
+  correction and tombstone/restore review, v0.2 legacy queue migration, and LAN
+  revocation.
 - Structured conflict reports for divergent previews, dependency-blocked queued
   mutations, unsupported remote schema versions, concurrent QSO corrections, and
   remote QSO tombstone/restore events that overlap local pending mutations.
