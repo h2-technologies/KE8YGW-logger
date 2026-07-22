@@ -3013,6 +3013,86 @@ mod tests {
     }
 
     #[test]
+    fn sync_retry_plan_recovers_terminated_send_and_blocks_without_network() {
+        let app_support_dir = std::env::temp_dir().join(format!("ham-ios-{}", Uuid::new_v4()));
+        let logbook_id = default_logbook_id();
+        let operation_id = Uuid::new_v4();
+        let create = call_json(json!({
+            "command": "qso.create",
+            "payload": {
+                "app_support_dir": app_support_dir.to_string_lossy(),
+                "logbook_id": logbook_id,
+                "operation_id": operation_id.to_string(),
+                "qso": {
+                    "contacted_callsign": "k1term",
+                    "station_callsign": "ke8ygw",
+                    "operator_callsign": "ke8ygw",
+                    "started_at": "2026-07-10T12:00:00Z",
+                    "mode": "ssb",
+                    "band": "20m"
+                }
+            }
+        }));
+        assert_eq!(create["ok"], true);
+
+        let sending = call_json(json!({
+            "command": "sync.offline_queue.retry_plan",
+            "payload": {
+                "app_support_dir": app_support_dir.to_string_lossy(),
+                "logbook_id": logbook_id,
+                "mark_sending": true
+            }
+        }));
+        assert_eq!(sending["ok"], true);
+        assert_eq!(sending["data"]["offline_queue"]["health"]["sending"], 1);
+
+        let offline = call_json(json!({
+            "command": "sync.offline_queue.retry_plan",
+            "payload": {
+                "app_support_dir": app_support_dir.to_string_lossy(),
+                "logbook_id": logbook_id,
+                "network_available": false,
+                "background_time_budget_seconds": 7
+            }
+        }));
+        assert_eq!(offline["ok"], true);
+        assert_eq!(
+            offline["data"]["recovery"]["recovered_interrupted_writes"],
+            1
+        );
+        assert_eq!(offline["data"]["retry_plan"]["blocked_by_network"], true);
+        assert_eq!(offline["data"]["retry_plan"]["mark_sending"], false);
+        assert_eq!(
+            offline["data"]["retry_plan"]["background_time_budget_seconds"],
+            7
+        );
+        assert_eq!(
+            offline["data"]["retry_plan"]["operation_ids"]
+                .as_array()
+                .unwrap()
+                .len(),
+            0
+        );
+        assert_eq!(offline["data"]["offline_queue"]["health"]["retrying"], 1);
+
+        let next_plan = call_json(json!({
+            "command": "sync.offline_queue.retry_plan",
+            "payload": {
+                "app_support_dir": app_support_dir.to_string_lossy(),
+                "logbook_id": logbook_id,
+                "mark_sending": false
+            }
+        }));
+        assert_eq!(next_plan["ok"], true);
+        assert_eq!(
+            next_plan["data"]["retry_plan"]["operation_ids"][0],
+            json!(operation_id)
+        );
+        assert_eq!(next_plan["data"]["offline_queue"]["health"]["retrying"], 1);
+        let _ = std::fs::remove_dir_all(app_support_dir);
+    }
+
+    #[test]
     fn sync_retry_result_backs_off_transient_and_stops_auth_failures() {
         let app_support_dir = std::env::temp_dir().join(format!("ham-ios-{}", Uuid::new_v4()));
         let logbook_id = default_logbook_id();

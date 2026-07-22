@@ -166,7 +166,13 @@ final class RustBridgeStore: ObservableObject {
     }
 
     func refreshSync() async {
-        await assign(endpoint: .sync, to: \.sync, as: SyncSnapshot.self)
+        do {
+            let supportURL = try RustBridgePaths.applicationSupportDirectory()
+            sync = try await command("sync.snapshot", payload: AppSupportBridgeRequest(appSupportDir: supportURL.path), as: SyncSnapshot.self)
+            lastError = nil
+        } catch {
+            await assign(endpoint: .sync, to: \.sync, as: SyncSnapshot.self)
+        }
     }
 
     func refreshDiagnostics() async {
@@ -249,6 +255,62 @@ final class RustBridgeStore: ObservableObject {
         let supportURL = try RustBridgePaths.applicationSupportDirectory()
         let request = ApplicationSettingsUpdateBridgeRequest(appSupportDir: supportURL.path, settings: settings)
         return try await command("settings.update", payload: request, as: ApplicationSettingsBridgeResult.self)
+    }
+
+    func recoverOfflineQueue() async throws -> SyncRecoveryBridgeResult {
+        let supportURL = try RustBridgePaths.applicationSupportDirectory()
+        let result = try await command(
+            "sync.offline_queue.recover",
+            payload: AppSupportBridgeRequest(appSupportDir: supportURL.path),
+            as: SyncRecoveryBridgeResult.self
+        )
+        sync = sync.replacingOfflineQueue(result.offlineQueue)
+        lastError = nil
+        return result
+    }
+
+    func planOfflineRetry(
+        maxMutations: Int = 25,
+        markSending: Bool = true,
+        networkAvailable: Bool = true,
+        backgroundTimeBudgetSeconds: Int = 25
+    ) async throws -> SyncRetryPlanBridgeResult {
+        let supportURL = try RustBridgePaths.applicationSupportDirectory()
+        let request = SyncRetryPlanBridgeRequest(
+            appSupportDir: supportURL.path,
+            logbookId: nil,
+            maxMutations: maxMutations,
+            markSending: markSending,
+            networkAvailable: networkAvailable,
+            backgroundTimeBudgetSeconds: backgroundTimeBudgetSeconds
+        )
+        let result = try await command("sync.offline_queue.retry_plan", payload: request, as: SyncRetryPlanBridgeResult.self)
+        sync = sync.replacingOfflineQueue(result.offlineQueue)
+        lastError = nil
+        return result
+    }
+
+    func recordOfflineRetryResult(
+        operationIds: [String],
+        acceptedEventHashes: [String] = [],
+        result: SyncRetryResultKind,
+        errorCode: String? = nil,
+        message: String? = nil
+    ) async throws -> SyncRetryResultBridgeResult {
+        let supportURL = try RustBridgePaths.applicationSupportDirectory()
+        let request = SyncRetryResultBridgeRequest(
+            appSupportDir: supportURL.path,
+            logbookId: nil,
+            operationIds: operationIds,
+            acceptedEventHashes: acceptedEventHashes,
+            result: result,
+            errorCode: errorCode,
+            message: message
+        )
+        let response = try await command("sync.offline_queue.retry_result", payload: request, as: SyncRetryResultBridgeResult.self)
+        sync = sync.replacingOfflineQueue(response.offlineQueue)
+        lastError = nil
+        return response
     }
 
     private func assign<T: Decodable>(
@@ -594,6 +656,76 @@ struct FallbackRustBridgeClient: RustBridgeClient {
                 "station_book": FallbackBridgeData.stationBook,
                 "projection_source": "fallback"
             ]
+        case "sync.offline_queue.recover":
+            data = [
+                "recovered_count": 0,
+                "recovery": FallbackBridgeData.offlineQueueRecovery(),
+                "offline_queue": FallbackBridgeData.offlineQueue()
+            ]
+        case "sync.offline_queue.retry_plan":
+            let networkAvailable = payload["network_available"] as? Bool ?? true
+            let maxMutations = payload["max_mutations"] as? Int ?? 25
+            let backgroundBudget = payload["background_time_budget_seconds"] as? Int ?? 25
+            data = [
+                "retry_plan": [
+                    "schema_version": 1,
+                    "logbook_id": payload["logbook_id"] as? String ?? UUID().uuidString,
+                    "operation_ids": [],
+                    "event_hashes": [],
+                    "missing_local_event_operation_ids": [],
+                    "network_required": true,
+                    "blocked_by_network": !networkAvailable,
+                    "max_mutations": maxMutations,
+                    "background_time_budget_seconds": backgroundBudget,
+                    "mark_sending": networkAvailable ? (payload["mark_sending"] as? Bool ?? true) : false,
+                    "permanent_failure_results": [
+                        "auth_failed",
+                        "validation_failed",
+                        "diverged",
+                        "missing_local_event",
+                        "permanent_failure"
+                    ]
+                ],
+                "offline_queue": FallbackBridgeData.offlineQueue(),
+                "recovery": FallbackBridgeData.offlineQueueRecovery()
+            ]
+        case "sync.offline_queue.retry_result":
+            let operationIDs = payload["operation_ids"] as? [String] ?? []
+            let result = payload["result"] as? String ?? "accepted"
+            let acceptedHashes = payload["accepted_event_hashes"] as? [String] ?? []
+            let status: String
+            switch result {
+            case "accepted":
+                status = "accepted"
+            case "transient_failure":
+                status = "retrying"
+            case "diverged":
+                status = "blocked"
+            default:
+                status = "user_action_required"
+            }
+            let errorCode = payload["error_code"] as? String ?? result
+            let mutations = operationIDs.map { operationID in
+                FallbackBridgeData.offlineMutation(
+                    operationId: operationID,
+                    status: status,
+                    operationType: "qso.create",
+                    lastErrorCode: result == "accepted" ? nil : errorCode
+                )
+            }
+            data = [
+                "retry_result": [
+                    "schema_version": 1,
+                    "logbook_id": payload["logbook_id"] as? String ?? UUID().uuidString,
+                    "result": result,
+                    "operation_ids": operationIDs,
+                    "accepted_count": result == "accepted" ? acceptedHashes.count : 0,
+                    "error_code": errorCode,
+                    "message": payload["message"] as? String ?? result
+                ],
+                "affected_mutations": mutations,
+                "offline_queue": FallbackBridgeData.offlineQueue(mutations: mutations)
+            ]
         case "bridge.self_test":
             data = [
                 "success": true,
@@ -924,10 +1056,82 @@ enum FallbackBridgeData {
     static let sync: [String: Any] = [
         "cloud_connection_state": "disconnected",
         "pending_changes": 0,
-        "offline_queue": [],
+        "offline_queue": offlineQueue(),
+        "conflict_reviews": ["health": ["open": 0, "resolved": 0, "total": 0]],
         "conflicts": [],
-        "history": []
+        "history": [],
+        "retry_policy": [
+            "network_required": true,
+            "background_retry_supported": true,
+            "permanent_user_action_states": ["blocked", "failed", "user_action_required"]
+        ]
     ]
+
+    static func offlineQueue(mutations: [[String: Any]] = []) -> [String: Any] {
+        let statuses = mutations.compactMap { $0["status"] as? String }
+        let pending = statuses.filter { $0 == "pending" }.count
+        let sending = statuses.filter { $0 == "sending" }.count
+        let retrying = statuses.filter { $0 == "retrying" }.count
+        let blocked = statuses.filter { $0 == "blocked" }.count
+        let failed = statuses.filter { $0 == "failed" }.count
+        let accepted = statuses.filter { $0 == "accepted" }.count
+        let userAction = statuses.filter { $0 == "user_action_required" }.count
+        return [
+            "queue_schema_version": 1,
+            "mutation_schema_version": 1,
+            "health": [
+                "total": mutations.count,
+                "pending": pending,
+                "sending": sending,
+                "retrying": retrying,
+                "blocked": blocked,
+                "failed": failed,
+                "accepted": accepted,
+                "user_action_required": userAction,
+                "ready_to_send": pending + retrying,
+                "oldest_pending_at": NSNull(),
+                "newest_update_at": NSNull()
+            ],
+            "mutations": mutations
+        ]
+    }
+
+    static func offlineMutation(
+        operationId: String,
+        status: String,
+        operationType: String,
+        lastErrorCode: String? = nil
+    ) -> [String: Any] {
+        var mutation: [String: Any] = [
+            "operation_id": operationId,
+            "logbook_id": UUID().uuidString,
+            "sequence": 1,
+            "operation_type": operationType,
+            "status": status,
+            "attempts": status == "accepted" ? 1 : 0,
+            "next_attempt_at": NSNull(),
+            "failure_reason": NSNull(),
+            "last_error_code": NSNull(),
+            "local_event_hash": status == "accepted" ? "fallback-event-hash" : NSNull()
+        ]
+        if let lastErrorCode {
+            mutation["last_error_code"] = lastErrorCode
+            mutation["failure_reason"] = lastErrorCode
+        }
+        return mutation
+    }
+
+    static func offlineQueueRecovery() -> [String: Any] {
+        [
+            "initialized_empty_queue": false,
+            "migrated_v0_2_absent_queue": false,
+            "migrated_v0_2_file": false,
+            "migrated_legacy_mutations": 0,
+            "recovered_interrupted_writes": 0,
+            "promoted_interrupted_atomic_write": false,
+            "quarantined_corrupt_file": false
+        ]
+    }
 
     static let diagnostics: [String: Any] = [
         "rust_version": "0.3.0",
@@ -1165,17 +1369,209 @@ struct MapMarkerSnapshot: Decodable, Identifiable {
 struct SyncSnapshot: Decodable {
     var cloudConnectionState: String?
     var pendingChanges: Int?
-    var offlineQueue: [String]?
+    var offlineQueue: SyncOfflineQueueSnapshot?
+    var conflictReviews: SyncConflictReviewSnapshot?
     var conflicts: [String]?
     var history: [String]?
+    var retryPolicy: SyncRetryPolicy?
+
+    enum CodingKeys: String, CodingKey {
+        case cloudConnectionState
+        case pendingChanges
+        case offlineQueue
+        case conflictReviews
+        case conflicts
+        case history
+        case retryPolicy
+    }
 
     static let placeholder = SyncSnapshot(
         cloudConnectionState: "disconnected",
         pendingChanges: 0,
-        offlineQueue: [],
+        offlineQueue: nil,
+        conflictReviews: nil,
         conflicts: [],
-        history: []
+        history: [],
+        retryPolicy: nil
     )
+
+    init(
+        cloudConnectionState: String?,
+        pendingChanges: Int?,
+        offlineQueue: SyncOfflineQueueSnapshot?,
+        conflictReviews: SyncConflictReviewSnapshot?,
+        conflicts: [String]?,
+        history: [String]?,
+        retryPolicy: SyncRetryPolicy?
+    ) {
+        self.cloudConnectionState = cloudConnectionState
+        self.pendingChanges = pendingChanges
+        self.offlineQueue = offlineQueue
+        self.conflictReviews = conflictReviews
+        self.conflicts = conflicts
+        self.history = history
+        self.retryPolicy = retryPolicy
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        cloudConnectionState = try container.decodeIfPresent(String.self, forKey: .cloudConnectionState)
+        pendingChanges = try container.decodeIfPresent(Int.self, forKey: .pendingChanges)
+        offlineQueue = try? container.decodeIfPresent(SyncOfflineQueueSnapshot.self, forKey: .offlineQueue)
+        conflictReviews = try? container.decodeIfPresent(SyncConflictReviewSnapshot.self, forKey: .conflictReviews)
+        conflicts = (try? container.decodeIfPresent([String].self, forKey: .conflicts)) ?? []
+        history = (try? container.decodeIfPresent([String].self, forKey: .history)) ?? []
+        retryPolicy = try? container.decodeIfPresent(SyncRetryPolicy.self, forKey: .retryPolicy)
+    }
+
+    func replacingOfflineQueue(_ queue: SyncOfflineQueueSnapshot) -> SyncSnapshot {
+        SyncSnapshot(
+            cloudConnectionState: cloudConnectionState,
+            pendingChanges: queue.health.pendingChangeCount,
+            offlineQueue: queue,
+            conflictReviews: conflictReviews,
+            conflicts: conflicts,
+            history: history,
+            retryPolicy: retryPolicy
+        )
+    }
+}
+
+struct SyncOfflineQueueSnapshot: Decodable {
+    var queueSchemaVersion: Int?
+    var mutationSchemaVersion: Int?
+    var health: SyncOfflineQueueHealth
+    var mutations: [SyncOfflineMutation]
+}
+
+struct SyncOfflineQueueHealth: Decodable {
+    var total: Int?
+    var pending: Int?
+    var sending: Int?
+    var retrying: Int?
+    var blocked: Int?
+    var failed: Int?
+    var accepted: Int?
+    var userActionRequired: Int?
+    var readyToSend: Int?
+    var oldestPendingAt: String?
+    var newestUpdateAt: String?
+
+    var pendingChangeCount: Int {
+        (pending ?? 0) + (sending ?? 0) + (retrying ?? 0) + (blocked ?? 0) + (failed ?? 0) + (userActionRequired ?? 0)
+    }
+}
+
+struct SyncOfflineMutation: Decodable, Identifiable {
+    var id: String { operationId ?? "\(logbookId ?? "unknown")-\(sequence ?? 0)" }
+    var operationId: String?
+    var logbookId: String?
+    var entityId: String?
+    var sequence: Int?
+    var operationType: String?
+    var status: String?
+    var attempts: Int?
+    var nextAttemptAt: String?
+    var failureReason: String?
+    var lastErrorCode: String?
+    var localEventHash: String?
+}
+
+struct SyncConflictReviewSnapshot: Decodable {
+    var health: SyncConflictReviewHealth?
+}
+
+struct SyncConflictReviewHealth: Decodable {
+    var open: Int?
+    var resolved: Int?
+    var total: Int?
+}
+
+struct SyncRetryPolicy: Decodable {
+    var networkRequired: Bool?
+    var backgroundRetrySupported: Bool?
+    var permanentUserActionStates: [String]?
+}
+
+struct SyncRecoveryBridgeResult: Decodable {
+    var recoveredCount: Int?
+    var recovery: SyncOfflineQueueRecoveryReport?
+    var offlineQueue: SyncOfflineQueueSnapshot
+}
+
+struct SyncOfflineQueueRecoveryReport: Decodable {
+    var initializedEmptyQueue: Bool?
+    var migratedV02AbsentQueue: Bool?
+    var migratedV02File: Bool?
+    var migratedLegacyMutations: Int?
+    var recoveredInterruptedWrites: Int?
+    var promotedInterruptedAtomicWrite: Bool?
+    var quarantinedCorruptFile: Bool?
+}
+
+struct SyncRetryPlanBridgeRequest: Encodable {
+    var appSupportDir: String
+    var logbookId: String?
+    var maxMutations: Int?
+    var markSending: Bool
+    var networkAvailable: Bool
+    var backgroundTimeBudgetSeconds: Int?
+}
+
+struct SyncRetryPlanBridgeResult: Decodable {
+    var retryPlan: SyncRetryPlan
+    var offlineQueue: SyncOfflineQueueSnapshot
+    var recovery: SyncOfflineQueueRecoveryReport?
+}
+
+struct SyncRetryPlan: Decodable {
+    var schemaVersion: Int?
+    var logbookId: String?
+    var operationIds: [String]
+    var eventHashes: [String]
+    var missingLocalEventOperationIds: [String]
+    var networkRequired: Bool
+    var blockedByNetwork: Bool
+    var maxMutations: Int?
+    var backgroundTimeBudgetSeconds: Int?
+    var markSending: Bool
+    var permanentFailureResults: [SyncRetryResultKind]?
+}
+
+struct SyncRetryResultBridgeRequest: Encodable {
+    var appSupportDir: String
+    var logbookId: String?
+    var operationIds: [String]
+    var acceptedEventHashes: [String]
+    var result: SyncRetryResultKind
+    var errorCode: String?
+    var message: String?
+}
+
+struct SyncRetryResultBridgeResult: Decodable {
+    var retryResult: SyncRetryResultSummary
+    var affectedMutations: [SyncOfflineMutation]
+    var offlineQueue: SyncOfflineQueueSnapshot
+}
+
+struct SyncRetryResultSummary: Decodable {
+    var schemaVersion: Int?
+    var logbookId: String?
+    var result: SyncRetryResultKind
+    var operationIds: [String]
+    var acceptedCount: Int
+    var errorCode: String?
+    var message: String?
+}
+
+enum SyncRetryResultKind: String, Codable {
+    case accepted
+    case transientFailure = "transient_failure"
+    case authFailed = "auth_failed"
+    case validationFailed = "validation_failed"
+    case diverged
+    case missingLocalEvent = "missing_local_event"
+    case permanentFailure = "permanent_failure"
 }
 
 struct DiagnosticsSnapshot: Decodable {

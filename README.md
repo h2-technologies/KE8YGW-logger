@@ -964,7 +964,11 @@ The iOS bridge also exposes Rust-owned `sync.offline_queue.retry_plan` and
 Swift can request a bounded official-event batch, mark planned work `sending`,
 record accepted hashes, back off transient network failures, and stop retry for
 auth, validation, divergence, missing-event, or permanent failures without
-owning sync domain rules.
+owning sync domain rules. The native Swift bridge decodes typed queue snapshots,
+recovery reports, retry plans, retry results, and affected mutations; the iOS
+Sync workspace displays queue health and asks Rust for retry plans using the
+native network monitor so no-network states remain visible without mutating the
+official event stream.
 
 LAN trust records are durable support state. Pairing tokens require explicit
 operator approval, expire quickly, are single use, and are stored only as

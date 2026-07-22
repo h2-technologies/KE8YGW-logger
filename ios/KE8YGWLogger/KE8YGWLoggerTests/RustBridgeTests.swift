@@ -67,6 +67,39 @@ final class RustBridgeTests: XCTestCase {
         XCTAssertEqual(result.bridgeSchemaVersion, 1)
     }
 
+    func testFallbackSyncRetryPlanBlocksWithoutNetwork() async throws {
+        let store = await RustBridgeStore(client: FallbackRustBridgeClient())
+        let result = try await store.planOfflineRetry(
+            maxMutations: 3,
+            markSending: true,
+            networkAvailable: false,
+            backgroundTimeBudgetSeconds: 12
+        )
+
+        XCTAssertTrue(result.retryPlan.networkRequired)
+        XCTAssertTrue(result.retryPlan.blockedByNetwork)
+        XCTAssertFalse(result.retryPlan.markSending)
+        XCTAssertEqual(result.retryPlan.maxMutations, 3)
+        XCTAssertEqual(result.retryPlan.backgroundTimeBudgetSeconds, 12)
+        XCTAssertEqual(result.retryPlan.operationIds.count, 0)
+        XCTAssertEqual(result.offlineQueue.health.total, 0)
+    }
+
+    func testFallbackSyncRetryResultSurfacesUserActionFailures() async throws {
+        let store = await RustBridgeStore(client: FallbackRustBridgeClient())
+        let operationID = "11111111-1111-4111-8111-111111111111"
+        let result = try await store.recordOfflineRetryResult(
+            operationIds: [operationID],
+            result: .authFailed
+        )
+
+        XCTAssertEqual(result.retryResult.result, .authFailed)
+        XCTAssertEqual(result.retryResult.operationIds, [operationID])
+        XCTAssertEqual(result.affectedMutations.first?.status, "user_action_required")
+        XCTAssertEqual(result.affectedMutations.first?.lastErrorCode, "auth_failed")
+        XCTAssertEqual(result.offlineQueue.health.userActionRequired, 1)
+    }
+
     func testRustBridgeStoreMapsStructuredErrors() async throws {
         let store = await RustBridgeStore(client: ErrorRustBridgeClient())
 

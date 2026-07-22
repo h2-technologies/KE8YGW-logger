@@ -165,7 +165,14 @@ mutations without matching local official events to `user_action_required`.
 failures, auth or validation failures, divergence, and missing-event failures
 back into the queue. Transient failures move to bounded retry/backoff; auth,
 validation, missing-event, permanent, and divergence results stop unattended
-retry and require operator review.
+retry and require operator review. The native Swift bridge decodes the typed
+queue snapshot, recovery report, retry plan, retry result, and affected
+mutations. The iOS Sync workspace displays Rust queue health/mutation status
+and asks Rust for retry plans using the native network monitor state; it does
+not mark mutations `sending` until a transport is ready to process the returned
+events. `sync_retry_plan_recovers_terminated_send_and_blocks_without_network`
+proves a terminated `sending` operation is recovered before planning and that a
+poor-network state returns a blocked no-op plan without losing queued work.
 
 ### Manual Conflict Review
 

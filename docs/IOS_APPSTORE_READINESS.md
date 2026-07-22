@@ -15,9 +15,13 @@ web and desktop on November 24, 2026.
 
 Current repository status: native SwiftUI source, Rust FFI, Xcode project files,
 build scripts, simulator CI, and Rust-owned offline queue plus conflict-review
-commands are present. Signing, provisioning, TestFlight, App Store metadata,
-privacy manifest, physical-device validation, release-safe background retry,
-and full v1 offline/sync/provider qualification remain incomplete.
+commands are present. Native Swift bridge methods and Sync workspace controls
+now expose Rust-owned queue recovery, retry planning, retry result
+classification, queue health, no-network planning, and user-action retry
+states. Signing, provisioning, TestFlight, App Store metadata, privacy manifest,
+physical-device validation, release-safe BGTask execution, actual native sync
+transport qualification, and full v1 offline/sync/provider qualification remain
+incomplete.
 
 ## Bundle and Signing
 
@@ -86,6 +90,8 @@ network, or background modes speculatively.
 - Reviewer can select or create a logbook.
 - Reviewer can create, edit, delete, and restore QSOs.
 - Offline queue behavior can be demonstrated.
+- The Sync workspace can display Rust queue health and request a no-network
+  retry plan without marking queued mutations as sending.
 - ADIF import/export works through native document flows.
 - POTA/SOTA and Net Control features are usable or clearly gated by account
   capability.
@@ -104,6 +110,9 @@ network, or background modes speculatively.
 - App launches on a physical device.
 - Login works against the intended environment.
 - Offline queue is tested across app quit/relaunch.
+- Rust FFI tests cover recovery of a terminated `sending` mutation before
+  retry planning, and Swift simulator tests cover no-network retry planning and
+  auth-failure user-action classification.
 - ADIF document import/export is tested with Files and share sheet flows.
 - Keychain values survive app restart and are cleared on sign-out.
 - Privacy manifest is included in the archive.

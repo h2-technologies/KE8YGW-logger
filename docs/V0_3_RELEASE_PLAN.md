@@ -25,6 +25,10 @@ Last audited: 2026-07-21
   work `sending`, return official event envelopes/hashes for native transport,
   back off transient failures, and stop retry on auth, validation, divergence,
   missing-local-event, and permanent failures.
+- Native Swift bridge methods and typed sync snapshots now expose queue
+  recovery, retry planning, retry results, queue health, and affected mutations
+  to the iOS Sync workspace without moving queue ordering or failure
+  classification out of Rust.
 - Queue-aware cloud push acknowledgment for queued official events.
 - Deterministic desktop restart/reconnect queue-drain coverage for interrupted
   sends, ordered queued official events, accepted-by-hash handling, and
@@ -97,6 +101,7 @@ cargo test -p ham-sync conflict_report
 cargo test -p ham-gui
 cargo test -p ham-ios-ffi
 cargo test -p ham-ios-ffi sync_retry
+cargo test -p ham-ios-ffi sync_retry_plan_recovers_terminated_send_and_blocks_without_network
 just version-check
 just ci
 ```
