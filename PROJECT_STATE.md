@@ -72,8 +72,9 @@ operations, and release qualification.
   Dependabot config, security workflow, Scorecard workflow, and pinned
   workflow/build supply-chain dependencies from PR #101.
 - Deterministic checks for API contract, product version consistency, Markdown
-  links, governance/license/secrets, release-artifact naming, and production tag
-  policy.
+  links, governance/license/secrets, iOS background/local-network bundle
+  declarations, generated Xcode artifact hygiene, release-artifact naming, and
+  production tag policy.
 
 ## Partial
 
@@ -154,7 +155,9 @@ operations, and release qualification.
   snapshot/issue/accept/trust/rotate/revoke decoding without pairing-code
   persistence. The iOS bundle now declares Local Network usage and allows local
   networking for paired-device sync, and declares the background processing
-  mode plus the permitted retry task identifier. Apple multicast
+  mode plus the permitted retry task identifier; the governance check now
+  enforces those Info.plist declarations and rejects tracked generated
+  Xcode/iOS artifacts. Apple multicast
   entitlement/provisioning,
   release-device cross-device reconciliation workflow qualification,
   physical-device LAN/iOS Local Network

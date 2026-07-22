@@ -43,6 +43,9 @@ the no-ready queue plan path where no push transport should run.
 The Sync API setting is persisted through the Rust settings schema and routes
 native manual/background retry to either self-hosted logbook-scoped endpoints or
 hosted `/api/v1/sync/*` endpoints.
+`scripts/governance-check.ps1` now fails if the bundle loses the Local Network
+usage string, local-network ATS allowance, background-processing mode, permitted
+sync retry task identifier, or if generated Xcode/iOS artifacts are tracked.
 Signing, provisioning, TestFlight, App Store metadata, privacy manifest,
 physical-device validation, release-device BGTask execution, real
 hosted/self-hosted native sync endpoint qualification, Apple multicast
@@ -138,6 +141,8 @@ processing must remain tied to implemented native features and App Review copy.
   Rust-owned event-chain verification before append.
 - The app declares the Local Network permission copy used for paired-device
   LAN sync and allows local networking for those connections.
+- Governance validation passes for Local Network, background retry bundle
+  declarations, and generated Xcode/iOS artifact hygiene.
 - ADIF import/export works through native document flows.
 - POTA/SOTA and Net Control features are usable or clearly gated by account
   capability.

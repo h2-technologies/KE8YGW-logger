@@ -44,6 +44,9 @@ Last audited: 2026-07-22
   events through `sync.remote_events.apply`. Simulator tests cover both Auto
   Pull paths: after a clean accepted push and after a no-ready queue plan where
   no push transport should run.
+- Governance validation now enforces the iOS Local Network usage string,
+  local-network ATS allowance, background-processing mode, permitted sync retry
+  task identifier, and absence of tracked generated Xcode/iOS artifacts.
 - Native iOS manual hosted/self-hosted pull, trusted LAN pull, and background
   Auto Pull refresh the SwiftData QSO cache from the Rust `qso.list`
   projection after Rust accepts remote events. Swift still treats SwiftData as
@@ -175,6 +178,7 @@ cargo test -p ham-ios-ffi
 cargo test -p ham-ios-ffi sync_retry
 cargo test -p ham-ios-ffi sync_retry_plan_recovers_terminated_send_and_blocks_without_network
 just version-check
+just governance-check
 just ci
 ```
 
