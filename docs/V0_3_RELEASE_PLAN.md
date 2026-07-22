@@ -35,7 +35,9 @@ Last audited: 2026-07-22
   follow the actual local head as well as full remote chains, and iOS exposes
   `sync.remote_events.apply` so native transports can apply pulled official
   envelopes through Rust-owned hash-chain verification and projection/sync
-  refresh.
+  refresh. Swift can build self-hosted/logbook-scoped and hosted pull requests,
+  fetch missing events through native transport, and pass the response back to
+  Rust for verification and local application.
 - Queue-aware cloud push acknowledgment for queued official events.
 - Deterministic desktop restart/reconnect queue-drain coverage for interrupted
   sends, ordered queued official events, accepted-by-hash handling, and

@@ -331,6 +331,72 @@ final class RustBridgeStore: ObservableObject {
         return result
     }
 
+    func executeRemotePull<T: SyncPullTransporting>(
+        serverURL: URL,
+        bearerToken: String? = nil,
+        syncToken: String? = nil,
+        endpointStyle: SyncPullEndpointStyle = .logbookScoped,
+        logbookId requestedLogbookId: String? = nil,
+        networkAvailable: Bool = true,
+        transport: T
+    ) async throws -> SyncPullExecutionResult {
+        guard networkAvailable else {
+            return SyncPullExecutionResult(
+                pullResponse: nil,
+                applyResult: nil,
+                status: .blockedByNetwork,
+                acceptedCount: 0,
+                rejectedCount: 0
+            )
+        }
+
+        let supportURL = try RustBridgePaths.applicationSupportDirectory()
+        let snapshot = try await command("sync.snapshot", payload: AppSupportBridgeRequest(appSupportDir: supportURL.path), as: SyncSnapshot.self)
+        sync = snapshot
+        let logbookId = [requestedLogbookId, snapshot.logbookId]
+            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .first { !$0.isEmpty } ?? SyncDefaults.defaultLogbookId
+        let pullResponse = try await transport.pull(
+            serverURL: serverURL,
+            bearerToken: bearerToken,
+            syncToken: syncToken,
+            endpointStyle: endpointStyle,
+            logbookId: logbookId,
+            localHeadHash: snapshot.localHeadHash
+        )
+        guard !pullResponse.events.isEmpty else {
+            let previewStatus = pullResponse.preview.status.lowercased()
+            let status: SyncPullExecutionStatus
+            if previewStatus == "diverged" {
+                status = .diverged
+            } else if previewStatus == "rejected" {
+                status = .rejected
+            } else {
+                status = .noRemoteEvents
+            }
+            return SyncPullExecutionResult(
+                pullResponse: pullResponse,
+                applyResult: nil,
+                status: status,
+                acceptedCount: 0,
+                rejectedCount: 0
+            )
+        }
+        let applyResult = try await applyRemoteEvents(
+            logbookId: logbookId,
+            peerId: pullResponse.preview.peerId,
+            events: pullResponse.events
+        )
+        let status = SyncPullExecutionStatus(status: applyResult.pull.status)
+        return SyncPullExecutionResult(
+            pullResponse: pullResponse,
+            applyResult: applyResult,
+            status: status,
+            acceptedCount: applyResult.pull.acceptedCount,
+            rejectedCount: applyResult.pull.rejectedCount
+        )
+    }
+
     func executeOfflineRetryPush<T: SyncPushTransporting>(
         serverURL: URL,
         bearerToken: String? = nil,
@@ -571,6 +637,10 @@ struct EmptyRustBridgePayload: Codable {}
 
 struct AppSupportBridgeRequest: Codable {
     var appSupportDir: String
+}
+
+private enum SyncDefaults {
+    static let defaultLogbookId = "00000000-0000-4000-8000-000000000001"
 }
 
 enum RustBridgeClientFactory {
@@ -1420,6 +1490,9 @@ enum FallbackBridgeData {
     static func sync(conflictReviews: [String: Any]? = nil) -> [String: Any] {
         [
             "cloud_connection_state": "disconnected",
+            "logbook_id": "00000000-0000-4000-8000-000000000001",
+            "local_head_hash": NSNull(),
+            "pending_events": 0,
             "pending_changes": 0,
             "offline_queue": offlineQueue(),
             "conflict_reviews": conflictReviews ?? ["health": ["open": 0, "resolved": 0, "total": 0], "reviews": []],
@@ -1734,6 +1807,9 @@ struct MapMarkerSnapshot: Decodable, Identifiable {
 
 struct SyncSnapshot: Decodable {
     var cloudConnectionState: String?
+    var logbookId: String?
+    var localHeadHash: String?
+    var pendingEvents: Int?
     var pendingChanges: Int?
     var offlineQueue: SyncOfflineQueueSnapshot?
     var conflictReviews: SyncConflictReviewSnapshot?
@@ -1743,6 +1819,9 @@ struct SyncSnapshot: Decodable {
 
     enum CodingKeys: String, CodingKey {
         case cloudConnectionState
+        case logbookId
+        case localHeadHash
+        case pendingEvents
         case pendingChanges
         case offlineQueue
         case conflictReviews
@@ -1753,6 +1832,9 @@ struct SyncSnapshot: Decodable {
 
     static let placeholder = SyncSnapshot(
         cloudConnectionState: "disconnected",
+        logbookId: nil,
+        localHeadHash: nil,
+        pendingEvents: 0,
         pendingChanges: 0,
         offlineQueue: nil,
         conflictReviews: nil,
@@ -1763,6 +1845,9 @@ struct SyncSnapshot: Decodable {
 
     init(
         cloudConnectionState: String?,
+        logbookId: String?,
+        localHeadHash: String?,
+        pendingEvents: Int?,
         pendingChanges: Int?,
         offlineQueue: SyncOfflineQueueSnapshot?,
         conflictReviews: SyncConflictReviewSnapshot?,
@@ -1771,6 +1856,9 @@ struct SyncSnapshot: Decodable {
         retryPolicy: SyncRetryPolicy?
     ) {
         self.cloudConnectionState = cloudConnectionState
+        self.logbookId = logbookId
+        self.localHeadHash = localHeadHash
+        self.pendingEvents = pendingEvents
         self.pendingChanges = pendingChanges
         self.offlineQueue = offlineQueue
         self.conflictReviews = conflictReviews
@@ -1782,6 +1870,9 @@ struct SyncSnapshot: Decodable {
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         cloudConnectionState = try container.decodeIfPresent(String.self, forKey: .cloudConnectionState)
+        logbookId = try container.decodeIfPresent(String.self, forKey: .logbookId)
+        localHeadHash = try container.decodeIfPresent(String.self, forKey: .localHeadHash)
+        pendingEvents = try container.decodeIfPresent(Int.self, forKey: .pendingEvents)
         pendingChanges = try container.decodeIfPresent(Int.self, forKey: .pendingChanges)
         offlineQueue = try? container.decodeIfPresent(SyncOfflineQueueSnapshot.self, forKey: .offlineQueue)
         conflictReviews = try? container.decodeIfPresent(SyncConflictReviewSnapshot.self, forKey: .conflictReviews)
@@ -1793,6 +1884,9 @@ struct SyncSnapshot: Decodable {
     func replacingOfflineQueue(_ queue: SyncOfflineQueueSnapshot) -> SyncSnapshot {
         SyncSnapshot(
             cloudConnectionState: cloudConnectionState,
+            logbookId: logbookId,
+            localHeadHash: localHeadHash,
+            pendingEvents: pendingEvents,
             pendingChanges: queue.health.pendingChangeCount,
             offlineQueue: queue,
             conflictReviews: conflictReviews,
@@ -1805,6 +1899,9 @@ struct SyncSnapshot: Decodable {
     func replacingConflictReviews(_ reviews: SyncConflictReviewSnapshot) -> SyncSnapshot {
         SyncSnapshot(
             cloudConnectionState: cloudConnectionState,
+            logbookId: logbookId,
+            localHeadHash: localHeadHash,
+            pendingEvents: pendingEvents,
             pendingChanges: pendingChanges,
             offlineQueue: offlineQueue,
             conflictReviews: reviews,
@@ -2094,6 +2191,12 @@ struct SyncPushRequest: Encodable, Equatable {
     var events: [SyncOfficialEvent]
 }
 
+struct SyncPullRequest: Encodable, Equatable {
+    var auth: SyncPushAuth?
+    var logbookId: String
+    var localHeadHash: String?
+}
+
 struct SyncPushResponse: Decodable, Equatable {
     var status: String?
     var acceptedCount: Int?
@@ -2101,6 +2204,34 @@ struct SyncPushResponse: Decodable, Equatable {
     var rejectedCount: Int?
     var serverHeadHash: String?
     var errors: [String]?
+}
+
+struct SyncPullResponse: Decodable, Equatable {
+    var preview: SyncPullPreview
+    var events: [SyncOfficialEvent]
+}
+
+struct SyncPullPreview: Decodable, Equatable {
+    var peerId: String
+    var logbookId: String
+    var status: String
+    var localHeadHash: String?
+    var remoteHeadHash: String?
+    var missingEventCount: Int
+    var remoteEventCount: Int
+    var events: [SyncEventMetadata]
+    var message: String
+}
+
+struct SyncEventMetadata: Decodable, Equatable {
+    var eventId: String
+    var logbookId: String
+    var entityId: String?
+    var previousHash: String?
+    var eventHash: String
+    var timestamp: String
+    var eventType: String
+    var schemaVersion: Int
 }
 
 enum SyncPushEndpointStyle: Equatable {
@@ -2117,6 +2248,20 @@ enum SyncPushEndpointStyle: Equatable {
     }
 }
 
+enum SyncPullEndpointStyle: Equatable {
+    case logbookScoped
+    case hostedSync
+
+    func path(logbookId: String) -> String {
+        switch self {
+        case .logbookScoped:
+            return "api/v1/logbooks/\(logbookId)/pull"
+        case .hostedSync:
+            return "api/v1/sync/pull"
+        }
+    }
+}
+
 protocol SyncPushTransporting {
     func push(
         serverURL: URL,
@@ -2126,6 +2271,17 @@ protocol SyncPushTransporting {
         logbookId: String,
         events: [SyncOfficialEvent]
     ) async throws -> SyncPushResponse
+}
+
+protocol SyncPullTransporting {
+    func pull(
+        serverURL: URL,
+        bearerToken: String?,
+        syncToken: String?,
+        endpointStyle: SyncPullEndpointStyle,
+        logbookId: String,
+        localHeadHash: String?
+    ) async throws -> SyncPullResponse
 }
 
 enum SyncRetryExecutionStatus: String, Equatable {
@@ -2148,6 +2304,38 @@ struct SyncRetryExecutionResult {
     var failedOperationCount: Int
 }
 
+enum SyncPullExecutionStatus: String, Equatable {
+    case blockedByNetwork = "blocked_by_network"
+    case noRemoteEvents = "no_remote_events"
+    case applied
+    case inSync = "in_sync"
+    case diverged
+    case rejected
+
+    init(status: String) {
+        switch status.lowercased() {
+        case "pulled":
+            self = .applied
+        case "in_sync":
+            self = .inSync
+        case "diverged":
+            self = .diverged
+        case "rejected":
+            self = .rejected
+        default:
+            self = .rejected
+        }
+    }
+}
+
+struct SyncPullExecutionResult {
+    var pullResponse: SyncPullResponse?
+    var applyResult: SyncRemoteEventsApplyBridgeResult?
+    var status: SyncPullExecutionStatus
+    var acceptedCount: Int
+    var rejectedCount: Int
+}
+
 enum SyncHTTPTransportError: LocalizedError, Equatable {
     case emptyEventBatch
     case invalidServerURL
@@ -2168,7 +2356,7 @@ enum SyncHTTPTransportError: LocalizedError, Equatable {
     }
 }
 
-struct SyncHTTPTransport: SyncPushTransporting {
+struct SyncHTTPTransport: SyncPushTransporting, SyncPullTransporting {
     func makePushRequest(
         serverURL: URL,
         bearerToken: String?,
@@ -2213,6 +2401,47 @@ struct SyncHTTPTransport: SyncPushTransporting {
         return request
     }
 
+    func makePullRequest(
+        serverURL: URL,
+        bearerToken: String?,
+        syncToken: String?,
+        endpointStyle: SyncPullEndpointStyle = .logbookScoped,
+        logbookId: String,
+        localHeadHash: String?
+    ) throws -> URLRequest {
+        guard var components = URLComponents(url: serverURL, resolvingAgainstBaseURL: false),
+              components.scheme != nil,
+              components.host != nil
+        else {
+            throw SyncHTTPTransportError.invalidServerURL
+        }
+
+        let basePath = components.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        let pullPath = endpointStyle.path(logbookId: logbookId)
+        components.path = "/" + ([basePath, pullPath].filter { !$0.isEmpty }.joined(separator: "/"))
+        guard let url = components.url else {
+            throw SyncHTTPTransportError.invalidServerURL
+        }
+
+        let body = SyncPullRequest(
+            auth: syncToken.map { SyncPushAuth(syncToken: $0) },
+            logbookId: logbookId,
+            localHeadHash: localHeadHash
+        )
+        let encoder = JSONEncoder()
+        encoder.keyEncodingStrategy = .convertToSnakeCase
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        if let bearerToken, !bearerToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            request.setValue("Bearer \(bearerToken)", forHTTPHeaderField: "Authorization")
+        }
+        request.httpBody = try encoder.encode(body)
+        return request
+    }
+
     func push(
         serverURL: URL,
         bearerToken: String?,
@@ -2240,6 +2469,35 @@ struct SyncHTTPTransport: SyncPushTransporting {
         let decoder = JSONDecoder()
         decoder.keyDecodingStrategy = .convertFromSnakeCase
         return try decoder.decode(SyncPushResponse.self, from: data)
+    }
+
+    func pull(
+        serverURL: URL,
+        bearerToken: String?,
+        syncToken: String?,
+        endpointStyle: SyncPullEndpointStyle = .logbookScoped,
+        logbookId: String,
+        localHeadHash: String?
+    ) async throws -> SyncPullResponse {
+        let request = try makePullRequest(
+            serverURL: serverURL,
+            bearerToken: bearerToken,
+            syncToken: syncToken,
+            endpointStyle: endpointStyle,
+            logbookId: logbookId,
+            localHeadHash: localHeadHash
+        )
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw SyncHTTPTransportError.invalidHTTPResponse
+        }
+        guard (200..<300).contains(http.statusCode) else {
+            let message = String(data: data, encoding: .utf8) ?? "sync pull failed"
+            throw SyncHTTPTransportError.serverRejected(statusCode: http.statusCode, message: message)
+        }
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        return try decoder.decode(SyncPullResponse.self, from: data)
     }
 }
 

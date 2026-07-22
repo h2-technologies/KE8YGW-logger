@@ -326,7 +326,9 @@ rejected before mutation. The iOS FFI command `sync.remote_events.apply`
 exposes that path to native transports by accepting full official event
 envelopes, returning the shared pull response, and refreshing the Rust-owned
 sync/projection counts without letting Swift validate or create official
-history.
+history. Native Swift builds self-hosted/logbook-scoped and hosted pull
+requests using the Rust snapshot's `logbook_id` and `local_head_hash`, then
+passes returned envelopes back through `sync.remote_events.apply`.
 
 The current self-hosted server uses durable local storage by default: embedded SurrealDB metadata/support state, append-only JSONL official-event storage, and filesystem-backed diagnostic report payloads. Durable SurrealDB storage is exposed through the `ham-sync` `surreal-storage` feature so GUI, iOS, and other protocol-only clients can avoid the database dependency. The in-memory backend remains for deterministic tests.
 

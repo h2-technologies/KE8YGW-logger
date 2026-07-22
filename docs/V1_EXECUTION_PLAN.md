@@ -64,10 +64,12 @@ outside issue #2.
      self-hosted/logbook-scoped push execution coordination, hosted
      `/api/v1/sync/push` request bodies, accepted-prefix/rejected-tail retry
      result recording, Rust-owned pulled-event apply through
-     `sync.remote_events.apply`, request retry plans with native network monitor
-     state, display saved conflict-review records with recommended actions and
-     structured conflict messages, and surface no-network/user-action retry
-     outcomes without owning event creation or domain rules.
+     `sync.remote_events.apply`, self-hosted/logbook-scoped and hosted pull
+     request construction, native pull fetch -> Rust apply coordination, request
+     retry plans with native network monitor state, display saved conflict-review
+     records with recommended actions and structured conflict messages, and
+     surface no-network/user-action retry and pull outcomes without owning event
+     creation or domain rules.
    - Remaining: production iOS reciprocal LAN pairing UX, stronger LAN
      key-exchange hardening, end-to-end cross-client branch review/reconciliation workflow
      qualification, physical-device LAN/iOS local-network

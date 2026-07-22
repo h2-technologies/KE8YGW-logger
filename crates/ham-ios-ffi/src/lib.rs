@@ -1536,17 +1536,20 @@ fn sync_snapshot_for_support(
         }
         None => None,
     };
-    let pending_events = match app_support_dir {
+    let (pending_events, local_head_hash) = match app_support_dir {
         Some(dir) => {
             let runtime =
                 Runtime::new().map_err(|error| BridgeFault::internal(error.to_string()))?;
             let store = event_store(dir)?;
             runtime
-                .block_on(store.list_events(logbook_id))
+                .block_on(async {
+                    let events = store.list_events(logbook_id).await?;
+                    let head = store.get_head(logbook_id).await?;
+                    Ok::<_, ham_core::StoreError>((events.len(), head))
+                })
                 .map_err(|error| BridgeFault::storage(error.to_string()))?
-                .len()
         }
-        None => 0,
+        None => (0, None),
     };
     let pending_changes = queue_snapshot
         .as_ref()
@@ -1565,6 +1568,8 @@ fn sync_snapshot_for_support(
         "cloud_config": CloudSyncConfig::default(),
         "cloud_connection_state": CloudConnectionState::Disconnected,
         "sync_protocol_version": ham_sync::PROTOCOL_VERSION,
+        "logbook_id": logbook_id,
+        "local_head_hash": local_head_hash,
         "pending_changes": pending_changes,
         "pending_events": pending_events,
         "offline_queue": queue_snapshot,
@@ -3350,6 +3355,10 @@ mod tests {
         assert_eq!(apply["data"]["pull"]["accepted_count"], 2);
         assert_eq!(apply["data"]["projection"]["pending_event_count"], 2);
         assert_eq!(apply["data"]["sync"]["pending_events"], 2);
+        assert_eq!(
+            apply["data"]["sync"]["local_head_hash"],
+            apply["data"]["pull"]["remote_head_hash"]
+        );
 
         let duplicate = call_json(json!({
             "command": "sync.remote_events.apply",

@@ -21,11 +21,12 @@ classification, queue health, no-network planning, user-action retry states,
 Rust-planned official event envelopes, self-hosted/logbook-scoped push
 execution coordination, hosted `/api/v1/sync/push` request construction,
 accepted-prefix/rejected-tail retry result recording, Rust-owned pulled-event
-apply through `sync.remote_events.apply`, saved conflict-review records,
-selected recovery paths, and structured conflict messages. Signing,
-provisioning, TestFlight, App Store metadata, privacy manifest, physical-device
-validation, release-safe BGTask execution, real hosted/self-hosted native sync
-transport qualification, and full v1
+apply through `sync.remote_events.apply`, self-hosted/logbook-scoped and hosted
+pull request construction, native pull fetch -> Rust apply coordination, saved
+conflict-review records, selected recovery paths, and structured conflict
+messages. Signing, provisioning, TestFlight, App Store metadata, privacy
+manifest, physical-device validation, release-safe BGTask execution, real
+hosted/self-hosted native sync endpoint qualification, and full v1
 offline/sync/provider qualification remain incomplete.
 
 ## Bundle and Signing

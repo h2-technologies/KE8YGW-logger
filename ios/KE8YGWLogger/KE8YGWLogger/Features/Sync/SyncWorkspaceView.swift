@@ -91,6 +91,9 @@ struct SyncWorkspaceView: View {
                 Button("Sync Now") {
                     Task { await executeRetryPush() }
                 }
+                Button("Pull Missing") {
+                    Task { await executePull() }
+                }
                 Button("Retry Pending Uploads") {
                     Task { await executeRetryPush() }
                 }
@@ -131,14 +134,12 @@ struct SyncWorkspaceView: View {
         }
         let syncToken: String?
         do {
-            syncToken = try credentialVault
-                .read(account: "sync_token", providerId: "sync")?
-                .trimmingCharacters(in: .whitespacesAndNewlines)
+            syncToken = try readSyncToken()
         } catch {
             syncMessage = "Unable to read sync credentials: \(error.localizedDescription)"
             return
         }
-        guard let syncToken, !syncToken.isEmpty else {
+        guard let syncToken else {
             syncMessage = "Add a sync token in Settings before pushing queued changes."
             return
         }
@@ -154,6 +155,37 @@ struct SyncWorkspaceView: View {
                 transport: SyncHTTPTransport()
             )
             syncMessage = syncResultMessage(result)
+        } catch {
+            syncMessage = error.localizedDescription
+        }
+    }
+
+    private func executePull() async {
+        guard let serverURL = syncServerURL() else {
+            syncMessage = "Enter a valid sync server URL in Settings."
+            return
+        }
+        let syncToken: String?
+        do {
+            syncToken = try readSyncToken()
+        } catch {
+            syncMessage = "Unable to read sync credentials: \(error.localizedDescription)"
+            return
+        }
+        guard let syncToken else {
+            syncMessage = "Add a sync token in Settings before pulling missing events."
+            return
+        }
+
+        do {
+            let result = try await bridge.executeRemotePull(
+                serverURL: serverURL,
+                syncToken: syncToken,
+                endpointStyle: .logbookScoped,
+                networkAvailable: connectivity.state.hasUsableInternet,
+                transport: SyncHTTPTransport()
+            )
+            syncMessage = syncPullResultMessage(result)
         } catch {
             syncMessage = error.localizedDescription
         }
@@ -190,6 +222,31 @@ struct SyncWorkspaceView: View {
             return nil
         }
         return url
+    }
+
+    private func readSyncToken() throws -> String? {
+        let token = try credentialVault
+            .read(account: "sync_token", providerId: "sync")?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let token, !token.isEmpty else {
+            return nil
+        }
+        return token
+    }
+
+    private func syncPullResultMessage(_ result: SyncPullExecutionResult) -> String {
+        switch result.status {
+        case .blockedByNetwork:
+            return "Network unavailable; missing events were not pulled."
+        case .noRemoteEvents, .inSync:
+            return "No missing remote events."
+        case .applied:
+            return "Pulled \(result.acceptedCount) remote events."
+        case .diverged:
+            return "Sync peer history diverged; manual review is required."
+        case .rejected:
+            return "Remote events were rejected by local verification."
+        }
     }
 
     private func syncResultMessage(_ result: SyncRetryExecutionResult) -> String {

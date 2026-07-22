@@ -284,6 +284,52 @@ final class RustBridgeTests: XCTestCase {
         XCTAssertFalse(bodyString.contains("secret-bearer"))
     }
 
+    func testSyncHTTPTransportBuildsLogbookScopedPullRequest() throws {
+        let logbookID = UUID().uuidString
+        let request = try SyncHTTPTransport().makePullRequest(
+            serverURL: try XCTUnwrap(URL(string: "https://sync.example.test/root/")),
+            bearerToken: nil,
+            syncToken: "sync-secret",
+            logbookId: logbookID,
+            localHeadHash: "local-head"
+        )
+        let body = try XCTUnwrap(request.httpBody)
+        let bodyString = String(decoding: body, as: UTF8.self)
+        let object = try JSONSerialization.jsonObject(with: body) as? [String: Any]
+        let auth = object?["auth"] as? [String: Any]
+
+        XCTAssertEqual(request.httpMethod, "POST")
+        XCTAssertEqual(
+            request.url?.absoluteString,
+            "https://sync.example.test/root/api/v1/logbooks/\(logbookID)/pull"
+        )
+        XCTAssertEqual(auth?["sync_token"] as? String, "sync-secret")
+        XCTAssertEqual(object?["logbook_id"] as? String, logbookID)
+        XCTAssertEqual(object?["local_head_hash"] as? String, "local-head")
+        XCTAssertFalse(bodyString.contains("Bearer"))
+    }
+
+    func testSyncHTTPTransportBuildsHostedSyncPullRequest() throws {
+        let logbookID = UUID().uuidString
+        let request = try SyncHTTPTransport().makePullRequest(
+            serverURL: try XCTUnwrap(URL(string: "https://api.example.test/root/")),
+            bearerToken: "secret-bearer",
+            syncToken: nil,
+            endpointStyle: .hostedSync,
+            logbookId: logbookID,
+            localHeadHash: nil
+        )
+        let body = try XCTUnwrap(request.httpBody)
+        let bodyString = String(decoding: body, as: UTF8.self)
+        let object = try JSONSerialization.jsonObject(with: body) as? [String: Any]
+
+        XCTAssertEqual(request.url?.absoluteString, "https://api.example.test/root/api/v1/sync/pull")
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer secret-bearer")
+        XCTAssertEqual(object?["logbook_id"] as? String, logbookID)
+        XCTAssertNil(object?["auth"])
+        XCTAssertFalse(bodyString.contains("secret-bearer"))
+    }
+
     func testSyncHTTPTransportRejectsEmptyEventBatches() throws {
         XCTAssertThrowsError(
             try SyncHTTPTransport().makePushRequest(
@@ -296,6 +342,40 @@ final class RustBridgeTests: XCTestCase {
         ) { error in
             XCTAssertEqual(error as? SyncHTTPTransportError, .emptyEventBatch)
         }
+    }
+
+    func testSyncPullExecutorFetchesAndAppliesRemoteEvents() async throws {
+        let logbookID = "00000000-0000-4000-8000-000000000001"
+        let event = sampleOfficialEvent(logbookID: logbookID, eventHash: "remote-head")
+        let transport = StubSyncPullTransport(response: pullResponse(logbookID: logbookID, events: [event]))
+        let store = await RustBridgeStore(client: FallbackRustBridgeClient())
+
+        let result = try await store.executeRemotePull(
+            serverURL: try XCTUnwrap(URL(string: "https://sync.example.test")),
+            syncToken: "sync-secret",
+            transport: transport
+        )
+
+        XCTAssertEqual(result.status, .applied)
+        XCTAssertEqual(result.acceptedCount, 1)
+        XCTAssertEqual(result.applyResult?.pull.remoteHeadHash, "remote-head")
+        XCTAssertEqual(transport.requests.first?.syncToken, "sync-secret")
+        XCTAssertEqual(transport.requests.first?.logbookId, logbookID)
+    }
+
+    func testSyncPullExecutorBlocksWithoutNetwork() async throws {
+        let transport = StubSyncPullTransport(response: pullResponse(logbookID: UUID().uuidString, events: []))
+        let store = await RustBridgeStore(client: FallbackRustBridgeClient())
+
+        let result = try await store.executeRemotePull(
+            serverURL: try XCTUnwrap(URL(string: "https://sync.example.test")),
+            syncToken: "sync-secret",
+            networkAvailable: false,
+            transport: transport
+        )
+
+        XCTAssertEqual(result.status, .blockedByNetwork)
+        XCTAssertTrue(transport.requests.isEmpty)
     }
 
     func testSyncRetryExecutorRecordsAcceptedPushResult() async throws {
@@ -591,6 +671,36 @@ final class RustBridgeTests: XCTestCase {
         ]
     }
 
+    private func pullResponse(logbookID: String, events: [SyncOfficialEvent]) -> SyncPullResponse {
+        SyncPullResponse(
+            preview: SyncPullPreview(
+                peerId: "cloud",
+                logbookId: logbookID,
+                status: events.isEmpty ? "in_sync" : "remote_ahead",
+                localHeadHash: nil,
+                remoteHeadHash: events.last?.eventHash,
+                missingEventCount: events.count,
+                remoteEventCount: events.count,
+                events: events.map(eventMetadata),
+                message: events.isEmpty ? "Local and remote heads match" : "\(events.count) remote events are available to pull"
+            ),
+            events: events
+        )
+    }
+
+    private func eventMetadata(_ event: SyncOfficialEvent) -> SyncEventMetadata {
+        SyncEventMetadata(
+            eventId: event.eventId,
+            logbookId: event.logbookId,
+            entityId: event.entityId,
+            previousHash: event.previousHash,
+            eventHash: event.eventHash,
+            timestamp: event.timestamp,
+            eventType: event.eventType,
+            schemaVersion: event.schemaVersion
+        )
+    }
+
     private func sampleOfficialEvent(
         logbookID: String = UUID().uuidString,
         eventHash: String = "sample-event-hash",
@@ -800,6 +910,66 @@ private struct StubSyncPushTransport: SyncPushTransporting {
             rejectedCount: 0,
             serverHeadHash: events.last?.eventHash,
             errors: []
+        )
+    }
+}
+
+private final class StubSyncPullTransport: SyncPullTransporting {
+    struct Request {
+        var serverURL: URL
+        var bearerToken: String?
+        var syncToken: String?
+        var endpointStyle: SyncPullEndpointStyle
+        var logbookId: String
+        var localHeadHash: String?
+    }
+
+    private let response: SyncPullResponse?
+    private let error: Error?
+    private(set) var requests: [Request] = []
+
+    init(response: SyncPullResponse) {
+        self.response = response
+        self.error = nil
+    }
+
+    init(error: Error) {
+        self.response = nil
+        self.error = error
+    }
+
+    func pull(
+        serverURL: URL,
+        bearerToken: String?,
+        syncToken: String?,
+        endpointStyle: SyncPullEndpointStyle,
+        logbookId: String,
+        localHeadHash: String?
+    ) async throws -> SyncPullResponse {
+        requests.append(Request(
+            serverURL: serverURL,
+            bearerToken: bearerToken,
+            syncToken: syncToken,
+            endpointStyle: endpointStyle,
+            logbookId: logbookId,
+            localHeadHash: localHeadHash
+        ))
+        if let error {
+            throw error
+        }
+        return response ?? SyncPullResponse(
+            preview: SyncPullPreview(
+                peerId: "cloud",
+                logbookId: logbookId,
+                status: "in_sync",
+                localHeadHash: localHeadHash,
+                remoteHeadHash: localHeadHash,
+                missingEventCount: 0,
+                remoteEventCount: 0,
+                events: [],
+                message: "Local and remote heads match"
+            ),
+            events: []
         )
     }
 }
