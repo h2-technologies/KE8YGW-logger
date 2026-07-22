@@ -1107,6 +1107,8 @@ struct LanPairingTokenRequest {
 struct LanPairingAcceptRequest {
     token_id: uuid::Uuid,
     pairing_code: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    auth_code: Option<String>,
     peer_device_id: uuid::Uuid,
     peer_display_name: String,
     logbook_id: Option<uuid::Uuid>,
@@ -1118,6 +1120,8 @@ struct LanPairingCompleteRequest {
     peer_id: Option<String>,
     token_id: uuid::Uuid,
     pairing_code: String,
+    #[serde(default)]
+    auth_code: Option<String>,
     public_key_fingerprint: Option<String>,
 }
 
@@ -5234,11 +5238,18 @@ fn handle_lan_pairing_accept(state: &AppState, body: &[u8]) -> Vec<u8> {
     };
     let logbook_id = request.logbook_id.unwrap_or(state.logbook_id);
     let pairing_code = request.pairing_code.trim().to_owned();
+    if pairing_code.is_empty() {
+        return json_error(400, "pairing code is required");
+    }
+    let auth_code = match lan_endpoint_auth_code(request.auth_code.as_deref(), &pairing_code) {
+        Ok(auth_code) => auth_code,
+        Err(error) => return json_response_with_status(400, &json!({"ok": false, "error": error})),
+    };
     let auth_credential_id = match store_lan_auth_credential(
         state,
         request.peer_device_id,
         &request.peer_display_name,
-        &pairing_code,
+        &auth_code,
     ) {
         Ok(credential_id) => credential_id,
         Err(error) => return json_response_with_status(500, &json!({"ok": false, "error": error})),
@@ -5292,10 +5303,15 @@ fn handle_lan_pairing_complete(state: &AppState, body: &[u8]) -> Vec<u8> {
     if pairing_code.is_empty() {
         return json_error(400, "pairing code is required");
     }
+    let auth_code = match lan_endpoint_auth_code(request.auth_code.as_deref(), &pairing_code) {
+        Ok(auth_code) => auth_code,
+        Err(error) => return json_response_with_status(400, &json!({"ok": false, "error": error})),
+    };
     let local_identity = local_sync_identity(state);
     let remote_accept = LanPairingAcceptRequest {
         token_id: request.token_id,
         pairing_code: pairing_code.clone(),
+        auth_code: Some(auth_code.clone()),
         peer_device_id: local_identity.device_id,
         peer_display_name: local_identity.display_name,
         logbook_id: Some(state.logbook_id),
@@ -5322,7 +5338,7 @@ fn handle_lan_pairing_complete(state: &AppState, body: &[u8]) -> Vec<u8> {
     };
 
     let auth_credential_id =
-        match store_lan_auth_credential(state, peer.device_id, &peer.display_name, &pairing_code) {
+        match store_lan_auth_credential(state, peer.device_id, &peer.display_name, &auth_code) {
             Ok(credential_id) => credential_id,
             Err(error) => {
                 return json_response_with_status(500, &json!({"ok": false, "error": error}));
@@ -5477,6 +5493,20 @@ fn handle_lan_trust_revoke(state: &AppState, body: &[u8]) -> Vec<u8> {
     }
 }
 
+fn lan_endpoint_auth_code(
+    provided_auth_code: Option<&str>,
+    fallback_pairing_code: &str,
+) -> Result<String, String> {
+    let auth_code = match provided_auth_code {
+        Some(value) => value.trim(),
+        None => fallback_pairing_code.trim(),
+    };
+    if auth_code.is_empty() {
+        return Err("LAN auth code is required".to_owned());
+    }
+    Ok(auth_code.to_owned())
+}
+
 fn store_lan_auth_credential(
     state: &AppState,
     peer_device_id: uuid::Uuid,
@@ -5485,7 +5515,7 @@ fn store_lan_auth_credential(
 ) -> Result<uuid::Uuid, String> {
     let secret = secret.trim();
     if secret.len() < 32 {
-        return Err("LAN pairing code is too short for endpoint authentication".to_owned());
+        return Err("LAN auth code is too short for endpoint authentication".to_owned());
     }
     let mut metadata = CredentialMetadata::new(
         "lan-sync-peer",
@@ -8040,6 +8070,82 @@ mod tests {
         assert!(lan_endpoint_auth_from_headers(&headers)
             .unwrap_err()
             .contains("signature"));
+    }
+
+    #[test]
+    fn lan_pairing_accept_stores_separate_endpoint_auth_code() {
+        let state = test_state("ke8ygw-ham-gui-lan-pairing-auth-code");
+        let issuer = local_sync_device_id(&state);
+        let peer_device_id = uuid::Uuid::new_v4();
+        let token = state
+            .lan_trust_store
+            .issue_pairing_token(
+                issuer,
+                state.logbook_id,
+                "Desktop LAN Peer",
+                true,
+                chrono::Utc::now(),
+            )
+            .unwrap();
+        let auth_code = format!(
+            "{}{}",
+            uuid::Uuid::new_v4().simple(),
+            uuid::Uuid::new_v4().simple()
+        );
+        let response = response_json(handle_lan_pairing_accept(
+            &state,
+            serde_json::to_vec(&json!({
+                "token_id": token.token_id,
+                "pairing_code": token.pairing_code,
+                "auth_code": auth_code,
+                "peer_device_id": peer_device_id,
+                "peer_display_name": "iOS Field Phone",
+                "logbook_id": state.logbook_id,
+                "public_key_fingerprint": "sha256:test"
+            }))
+            .unwrap()
+            .as_slice(),
+        ));
+        assert_eq!(response["ok"], true);
+        let credential_id: uuid::Uuid =
+            serde_json::from_value(response["trusted_device"]["auth_credential_id"].clone())
+                .unwrap();
+        let stored_secret = retrieve_lan_auth_secret(&state, credential_id).unwrap();
+        assert_eq!(stored_secret, auth_code);
+        assert_ne!(stored_secret, token.pairing_code);
+
+        let target = format!("/api/sync/events-since?logbook_id={}", state.logbook_id);
+        let signature = lan_auth_signature(
+            &stored_secret,
+            peer_device_id,
+            state.logbook_id,
+            "GET",
+            &target,
+            "pairing-accept-test-nonce",
+        );
+        assert!(verify_lan_auth_signature(
+            &auth_code,
+            peer_device_id,
+            state.logbook_id,
+            "GET",
+            &target,
+            "pairing-accept-test-nonce",
+            &signature,
+        ));
+        assert!(!verify_lan_auth_signature(
+            &token.pairing_code,
+            peer_device_id,
+            state.logbook_id,
+            "GET",
+            &target,
+            "pairing-accept-test-nonce",
+            &signature,
+        ));
+
+        let snapshot_json =
+            serde_json::to_string(&state.lan_trust_store.snapshot().unwrap()).unwrap();
+        assert!(!snapshot_json.contains(&token.pairing_code));
+        assert!(!snapshot_json.contains(&auth_code));
     }
 
     #[test]

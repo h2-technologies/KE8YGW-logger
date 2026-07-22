@@ -11,6 +11,7 @@ struct SyncWorkspaceView: View {
     @State private var lanPeerDeviceId = ""
     @State private var lanPeerDisplayName = ""
     @State private var lanPairingTokenId = ""
+    @State private var lanPairingCode = ""
     @State private var lanPairingFingerprint = ""
     @State private var lanSelectedDeviceId = ""
     @State private var lanIssuedPairing: SyncIssuedPairingToken?
@@ -144,12 +145,18 @@ struct SyncWorkspaceView: View {
                 TextField("Pairing Token ID", text: $lanPairingTokenId)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
+                SecureField("Pairing Code", text: $lanPairingCode)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
                 TextField("Fingerprint", text: $lanPairingFingerprint)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
                 HStack {
                     Button("Issue Code") {
                         Task { await issueLanPairingToken() }
+                    }
+                    Button("Accept Code") {
+                        Task { await acceptLanPairingToken() }
                     }
                     Button("Trust Peer") {
                         Task { await trustLanPeer() }
@@ -207,6 +214,56 @@ struct SyncWorkspaceView: View {
             lanIssuedPairing = result.pairing
             syncMessage = "Issued LAN pairing code \(result.pairing.tokenId)."
         } catch {
+            syncMessage = error.localizedDescription
+        }
+    }
+
+    private func acceptLanPairingToken() async {
+        let tokenId = lanPairingTokenId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard UUID(uuidString: tokenId) != nil else {
+            syncMessage = "Enter a valid pairing token UUID."
+            return
+        }
+        let pairingCode = lanPairingCode.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !pairingCode.isEmpty else {
+            syncMessage = "Enter the pairing code shown on this device."
+            return
+        }
+        let peerDeviceId = lanPeerDeviceId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard UUID(uuidString: peerDeviceId) != nil else {
+            syncMessage = "Enter a valid peer device UUID."
+            return
+        }
+        let displayName = lanPeerDisplayName
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .nonEmpty ?? "LAN Peer"
+        let credentialId = UUID().uuidString
+        do {
+            try credentialVault.save(
+                secret: generateLanAuthSecret(),
+                account: lanAuthAccount(credentialId),
+                providerId: "lan_sync"
+            )
+            let result = try await bridge.acceptLanPairingToken(
+                tokenId: tokenId,
+                pairingCode: pairingCode,
+                peerDeviceId: peerDeviceId,
+                peerDisplayName: displayName,
+                publicKeyFingerprint: lanPairingFingerprint.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty,
+                authCredentialId: credentialId
+            )
+            lanSelectedDeviceId = result.trustedDevice.deviceId ?? peerDeviceId
+            lanPairingTokenId = ""
+            lanPairingCode = ""
+            lanPeerDeviceId = ""
+            lanPeerDisplayName = ""
+            lanIssuedPairing = nil
+            syncMessage = "Accepted LAN pairing for \(result.trustedDevice.displayName ?? displayName)."
+        } catch {
+            try? credentialVault.delete(
+                account: lanAuthAccount(credentialId),
+                providerId: "lan_sync"
+            )
             syncMessage = error.localizedDescription
         }
     }

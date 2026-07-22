@@ -68,11 +68,11 @@ outside issue #2.
      request construction, native pull fetch -> Rust apply coordination, request
      retry plans with native network monitor state, display saved conflict-review
      records with recommended actions and structured conflict messages, expose
-     Rust-owned LAN trust snapshots, local one-time code issue, direct peer
-     trust, Keychain-backed LAN auth rotation, and revocation, and surface
+     Rust-owned LAN trust snapshots, local one-time code issue/acceptance,
+     direct peer trust, Keychain-backed LAN auth rotation, and revocation, and surface
      no-network/user-action retry and pull outcomes without owning event
      creation or domain rules.
-   - Remaining: production iOS reciprocal pairing completion UX, stronger LAN
+   - Remaining: production iOS reciprocal LAN transport completion UX, stronger LAN
      key-exchange hardening, end-to-end cross-client branch review/reconciliation workflow
      qualification, physical-device LAN/iOS local-network
      validation, release-device iOS background task and poor-network

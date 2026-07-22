@@ -24,8 +24,8 @@ accepted-prefix/rejected-tail retry result recording, Rust-owned pulled-event
 apply through `sync.remote_events.apply`, self-hosted/logbook-scoped and hosted
 pull request construction, native pull fetch -> Rust apply coordination, saved
 conflict-review records, selected recovery paths, and structured conflict
-messages, and LAN trust snapshot/issue/trust/rotate/revoke controls that keep
-LAN auth secrets in Keychain and store only credential IDs in Rust support
+messages, and LAN trust snapshot/issue/accept/trust/rotate/revoke controls
+that keep LAN auth secrets in Keychain and store only credential IDs in Rust support
 state. Signing, provisioning, TestFlight, App Store metadata, privacy manifest,
 physical-device validation, release-safe BGTask execution, real
 hosted/self-hosted native sync endpoint qualification, production reciprocal
@@ -107,9 +107,10 @@ network, or background modes speculatively.
   Swift.
 - The Sync workspace can display saved Rust conflict-review records and
   recommended operator actions without merging history in Swift.
-- The Sync workspace can issue local LAN pairing codes, trust/revoke peers, and
-  rotate LAN auth credentials without storing raw pairing codes or LAN auth
-  secrets in Rust support state, logs, diagnostics, or SwiftData.
+- The Sync workspace can issue and accept local LAN pairing codes,
+  trust/revoke peers, and rotate LAN auth credentials without storing raw
+  pairing codes or LAN auth secrets in Rust support state, logs, diagnostics,
+  or SwiftData.
 - ADIF import/export works through native document flows.
 - POTA/SOTA and Net Control features are usable or clearly gated by account
   capability.

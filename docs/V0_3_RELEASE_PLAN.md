@@ -79,14 +79,15 @@ Last audited: 2026-07-22
   secrets stored through `CredentialStore` and old credential references
   deleted after trust state updates.
 - Guided browser LAN pairing/trust panel for issuing local one-time codes,
-  entering peer token/code/fingerprint values, completing reciprocal pairing,
+  entering peer token/code/fingerprint values, completing reciprocal pairing
+  with a generated endpoint auth code distinct from the one-time pairing code,
   generating replacement auth codes, rotating LAN auth, and revoking selected
   trusted peers without prompt-only handling.
 - Native iOS LAN trust bridge and Sync workspace controls for Rust-owned
-  trust snapshots, local one-time code issue, direct peer trust, Keychain-backed
-  LAN auth credential rotation, and revocation. Pairing codes are returned only
-  by the issue command; snapshots and `lan-trust.json` do not store raw pairing
-  codes or LAN auth secrets.
+  trust snapshots, local one-time code issue and acceptance, direct peer trust,
+  Keychain-backed LAN auth credential rotation, and revocation. Pairing codes
+  are returned only by the issue command; snapshots and `lan-trust.json` do not
+  store raw pairing codes or LAN auth secrets.
 - Automatic IPv4/IPv6 multicast discovery worker that probes reachable peer
   identity before recording peers.
 - Older trust records without an `auth_credential_id` remain readable but must
@@ -94,7 +95,7 @@ Last audited: 2026-07-22
 
 ## Still Incomplete For v1
 
-- Production iOS reciprocal pairing completion UX and full release-device
+- Production iOS reciprocal LAN transport completion UX and full release-device
   pairing qualification.
 - Stronger LAN key-exchange hardening.
 - Physical-device LAN and iOS Local Network permission validation.

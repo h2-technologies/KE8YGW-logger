@@ -835,7 +835,7 @@ replication protocol can compare event ancestry safely.
 The GUI Sync Status panel can start/stop discovery, refresh peers, handshake
 with a selected peer, manually add a direct LAN HTTP peer, preview a pull, issue
 local one-time pairing codes, enter peer token/code/fingerprint values,
-complete reciprocal pairing, generate replacement LAN auth codes, rotate trust
+complete reciprocal pairing with a generated endpoint auth code, generate replacement LAN auth codes, rotate trust
 credentials, revoke a selected peer, recover the offline queue, pull missing
 events from trusted peers, and copy the local sync identity. The current implementation
 keeps peers in memory, includes a demo refresh path for local testing, and can
@@ -844,12 +844,13 @@ manually entered numeric loopback/private/link-local `http://ip:port`.
 Discovered peers are recorded only after their advertised API port serves a
 matching `/api/sync/state` identity.
 
-Pairing-derived LAN auth secrets are stored through the Rust credential path.
-Durable LAN trust state stores credential IDs, not raw secrets.
+Reciprocal browser pairing stores a generated LAN endpoint auth code through
+the Rust credential path instead of reusing the one-time pairing code. Durable
+LAN trust state stores credential IDs, not raw secrets.
 Native iOS uses the same Rust trust store through FFI for trust snapshots,
-local one-time code issue, direct peer trust, Keychain-backed LAN auth
-credential rotation, and revocation. Pairing codes are only returned by the
-issue command and are not stored in trust snapshots.
+local one-time code issue and acceptance, direct peer trust, Keychain-backed
+LAN auth credential rotation, and revocation. Pairing codes are only returned
+by the issue command and are not stored in trust snapshots.
 
 Runtime events include:
 
@@ -864,7 +865,7 @@ Runtime events include:
 Security limitations for MVP: peers are untrusted until they pass the durable
 LAN trust store, no destructive commands are accepted, automatic replication is
 disabled, protected LAN reads require HMAC-SHA256 request proof after pairing,
-and production iOS reciprocal pairing completion UX, stronger LAN key-exchange
+and production iOS reciprocal LAN transport completion UX, stronger LAN key-exchange
 hardening, plus physical-device LAN/iOS validation remain TODOs before
 unattended LAN sync.
 
@@ -924,7 +925,7 @@ path, structured conflict messages, and review health, and the Sync workspace
 shows open review actions, peer IDs, and conflict details without owning merge
 rules. LAN auth credential rotation/recovery is available through the GUI trust
 endpoint. End-to-end cross-client branch review workflow qualification, signed
-events, production iOS reciprocal pairing completion UX, stronger LAN key-exchange
+events, production iOS reciprocal LAN transport completion UX, stronger LAN key-exchange
 hardening, and physical-device LAN/iOS local-network validation are still
 deferred.
 
@@ -996,13 +997,13 @@ hashes. Trusted devices are scoped to logbooks, record only credential
 references for their shared LAN auth secret, reject replayed nonces, and revoke
 immediately. LAN list/head/event read endpoints require requester device ID,
 fresh replay nonce, signature-version, and HMAC-SHA256 signature headers. The
-serving peer verifies the signature against the pairing-derived credential,
+serving peer verifies the signature against the stored endpoint-auth credential,
 logbook scope, revocation state, and replay history before returning logbook or
 event data. Mutating LAN pull rejects untrusted, revoked, wrong-logbook, or
 replayed peers before appending remote official events.
-Native iOS exposes the same Rust trust state for local code issue, direct trust,
-Keychain-backed auth rotation, and revocation; Swift stores LAN auth secrets in
-Keychain and Rust stores only credential IDs.
+Native iOS exposes the same Rust trust state for local code issue/acceptance,
+direct trust, Keychain-backed auth rotation, and revocation; Swift stores LAN
+auth secrets in Keychain and Rust stores only credential IDs.
 Manual conflict-review records are also durable support state. They store
 structured conflict reports and the operator-selected recovery path without
 rewriting official history. Unsafe divergent pulls are rejected by the shared
@@ -1050,7 +1051,7 @@ discovered must bind its GUI API to a LAN-reachable address such as
 `0.0.0.0:<port>` or a specific private interface; loopback-only peers can still
 use manual loopback URLs. Mutating LAN pull also requires the explicit
 `sync.lan.pull` permission, durable peer trust, and signed remote read requests.
-Production iOS reciprocal pairing completion UX, stronger LAN key-exchange
+Production iOS reciprocal LAN transport completion UX, stronger LAN key-exchange
 hardening, and physical iOS Local Network permission validation remain next sync
 tasks.
 

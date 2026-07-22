@@ -226,7 +226,8 @@ conflict details without owning merge or validation rules.
 - explicit operator approval before issuing a pairing token
 - short-lived single-use pairing tokens stored only as hashes
 - trusted device records scoped to logbook IDs
-- `auth_credential_id` references for pairing-derived LAN request secrets
+- `auth_credential_id` references for LAN endpoint-auth secrets created during
+  pairing or rotation
 - credential-reference rotation for recovery when a LAN auth code must change
 - optional public-key fingerprint metadata for future signed transport
 - immediate revocation
@@ -237,10 +238,13 @@ auth-rotation, and revoke endpoints. The browser Sync panel wraps those
 endpoints in guided LAN pairing/trust controls for issuing local one-time
 codes, entering peer token/code/fingerprint values, completing reciprocal
 pairing, generating replacement auth codes, rotating LAN auth, and revoking
-trusted peers. `pairing-complete` posts the
-operator-entered peer token and pairing code to the selected peer, stores the
-accepted pairing code as a LAN auth credential through `CredentialStore`, and
-records only the resulting credential ID in durable trust state.
+trusted peers. `pairing-complete` posts the operator-entered peer token and
+pairing code plus a browser-generated `auth_code` to the selected peer, stores
+that generated endpoint-auth code through `CredentialStore` on both sides, and
+records only the resulting credential IDs in durable trust state. New browser
+clients no longer use the one-time pairing code as the long-lived LAN endpoint
+auth secret; the `pairing-accept` endpoint still falls back to the pairing code
+only for compatibility with older clients that omit `auth_code`.
 `/api/sync/lan/rotate-auth` lets an operator replace a trusted peer's LAN auth
 credential reference for the current logbook; the replacement secret is stored
 through `CredentialStore`, the trust record is updated only after the new
@@ -257,11 +261,12 @@ Native iOS exposes the same durable trust store through Rust FFI commands:
 `sync.lan_trust.snapshot`, `sync.lan_trust.issue_pairing_token`,
 `sync.lan_trust.accept_pairing_token`, `sync.lan_trust.trust_peer`,
 `sync.lan_trust.rotate_auth`, and `sync.lan_trust.revoke`. The iOS Sync
-workspace can issue a local one-time code, directly trust a peer, rotate
-Keychain-backed LAN auth credentials, and revoke trust. The accept-pairing
-command requires an `auth_credential_id`; Swift creates the LAN auth secret in
-Keychain first and Rust persists only that credential ID. Pairing codes are
-returned only from the issue-token command and are not present in snapshots.
+workspace can issue a local one-time code, accept a locally issued pairing code
+for a typed peer, directly trust a peer, rotate Keychain-backed LAN auth
+credentials, and revoke trust. The accept-pairing command requires an
+`auth_credential_id`; Swift creates the LAN auth secret in Keychain first and
+Rust persists only that credential ID. Pairing codes are returned only from the
+issue-token command and are not present in snapshots.
 
 LAN `list-logbooks`, `get-head`, `events-since`, and `event-metadata` requests
 must include these headers:
@@ -304,7 +309,7 @@ reachability and reduce spoofing; official event writes remain local and
 trust-gated; protected LAN read endpoints require reciprocal trust state,
 fresh nonces, and HMAC-SHA256 request proof. The current LAN HTTP transport is
 still not encrypted and must not be exposed outside trusted local networks.
-Production iOS reciprocal pairing completion UX, stronger LAN key-exchange
+Production iOS reciprocal LAN transport completion UX, stronger LAN key-exchange
 hardening, physical-device LAN validation, and iOS Local Network permission
 validation remain before unattended LAN sync is considered complete.
 
@@ -346,10 +351,10 @@ The current self-hosted server uses durable local storage by default: embedded S
 
 ## Deferred Work
 
-- Production iOS reciprocal pairing completion UX over the durable trust store.
+- Production iOS reciprocal LAN transport completion UX over the durable trust store.
 - Signed official events.
 - End-to-end encrypted relay.
-- Stronger LAN key-exchange hardening and production iOS reciprocal pairing completion UX.
+- Stronger LAN key-exchange hardening and production iOS reciprocal LAN transport completion UX.
 - Physical-device LAN and iOS Local Network permission validation.
 - End-to-end cross-client branch review and reconciliation workflow beyond the
   current guided browser review surface and explicit corrective-event commands.

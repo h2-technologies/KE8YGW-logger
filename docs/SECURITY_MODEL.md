@@ -95,7 +95,7 @@ sessions for compatibility-only sync/report flows.
 GUI LAN sync read endpoints for logbook lists, heads, event ranges, and event
 metadata require trusted-device, replay-nonce, signature-version, and
 HMAC-SHA256 signature headers. The serving peer verifies those headers against a
-pairing-derived credential stored through `CredentialStore`, durable LAN trust
+stored endpoint-auth credential created during pairing or rotation through `CredentialStore`, durable LAN trust
 records, logbook scope, revocation state, and replay history before returning
 logbook or event data. LAN trust JSON stores only credential references, not raw
 pairing codes. The GUI LAN auth-rotation endpoint stores the replacement secret
@@ -106,7 +106,7 @@ secret-free.
 
 Future work:
 
-- production iOS reciprocal pairing completion UX on top of the durable LAN trust store
+- production iOS reciprocal LAN transport completion UX on top of the durable LAN trust store
 - stronger LAN key-exchange hardening
 - signed official events
 - end-to-end encrypted relay

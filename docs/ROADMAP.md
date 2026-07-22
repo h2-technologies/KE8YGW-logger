@@ -39,8 +39,9 @@ wrapper is not the iOS client. See `V1_RELEASE_PLAN.md`,
      the GUI also runs IPv4/IPv6 multicast discovery with reachable identity
      probing, plus guided browser LAN pairing/trust controls and GUI LAN auth
      credential rotation/recovery. Native iOS now has Rust-owned LAN trust
-     snapshot/issue/trust/rotate/revoke bridge commands with Keychain-backed
-     credential references. Production iOS reciprocal pairing completion UX,
+     snapshot/issue/accept/trust/rotate/revoke bridge commands with
+     Keychain-backed credential references. Production iOS reciprocal LAN
+     transport completion UX,
      stronger LAN key-exchange hardening, and physical-device LAN/iOS
      local-network validation remain high priority.
 
@@ -113,7 +114,8 @@ wrapper is not the iOS client. See `V1_RELEASE_PLAN.md`,
      official event hashes, plus guided browser conflict-review and LAN
      pairing/trust surfaces for saved reviews, structured conflict summaries,
      explicit recovery choices, corrective QSO note events, local one-time
-     pairing codes, reciprocal pairing completion, auth rotation, and trust
+     pairing codes, reciprocal pairing completion with generated endpoint auth
+     codes, auth rotation, and trust
      revocation. Deterministic shared sync golden tests
      cover crash recovery, transient retry, duplicate/reordered delivery,
      iOS-style pull replay, clock-skewed timestamps, divergent heads,
@@ -123,8 +125,8 @@ wrapper is not the iOS client. See `V1_RELEASE_PLAN.md`,
      endpoint authorization, GUI LAN auth credential rotation/recovery, desktop
      cloud reconnect auto-drain when auto-push is enabled, iOS FFI background
      retry planning/result classification, and iOS LAN trust
-     snapshot/issue/trust/rotate/revoke bridge commands.
-     Production iOS reciprocal pairing completion UX, stronger LAN key-exchange
+     snapshot/issue/accept/trust/rotate/revoke bridge commands.
+     Production iOS reciprocal LAN transport completion UX, stronger LAN key-exchange
      hardening, end-to-end cross-client branch review/reconciliation workflow
      qualification,
      physical-device LAN/iOS local-network validation, and release-device iOS

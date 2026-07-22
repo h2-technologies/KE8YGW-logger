@@ -53,12 +53,12 @@ wrapper.
   construction, native pull fetch -> Rust apply coordination, saved
   conflict-review records, selected recovery paths, and structured conflict
   messages, plus Rust-owned LAN trust snapshots, local one-time pairing-code
-  issue, direct peer trust, Keychain-backed LAN auth credential rotation, and
-  revocation controls. The Sync workspace can ask Rust for no-network/user-action
+  issue and acceptance, direct peer trust, Keychain-backed LAN auth credential
+  rotation, and revocation controls. The Sync workspace can ask Rust for no-network/user-action
   retry decisions using native network state, apply pulled official envelopes
   through shared verification, surface open review actions, and manage LAN trust
   without storing raw LAN auth secrets in Rust support state. Full real endpoint
-  qualification, production reciprocal pairing completion UX, release-device
+  qualification, production reciprocal LAN transport completion UX, release-device
   scheduling, and broader reconciliation workflows are not complete end-to-end
   on iOS.
 - MapKit surfaces exist, but cached/offline map regions and production map

@@ -3509,10 +3509,12 @@ async function trustSelectedPeer() {
     render();
     return;
   }
+  const authCode = strongLocalAuthCode();
   const trusted = await syncPost("/api/sync/lan/pairing-complete", {
     peer_id: peer.peer_id,
     token_id: tokenId,
     pairing_code: pairingCode,
+    auth_code: authCode,
     public_key_fingerprint: publicKeyFingerprint,
   });
   state.importSummary = trusted.trusted_device || trusted;

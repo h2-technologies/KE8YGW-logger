@@ -42,7 +42,7 @@ Partial:
 - Hosted web/desktop/iOS UX for the implemented account/session/device/admin
   APIs, production email/Turnstile deployment configuration, hosted
   backup/divergence UX, provider runtime execution, cloud/self-hosted sync,
-  production iOS reciprocal pairing completion UX, stronger LAN key-exchange
+  production iOS reciprocal LAN transport completion UX, stronger LAN key-exchange
   hardening, desktop
   packaging, native iOS projection/cache flows, and release automation.
 
@@ -52,7 +52,7 @@ Test-only or fake/default paths:
   GUI demo peer/runtime data.
 
 Deferred or unimplemented:
-- Production iOS reciprocal pairing completion UX, stronger LAN key-exchange hardening,
+- Production iOS reciprocal LAN transport completion UX, stronger LAN key-exchange hardening,
   physical-device LAN/iOS local-network validation, LoTW/TQSL live upload,
   SOTAWatch approved live access, RBN/background DX lifecycle,
   cached/offline map regions, full contesting, full EmComm forms, signed desktop

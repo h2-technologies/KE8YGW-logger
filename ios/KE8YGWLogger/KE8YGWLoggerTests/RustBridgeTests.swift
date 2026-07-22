@@ -271,6 +271,32 @@ final class RustBridgeTests: XCTestCase {
         XCTAssertNotNil(store.sync.lanTrust?.trustedDevices.first(where: { $0.deviceId == peerDeviceID })?.revokedAt)
     }
 
+    @MainActor
+    func testLanPairingAcceptBridgeConsumesTokenAndStoresCredentialReference() async throws {
+        let store = RustBridgeStore(client: FallbackRustBridgeClient())
+        let peerDeviceID = UUID().uuidString
+        let authCredentialID = UUID().uuidString
+        let issued = try await store.issueLanPairingToken(
+            issuerDisplayName: "iOS Field Phone",
+            approvedByOperator: true
+        )
+
+        let accepted = try await store.acceptLanPairingToken(
+            tokenId: issued.pairing.tokenId,
+            pairingCode: issued.pairing.pairingCode,
+            peerDeviceId: peerDeviceID,
+            peerDisplayName: "Desktop LAN Peer",
+            publicKeyFingerprint: "sha256:desktop",
+            authCredentialId: authCredentialID
+        )
+
+        XCTAssertEqual(accepted.trustedDevice.deviceId, peerDeviceID)
+        XCTAssertEqual(accepted.trustedDevice.authCredentialId, authCredentialID)
+        XCTAssertEqual(accepted.trustedDevice.pairingTokenId, issued.pairing.tokenId)
+        XCTAssertEqual(accepted.trustedDevice.publicKeyFingerprint, "sha256:desktop")
+        XCTAssertNotNil(store.sync.lanTrust?.pairingTokens.first(where: { $0.tokenId == issued.pairing.tokenId })?.consumedAt)
+    }
+
     func testSyncRetryPlanDecodesTransportableOfficialEvents() throws {
         let event = officialEventPayload()
         let envelope: [String: Any] = [
