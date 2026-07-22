@@ -31,6 +31,12 @@ Last audited: 2026-07-22
   execution coordination, hosted `/api/v1/sync/push` request construction, and
   partial-acceptance retry-result handling to the iOS Sync workspace without
   moving queue ordering, event creation, or failure classification out of Rust.
+- Native iOS background retry registration for a permitted
+  `BGProcessingTask` identifier, with bundle background-processing
+  declarations and a scheduler eligibility policy that requires enabled Rust
+  settings, a valid sync URL, a Keychain sync token, and pending Rust queue
+  work before scheduling the same Rust-plan -> Swift-transport -> Rust-result
+  executor.
 - Shared sync golden coverage proves a partial push can accept a valid prefix,
   stop the rejected tail as `user_action_required`, avoid local or cloud
   duplicates, and complete the reviewed tail by acknowledged event hash.
@@ -137,7 +143,8 @@ Last audited: 2026-07-22
   native saved-review display, desktop/iOS review stores, and desktop/iOS
   corrective-event endpoints.
 - Release-device iOS background task execution, poor-network behavior, and
-  local-network permission validation, including release-device
+  local-network permission validation beyond the current bundle declarations,
+  scheduler policy, and simulator-safe Swift tests, including release-device
   hosted/self-hosted native push/pull transport execution.
 - Release-device hosted web/desktop/iOS/self-hosted end-to-end qualification,
   physical-device tests, and full migration matrix.

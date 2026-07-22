@@ -1051,6 +1051,61 @@ final class RustBridgeTests: XCTestCase {
         XCTAssertEqual(client.retryResultPayloads[1]["operation_ids"] as? [String], [operationIDs[1]])
     }
 
+    func testBackgroundRetryPolicySchedulesConfiguredPendingWork() throws {
+        let now = Date(timeIntervalSince1970: 1_785_000_000)
+        let policy = SyncBackgroundRetryPolicy(minimumDelaySeconds: 300)
+        let decision = policy.decision(
+            syncSettings: backgroundSyncSettings(serverURL: "https://sync.example.test", enabled: true),
+            pendingChanges: 2,
+            hasSyncToken: true,
+            now: now
+        )
+
+        XCTAssertTrue(decision.shouldSchedule)
+        XCTAssertNil(decision.skipReason)
+        XCTAssertEqual(decision.earliestBeginDate, now.addingTimeInterval(300))
+        XCTAssertEqual(SyncBackgroundRetryTask.identifier, "com.h2technologiesllc.ke8ygw-logger.sync.retry")
+        XCTAssertEqual(SyncBackgroundRetryTask.maxMutations, 25)
+        XCTAssertEqual(SyncBackgroundRetryTask.backgroundTimeBudgetSeconds, 20)
+    }
+
+    func testBackgroundRetryPolicySkipsUnsafeOrUnneededScheduling() throws {
+        let policy = SyncBackgroundRetryPolicy(minimumDelaySeconds: 300)
+
+        XCTAssertEqual(
+            policy.decision(
+                syncSettings: backgroundSyncSettings(serverURL: "https://sync.example.test", enabled: false),
+                pendingChanges: 2,
+                hasSyncToken: true
+            ).skipReason,
+            .disabled
+        )
+        XCTAssertEqual(
+            policy.decision(
+                syncSettings: backgroundSyncSettings(serverURL: "file:///tmp/sync", enabled: true),
+                pendingChanges: 2,
+                hasSyncToken: true
+            ).skipReason,
+            .missingServerURL
+        )
+        XCTAssertEqual(
+            policy.decision(
+                syncSettings: backgroundSyncSettings(serverURL: "https://sync.example.test", enabled: true),
+                pendingChanges: 2,
+                hasSyncToken: false
+            ).skipReason,
+            .missingSyncToken
+        )
+        XCTAssertEqual(
+            policy.decision(
+                syncSettings: backgroundSyncSettings(serverURL: "https://sync.example.test", enabled: true),
+                pendingChanges: 0,
+                hasSyncToken: true
+            ).skipReason,
+            .noPendingChanges
+        )
+    }
+
     func testRustBridgeStoreMapsStructuredErrors() async throws {
         let store = await RustBridgeStore(client: ErrorRustBridgeClient())
 
@@ -1306,6 +1361,19 @@ final class RustBridgeTests: XCTestCase {
                 "band": .string("20m"),
                 "mode": .string("SSB")
             ])
+        )
+    }
+
+    private func backgroundSyncSettings(serverURL: String, enabled: Bool) -> RustSyncSettings {
+        RustSyncSettings(
+            syncServerUrl: serverURL,
+            deviceName: "KE8YGW Logger iOS",
+            preferLanSync: true,
+            autoPushEnabled: true,
+            autoPullEnabled: false,
+            syncIntervalMinutes: 15,
+            backgroundSyncEnabled: enabled,
+            accountLabel: nil
         )
     }
 }

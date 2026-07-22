@@ -178,6 +178,13 @@ official history itself. The native retry executor now performs the
 Rust-plan -> Swift-transport -> Rust-result sequence for the configured
 sync-token push path, including accepted-prefix recording when a receiver
 accepts early events and rejects a later event.
+The native iOS bundle declares the permitted background retry task identifier
+and background processing mode. Swift schedules that `BGProcessingTask` only
+when Rust settings enable background sync, a valid sync server URL and Keychain
+sync token are present, and the Rust queue snapshot reports pending work. The
+task handler delegates to the same Rust-plan -> Swift-transport -> Rust-result
+executor and does not create official events or classify domain failures in
+Swift.
 `cross_client_golden_partial_push_accepts_prefix_and_blocks_rejected_tail`
 proves the shared Rust cloud/queue path accepts the valid prefix, blocks the
 rejected tail as `user_action_required`, avoids local and cloud duplicates, and
@@ -407,6 +414,9 @@ The current self-hosted server uses durable local storage by default: embedded S
   code plus HMAC request-proof model.
 - Release-device iOS LAN discovery validation.
 - Physical-device LAN and iOS Local Network permission prompt validation.
+- Release-device iOS BGTask execution and poor-network behavior beyond the
+  current bundle declarations, scheduler eligibility policy, and
+  simulator-safe Swift tests.
 - Release-device cross-client branch review and reconciliation workflow beyond
   the current deterministic shared golden tests, guided browser review surface,
   desktop/iOS review stores, and explicit corrective-event commands.

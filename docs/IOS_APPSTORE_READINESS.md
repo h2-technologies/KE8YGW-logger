@@ -32,8 +32,13 @@ Local Network usage plus local networking for paired-device sync. The Sync
 workspace can also scan IPv4/IPv6 LAN discovery packets, derive peer URLs from
 sender address plus advertised API port, probe `/api/sync/state`, and list only
 peers whose probed device/session identity matches the packet.
+The bundle now declares the permitted background retry `BGProcessingTask`
+identifier and background processing mode. Scheduling is gated by Rust settings,
+a valid sync URL, a Keychain sync token, and pending Rust queue work, and the
+handler delegates to the existing Rust-plan -> Swift-transport -> Rust-result
+executor.
 Signing, provisioning, TestFlight, App Store metadata, privacy manifest,
-physical-device validation, release-safe BGTask execution, real
+physical-device validation, release-device BGTask execution, real
 hosted/self-hosted native sync endpoint qualification, Apple multicast
 entitlement/provisioning, and full v1 offline/sync/provider qualification
 remain incomplete.
@@ -57,8 +62,8 @@ Only request entitlements that the native app uses:
 - Network client access.
 - iCloud documents only if explicitly used.
 - Push notifications only if notification delivery is implemented.
-- Background modes only if offline sync/retry needs them and the behavior is
-  review-safe.
+- Background processing is declared for offline sync retry; qualify the behavior
+  on release devices before TestFlight.
 - Location only if native maps or station workflows require device location.
 
 ## Privacy Manifest
@@ -96,8 +101,9 @@ Permission prompts must be tied to native features:
 - Location only for features that use current device location.
 - Notifications only for implemented reminders/sync/provider notifications.
 
-Do not request location, notifications, contacts, photos, Bluetooth, local
-network, or background modes speculatively.
+Do not request contacts, photos, Bluetooth, or other unused permissions
+speculatively. Location, Local Network, notifications, and background
+processing must remain tied to implemented native features and App Review copy.
 
 ## Review Checklist
 

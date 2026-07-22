@@ -211,9 +211,11 @@ for every XCFramework slice.
   `artifacts/ios/include`.
 - Keychain behavior: provider secrets remain in the iOS Keychain layer. Do not
   store tokens in SwiftData, UserDefaults, diagnostics JSON, or Rust debug logs.
-- Notifications/background modes: local notification authorization exists, but
-  unrestricted background execution is not assumed. Validate required
-  capabilities in Xcode before enabling distribution builds.
+- Notifications/background modes: local notification authorization exists, and
+  offline sync retry declares a `BGProcessingTask` identifier plus processing
+  mode. Unrestricted background execution is not assumed; validate release
+  device behavior and required capabilities in Xcode before enabling
+  distribution builds.
 
 ## Validation Status
 

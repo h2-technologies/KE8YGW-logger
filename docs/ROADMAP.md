@@ -127,11 +127,12 @@ wrapper is not the iOS client. See `V1_RELEASE_PLAN.md`,
      cloud reconnect auto-drain when auto-push is enabled, iOS FFI background
      retry planning/result classification, and iOS LAN trust
      snapshot/issue/accept/trust/rotate/revoke bridge commands, reciprocal
-     peer-URL pairing, and multicast discovery peer selection.
+     peer-URL pairing, multicast discovery peer selection, and native iOS
+     background retry task registration/scheduling policy.
      Release-device cross-client branch review/reconciliation workflow
      qualification,
      physical-device LAN/iOS local-network validation, and release-device iOS
-     background task/poor-network qualification remain planned.
+     background task execution/poor-network qualification remain planned.
 
 ## Dependency Order
 
@@ -143,7 +144,7 @@ rewrites:
    entitlement/provisioning, release-device cross-client branch
    review/reconciliation workflow qualification,
    physical-device LAN/iOS local-network validation, and release-device iOS
-   background task/poor-network qualification before unattended desktop/iOS
+   background task execution/poor-network qualification before unattended desktop/iOS
    operation.
 2. Complete provider runtime hardening and production provider qualification
    before release-candidate data migration or operations work.

@@ -2,11 +2,11 @@ import SwiftData
 import SwiftUI
 
 struct SyncWorkspaceView: View {
+    @Environment(\.modelContext) private var modelContext
     @EnvironmentObject private var bridge: RustBridgeStore
     @Query private var settings: [AppSettings]
     @StateObject private var connectivity = ConnectivityMonitor()
     @StateObject private var lanDiscovery = SyncLanDiscoveryScanner()
-    @State private var backgroundSync = true
     @State private var retryAutomatically = true
     @State private var syncMessage: String?
     @State private var lanPeerDeviceId = ""
@@ -33,7 +33,7 @@ struct SyncWorkspaceView: View {
                     DetailRow(title: "Open Reviews", value: "\(reviewHealth.open ?? 0)")
                 }
                 DetailRow(title: "Conflicts", value: "\(bridge.sync.conflicts?.count ?? 0)")
-                Toggle("Background Sync", isOn: $backgroundSync)
+                Toggle("Background Sync", isOn: backgroundSyncBinding())
                 Toggle("Automatic Retry", isOn: $retryAutomatically)
             }
 
@@ -632,6 +632,31 @@ struct SyncWorkspaceView: View {
             return nil
         }
         return token
+    }
+
+    private func backgroundSyncBinding() -> Binding<Bool> {
+        Binding(
+            get: {
+                settings.first?.backgroundSyncEnabled ?? true
+            },
+            set: { enabled in
+                guard let appSettings = settings.first else { return }
+                appSettings.backgroundSyncEnabled = enabled
+                appSettings.updatedAt = Date()
+                try? modelContext.save()
+                Task { @MainActor in
+                    do {
+                        let result = try await bridge.saveSettings(appSettings.rustSettingsPayload())
+                        if let persisted = result.settings {
+                            appSettings.apply(rust: persisted)
+                            try? modelContext.save()
+                        }
+                    } catch {
+                        syncMessage = error.localizedDescription
+                    }
+                }
+            }
+        )
     }
 
     private func lanPeerURLValue() -> URL? {

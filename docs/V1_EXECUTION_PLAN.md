@@ -76,12 +76,15 @@ outside issue #2.
      reciprocal peer-URL pairing, direct peer trust, Keychain-backed LAN auth
      rotation, revocation, multicast discovery peer selection with
      `/api/sync/state` identity probing before listing peers, and trusted-peer
-     identity probing before signed LAN reads, and surface no-network/user-action
+     identity probing before signed LAN reads, register and schedule a
+     permitted iOS background retry task only when Rust settings, a valid sync
+     URL, a Keychain sync token, and pending Rust queue work make it eligible,
+     and surface no-network/user-action
      retry and pull outcomes without owning event creation or domain rules.
    - Remaining: Apple multicast entitlement/provisioning, release-device
      cross-client branch review/reconciliation workflow qualification,
      physical-device LAN/iOS local-network validation, release-device iOS
-     background task and poor-network qualification, release-device
+     background task execution and poor-network qualification, release-device
      hosted/self-hosted native push/pull execution, and release-device hosted
      web/desktop/iOS/self-hosted migration/recovery qualification.
    - Blockers: Apple multicast entitlement/provisioning, local network
@@ -174,8 +177,8 @@ outside issue #2.
 1. Finish sync/reconciliation hardening: Apple multicast
    entitlement/provisioning, release-device cross-client branch
    review/reconciliation workflow qualification,
-   physical-device LAN/iOS local-network validation, and iOS background task and
-   poor-network validation on release devices.
+   physical-device LAN/iOS local-network validation, and iOS background task
+   execution plus poor-network validation on release devices.
 2. Complete production provider qualification and release-runner live validation
    for the issue #2 provider set.
 3. Wire hosted web, desktop, and iOS UI flows to the implemented account,

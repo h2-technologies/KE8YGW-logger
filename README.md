@@ -1013,8 +1013,13 @@ directly follow the actual local head. Swift now builds self-hosted
 logbook-scoped and hosted pull requests, fetches missing events through native
 transport, and immediately applies them through the Rust bridge. Automated
 hosted/self-hosted server endpoint tests now cover the CI-safe wire surfaces;
-release-device native transport, background, poor-network, and local-network
-permission behavior remain v0.3/v1 qualification work.
+the iOS bundle also declares a permitted `BGProcessingTask` retry identifier
+and processing background mode. The app schedules that task only when Rust
+settings enable background sync, a valid sync URL and Keychain sync token are
+present, and the Rust queue snapshot reports pending work; the task handler
+delegates to the same Rust-plan -> Swift-transport -> Rust-result executor.
+Release-device BGTask execution, native endpoint qualification, poor-network,
+and local-network permission behavior remain v0.3/v1 qualification work.
 
 LAN trust records are durable support state. Pairing tokens require explicit
 operator approval, expire quickly, are single use, and are stored only as

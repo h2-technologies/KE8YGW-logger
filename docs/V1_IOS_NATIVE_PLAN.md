@@ -85,7 +85,8 @@ wrapper.
   shared Rust/API validation.
 - Finish real native sync endpoint qualification, release-device divergence
   review/corrective-event workflow qualification, Apple multicast
-  entitlement/provisioning for LAN discovery, release-device BGTask execution,
+  entitlement/provisioning for LAN discovery, release-device BGTask execution
+  beyond the current background retry registration/scheduling policy,
   hosted/self-hosted qualification for native push/pull paths, and physical
   poor-network validation through the Rust bridge/API contract.
 - Finish native ADIF import/restore, backup inspect/dry-run/apply, and

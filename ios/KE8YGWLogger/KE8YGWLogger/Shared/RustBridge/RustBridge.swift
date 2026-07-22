@@ -3042,6 +3042,97 @@ enum SyncRetryExecutionStatus: String, Equatable {
     case diverged
 }
 
+enum SyncBackgroundRetryTask {
+    static let identifier = "com.h2technologiesllc.ke8ygw-logger.sync.retry"
+    static let maxMutations = 25
+    static let backgroundTimeBudgetSeconds = 20
+    static let minimumDelaySeconds: TimeInterval = 15 * 60
+}
+
+enum SyncBackgroundRetrySkipReason: Equatable {
+    case disabled
+    case missingServerURL
+    case missingSyncToken
+    case noPendingChanges
+}
+
+struct SyncBackgroundRetryScheduleDecision: Equatable {
+    var skipReason: SyncBackgroundRetrySkipReason?
+    var earliestBeginDate: Date?
+    var submissionError: String?
+
+    var shouldSchedule: Bool {
+        skipReason == nil && submissionError == nil
+    }
+
+    static func schedule(earliestBeginDate: Date) -> SyncBackgroundRetryScheduleDecision {
+        SyncBackgroundRetryScheduleDecision(
+            skipReason: nil,
+            earliestBeginDate: earliestBeginDate,
+            submissionError: nil
+        )
+    }
+
+    static func skip(_ reason: SyncBackgroundRetrySkipReason) -> SyncBackgroundRetryScheduleDecision {
+        SyncBackgroundRetryScheduleDecision(
+            skipReason: reason,
+            earliestBeginDate: nil,
+            submissionError: nil
+        )
+    }
+
+    func replacingSubmissionError(_ error: String) -> SyncBackgroundRetryScheduleDecision {
+        SyncBackgroundRetryScheduleDecision(
+            skipReason: skipReason,
+            earliestBeginDate: earliestBeginDate,
+            submissionError: error
+        )
+    }
+}
+
+struct SyncBackgroundRetryPolicy {
+    var minimumDelaySeconds: TimeInterval = SyncBackgroundRetryTask.minimumDelaySeconds
+
+    func decision(
+        syncSettings: RustSyncSettings?,
+        pendingChanges: Int?,
+        hasSyncToken: Bool,
+        now: Date = Date()
+    ) -> SyncBackgroundRetryScheduleDecision {
+        guard let syncSettings, syncSettings.backgroundSyncEnabled else {
+            return .skip(.disabled)
+        }
+        guard hasValidServerURL(syncSettings.syncServerUrl) else {
+            return .skip(.missingServerURL)
+        }
+        guard hasSyncToken else {
+            return .skip(.missingSyncToken)
+        }
+        if let pendingChanges, pendingChanges <= 0 {
+            return .skip(.noPendingChanges)
+        }
+        return .schedule(earliestBeginDate: now.addingTimeInterval(minimumDelaySeconds))
+    }
+
+    func hasValidServerURL(_ rawValue: String) -> Bool {
+        let value = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let url = URL(string: value),
+              let scheme = url.scheme?.lowercased(),
+              (scheme == "http" || scheme == "https"),
+              url.host != nil
+        else {
+            return false
+        }
+        return true
+    }
+}
+
+struct SyncBackgroundRetryRunResult {
+    var taskCompleted: Bool
+    var syncSettings: RustSyncSettings?
+    var remainingPendingChanges: Int?
+}
+
 struct SyncRetryExecutionResult {
     var plan: SyncRetryPlan
     var pushResponse: SyncPushResponse?
