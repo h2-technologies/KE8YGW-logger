@@ -941,6 +941,12 @@ startup or through the Sync panel recovery action. A deterministic `ham-sync`
 regression test covers a desktop-style restart/reconnect drain path, including
 ordered queued official events, accepted-by-hash cleanup, duplicate cloud replay,
 and local official-log duplicate prevention.
+
+When cloud sync reconnects with Auto Push enabled, the desktop GUI drains ready
+offline mutations automatically through the same queue-aware cloud push path.
+That reconnect drain is queue-only: it accepts queued event hashes and does not
+publish unrelated local official history when no offline mutation is ready.
+
 Additional deterministic shared sync golden tests cover transient network retry,
 reordered delivery rejection, iOS-style pull/projection replay, clock-skewed
 event timestamps ordered by hashes, divergent heads, conflict-review resolution,

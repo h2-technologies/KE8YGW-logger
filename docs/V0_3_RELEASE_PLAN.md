@@ -29,6 +29,9 @@ Last audited: 2026-07-21
 - Deterministic desktop restart/reconnect queue-drain coverage for interrupted
   sends, ordered queued official events, accepted-by-hash handling, and
   duplicate cloud replay.
+- Desktop cloud reconnect auto-drain when `auto_push_enabled` is set, with a
+  queue-only guard so accepted but unqueued local history is not pushed
+  implicitly.
 - Deterministic shared sync golden scenarios for desktop-style crash recovery,
   transient network retry, duplicate replay, reordered delivery rejection,
   iOS-style pull/projection replay, clock-skewed event timestamps ordered by
@@ -88,6 +91,7 @@ Last audited: 2026-07-21
 cargo test -p ham-sync
 cargo test -p ham-sync cross_client_golden
 cargo test -p ham-sync desktop_queue_recovers_restart_and_drains_to_cloud_without_duplicates
+cargo test -p ham-gui cloud_connect_auto_push
 cargo test -p ham-sync recover_or_initialize
 cargo test -p ham-sync conflict_report
 cargo test -p ham-gui

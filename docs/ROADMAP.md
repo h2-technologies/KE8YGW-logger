@@ -118,8 +118,9 @@ wrapper is not the iOS client. See `V1_RELEASE_PLAN.md`,
      conflict-review resolution, legacy queue migration, restore replay, and
      LAN revocation.
    - Status: implemented as a v0.3 foundation with HMAC-SHA256 signed LAN read
-     endpoint authorization, GUI LAN auth credential rotation/recovery, and
-     iOS FFI background retry planning/result classification.
+     endpoint authorization, GUI LAN auth credential rotation/recovery, desktop
+     cloud reconnect auto-drain when auto-push is enabled, and iOS FFI
+     background retry planning/result classification.
      Production iOS reciprocal LAN pairing UX, stronger LAN key-exchange
      hardening, end-to-end cross-client branch review/reconciliation workflow
      qualification,

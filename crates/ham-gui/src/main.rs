@@ -1207,6 +1207,39 @@ struct SyncStatePayload {
     warning_count: u64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CloudPushMode {
+    Manual,
+    AutoDrainQueueOnly,
+}
+
+impl CloudPushMode {
+    fn queue_only(self) -> bool {
+        matches!(self, Self::AutoDrainQueueOnly)
+    }
+
+    fn started_event_type(self) -> &'static str {
+        match self {
+            Self::Manual => "sync.cloud.push.started",
+            Self::AutoDrainQueueOnly => "sync.cloud.auto_push.started",
+        }
+    }
+
+    fn completed_event_type(self) -> &'static str {
+        match self {
+            Self::Manual => "sync.cloud.push.completed",
+            Self::AutoDrainQueueOnly => "sync.cloud.auto_push.completed",
+        }
+    }
+
+    fn failed_event_type(self) -> &'static str {
+        match self {
+            Self::Manual => "sync.cloud.push.failed",
+            Self::AutoDrainQueueOnly => "sync.cloud.auto_push.failed",
+        }
+    }
+}
+
 fn json_response<T: Serialize>(payload: &T) -> Vec<u8> {
     let body = serde_json::to_vec(payload).expect("serializing GUI shell payload should not fail");
     response(200, "application/json; charset=utf-8", &body)
@@ -6601,7 +6634,8 @@ fn handle_cloud_connect(state: &AppState, body: &[u8]) -> Vec<u8> {
             ),
             None,
         );
-        json_response(&json!({"ok": true, "session": session}))
+        let auto_push = maybe_auto_drain_cloud_queue_after_connect(state);
+        json_response(&json!({"ok": true, "session": session, "auto_push": auto_push}))
     } else {
         {
             let mut sync = state
@@ -6634,14 +6668,79 @@ fn handle_cloud_push(state: &AppState) -> Vec<u8> {
     ) {
         return response;
     }
+    match run_cloud_push(state, CloudPushMode::Manual) {
+        Ok(payload) => json_response(&payload),
+        Err((status, payload)) => json_response_with_status(status, &payload),
+    }
+}
+
+fn maybe_auto_drain_cloud_queue_after_connect(state: &AppState) -> Option<Value> {
+    let auto_push_enabled = state
+        .sync
+        .lock()
+        .expect("sync state mutex should not be poisoned")
+        .cloud_config
+        .auto_push_enabled;
+    if !auto_push_enabled {
+        return None;
+    }
+    if ensure_gui_permission(
+        state,
+        &core_gui_manifest(),
+        PluginCapability::SyncCloudPush,
+        "Cloud sync auto-push permission check",
+    )
+    .is_err()
+    {
+        let _ = publish_cloud_runtime(
+            state,
+            "sync.cloud.auto_push.failed",
+            RuntimeEventSeverity::Warn,
+            "Cloud auto-push is not permitted",
+            None,
+            Some("sync.cloud.push permission is required for automatic queue drain".to_owned()),
+        );
+        return Some(json!({
+            "ok": false,
+            "skipped": false,
+            "error": "sync.cloud.push permission is required for automatic queue drain"
+        }));
+    }
+    match run_cloud_push(state, CloudPushMode::AutoDrainQueueOnly) {
+        Ok(payload) => Some(payload),
+        Err((status, mut payload)) => {
+            if let Some(object) = payload.as_object_mut() {
+                object.insert("status_code".to_owned(), json!(status));
+            }
+            Some(payload)
+        }
+    }
+}
+
+fn run_cloud_push(state: &AppState, mode: CloudPushMode) -> Result<Value, (u16, Value)> {
     let Some(auth) = cloud_auth(state) else {
-        return cloud_auth_error(state, "sync.cloud.push.failed");
+        let _ = publish_cloud_runtime(
+            state,
+            mode.failed_event_type(),
+            RuntimeEventSeverity::Warn,
+            "Cloud sync is not connected",
+            None,
+            Some("cloud sync is not connected".to_owned()),
+        );
+        return Err((
+            400,
+            json!({"ok": false, "error": "cloud sync is not connected"}),
+        ));
     };
     let _ = publish_cloud_runtime(
         state,
-        "sync.cloud.push.started",
+        mode.started_event_type(),
         RuntimeEventSeverity::Info,
-        "Pushing local official events to cloud",
+        if mode.queue_only() {
+            "Draining ready offline mutations to cloud"
+        } else {
+            "Pushing local official events to cloud"
+        },
         None,
         None,
     );
@@ -6656,10 +6755,16 @@ fn handle_cloud_push(state: &AppState) -> Vec<u8> {
     ) {
         Ok(batch) => batch,
         Err(error) => {
-            return json_response_with_status(
-                400,
-                &json!({"ok": false, "error": format!("offline queue is not readable: {error}")}),
-            )
+            let error_message = format!("offline queue is not readable: {error}");
+            let _ = publish_cloud_runtime(
+                state,
+                mode.failed_event_type(),
+                RuntimeEventSeverity::Warn,
+                "Cloud push could not read the offline queue",
+                None,
+                Some(error_message.clone()),
+            );
+            return Err((400, json!({"ok": false, "error": error_message})));
         }
     };
     for operation_id in &offline_batch.missing_local_event_operation_ids {
@@ -6669,6 +6774,47 @@ fn handle_cloud_push(state: &AppState) -> Vec<u8> {
             Some("missing_local_official_event".to_owned()),
             chrono::Utc::now(),
         );
+    }
+    let offline_batch_summary = json!({
+        "operation_ids": offline_batch.operation_ids.clone(),
+        "event_count": offline_batch.events.len(),
+        "missing_local_event_operation_ids": offline_batch.missing_local_event_operation_ids.clone()
+    });
+    if mode.queue_only()
+        && offline_batch.events.is_empty()
+        && offline_batch.missing_local_event_operation_ids.is_empty()
+    {
+        let _ = publish_cloud_runtime(
+            state,
+            "sync.cloud.auto_push.skipped",
+            RuntimeEventSeverity::Info,
+            "No ready offline mutations to drain",
+            Some(json!({"offline_push_batch": offline_batch_summary.clone()})),
+            None,
+        );
+        return Ok(json!({
+            "ok": true,
+            "skipped": true,
+            "skip_reason": "no_ready_offline_mutations",
+            "offline_push_batch": offline_batch_summary
+        }));
+    }
+    if mode.queue_only() && offline_batch.events.is_empty() {
+        let error = "offline queue has a ready mutation without a matching local official event";
+        let _ = publish_cloud_runtime(
+            state,
+            mode.failed_event_type(),
+            RuntimeEventSeverity::Warn,
+            "Cloud auto-push requires operator review",
+            Some(json!({"offline_push_batch": offline_batch_summary.clone()})),
+            Some(error.to_owned()),
+        );
+        return Ok(json!({
+            "ok": false,
+            "skipped": false,
+            "error": error,
+            "offline_push_batch": offline_batch_summary
+        }));
     }
     for operation_id in &offline_batch.operation_ids {
         let _ = state
@@ -6699,11 +6845,11 @@ fn handle_cloud_push(state: &AppState) -> Vec<u8> {
                 push.status,
                 ReplicationStatus::Pulled | ReplicationStatus::InSync
             ) {
-                "sync.cloud.push.completed"
+                mode.completed_event_type()
             } else if push.status == ReplicationStatus::Diverged {
                 "sync.cloud.divergence.detected"
             } else {
-                "sync.cloud.push.failed"
+                mode.failed_event_type()
             };
             {
                 let mut sync = state
@@ -6765,8 +6911,9 @@ fn handle_cloud_push(state: &AppState) -> Vec<u8> {
                 Some(json!(&push)),
                 push.errors.first().cloned(),
             );
-            json_response(&json!({
+            Ok(json!({
                 "ok": push.errors.is_empty(),
+                "skipped": false,
                 "push": push,
                 "offline_push_batch": {
                     "operation_ids": offline_batch.operation_ids,
@@ -6786,13 +6933,13 @@ fn handle_cloud_push(state: &AppState) -> Vec<u8> {
             }
             let _ = publish_cloud_runtime(
                 state,
-                "sync.cloud.push.failed",
+                mode.failed_event_type(),
                 RuntimeEventSeverity::Warn,
                 "Cloud push failed",
                 None,
                 Some(error.to_string()),
             );
-            json_response_with_status(400, &json!({"ok": false, "error": error.to_string()}))
+            Err((400, json!({"ok": false, "error": error.to_string()})))
         }
     }
 }
@@ -7616,6 +7763,201 @@ fn start_demo_runtime_publisher(bridge: GuiRuntimeBridge) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn test_root(prefix: &str) -> std::path::PathBuf {
+        let root = std::env::temp_dir().join(format!("{prefix}-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        root
+    }
+
+    fn test_state(prefix: &str) -> AppState {
+        let root = test_root(prefix);
+        let support_dir = root.join("support");
+        std::fs::create_dir_all(&support_dir).unwrap();
+        let bridge = GuiRuntimeBridge::new(RuntimeLogConfig {
+            directory: root.join("logs"),
+            max_bytes: 1024 * 1024,
+            retained_files: 1,
+        })
+        .unwrap();
+        let store = Arc::new(JsonlLogbookEventStore::open(root.join("official.jsonl")).unwrap());
+        let permission_store =
+            JsonPermissionGrantStore::new(support_dir.join("plugin-permissions.json"));
+        let station_store = JsonStationBookStore::new(support_dir.join("station-book.json"));
+        let service_registry_store =
+            JsonSupportStore::<ServiceRegistry>::new(support_dir.join("service-registry.json"));
+        let service_cache_store =
+            JsonSupportStore::<Vec<ServiceCacheEntry>>::new(support_dir.join("service-cache.json"));
+        let map_layer_store =
+            JsonSupportStore::<MapLayerStack>::new(support_dir.join("map-layers.json"));
+        let upload_queue_store =
+            JsonSupportStore::<UploadQueue>::new(support_dir.join("upload-queue.json"));
+        let mut permission_grants = PermissionGrantSet::grants_for_manifest(&core_gui_manifest());
+        let permission_registry = PermissionRegistry::mvp_default();
+        let permission_settings = PermissionSettings::default();
+        ham_core::grant_builtin_defaults(
+            &[core_gui_manifest()],
+            &permission_registry,
+            &permission_settings,
+            &mut permission_grants,
+        );
+        AppState {
+            bridge,
+            store,
+            logbook_id: uuid::Uuid::new_v4(),
+            proposal_runtime: tokio::runtime::Runtime::new().unwrap(),
+            sync: Mutex::new(SyncUiState::new("127.0.0.1:0".to_owned())),
+            offline_queue: JsonOfflineMutationQueue::new(
+                support_dir.join("offline-mutations.json"),
+            ),
+            conflict_review_store: JsonConflictReviewStore::new(
+                support_dir.join("conflict-reviews.json"),
+            ),
+            lan_trust_store: JsonLanTrustStore::new(support_dir.join("lan-trust.json")),
+            cloud_server: InMemoryCloudSyncServer::new(CloudServerConfig::default()),
+            lookup_cache: LookupCache::new(),
+            lookup_config: Mutex::new(LookupUiConfig::default()),
+            service_registry: Mutex::new(default_service_registry()),
+            service_cache: ServiceCache::new(),
+            map_layers: Mutex::new(MapLayerStack::default_layers()),
+            rig_provider: MockRigProvider::default(),
+            rig_config: Mutex::new(RigUiConfig::default()),
+            station_store,
+            station_book: Mutex::new(StationBook::default()),
+            credential_store: Mutex::new(default_credential_store(&support_dir, true)),
+            upload_queue: Mutex::new(default_upload_queue()),
+            online_support: Mutex::new(OnlineSupportState::default()),
+            last_report: Mutex::new(None),
+            permission_registry,
+            permission_store,
+            service_registry_store,
+            service_cache_store,
+            map_layer_store,
+            upload_queue_store,
+            permission_grants: Mutex::new(permission_grants),
+            permission_settings: Mutex::new(permission_settings),
+        }
+    }
+
+    fn response_json(response: Vec<u8>) -> Value {
+        serde_json::from_slice(http_response_body(&response).unwrap()).unwrap()
+    }
+
+    fn create_test_qso(state: &AppState, callsign: &str) -> Value {
+        response_json(handle_qso_create(
+            state,
+            serde_json::to_vec(&json!({
+                "contacted_callsign": callsign,
+                "mode": "SSB"
+            }))
+            .unwrap()
+            .as_slice(),
+        ))
+    }
+
+    #[test]
+    fn cloud_connect_auto_push_drains_recovered_desktop_queue() {
+        let state = test_state("ke8ygw-ham-gui-auto-drain");
+        let created = create_test_qso(&state, "K1AUTO");
+        assert_eq!(created["ok"], true);
+        let operation_id: uuid::Uuid =
+            serde_json::from_value(created["offline_mutation"]["operation_id"].clone()).unwrap();
+        state
+            .offline_queue
+            .mark_sending(operation_id, chrono::Utc::now())
+            .unwrap();
+        assert_eq!(
+            state
+                .offline_queue
+                .recover_interrupted_writes(chrono::Utc::now())
+                .unwrap(),
+            1
+        );
+
+        let connected = response_json(handle_cloud_connect(
+            &state,
+            serde_json::to_vec(&json!({
+                "enable_cloud_sync": true,
+                "auto_push_enabled": true
+            }))
+            .unwrap()
+            .as_slice(),
+        ));
+
+        assert_eq!(connected["ok"], true);
+        assert_eq!(connected["auto_push"]["ok"], true);
+        assert_eq!(connected["auto_push"]["skipped"], false);
+        assert_eq!(connected["auto_push"]["push"]["accepted_count"], 1);
+        assert_eq!(
+            connected["auto_push"]["offline_push_batch"]["event_count"],
+            1
+        );
+
+        let snapshot = state
+            .offline_queue
+            .load_snapshot(chrono::Utc::now())
+            .unwrap();
+        assert_eq!(snapshot.health.accepted, 1);
+        assert_eq!(snapshot.health.ready_to_send, 0);
+        assert_eq!(
+            state
+                .proposal_runtime
+                .block_on(state.store.list_events(state.logbook_id))
+                .unwrap()
+                .len(),
+            1,
+            "desktop auto-drain must not duplicate local official history"
+        );
+        assert_eq!(
+            state
+                .sync
+                .lock()
+                .expect("sync state mutex should not be poisoned")
+                .latest_cloud_push
+                .as_ref()
+                .map(|push| push.accepted_count),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn cloud_connect_auto_push_skips_unqueued_local_history() {
+        let state = test_state("ke8ygw-ham-gui-auto-drain-skip");
+        let created = create_test_qso(&state, "K1LOCAL");
+        let operation_id: uuid::Uuid =
+            serde_json::from_value(created["offline_mutation"]["operation_id"].clone()).unwrap();
+        state
+            .offline_queue
+            .mark_accepted(operation_id, chrono::Utc::now())
+            .unwrap();
+
+        let connected = response_json(handle_cloud_connect(
+            &state,
+            serde_json::to_vec(&json!({
+                "enable_cloud_sync": true,
+                "auto_push_enabled": true
+            }))
+            .unwrap()
+            .as_slice(),
+        ));
+
+        assert_eq!(connected["ok"], true);
+        assert_eq!(connected["auto_push"]["ok"], true);
+        assert_eq!(connected["auto_push"]["skipped"], true);
+        assert_eq!(
+            connected["auto_push"]["skip_reason"],
+            "no_ready_offline_mutations"
+        );
+        assert!(
+            state
+                .sync
+                .lock()
+                .expect("sync state mutex should not be poisoned")
+                .latest_cloud_push
+                .is_none(),
+            "auto-drain must not push unrelated local history when the offline queue is empty"
+        );
+    }
 
     #[test]
     fn lan_peer_address_accepts_http_ipv4_and_ipv6_socket_addresses() {

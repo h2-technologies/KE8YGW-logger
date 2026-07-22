@@ -147,8 +147,13 @@ hashes. The deterministic
 `desktop_queue_recovers_restart_and_drains_to_cloud_without_duplicates` test
 covers recovery of an interrupted desktop send, reconnect drain ordering,
 accepted-by-hash queue cleanup, duplicate cloud replay handling, and local
-official-log duplicate prevention. Divergence blocks the queued operations for
-manual review.
+official-log duplicate prevention. When cloud sync reconnects and auto-push is
+enabled, the GUI runs a queue-only auto-drain: ready queued official mutations
+are pushed and accepted by hash, while unrelated unqueued local official history
+is not opportunistically published. `cloud_connect_auto_push_drains_recovered_desktop_queue`
+and `cloud_connect_auto_push_skips_unqueued_local_history` cover the reconnect
+auto-drain and queue-only guard paths. Divergence blocks the queued operations
+for manual review.
 
 iOS exposes the same Rust-owned drain policy through FFI commands.
 `sync.offline_queue.retry_plan` recovers interrupted writes, applies bounded

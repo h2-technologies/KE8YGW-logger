@@ -30,8 +30,9 @@ outside issue #2.
    - Implemented foundation: durable versioned mutation queue, deterministic
      per-logbook order, idempotency/dependency checks, retry/backoff state,
      interrupted-send recovery, deterministic desktop restart/reconnect
-     queue-drain coverage, v0.2 absent/legacy queue migration, corrupt queue
-     quarantine, interrupted atomic-write promotion, desktop/iOS queue hooks for
+     queue-drain coverage, desktop cloud reconnect auto-drain when auto-push is
+     enabled, v0.2 absent/legacy queue migration, corrupt queue quarantine,
+     interrupted atomic-write promotion, desktop/iOS queue hooks for
      implemented mutations, optional queued target-entity metadata, queue-aware
      cloud push acknowledgments, structured conflict reports for divergent
      heads, missing dependencies, unsupported schemas, concurrent QSO
