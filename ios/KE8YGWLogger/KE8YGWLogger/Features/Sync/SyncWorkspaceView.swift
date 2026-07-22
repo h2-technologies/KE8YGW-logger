@@ -5,6 +5,7 @@ struct SyncWorkspaceView: View {
     @Environment(\.modelContext) private var modelContext
     @EnvironmentObject private var bridge: RustBridgeStore
     @Query private var settings: [AppSettings]
+    @Query private var qsos: [QSO]
     @StateObject private var connectivity = ConnectivityMonitor()
     @StateObject private var lanDiscovery = SyncLanDiscoveryScanner()
     @State private var retryAutomatically = true
@@ -540,6 +541,9 @@ struct SyncWorkspaceView: View {
                 networkAvailable: connectivity.state.hasUsableInternet,
                 transport: SyncHTTPTransport()
             )
+            if result.applyResult != nil {
+                try await refreshQSOProjectionCache()
+            }
             syncMessage = syncPullResultMessage(result)
         } catch {
             syncMessage = error.localizedDescription
@@ -585,6 +589,9 @@ struct SyncWorkspaceView: View {
                 networkAvailable: connectivity.state.hasUsableInternet,
                 transport: SyncLanHTTPTransport()
             )
+            if result.applyResult != nil {
+                try await refreshQSOProjectionCache()
+            }
             syncMessage = syncPullResultMessage(result)
         } catch {
             syncMessage = error.localizedDescription
@@ -640,6 +647,16 @@ struct SyncWorkspaceView: View {
 
     private func pullEndpointStyle() -> SyncPullEndpointStyle {
         SyncPullEndpointStyle(setting: settings.first?.syncEndpointStyle)
+    }
+
+    private func refreshQSOProjectionCache() async throws {
+        let result = try await bridge.listQSOs(includeDeleted: true)
+        try ProjectionRefreshService.rebuildQSOProjection(
+            from: result.records,
+            existing: qsos,
+            modelContext: modelContext,
+            syncStatus: "synced"
+        )
     }
 
     private func backgroundSyncBinding() -> Binding<Bool> {

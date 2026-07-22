@@ -202,6 +202,19 @@ final class RustBridgeStore: ObservableObject {
         try await command("qso.delete", payload: request, as: QSOBridgeMutationResult.self)
     }
 
+    func listQSOs(
+        logbookId: String? = nil,
+        includeDeleted: Bool = true
+    ) async throws -> QSOListBridgeResult {
+        let supportURL = try RustBridgePaths.applicationSupportDirectory()
+        let request = QSOListBridgeRequest(
+            appSupportDir: supportURL.path,
+            logbookId: logbookId,
+            includeDeleted: includeDeleted
+        )
+        return try await command("qso.list", payload: request, as: QSOListBridgeResult.self)
+    }
+
     func createStationProfile(_ request: StationProfileMutationRequest) async throws -> StationBookMutationResult {
         try await command("station.profile.create", payload: request, as: StationBookMutationResult.self)
     }
@@ -1156,6 +1169,15 @@ struct FallbackRustBridgeClient: RustBridgeClient {
                     "schema_version": 1,
                     "last_rust_revision": "fallback-delete-hash",
                     "pending_event_count": 1
+                ]
+            ]
+        case "qso.list":
+            data = [
+                "records": [],
+                "projection": [
+                    "source": "fallback",
+                    "schema_version": 1,
+                    "pending_event_count": 0
                 ]
             ]
         case "station.profile.create":
@@ -4336,6 +4358,17 @@ struct QSOBridgeMutationResult: Decodable {
     var sync: RustSyncMutationStatus?
 }
 
+struct QSOListBridgeRequest: Codable {
+    var appSupportDir: String
+    var logbookId: String?
+    var includeDeleted: Bool
+}
+
+struct QSOListBridgeResult: Decodable {
+    var records: [RustQSORecord]
+    var projection: RustProjectionStatus?
+}
+
 struct RustOfficialEvent: Decodable {
     var eventId: String
     var eventType: String
@@ -4356,33 +4389,33 @@ struct RustQSORecord: Decodable {
 }
 
 struct RustQSOPayload: Decodable {
-    var contactedCallsign: String?
-    var stationCallsign: String?
-    var operatorCallsign: String?
-    var startedAt: String?
-    var mode: String?
-    var band: String?
-    var submode: String?
-    var frequencyHz: UInt64?
-    var frequencyMhz: Double?
-    var rstSent: String?
-    var rstReceived: String?
-    var powerWatts: Double?
-    var stationProfileId: String?
-    var equipmentSummary: String?
-    var grid: String?
-    var county: String?
-    var name: String?
-    var qth: String?
-    var state: String?
-    var country: String?
-    var qsoKind: String?
-    var contestExchange: String?
-    var satelliteName: String?
-    var potaReferences: String?
-    var sotaReferences: String?
-    var notes: String?
-    var clientOperationId: String?
+    var contactedCallsign: String? = nil
+    var stationCallsign: String? = nil
+    var operatorCallsign: String? = nil
+    var startedAt: String? = nil
+    var mode: String? = nil
+    var band: String? = nil
+    var submode: String? = nil
+    var frequencyHz: UInt64? = nil
+    var frequencyMhz: Double? = nil
+    var rstSent: String? = nil
+    var rstReceived: String? = nil
+    var powerWatts: Double? = nil
+    var stationProfileId: String? = nil
+    var equipmentSummary: String? = nil
+    var grid: String? = nil
+    var county: String? = nil
+    var name: String? = nil
+    var qth: String? = nil
+    var state: String? = nil
+    var country: String? = nil
+    var qsoKind: String? = nil
+    var contestExchange: String? = nil
+    var satelliteName: String? = nil
+    var potaReferences: String? = nil
+    var sotaReferences: String? = nil
+    var notes: String? = nil
+    var clientOperationId: String? = nil
 }
 
 struct RustProjectionStatus: Decodable {

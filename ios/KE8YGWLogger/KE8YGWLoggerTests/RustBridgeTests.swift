@@ -38,6 +38,15 @@ final class RustBridgeTests: XCTestCase {
         XCTAssertEqual(envelope.data?.callsign, "KE8YGW")
     }
 
+    func testListQSOsUsesRustProjectionCommand() async throws {
+        let store = await RustBridgeStore(client: FallbackRustBridgeClient())
+        let result = try await store.listQSOs(includeDeleted: true)
+
+        XCTAssertEqual(result.records.count, 0)
+        XCTAssertEqual(result.projection?.source, "fallback")
+        XCTAssertEqual(result.projection?.pendingEventCount, 0)
+    }
+
     func testFallbackCreateQSOMutationDecodes() async throws {
         let store = await RustBridgeStore(client: FallbackRustBridgeClient())
         let result = try await store.createQSO(CreateQSOBridgeRequest(

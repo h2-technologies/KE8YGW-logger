@@ -42,6 +42,10 @@ Last audited: 2026-07-22
   Swift-transport -> Rust-result executor. Background Auto Pull runs only after
   a clean accepted push or no-ready-events push plan and applies fetched remote
   events through `sync.remote_events.apply`.
+- Native iOS manual hosted/self-hosted pull, trusted LAN pull, and background
+  Auto Pull refresh the SwiftData QSO cache from the Rust `qso.list`
+  projection after Rust accepts remote events. Swift still treats SwiftData as
+  a cache and does not validate, create, or merge official history.
 - Shared sync golden coverage proves a partial push can accept a valid prefix,
   stop the rejected tail as `user_action_required`, avoid local or cloud
   duplicates, and complete the reviewed tail by acknowledged event hash.
@@ -149,8 +153,9 @@ Last audited: 2026-07-22
   corrective-event endpoints.
 - Release-device iOS background task execution, poor-network behavior, and
   local-network permission validation beyond the current bundle declarations,
-  scheduler policy, and simulator-safe Swift tests, including release-device
-  hosted/self-hosted native push/pull transport execution.
+  scheduler policy, SwiftData projection-refresh hook, and simulator-safe Swift
+  tests, including release-device hosted/self-hosted native push/pull transport
+  execution.
 - Release-device hosted web/desktop/iOS/self-hosted end-to-end qualification,
   physical-device tests, and full migration matrix.
 

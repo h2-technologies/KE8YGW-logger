@@ -410,7 +410,10 @@ envelopes, returning the shared pull response, and refreshing the Rust-owned
 sync/projection counts without letting Swift validate or create official
 history. Native Swift builds self-hosted/logbook-scoped and hosted pull
 requests using the Rust snapshot's `logbook_id` and `local_head_hash`, then
-passes returned envelopes back through `sync.remote_events.apply`.
+passes returned envelopes back through `sync.remote_events.apply`. After Rust
+accepts remote events, manual iOS pull, trusted LAN pull, and background Auto
+Pull refresh the native SwiftData QSO cache from the Rust `qso.list` projection;
+SwiftData remains a projection cache, not an official state owner.
 
 The current self-hosted server uses durable local storage by default: embedded SurrealDB metadata/support state, append-only JSONL official-event storage, and filesystem-backed diagnostic report payloads. Durable SurrealDB storage is exposed through the `ham-sync` `surreal-storage` feature so GUI, iOS, and other protocol-only clients can avoid the database dependency. The in-memory backend remains for deterministic tests.
 

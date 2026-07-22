@@ -132,7 +132,10 @@ operations, and release qualification.
   work or Auto Pull is enabled. The task handler delegates to the existing
   Rust-plan -> Swift-transport -> Rust-result retry executor and can run
   configured Auto Pull after a clean accepted push or no-ready-events push plan
-  through `sync.remote_events.apply`.
+  through `sync.remote_events.apply`. Manual hosted/self-hosted pull, trusted
+  LAN pull, and background Auto Pull refresh SwiftData QSO cache rows from the
+  Rust `qso.list` projection after Rust accepts remote events; SwiftData remains
+  a projection cache and not an official-state owner.
   Simulator-safe fallback tests cover review creation/decoding, selected
   recovery-path resolution, retry execution acceptance, auth-failure
   user-action stops without token leakage, pull request construction, pull
@@ -142,8 +145,8 @@ operations, and release qualification.
   LAN peer identity mismatch rejection, pulled-event apply decoding, partial
   divergence result recording, hosted endpoint-style execution routing,
   background retry scheduling policy boundaries, background auto-pull
-  sequencing after a clean push, and pull suppression after user-action push
-  failures,
+  sequencing after a clean push, Rust-projection SwiftData cache refresh, and
+  pull suppression after user-action push failures,
   shared accepted-prefix/rejected-tail queue
   recovery, expired cloud-auth user-action recovery, durable local identity
   decoding, and LAN trust

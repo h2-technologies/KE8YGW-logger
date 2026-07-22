@@ -5,16 +5,22 @@ import SwiftUI
 @main
 struct KE8YGWLoggerApp: App {
     private let backgroundRetryCoordinator = SyncBackgroundRetryCoordinator.shared
+    private let modelContainer: ModelContainer
 
     init() {
-        backgroundRetryCoordinator.registerLaunchHandler()
+        do {
+            modelContainer = try ModelContainer(for: QSO.self, StationProfile.self, StationEquipment.self, AppSettings.self)
+        } catch {
+            fatalError("Unable to create SwiftData model container: \(error)")
+        }
+        backgroundRetryCoordinator.registerLaunchHandler(modelContainer: modelContainer)
     }
 
     var body: some Scene {
         WindowGroup {
             RootView(backgroundRetryCoordinator: backgroundRetryCoordinator)
         }
-        .modelContainer(for: [QSO.self, StationProfile.self, StationEquipment.self, AppSettings.self])
+        .modelContainer(modelContainer)
     }
 }
 
@@ -33,7 +39,7 @@ final class SyncBackgroundRetryCoordinator {
         self.policy = policy
     }
 
-    func registerLaunchHandler() {
+    func registerLaunchHandler(modelContainer: ModelContainer) {
         guard !registrationAttempted else { return }
         registrationAttempted = true
 
@@ -46,7 +52,7 @@ final class SyncBackgroundRetryCoordinator {
                 return
             }
             Task { @MainActor in
-                await self.handle(task: task)
+                await self.handle(task: task, modelContainer: modelContainer)
             }
         }
     }
@@ -80,9 +86,9 @@ final class SyncBackgroundRetryCoordinator {
     }
 
     @MainActor
-    private func handle(task: BGProcessingTask) async {
+    private func handle(task: BGProcessingTask, modelContainer: ModelContainer) async {
         let retryTask = Task { @MainActor in
-            await executeStoredRetry()
+            await executeStoredRetry(modelContainer: modelContainer)
         }
         task.expirationHandler = {
             retryTask.cancel()
@@ -95,7 +101,7 @@ final class SyncBackgroundRetryCoordinator {
     }
 
     @MainActor
-    private func executeStoredRetry() async -> SyncBackgroundRetryRunResult {
+    private func executeStoredRetry(modelContainer: ModelContainer) async -> SyncBackgroundRetryRunResult {
         let bridge = RustBridgeStore()
         do {
             let settingsResult = try await bridge.loadSettings()
@@ -131,7 +137,18 @@ final class SyncBackgroundRetryCoordinator {
                 pushTransport: SyncHTTPTransport(),
                 pullTransport: SyncHTTPTransport()
             )
-            let taskCompleted = !Task.isCancelled && result.taskCompleted
+            var taskCompleted = !Task.isCancelled && result.taskCompleted
+            if result.pullResult != nil {
+                do {
+                    try await ProjectionRefreshService.refreshQSOProjection(
+                        from: bridge,
+                        modelContainer: modelContainer
+                    )
+                } catch {
+                    bridge.lastError = error.localizedDescription
+                    taskCompleted = false
+                }
+            }
             return SyncBackgroundRetryRunResult(
                 taskCompleted: taskCompleted,
                 syncSettings: syncSettings,

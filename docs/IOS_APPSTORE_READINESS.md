@@ -161,8 +161,9 @@ processing must remain tied to implemented native features and App Review copy.
   creation/decoding, selected recovery-path resolution, event-envelope decoding,
   hosted/self-hosted push request construction, accepted retry execution,
   background Auto Pull sequencing after clean pushes, pull suppression after
-  user-action push failures, auth-failure result recording without token
-  leakage, and partial-divergence retry-result splitting.
+  user-action push failures, Rust projection driven SwiftData QSO cache
+  refresh, auth-failure result recording without token leakage, and
+  partial-divergence retry-result splitting.
 - ADIF document import/export is tested with Files and share sheet flows.
 - Keychain values survive app restart and are cleared on sign-out.
 - Privacy manifest is included in the archive.
