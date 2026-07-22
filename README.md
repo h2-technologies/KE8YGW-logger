@@ -1006,7 +1006,11 @@ Swift can execute the Rust-plan -> Swift-transport -> Rust-result sequence for
 the configured sync-token push path, record accepted server prefixes separately
 from rejected tails, and build both the self-hosted logbook-scoped push request
 and the hosted `/api/v1/sync/push` request without creating or validating
-official history itself. The iOS bridge also exposes `sync.remote_events.apply`
+official history itself. The persisted sync settings now include an additive
+`sync_endpoint_style` value so native iOS manual and background retry can route
+the configured execution path to self-hosted/logbook-scoped sync or hosted
+`/api/v1/sync/*` endpoints without inferring transport semantics from a URL.
+The iOS bridge also exposes `sync.remote_events.apply`
 so native pull transports can pass official event envelopes back through shared
 Rust hash-chain verification, including verified missing-tail responses that
 directly follow the actual local head. Swift now builds self-hosted

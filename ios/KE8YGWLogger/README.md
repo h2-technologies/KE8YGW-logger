@@ -157,7 +157,8 @@ the user's manual value when GPS updates arrive.
 - Run macOS/Xcode validation for simulator, physical device, archive, and unit
   tests.
 - Qualify release-device BGTask execution, hosted/self-hosted native sync
-  endpoints, poor-network behavior, and Local Network permission prompts.
+  endpoints selected through the Sync API setting, poor-network behavior, and
+  Local Network permission prompts.
 - Route QSO correct/update, provider queue actions, live provider credential
   validation, Net Control check-in classification updates, Net Control snapshot
   recovery, emergency assignments, remaining sync merge/conflict workflows, and

@@ -127,8 +127,9 @@ wrapper is not the iOS client. See `V1_RELEASE_PLAN.md`,
      cloud reconnect auto-drain when auto-push is enabled, iOS FFI background
      retry planning/result classification, and iOS LAN trust
      snapshot/issue/accept/trust/rotate/revoke bridge commands, reciprocal
-     peer-URL pairing, multicast discovery peer selection, and native iOS
-     background retry task registration/scheduling policy.
+     peer-URL pairing, multicast discovery peer selection, native iOS
+     background retry task registration/scheduling policy, and explicit native
+     self-hosted versus hosted sync endpoint routing.
      Release-device cross-client branch review/reconciliation workflow
      qualification,
      physical-device LAN/iOS local-network validation, and release-device iOS

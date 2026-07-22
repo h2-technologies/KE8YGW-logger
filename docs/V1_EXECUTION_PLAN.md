@@ -65,12 +65,12 @@ outside issue #2.
      validation, divergence, missing-event, and permanent failures. Native
      Swift bridge methods and the iOS Sync workspace now decode Rust queue
      health/mutations, Rust-planned official event envelopes,
-     self-hosted/logbook-scoped push execution coordination, hosted
-     `/api/v1/sync/push` request bodies, accepted-prefix/rejected-tail retry
-     result recording, Rust-owned pulled-event apply through
+     self-hosted/logbook-scoped and hosted `/api/v1/sync/*` execution routing,
+     accepted-prefix/rejected-tail retry result recording, Rust-owned pulled-event apply through
      `sync.remote_events.apply`, self-hosted/logbook-scoped and hosted pull
      request construction, native hosted/self-hosted and peer-identity-gated
-     signed LAN pull fetch -> Rust apply coordination, request retry plans with native network monitor state, display saved conflict-review
+     signed LAN pull fetch -> Rust apply coordination, request retry plans with native
+     network monitor state, display saved conflict-review
      records with recommended actions and structured conflict messages, expose
      Rust-owned LAN trust snapshots, local one-time code issue/acceptance,
      reciprocal peer-URL pairing, direct peer trust, Keychain-backed LAN auth

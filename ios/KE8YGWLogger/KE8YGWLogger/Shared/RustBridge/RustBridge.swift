@@ -1792,6 +1792,7 @@ private enum FallbackSettingsMemory {
             "sync": [
                 "sync_server_url": "http://127.0.0.1:9740",
                 "device_name": "KE8YGW Logger iOS",
+                "sync_endpoint_style": "logbook_scoped",
                 "prefer_lan_sync": true,
                 "auto_push_enabled": false,
                 "auto_pull_enabled": false,
@@ -1845,6 +1846,13 @@ private enum FallbackSettingsMemory {
         if var logging = normalized["logging"] as? [String: Any] {
             logging["default_mode"] = (logging["default_mode"] as? String ?? "SSB").trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
             normalized["logging"] = logging
+        }
+        if var sync = normalized["sync"] as? [String: Any] {
+            let endpointStyle = (sync["sync_endpoint_style"] as? String ?? "logbook_scoped")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .lowercased()
+            sync["sync_endpoint_style"] = endpointStyle == "hosted_sync" ? "hosted_sync" : "logbook_scoped"
+            normalized["sync"] = sync
         }
         if var net = normalized["net_control"] as? [String: Any] {
             net["default_mode"] = (net["default_mode"] as? String ?? "FM").trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
@@ -2962,6 +2970,15 @@ enum SyncPushEndpointStyle: Equatable {
     case logbookScoped
     case hostedSync
 
+    init(setting: String?) {
+        switch setting?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "hosted_sync", "hosted":
+            self = .hostedSync
+        default:
+            self = .logbookScoped
+        }
+    }
+
     func path(logbookId: String) -> String {
         switch self {
         case .logbookScoped:
@@ -2975,6 +2992,15 @@ enum SyncPushEndpointStyle: Equatable {
 enum SyncPullEndpointStyle: Equatable {
     case logbookScoped
     case hostedSync
+
+    init(setting: String?) {
+        switch setting?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "hosted_sync", "hosted":
+            self = .hostedSync
+        default:
+            self = .logbookScoped
+        }
+    }
 
     func path(logbookId: String) -> String {
         switch self {
@@ -4436,6 +4462,7 @@ struct RustProviderValidationSettings: Codable, Equatable {
 struct RustSyncSettings: Codable, Equatable {
     var syncServerUrl: String
     var deviceName: String
+    var syncEndpointStyle: String?
     var preferLanSync: Bool
     var autoPushEnabled: Bool
     var autoPullEnabled: Bool

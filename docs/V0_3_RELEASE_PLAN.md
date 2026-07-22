@@ -28,9 +28,12 @@ Last audited: 2026-07-22
 - Native Swift bridge methods and typed sync snapshots now expose queue
   recovery, retry planning, retry results, queue health, affected mutations,
   Rust-planned official event envelopes, self-hosted/logbook-scoped push
-  execution coordination, hosted `/api/v1/sync/push` request construction, and
+  execution coordination, hosted `/api/v1/sync/*` endpoint routing, and
   partial-acceptance retry-result handling to the iOS Sync workspace without
   moving queue ordering, event creation, or failure classification out of Rust.
+- Additive `sync_endpoint_style` settings support for native iOS manual and
+  background retry so self-hosted/logbook-scoped sync remains the default while
+  hosted `/api/v1/sync/*` execution can be selected without URL guessing.
 - Native iOS background retry registration for a permitted
   `BGProcessingTask` identifier, with bundle background-processing
   declarations and a scheduler eligibility policy that requires enabled Rust

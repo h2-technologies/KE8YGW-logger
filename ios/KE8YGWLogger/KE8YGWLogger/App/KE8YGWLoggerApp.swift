@@ -122,7 +122,7 @@ final class SyncBackgroundRetryCoordinator {
             let result = try await bridge.executeOfflineRetryPush(
                 serverURL: serverURL,
                 syncToken: syncToken,
-                endpointStyle: .logbookScoped,
+                endpointStyle: SyncPushEndpointStyle(setting: syncSettings.syncEndpointStyle),
                 maxMutations: SyncBackgroundRetryTask.maxMutations,
                 networkAvailable: true,
                 backgroundTimeBudgetSeconds: SyncBackgroundRetryTask.backgroundTimeBudgetSeconds,

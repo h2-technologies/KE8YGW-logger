@@ -178,6 +178,12 @@ official history itself. The native retry executor now performs the
 Rust-plan -> Swift-transport -> Rust-result sequence for the configured
 sync-token push path, including accepted-prefix recording when a receiver
 accepts early events and rejects a later event.
+Application settings include an additive `sync_endpoint_style` value. The
+default `logbook_scoped` value preserves self-hosted sync-server behavior, while
+`hosted_sync` routes native manual and background retry through hosted
+`/api/v1/sync/push` and `/api/v1/sync/pull` endpoints. Missing legacy values
+default to `logbook_scoped`; unsupported persisted Rust enum values fail to
+deserialize instead of silently changing transport semantics.
 The native iOS bundle declares the permitted background retry task identifier
 and background processing mode. Swift schedules that `BGProcessingTask` only
 when Rust settings enable background sync, a valid sync server URL and Keychain

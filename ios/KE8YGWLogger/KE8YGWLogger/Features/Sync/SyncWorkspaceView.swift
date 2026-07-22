@@ -503,7 +503,7 @@ struct SyncWorkspaceView: View {
             let result = try await bridge.executeOfflineRetryPush(
                 serverURL: serverURL,
                 syncToken: syncToken,
-                endpointStyle: .logbookScoped,
+                endpointStyle: pushEndpointStyle(),
                 maxMutations: 25,
                 networkAvailable: connectivity.state.hasUsableInternet,
                 backgroundTimeBudgetSeconds: 20,
@@ -536,7 +536,7 @@ struct SyncWorkspaceView: View {
             let result = try await bridge.executeRemotePull(
                 serverURL: serverURL,
                 syncToken: syncToken,
-                endpointStyle: .logbookScoped,
+                endpointStyle: pullEndpointStyle(),
                 networkAvailable: connectivity.state.hasUsableInternet,
                 transport: SyncHTTPTransport()
             )
@@ -632,6 +632,14 @@ struct SyncWorkspaceView: View {
             return nil
         }
         return token
+    }
+
+    private func pushEndpointStyle() -> SyncPushEndpointStyle {
+        SyncPushEndpointStyle(setting: settings.first?.syncEndpointStyle)
+    }
+
+    private func pullEndpointStyle() -> SyncPullEndpointStyle {
+        SyncPullEndpointStyle(setting: settings.first?.syncEndpointStyle)
     }
 
     private func backgroundSyncBinding() -> Binding<Bool> {

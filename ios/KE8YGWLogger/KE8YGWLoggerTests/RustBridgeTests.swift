@@ -454,6 +454,14 @@ final class RustBridgeTests: XCTestCase {
         XCTAssertFalse(bodyString.contains("secret-bearer"))
     }
 
+    func testSyncEndpointStyleSettingsMapToNativeTransportPaths() throws {
+        XCTAssertEqual(SyncPushEndpointStyle(setting: nil), .logbookScoped)
+        XCTAssertEqual(SyncPullEndpointStyle(setting: "logbook_scoped"), .logbookScoped)
+        XCTAssertEqual(SyncPushEndpointStyle(setting: "hosted_sync"), .hostedSync)
+        XCTAssertEqual(SyncPullEndpointStyle(setting: "hosted"), .hostedSync)
+        XCTAssertEqual(SyncPushEndpointStyle(setting: "unsupported"), .logbookScoped)
+    }
+
     func testSyncLanHTTPTransportBuildsSignedEventsSinceRequest() throws {
         let logbookID = "00000000-0000-4000-8000-000000000001"
         let localDeviceID = "00000000-0000-4000-8000-0000000000f1"
@@ -990,6 +998,36 @@ final class RustBridgeTests: XCTestCase {
         XCTAssertEqual(client.retryResultPayloads[0]["accepted_event_hashes"] as? [String], ["event-hash-1", "event-hash-2"])
     }
 
+    func testSyncRetryExecutorCanUseHostedSyncEndpointStyle() async throws {
+        let logbookID = UUID().uuidString
+        let event = sampleOfficialEvent(logbookID: logbookID, eventHash: "event-hash-hosted")
+        let operationID = UUID().uuidString
+        let client = try RetryExecutorRustBridgeClient(
+            retryPlanPayload: retryPlanPayload(operationIds: [operationID], events: [event])
+        )
+        let transport = StubSyncPushTransport(response: SyncPushResponse(
+            status: "pulled",
+            acceptedCount: 1,
+            ignoredDuplicateCount: 0,
+            rejectedCount: 0,
+            serverHeadHash: event.eventHash,
+            errors: []
+        ))
+        let store = await RustBridgeStore(client: client)
+
+        let result = try await store.executeOfflineRetryPush(
+            serverURL: try XCTUnwrap(URL(string: "https://api.example.test")),
+            syncToken: "sync-secret",
+            endpointStyle: SyncPushEndpointStyle(setting: "hosted_sync"),
+            transport: transport
+        )
+
+        XCTAssertEqual(result.status, .accepted)
+        XCTAssertEqual(transport.requests.first?.endpointStyle, .hostedSync)
+        XCTAssertEqual(transport.requests.first?.syncToken, "sync-secret")
+        XCTAssertEqual(transport.requests.first?.logbookId, logbookID)
+    }
+
     func testSyncRetryExecutorRecordsAuthFailureWithoutLeakingToken() async throws {
         let logbookID = UUID().uuidString
         let event = sampleOfficialEvent(logbookID: logbookID, eventHash: "event-hash-auth")
@@ -1368,6 +1406,7 @@ final class RustBridgeTests: XCTestCase {
         RustSyncSettings(
             syncServerUrl: serverURL,
             deviceName: "KE8YGW Logger iOS",
+            syncEndpointStyle: "logbook_scoped",
             preferLanSync: true,
             autoPushEnabled: true,
             autoPullEnabled: false,
@@ -1524,9 +1563,19 @@ private final class RetryExecutorRustBridgeClient: RustBridgeClient {
     }
 }
 
-private struct StubSyncPushTransport: SyncPushTransporting {
-    var response: SyncPushResponse?
-    var error: Error?
+private final class StubSyncPushTransport: SyncPushTransporting {
+    struct Request {
+        var serverURL: URL
+        var bearerToken: String?
+        var syncToken: String?
+        var endpointStyle: SyncPushEndpointStyle
+        var logbookId: String
+        var events: [SyncOfficialEvent]
+    }
+
+    private let response: SyncPushResponse?
+    private let error: Error?
+    private(set) var requests: [Request] = []
 
     init(response: SyncPushResponse) {
         self.response = response
@@ -1546,7 +1595,14 @@ private struct StubSyncPushTransport: SyncPushTransporting {
         logbookId: String,
         events: [SyncOfficialEvent]
     ) async throws -> SyncPushResponse {
-        _ = (serverURL, bearerToken, syncToken, endpointStyle, logbookId, events)
+        requests.append(Request(
+            serverURL: serverURL,
+            bearerToken: bearerToken,
+            syncToken: syncToken,
+            endpointStyle: endpointStyle,
+            logbookId: logbookId,
+            events: events
+        ))
         if let error {
             throw error
         }

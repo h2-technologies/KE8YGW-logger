@@ -19,7 +19,7 @@ commands are present. Native Swift bridge methods and Sync workspace controls
 now expose Rust-owned queue recovery, retry planning, retry result
 classification, queue health, no-network planning, user-action retry states,
 Rust-planned official event envelopes, self-hosted/logbook-scoped push
-execution coordination, hosted `/api/v1/sync/push` request construction,
+execution coordination, hosted `/api/v1/sync/*` execution routing,
 accepted-prefix/rejected-tail retry result recording, Rust-owned pulled-event
 apply through `sync.remote_events.apply`, self-hosted/logbook-scoped and hosted
 pull request construction, native hosted/self-hosted and peer-identity-gated
@@ -37,6 +37,9 @@ identifier and background processing mode. Scheduling is gated by Rust settings,
 a valid sync URL, a Keychain sync token, and pending Rust queue work, and the
 handler delegates to the existing Rust-plan -> Swift-transport -> Rust-result
 executor.
+The Sync API setting is persisted through the Rust settings schema and routes
+native manual/background retry to either self-hosted logbook-scoped endpoints or
+hosted `/api/v1/sync/*` endpoints.
 Signing, provisioning, TestFlight, App Store metadata, privacy manifest,
 physical-device validation, release-device BGTask execution, real
 hosted/self-hosted native sync endpoint qualification, Apple multicast

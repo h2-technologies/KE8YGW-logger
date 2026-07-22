@@ -46,8 +46,8 @@ wrapper.
   commands are exposed through the bridge. The native Swift bridge also exposes
   typed queue snapshots, recovery reports, retry plans, retry results, affected
   mutations, queue health, Rust-planned official event envelopes,
-  self-hosted/logbook-scoped push execution coordination, hosted
-  `/api/v1/sync/push` request construction, accepted-prefix/rejected-tail retry
+  self-hosted/logbook-scoped and hosted `/api/v1/sync/*` execution routing,
+  accepted-prefix/rejected-tail retry
   result recording with shared Rust golden coverage for accepted-prefix
   queue acknowledgment, rejected-tail user-action stops, and revoked/expired
   cloud-auth re-pair recovery, Rust-owned pulled-event apply through
