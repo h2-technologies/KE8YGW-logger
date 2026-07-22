@@ -54,6 +54,9 @@ Last audited: 2026-07-21
 - Guided browser conflict-review surface for saved review selection, structured
   conflict summaries, explicit recovery-path decisions, and form-based
   corrective QSO note events through the Rust desktop endpoints.
+- Native Swift conflict-review snapshot decoding and Sync workspace display for
+  saved open reviews, recommended actions, peer IDs, structured conflict
+  messages, and selected recovery-path results.
 - Durable LAN trust store with explicit approval, hashed short-lived single-use
   pairing tokens, logbook-scoped trusted devices, replay nonce rejection, and
   immediate revocation.
@@ -82,8 +85,8 @@ Last audited: 2026-07-21
 - Stronger LAN key-exchange hardening.
 - Physical-device LAN and iOS Local Network permission validation.
 - End-to-end cross-client branch review and reconciliation workflow beyond the
-  current guided browser review surface and desktop/iOS corrective-event
-  endpoints.
+  current guided browser review surface, native saved-review display, and
+  desktop/iOS corrective-event endpoints.
 - Release-device iOS background task execution, poor-network behavior, and
   local-network permission validation.
 - Real hosted web/desktop/iOS/self-hosted end-to-end device qualification,

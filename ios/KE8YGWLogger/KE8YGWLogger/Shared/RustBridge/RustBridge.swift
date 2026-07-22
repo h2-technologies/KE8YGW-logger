@@ -313,6 +313,22 @@ final class RustBridgeStore: ObservableObject {
         return response
     }
 
+    func resolveConflictReview(
+        reviewId: String,
+        resolution: SyncManualConflictResolution
+    ) async throws -> SyncConflictReviewMutationResult {
+        let supportURL = try RustBridgePaths.applicationSupportDirectory()
+        let request = SyncConflictReviewResolveBridgeRequest(
+            appSupportDir: supportURL.path,
+            reviewId: reviewId,
+            resolution: resolution
+        )
+        let result = try await command("sync.conflict_reviews.resolve", payload: request, as: SyncConflictReviewMutationResult.self)
+        sync = sync.replacingConflictReviews(result.conflictReviews)
+        lastError = nil
+        return result
+    }
+
     private func assign<T: Decodable>(
         endpoint: RustBridgeEndpoint,
         to keyPath: ReferenceWritableKeyPath<RustBridgeStore, T>,
@@ -499,7 +515,7 @@ struct FallbackRustBridgeClient: RustBridgeClient {
         case .map:
             data = FallbackBridgeData.map
         case .sync:
-            data = FallbackBridgeData.sync
+            data = FallbackBridgeData.sync()
         case .diagnostics:
             data = FallbackBridgeData.diagnostics
         case .lookupCallsign:
@@ -726,6 +742,26 @@ struct FallbackRustBridgeClient: RustBridgeClient {
                 "affected_mutations": mutations,
                 "offline_queue": FallbackBridgeData.offlineQueue(mutations: mutations)
             ]
+        case "sync.snapshot", "sync.conflict_reviews.snapshot":
+            let appSupportDir = payload["app_support_dir"] as? String ?? "fallback"
+            data = FallbackBridgeData.sync(
+                conflictReviews: FallbackConflictReviewMemory.snapshot(appSupportDir: appSupportDir)
+            )
+        case "sync.conflict_reviews.create":
+            let appSupportDir = payload["app_support_dir"] as? String ?? "fallback"
+            let report = payload["report"] as? [String: Any] ?? FallbackConflictReviewMemory.defaultReport()
+            data = FallbackConflictReviewMemory.create(appSupportDir: appSupportDir, report: report)
+        case "sync.conflict_reviews.resolve":
+            let appSupportDir = payload["app_support_dir"] as? String ?? "fallback"
+            let reviewID = payload["review_id"] as? String ?? ""
+            let resolution = payload["resolution"] as? [String: Any] ?? [
+                "choice": SyncManualConflictResolutionChoice.markUserActionRequired.rawValue
+            ]
+            data = FallbackConflictReviewMemory.resolve(
+                appSupportDir: appSupportDir,
+                reviewID: reviewID,
+                resolution: resolution
+            )
         case "bridge.self_test":
             data = [
                 "success": true,
@@ -794,6 +830,144 @@ struct FallbackRustBridgeClient: RustBridgeClient {
         case RustBridgeEndpoint.diagnostics.command: return .diagnostics
         default: return .version
         }
+    }
+}
+
+private enum FallbackConflictReviewMemory {
+    private static let lock = NSLock()
+    private static var records: [String: [[String: Any]]] = [:]
+
+    static func snapshot(appSupportDir: String = "fallback") -> [String: Any] {
+        lock.lock()
+        defer { lock.unlock() }
+        return snapshotUnlocked(appSupportDir: appSupportDir)
+    }
+
+    static func create(appSupportDir: String, report: [String: Any]) -> [String: Any] {
+        lock.lock()
+        defer { lock.unlock() }
+        var reviews = records[appSupportDir] ?? []
+        let fingerprint = fingerprint(for: report)
+        if let existing = reviews.first(where: { review in
+            (review["report_fingerprint"] as? String) == fingerprint && (review["status"] as? String) == "open"
+        }) {
+            return [
+                "conflict_review": existing,
+                "conflict_reviews": snapshotUnlocked(appSupportDir: appSupportDir)
+            ]
+        }
+
+        let now = ISO8601DateFormatter().string(from: Date())
+        let review: [String: Any] = [
+            "schema_version": 1,
+            "review_id": UUID().uuidString,
+            "report_fingerprint": fingerprint,
+            "report": report,
+            "status": "open",
+            "selected_resolution": NSNull(),
+            "created_at": now,
+            "updated_at": now,
+            "resolved_at": NSNull()
+        ]
+        reviews.append(review)
+        records[appSupportDir] = reviews
+        return [
+            "conflict_review": review,
+            "conflict_reviews": snapshotUnlocked(appSupportDir: appSupportDir)
+        ]
+    }
+
+    static func resolve(
+        appSupportDir: String,
+        reviewID: String,
+        resolution: [String: Any]
+    ) -> [String: Any] {
+        lock.lock()
+        defer { lock.unlock() }
+        var reviews = records[appSupportDir] ?? []
+        let now = ISO8601DateFormatter().string(from: Date())
+        let resolvedReview: [String: Any]
+        if let index = reviews.firstIndex(where: { ($0["review_id"] as? String) == reviewID }) {
+            var review = reviews[index]
+            review["status"] = "resolved"
+            review["selected_resolution"] = resolution
+            review["updated_at"] = now
+            review["resolved_at"] = now
+            reviews[index] = review
+            records[appSupportDir] = reviews
+            resolvedReview = review
+        } else {
+            resolvedReview = [
+                "schema_version": 1,
+                "review_id": reviewID,
+                "report_fingerprint": "fallback-missing-review",
+                "report": defaultReport(),
+                "status": "resolved",
+                "selected_resolution": resolution,
+                "created_at": now,
+                "updated_at": now,
+                "resolved_at": now
+            ]
+        }
+        return [
+            "conflict_review": resolvedReview,
+            "conflict_reviews": snapshotUnlocked(appSupportDir: appSupportDir)
+        ]
+    }
+
+    static func defaultReport() -> [String: Any] {
+        [
+            "schema_version": 1,
+            "created_at": ISO8601DateFormatter().string(from: Date()),
+            "logbook_id": UUID().uuidString,
+            "peer_id": "fallback-peer",
+            "status": "diverged",
+            "local_head_hash": "fallback-local-head",
+            "remote_head_hash": "fallback-remote-head",
+            "missing_event_count": 1,
+            "pending_operation_count": 0,
+            "conflicts": [
+                [
+                    "kind": "divergent_heads",
+                    "message": "Local and remote sync heads require manual review.",
+                    "related_operation_ids": [],
+                    "related_event_hashes": ["fallback-local-head", "fallback-remote-head"],
+                    "safe_auto_merge": false,
+                    "requires_user_action": true,
+                    "resolution_options": [
+                        "keep_local_history",
+                        "create_corrective_events",
+                        "mark_user_action_required"
+                    ]
+                ]
+            ],
+            "recommended_action": "Manual review required before syncing."
+        ]
+    }
+
+    private static func snapshotUnlocked(appSupportDir: String) -> [String: Any] {
+        let reviews = records[appSupportDir] ?? []
+        let open = reviews.filter { ($0["status"] as? String) == "open" }.count
+        let resolved = reviews.filter { ($0["status"] as? String) == "resolved" }.count
+        return [
+            "file_version": 1,
+            "review_schema_version": 1,
+            "health": [
+                "total": reviews.count,
+                "open": open,
+                "resolved": resolved
+            ],
+            "reviews": reviews
+        ]
+    }
+
+    private static func fingerprint(for report: [String: Any]) -> String {
+        let logbookID = report["logbook_id"] as? String ?? "unknown-logbook"
+        let peerID = report["peer_id"] as? String ?? "unknown-peer"
+        let status = report["status"] as? String ?? "unknown-status"
+        let local = report["local_head_hash"] as? String ?? "none"
+        let remote = report["remote_head_hash"] as? String ?? "none"
+        return "\(logbookID):\(peerID):\(status):\(local):\(remote)"
     }
 }
 
@@ -1053,19 +1227,21 @@ enum FallbackBridgeData {
         ]
     ]
 
-    static let sync: [String: Any] = [
-        "cloud_connection_state": "disconnected",
-        "pending_changes": 0,
-        "offline_queue": offlineQueue(),
-        "conflict_reviews": ["health": ["open": 0, "resolved": 0, "total": 0]],
-        "conflicts": [],
-        "history": [],
-        "retry_policy": [
-            "network_required": true,
-            "background_retry_supported": true,
-            "permanent_user_action_states": ["blocked", "failed", "user_action_required"]
+    static func sync(conflictReviews: [String: Any]? = nil) -> [String: Any] {
+        [
+            "cloud_connection_state": "disconnected",
+            "pending_changes": 0,
+            "offline_queue": offlineQueue(),
+            "conflict_reviews": conflictReviews ?? ["health": ["open": 0, "resolved": 0, "total": 0], "reviews": []],
+            "conflicts": [],
+            "history": [],
+            "retry_policy": [
+                "network_required": true,
+                "background_retry_supported": true,
+                "permanent_user_action_states": ["blocked", "failed", "user_action_required"]
+            ]
         ]
-    ]
+    }
 
     static func offlineQueue(mutations: [[String: Any]] = []) -> [String: Any] {
         let statuses = mutations.compactMap { $0["status"] as? String }
@@ -1435,6 +1611,18 @@ struct SyncSnapshot: Decodable {
             retryPolicy: retryPolicy
         )
     }
+
+    func replacingConflictReviews(_ reviews: SyncConflictReviewSnapshot) -> SyncSnapshot {
+        SyncSnapshot(
+            cloudConnectionState: cloudConnectionState,
+            pendingChanges: pendingChanges,
+            offlineQueue: offlineQueue,
+            conflictReviews: reviews,
+            conflicts: conflicts,
+            history: history,
+            retryPolicy: retryPolicy
+        )
+    }
 }
 
 struct SyncOfflineQueueSnapshot: Decodable {
@@ -1478,13 +1666,112 @@ struct SyncOfflineMutation: Decodable, Identifiable {
 }
 
 struct SyncConflictReviewSnapshot: Decodable {
+    var fileVersion: Int?
+    var reviewSchemaVersion: Int?
     var health: SyncConflictReviewHealth?
+    var reviews: [SyncManualConflictReview]?
+
+    var openReviews: [SyncManualConflictReview] {
+        (reviews ?? []).filter { $0.status == "open" }
+    }
 }
 
 struct SyncConflictReviewHealth: Decodable {
     var open: Int?
     var resolved: Int?
     var total: Int?
+}
+
+struct SyncManualConflictReview: Decodable, Identifiable {
+    var id: String { reviewId ?? reportFingerprint ?? UUID().uuidString }
+    var schemaVersion: Int?
+    var reviewId: String?
+    var reportFingerprint: String?
+    var report: SyncConflictReportSnapshot?
+    var status: String?
+    var selectedResolution: SyncManualConflictResolution?
+    var createdAt: String?
+    var updatedAt: String?
+    var resolvedAt: String?
+
+    var statusLabel: String {
+        (status ?? "open").replacingOccurrences(of: "_", with: " ").capitalized
+    }
+}
+
+struct SyncConflictReportSnapshot: Decodable {
+    var schemaVersion: Int?
+    var createdAt: String?
+    var logbookId: String?
+    var peerId: String?
+    var status: String?
+    var localHeadHash: String?
+    var remoteHeadHash: String?
+    var missingEventCount: Int?
+    var pendingOperationCount: Int?
+    var conflicts: [SyncConflictSnapshot]?
+    var recommendedAction: String?
+
+    var statusLabel: String {
+        (status ?? "review").replacingOccurrences(of: "_", with: " ").capitalized
+    }
+}
+
+struct SyncConflictSnapshot: Decodable, Identifiable {
+    var id: String {
+        let hashes = relatedEventHashes?.joined(separator: "-") ?? ""
+        let operations = relatedOperationIds?.joined(separator: "-") ?? ""
+        return "\(kind ?? "conflict")-\(hashes)-\(operations)"
+    }
+    var kind: String?
+    var message: String?
+    var relatedOperationIds: [String]?
+    var relatedEventHashes: [String]?
+    var safeAutoMerge: Bool?
+    var requiresUserAction: Bool?
+    var resolutionOptions: [String]?
+
+    var kindLabel: String {
+        (kind ?? "conflict").replacingOccurrences(of: "_", with: " ").capitalized
+    }
+}
+
+enum SyncManualConflictResolutionChoice: String, Codable {
+    case keepLocalHistory = "keep_local_history"
+    case pullRemoteAfterReview = "pull_remote_after_review"
+    case createCorrectiveEvents = "create_corrective_events"
+    case retryAfterDependencyArrives = "retry_after_dependency_arrives"
+    case markUserActionRequired = "mark_user_action_required"
+}
+
+struct SyncManualConflictResolution: Codable {
+    var choice: SyncManualConflictResolutionChoice
+    var operatorNote: String?
+    var correctiveEventHashes: [String]
+    var resolvedByDeviceId: String?
+
+    init(
+        choice: SyncManualConflictResolutionChoice,
+        operatorNote: String? = nil,
+        correctiveEventHashes: [String] = [],
+        resolvedByDeviceId: String? = nil
+    ) {
+        self.choice = choice
+        self.operatorNote = operatorNote
+        self.correctiveEventHashes = correctiveEventHashes
+        self.resolvedByDeviceId = resolvedByDeviceId
+    }
+}
+
+struct SyncConflictReviewResolveBridgeRequest: Encodable {
+    var appSupportDir: String
+    var reviewId: String
+    var resolution: SyncManualConflictResolution
+}
+
+struct SyncConflictReviewMutationResult: Decodable {
+    var conflictReview: SyncManualConflictReview
+    var conflictReviews: SyncConflictReviewSnapshot
 }
 
 struct SyncRetryPolicy: Decodable {

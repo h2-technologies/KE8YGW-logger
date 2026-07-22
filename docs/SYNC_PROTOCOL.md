@@ -205,7 +205,10 @@ browser review surface for saved review selection, structured conflict
 summaries, explicit recovery-path choices, and form-based corrective QSO note
 events that record the resulting official event hash on the review. iOS can
 create, resolve, snapshot, and resolve with corrective proposal events through
-Rust bridge commands.
+Rust bridge commands. The native Swift bridge decodes the saved review list,
+selected recovery path, structured conflict messages, and review health; the
+iOS Sync workspace displays open reviews, recommended actions, peer IDs, and
+conflict details without owning merge or validation rules.
 
 ## LAN Trust
 

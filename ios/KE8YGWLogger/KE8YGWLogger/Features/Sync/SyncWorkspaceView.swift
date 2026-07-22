@@ -17,6 +17,9 @@ struct SyncWorkspaceView: View {
                     DetailRow(title: "Ready", value: "\(health.readyToSend ?? 0)")
                     DetailRow(title: "Needs Review", value: "\(health.userActionRequired ?? 0)")
                 }
+                if let reviewHealth = bridge.sync.conflictReviews?.health {
+                    DetailRow(title: "Open Reviews", value: "\(reviewHealth.open ?? 0)")
+                }
                 DetailRow(title: "Conflicts", value: "\(bridge.sync.conflicts?.count ?? 0)")
                 Toggle("Background Sync", isOn: $backgroundSync)
                 Toggle("Automatic Retry", isOn: $retryAutomatically)
@@ -46,10 +49,34 @@ struct SyncWorkspaceView: View {
             }
 
             Section("Merge Status") {
-                if bridge.sync.conflicts?.isEmpty != false {
+                let reviews = bridge.sync.conflictReviews?.openReviews ?? []
+                if reviews.isEmpty && bridge.sync.conflicts?.isEmpty != false {
                     Label("No conflicts", systemImage: "checkmark.circle")
                         .foregroundStyle(.green)
                 } else {
+                    ForEach(reviews) { review in
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text(review.report?.statusLabel ?? review.statusLabel)
+                                .font(.headline)
+                            Text(review.report?.recommendedAction ?? "Manual review required before syncing.")
+                                .font(.subheadline)
+                                .foregroundStyle(.orange)
+                            if let peerID = review.report?.peerId {
+                                Text(peerID)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            ForEach(review.report?.conflicts ?? []) { conflict in
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(conflict.kindLabel)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                    Text(conflict.message ?? "Conflict requires operator review.")
+                                        .font(.caption)
+                                }
+                            }
+                        }
+                    }
                     ForEach(bridge.sync.conflicts ?? [], id: \.self) { conflict in
                         Text(conflict)
                             .foregroundStyle(.orange)

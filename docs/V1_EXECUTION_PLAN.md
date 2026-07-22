@@ -61,8 +61,9 @@ outside issue #2.
      validation, divergence, missing-event, and permanent failures. Native
      Swift bridge methods and the iOS Sync workspace now decode Rust queue
      health/mutations, request retry plans with native network monitor state,
-     and surface no-network/user-action retry outcomes without owning domain
-     rules.
+     display saved conflict-review records with recommended actions and
+     structured conflict messages, and surface no-network/user-action retry
+     outcomes without owning domain rules.
    - Remaining: production iOS reciprocal LAN pairing UX, stronger LAN
      key-exchange hardening, end-to-end cross-client branch review/reconciliation workflow
      qualification, physical-device LAN/iOS local-network

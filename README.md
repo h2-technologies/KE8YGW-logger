@@ -914,11 +914,14 @@ submitting explicit proposals through the normal proposal pipeline and storing
 the generated official event hashes on the review. The browser divergence
 screen lists saved reviews, summarizes structured conflicts, records explicit
 recovery-path choices, and submits corrective QSO note events through the Rust
-desktop endpoints. LAN auth credential rotation/recovery is available through
-the GUI trust endpoint. End-to-end cross-client branch review workflow
-qualification, signed events, production iOS reciprocal LAN pairing UX, stronger
-LAN key-exchange hardening, and physical-device LAN/iOS local-network validation
-are still deferred.
+desktop endpoints. Native iOS decodes the saved review list, selected recovery
+path, structured conflict messages, and review health, and the Sync workspace
+shows open review actions, peer IDs, and conflict details without owning merge
+rules. LAN auth credential rotation/recovery is available through the GUI trust
+endpoint. End-to-end cross-client branch review workflow qualification, signed
+events, production iOS reciprocal LAN pairing UX, stronger LAN key-exchange
+hardening, and physical-device LAN/iOS local-network validation are still
+deferred.
 
 ## Durable Offline Queue And LAN Trust
 
@@ -986,7 +989,9 @@ rewriting official history. Unsafe divergent pulls are rejected by the shared
 Rust validator; corrective-event resolutions require event hashes as evidence,
 and the desktop/iOS corrective-event commands create those hashes by submitting
 normal core proposals before resolving a review. The browser review surface is a
-client of those Rust records and endpoints; it does not merge history itself.
+client of those Rust records and endpoints; the native iOS Sync workspace
+displays the same saved review records and structured conflict details; neither
+client merges history itself.
 
 Replication runtime events include:
 

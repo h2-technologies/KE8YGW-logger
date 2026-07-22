@@ -100,6 +100,60 @@ final class RustBridgeTests: XCTestCase {
         XCTAssertEqual(result.offlineQueue.health.userActionRequired, 1)
     }
 
+    func testFallbackConflictReviewSnapshotDecodesOpenReview() async throws {
+        let client = FallbackRustBridgeClient()
+        let appSupportDir = "swift-conflict-\(UUID().uuidString)"
+        let result: SyncConflictReviewMutationResult = try await decodeCommand(
+            client: client,
+            command: "sync.conflict_reviews.create",
+            payload: [
+                "app_support_dir": appSupportDir,
+                "report": conflictReportPayload()
+            ]
+        )
+
+        XCTAssertEqual(result.conflictReviews.health?.open, 1)
+        XCTAssertEqual(result.conflictReviews.openReviews.count, 1)
+        XCTAssertEqual(result.conflictReview.status, "open")
+        XCTAssertEqual(result.conflictReview.report?.status, "diverged")
+        XCTAssertEqual(result.conflictReview.report?.recommendedAction, "Manual review required before syncing.")
+        XCTAssertEqual(result.conflictReview.report?.conflicts?.first?.kind, "divergent_heads")
+        XCTAssertEqual(result.conflictReview.report?.conflicts?.first?.requiresUserAction, true)
+    }
+
+    func testFallbackConflictReviewResolutionDecodesSelectedRecoveryPath() async throws {
+        let client = FallbackRustBridgeClient()
+        let appSupportDir = "swift-conflict-\(UUID().uuidString)"
+        let created: SyncConflictReviewMutationResult = try await decodeCommand(
+            client: client,
+            command: "sync.conflict_reviews.create",
+            payload: [
+                "app_support_dir": appSupportDir,
+                "report": conflictReportPayload()
+            ]
+        )
+        let reviewID = try XCTUnwrap(created.conflictReview.reviewId)
+        let resolved: SyncConflictReviewMutationResult = try await decodeCommand(
+            client: client,
+            command: "sync.conflict_reviews.resolve",
+            payload: [
+                "app_support_dir": appSupportDir,
+                "review_id": reviewID,
+                "resolution": [
+                    "choice": SyncManualConflictResolutionChoice.markUserActionRequired.rawValue,
+                    "operator_note": "Reviewed on iOS.",
+                    "corrective_event_hashes": []
+                ]
+            ]
+        )
+
+        XCTAssertEqual(resolved.conflictReview.status, "resolved")
+        XCTAssertEqual(resolved.conflictReview.selectedResolution?.choice, .markUserActionRequired)
+        XCTAssertEqual(resolved.conflictReview.selectedResolution?.operatorNote, "Reviewed on iOS.")
+        XCTAssertEqual(resolved.conflictReviews.health?.open, 0)
+        XCTAssertEqual(resolved.conflictReviews.health?.resolved, 1)
+    }
+
     func testRustBridgeStoreMapsStructuredErrors() async throws {
         let store = await RustBridgeStore(client: ErrorRustBridgeClient())
 
@@ -217,6 +271,36 @@ final class RustBridgeTests: XCTestCase {
         let settingsData = try encoder.encode(settings)
         let settingsObject = try JSONSerialization.jsonObject(with: settingsData)
         return ["app_support_dir": appSupportDir, "settings": settingsObject]
+    }
+
+    private func conflictReportPayload() -> [String: Any] {
+        [
+            "schema_version": 1,
+            "created_at": "2026-07-21T12:00:00Z",
+            "logbook_id": UUID().uuidString,
+            "peer_id": "ios-fallback-peer",
+            "status": "diverged",
+            "local_head_hash": "local-head",
+            "remote_head_hash": "remote-head",
+            "missing_event_count": 1,
+            "pending_operation_count": 0,
+            "conflicts": [
+                [
+                    "kind": "divergent_heads",
+                    "message": "Local and remote heads diverged.",
+                    "related_operation_ids": [],
+                    "related_event_hashes": ["local-head", "remote-head"],
+                    "safe_auto_merge": false,
+                    "requires_user_action": true,
+                    "resolution_options": [
+                        "keep_local_history",
+                        "create_corrective_events",
+                        "mark_user_action_required"
+                    ]
+                ]
+            ],
+            "recommended_action": "Manual review required before syncing."
+        ]
     }
 }
 

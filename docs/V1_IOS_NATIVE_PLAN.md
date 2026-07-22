@@ -45,9 +45,11 @@ wrapper.
   optional target entity metadata, and durable conflict-review create/resolve
   commands are exposed through the bridge. The native Swift bridge also exposes
   typed queue snapshots, recovery reports, retry plans, retry results, affected
-  mutations, and queue health so the Sync workspace can ask Rust for
-  no-network/user-action retry decisions using native network state. Full
-  push/pull/reconciliation workflows are not exposed end-to-end to iOS.
+  mutations, queue health, saved conflict-review records, selected recovery
+  paths, and structured conflict messages so the Sync workspace can ask Rust
+  for no-network/user-action retry decisions using native network state and
+  surface open review actions. Full push/pull/reconciliation workflows are not
+  exposed end-to-end to iOS.
 - MapKit surfaces exist, but cached/offline map regions and production map
   provider integration are not complete.
 - Keychain plumbing exists, but production provider credential setup and App
@@ -67,9 +69,10 @@ wrapper.
 
 - Complete offline queue and reconciliation behavior through shared Rust/API
   validation.
-- Expose actual native sync push/pull transport, divergence review UI,
-  corrective-event conflict handling, release-device BGTask execution, and
-  physical poor-network validation through the Rust bridge/API contract.
+- Expose actual native sync push/pull transport, full divergence review
+  decisions, corrective-event conflict handling, release-device BGTask
+  execution, and physical poor-network validation through the Rust bridge/API
+  contract.
 - Finish native ADIF import/restore, backup inspect/dry-run/apply, and
   diagnostic export flows without storing secrets.
 - Add cached/offline map region selection and validation against an approved
