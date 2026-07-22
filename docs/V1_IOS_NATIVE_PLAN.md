@@ -48,10 +48,12 @@ wrapper.
   mutations, queue health, Rust-planned official event envelopes,
   self-hosted/logbook-scoped push execution coordination, hosted
   `/api/v1/sync/push` request construction, accepted-prefix/rejected-tail retry
-  result recording, saved conflict-review records, selected recovery paths, and
-  structured conflict messages so the Sync workspace can ask Rust for
-  no-network/user-action retry decisions using native network state and surface
-  open review actions. Full pull/reconciliation workflows and real
+  result recording, Rust-owned pulled-event apply through
+  `sync.remote_events.apply`, saved conflict-review records, selected recovery
+  paths, and structured conflict messages so the Sync workspace can ask Rust for
+  no-network/user-action retry decisions using native network state, apply
+  pulled official envelopes through shared verification, and surface open review
+  actions. Full native endpoint fetch/reconciliation workflows and real
   hosted/self-hosted endpoint qualification are not exposed end-to-end to iOS.
 - MapKit surfaces exist, but cached/offline map regions and production map
   provider integration are not complete.
@@ -72,10 +74,11 @@ wrapper.
 
 - Complete offline queue and reconciliation behavior through shared Rust/API
   validation.
-- Finish native sync pull execution, full divergence review decisions,
-  corrective-event conflict handling, release-device BGTask execution,
-  hosted/self-hosted endpoint qualification for the native push path, and
-  physical poor-network validation through the Rust bridge/API contract.
+- Finish native sync pull transport execution, full divergence review
+  decisions, corrective-event conflict handling, release-device BGTask
+  execution, hosted/self-hosted endpoint qualification for native push/pull
+  paths, and physical poor-network validation through the Rust bridge/API
+  contract.
 - Finish native ADIF import/restore, backup inspect/dry-run/apply, and
   diagnostic export flows without storing secrets.
 - Add cached/offline map region selection and validation against an approved

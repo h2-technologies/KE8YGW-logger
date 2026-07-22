@@ -586,6 +586,11 @@ where
 
     let missing = match missing_events_after(&remote_events, local_head_hash.as_deref()) {
         MissingEvents::Events(events) => events,
+        MissingEvents::Diverged
+            if remote_events_are_missing_tail(&remote_events, local_head_hash.as_deref()) =>
+        {
+            remote_events.clone()
+        }
         MissingEvents::Diverged => {
             return PullEventsResponse {
                 peer_id: request.peer_id,
@@ -695,6 +700,16 @@ fn missing_events_after(
             .position(|event| event.event_hash == hash)
             .map(|index| MissingEvents::Events(remote_events[index + 1..].to_vec()))
             .unwrap_or(MissingEvents::Diverged),
+    }
+}
+
+fn remote_events_are_missing_tail(
+    remote_events: &[CoreEventEnvelope],
+    local_head_hash: Option<&str>,
+) -> bool {
+    match (local_head_hash, remote_events.first()) {
+        (Some(hash), Some(first)) => first.previous_hash.as_deref() == Some(hash),
+        _ => false,
     }
 }
 
@@ -3233,6 +3248,36 @@ mod tests {
         );
         let projection = store.rebuild_projections(logbook_id).await.unwrap();
         assert_eq!(projection.list(false).len(), 2);
+    }
+
+    #[tokio::test]
+    async fn successful_pull_accepts_verified_missing_tail() {
+        let logbook_id = Uuid::new_v4();
+        let remote = remote_chain(logbook_id, 3);
+        let store = InMemoryLogbookEventStore::new();
+        store
+            .append_verified_remote_event(remote[0].clone())
+            .await
+            .unwrap();
+        let local_head = store.get_head(logbook_id).await.unwrap();
+
+        let response = pull_missing_events(
+            &store,
+            PullEventsRequest {
+                peer_id: "peer".to_owned(),
+                logbook_id,
+                local_head_hash: local_head,
+            },
+            remote[1..].to_vec(),
+        )
+        .await;
+
+        assert_eq!(response.status, ReplicationStatus::Pulled);
+        assert_eq!(response.accepted_count, 2);
+        assert_eq!(
+            store.get_head(logbook_id).await.unwrap(),
+            remote.last().map(|event| event.event_hash.clone())
+        );
     }
 
     #[tokio::test]

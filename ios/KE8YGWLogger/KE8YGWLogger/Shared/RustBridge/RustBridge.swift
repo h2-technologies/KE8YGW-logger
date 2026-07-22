@@ -313,6 +313,24 @@ final class RustBridgeStore: ObservableObject {
         return response
     }
 
+    func applyRemoteEvents(
+        logbookId: String? = nil,
+        peerId: String? = nil,
+        events: [SyncOfficialEvent]
+    ) async throws -> SyncRemoteEventsApplyBridgeResult {
+        let supportURL = try RustBridgePaths.applicationSupportDirectory()
+        let request = SyncRemoteEventsApplyBridgeRequest(
+            appSupportDir: supportURL.path,
+            logbookId: logbookId,
+            peerId: peerId,
+            events: events
+        )
+        let result = try await command("sync.remote_events.apply", payload: request, as: SyncRemoteEventsApplyBridgeResult.self)
+        sync = result.sync
+        lastError = nil
+        return result
+    }
+
     func executeOfflineRetryPush<T: SyncPushTransporting>(
         serverURL: URL,
         bearerToken: String? = nil,
@@ -888,6 +906,31 @@ struct FallbackRustBridgeClient: RustBridgeClient {
                 ],
                 "affected_mutations": mutations,
                 "offline_queue": FallbackBridgeData.offlineQueue(mutations: mutations)
+            ]
+        case "sync.remote_events.apply":
+            let events = payload["events"] as? [[String: Any]] ?? []
+            let logbookID = (payload["logbook_id"] as? String)
+                ?? (events.first?["logbook_id"] as? String)
+                ?? UUID().uuidString
+            let remoteHeadHash = events.last?["event_hash"] ?? NSNull()
+            data = [
+                "pull": [
+                    "peer_id": payload["peer_id"] as? String ?? "fallback-ios-peer",
+                    "logbook_id": logbookID,
+                    "status": events.isEmpty ? "in_sync" : "pulled",
+                    "accepted_count": events.count,
+                    "ignored_duplicate_count": 0,
+                    "rejected_count": 0,
+                    "local_head_hash": remoteHeadHash,
+                    "remote_head_hash": remoteHeadHash,
+                    "errors": []
+                ],
+                "sync": FallbackBridgeData.sync(),
+                "projection": [
+                    "source": "fallback",
+                    "schema_version": 1,
+                    "pending_event_count": events.count
+                ]
             ]
         case "sync.snapshot", "sync.conflict_reviews.snapshot":
             let appSupportDir = payload["app_support_dir"] as? String ?? "fallback"
@@ -2423,6 +2466,31 @@ struct SyncRetryResultBridgeResult: Decodable {
     var retryResult: SyncRetryResultSummary
     var affectedMutations: [SyncOfflineMutation]
     var offlineQueue: SyncOfflineQueueSnapshot
+}
+
+struct SyncRemoteEventsApplyBridgeRequest: Encodable {
+    var appSupportDir: String
+    var logbookId: String?
+    var peerId: String?
+    var events: [SyncOfficialEvent]
+}
+
+struct SyncRemoteEventsApplyBridgeResult: Decodable {
+    var pull: SyncPullApplyResponse
+    var sync: SyncSnapshot
+    var projection: RustProjectionStatus?
+}
+
+struct SyncPullApplyResponse: Decodable, Equatable {
+    var peerId: String
+    var logbookId: String
+    var status: String
+    var acceptedCount: Int
+    var ignoredDuplicateCount: Int
+    var rejectedCount: Int
+    var localHeadHash: String?
+    var remoteHeadHash: String?
+    var errors: [String]
 }
 
 struct SyncRetryResultSummary: Decodable {

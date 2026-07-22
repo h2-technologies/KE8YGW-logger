@@ -976,8 +976,12 @@ Swift can execute the Rust-plan -> Swift-transport -> Rust-result sequence for
 the configured sync-token push path, record accepted server prefixes separately
 from rejected tails, and build both the self-hosted logbook-scoped push request
 and the hosted `/api/v1/sync/push` request without creating or validating
-official history itself. Real hosted/self-hosted endpoint qualification and
-release-device background behavior remain v0.3/v1 qualification work.
+official history itself. The iOS bridge also exposes `sync.remote_events.apply`
+so native pull transports can pass official event envelopes back through shared
+Rust hash-chain verification, including verified missing-tail responses that
+directly follow the actual local head. Real hosted/self-hosted endpoint
+qualification and release-device background behavior remain v0.3/v1
+qualification work.
 
 LAN trust records are durable support state. Pairing tokens require explicit
 operator approval, expire quickly, are single use, and are stored only as

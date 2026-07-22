@@ -31,6 +31,11 @@ Last audited: 2026-07-22
   execution coordination, hosted `/api/v1/sync/push` request construction, and
   partial-acceptance retry-result handling to the iOS Sync workspace without
   moving queue ordering, event creation, or failure classification out of Rust.
+- Shared pull application accepts verified missing-tail responses that directly
+  follow the actual local head as well as full remote chains, and iOS exposes
+  `sync.remote_events.apply` so native transports can apply pulled official
+  envelopes through Rust-owned hash-chain verification and projection/sync
+  refresh.
 - Queue-aware cloud push acknowledgment for queued official events.
 - Deterministic desktop restart/reconnect queue-drain coverage for interrupted
   sends, ordered queued official events, accepted-by-hash handling, and
@@ -91,7 +96,7 @@ Last audited: 2026-07-22
   desktop/iOS corrective-event endpoints.
 - Release-device iOS background task execution, poor-network behavior, and
   local-network permission validation, including real hosted/self-hosted
-  endpoint qualification for the native push execution path.
+  endpoint qualification for native push/pull transport execution.
 - Real hosted web/desktop/iOS/self-hosted end-to-end device qualification,
   physical-device tests, and full migration matrix.
 

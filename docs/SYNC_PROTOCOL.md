@@ -316,6 +316,18 @@ The hosted `ham-server` API exposes bearer/session-scoped sync push as
 `POST /api/v1/sync/push`; the logbook-scoped routes above are the self-hosted
 sync-server compatibility surface used by sync-token clients.
 
+Pull application uses the same Rust verification path for hosted, self-hosted,
+LAN, desktop, and iOS clients. `ham-sync::pull_missing_events` accepts either a
+full remote chain that contains the local head or a verified missing tail whose
+first event directly follows the actual local store head. In both cases, every
+accepted event is appended through `append_verified_remote_event`; divergent
+heads, unsupported schemas, broken hashes, and wrong previous hashes remain
+rejected before mutation. The iOS FFI command `sync.remote_events.apply`
+exposes that path to native transports by accepting full official event
+envelopes, returning the shared pull response, and refreshing the Rust-owned
+sync/projection counts without letting Swift validate or create official
+history.
+
 The current self-hosted server uses durable local storage by default: embedded SurrealDB metadata/support state, append-only JSONL official-event storage, and filesystem-backed diagnostic report payloads. Durable SurrealDB storage is exposed through the `ham-sync` `surreal-storage` feature so GUI, iOS, and other protocol-only clients can avoid the database dependency. The in-memory backend remains for deterministic tests.
 
 ## Deferred Work

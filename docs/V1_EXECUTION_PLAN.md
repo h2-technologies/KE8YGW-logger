@@ -63,8 +63,9 @@ outside issue #2.
      health/mutations, Rust-planned official event envelopes,
      self-hosted/logbook-scoped push execution coordination, hosted
      `/api/v1/sync/push` request bodies, accepted-prefix/rejected-tail retry
-     result recording, request retry plans with native network monitor state,
-     display saved conflict-review records with recommended actions and
+     result recording, Rust-owned pulled-event apply through
+     `sync.remote_events.apply`, request retry plans with native network monitor
+     state, display saved conflict-review records with recommended actions and
      structured conflict messages, and surface no-network/user-action retry
      outcomes without owning event creation or domain rules.
    - Remaining: production iOS reciprocal LAN pairing UX, stronger LAN
@@ -72,7 +73,7 @@ outside issue #2.
      qualification, physical-device LAN/iOS local-network
      validation, release-device iOS background task and poor-network
      qualification, real hosted/self-hosted endpoint qualification for native
-     push execution, and real hosted web/desktop/iOS/self-hosted
+     push/pull execution, and real hosted web/desktop/iOS/self-hosted
      migration/recovery qualification.
    - Blockers: local network permission behavior on iOS, iOS reciprocal LAN
      pairing UX, physical test devices, and acceptance criteria for manual conflict

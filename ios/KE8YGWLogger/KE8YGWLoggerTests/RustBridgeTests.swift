@@ -101,6 +101,41 @@ final class RustBridgeTests: XCTestCase {
         XCTAssertEqual(result.offlineQueue.health.userActionRequired, 1)
     }
 
+    func testFallbackRemoteEventsApplyDecodesPullResponse() async throws {
+        let store = await RustBridgeStore(client: FallbackRustBridgeClient())
+        let logbookID = "00000000-0000-4000-8000-000000000001"
+        let event = SyncOfficialEvent(
+            eventId: "11111111-1111-4111-8111-111111111111",
+            eventType: "official.log.qso.created",
+            logbookId: logbookID,
+            entityId: "22222222-2222-4222-8222-222222222222",
+            previousHash: nil,
+            eventHash: "remote-head-hash",
+            timestamp: "2026-07-10T12:00:00Z",
+            authorOperatorId: nil,
+            stationCallsign: "KE8YGW",
+            operatorCallsign: "KE8YGW",
+            authorDeviceId: "33333333-3333-4333-8333-333333333333",
+            sourceDeviceId: "33333333-3333-4333-8333-333333333333",
+            correlationId: "44444444-4444-4444-8444-444444444444",
+            sourcePluginId: "plugin.ios.native",
+            schemaVersion: 1,
+            payload: .object(["contacted_callsign": .string("K1ABC")])
+        )
+
+        let result = try await store.applyRemoteEvents(
+            logbookId: logbookID,
+            peerId: "ios-test-peer",
+            events: [event]
+        )
+
+        XCTAssertEqual(result.pull.peerId, "ios-test-peer")
+        XCTAssertEqual(result.pull.status, "pulled")
+        XCTAssertEqual(result.pull.acceptedCount, 1)
+        XCTAssertEqual(result.pull.remoteHeadHash, "remote-head-hash")
+        XCTAssertEqual(result.projection?.pendingEventCount, 1)
+    }
+
     func testFallbackConflictReviewSnapshotDecodesOpenReview() async throws {
         let client = FallbackRustBridgeClient()
         let appSupportDir = "swift-conflict-\(UUID().uuidString)"

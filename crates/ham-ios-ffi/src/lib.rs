@@ -19,11 +19,11 @@ use ham_core::{
     default_service_registry, encode_maidenhead, export_adif, grid_to_lat_lon, infer_band,
     maidenhead_to_coordinate, map_provider_metadata, mock_propagation_forecast, mock_weather,
     online_provider_metadata, parse_adif, qso_map_objects, station_markers_from_profiles,
-    submit_proposal, validate_grid, ApplicationSettings, Coordinate, EquipmentItem, EquipmentType,
-    InMemoryEventBus, JsonStationBookStore, JsonSupportStore, JsonlLogbookEventStore,
-    LocalPrefixProvider, LogbookEventStore, MapLayerStack, OperatorRole, ProposalContext,
-    QsoCurrentStateProjection, QsoRecord, StationBook, StationConfiguration, StationProfile,
-    UploadQueue, UploadTarget,
+    submit_proposal, validate_grid, ApplicationSettings, Coordinate, CoreEventEnvelope,
+    EquipmentItem, EquipmentType, InMemoryEventBus, JsonStationBookStore, JsonSupportStore,
+    JsonlLogbookEventStore, LocalPrefixProvider, LogbookEventStore, MapLayerStack, OperatorRole,
+    ProposalContext, QsoCurrentStateProjection, QsoRecord, StationBook, StationConfiguration,
+    StationProfile, UploadQueue, UploadTarget,
 };
 use ham_plugin_sdk::{
     PluginCapability, PluginManifest, ProposalEnvelope, OFFICIAL_LOG_QSO_CREATED,
@@ -37,14 +37,15 @@ use ham_plugin_sdk::{
     PROPOSAL_QSO_NOTE_ADD, PROPOSAL_QSO_RESTORE,
 };
 use ham_sync::{
-    CloudConnectionState, CloudSyncConfig, ConflictReviewStatus, JsonConflictReviewStore,
-    JsonOfflineMutationQueue, LocalPeerIdentity, ManualConflictResolution,
-    ManualConflictResolutionChoice, OfflineMutationEnvelope, OfflineMutationInput, SyncConfig,
-    SyncConflictReport, MAX_CONFLICT_REVIEW_NOTE_BYTES, OFFLINE_OP_ACTIVATION_END,
-    OFFLINE_OP_ACTIVATION_START, OFFLINE_OP_NET_CHECKIN_CREATE, OFFLINE_OP_NET_CHECKIN_DELETE,
-    OFFLINE_OP_NET_SESSION_END, OFFLINE_OP_NET_SESSION_START, OFFLINE_OP_NET_TRAFFIC_CREATE,
-    OFFLINE_OP_QSO_CORRECT, OFFLINE_OP_QSO_CREATE, OFFLINE_OP_QSO_DELETE, OFFLINE_OP_QSO_NOTE_ADD,
-    OFFLINE_OP_QSO_RESTORE, OFFLINE_OP_STATION_EQUIPMENT_CREATE, OFFLINE_OP_STATION_PROFILE_CREATE,
+    pull_missing_events, CloudConnectionState, CloudSyncConfig, ConflictReviewStatus,
+    JsonConflictReviewStore, JsonOfflineMutationQueue, LocalPeerIdentity, ManualConflictResolution,
+    ManualConflictResolutionChoice, OfflineMutationEnvelope, OfflineMutationInput,
+    PullEventsRequest, SyncConfig, SyncConflictReport, MAX_CONFLICT_REVIEW_NOTE_BYTES,
+    OFFLINE_OP_ACTIVATION_END, OFFLINE_OP_ACTIVATION_START, OFFLINE_OP_NET_CHECKIN_CREATE,
+    OFFLINE_OP_NET_CHECKIN_DELETE, OFFLINE_OP_NET_SESSION_END, OFFLINE_OP_NET_SESSION_START,
+    OFFLINE_OP_NET_TRAFFIC_CREATE, OFFLINE_OP_QSO_CORRECT, OFFLINE_OP_QSO_CREATE,
+    OFFLINE_OP_QSO_DELETE, OFFLINE_OP_QSO_NOTE_ADD, OFFLINE_OP_QSO_RESTORE,
+    OFFLINE_OP_STATION_EQUIPMENT_CREATE, OFFLINE_OP_STATION_PROFILE_CREATE,
     OFFLINE_OP_STATION_PROFILE_SELECT,
 };
 use serde::{Deserialize, Serialize};
@@ -281,6 +282,17 @@ struct IosRetryResultRequest {
     error_code: Option<String>,
     #[serde(default)]
     message: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct IosRemoteEventsApplyRequest {
+    app_support_dir: String,
+    #[serde(default)]
+    logbook_id: Option<Uuid>,
+    #[serde(default)]
+    peer_id: Option<String>,
+    #[serde(default)]
+    events: Vec<CoreEventEnvelope>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
@@ -572,6 +584,7 @@ fn dispatch_call(call: BridgeCall, correlation_id: Uuid) -> Result<Value, Bridge
         "sync.offline_queue.recover" => sync_offline_queue_recover_command(payload),
         "sync.offline_queue.retry_plan" => sync_offline_queue_retry_plan_command(payload),
         "sync.offline_queue.retry_result" => sync_offline_queue_retry_result_command(payload),
+        "sync.remote_events.apply" => sync_remote_events_apply_command(payload),
         "sync.conflict_reviews.snapshot" => sync_snapshot_command(payload),
         "sync.conflict_reviews.create" => sync_conflict_review_create_command(payload),
         "sync.conflict_reviews.resolve" => sync_conflict_review_resolve_command(payload),
@@ -1229,6 +1242,62 @@ fn sync_offline_queue_retry_result_command(payload: Value) -> Result<Value, Brid
         },
         "affected_mutations": affected_mutations,
         "offline_queue": snapshot
+    }))
+}
+
+fn sync_remote_events_apply_command(payload: Value) -> Result<Value, BridgeFault> {
+    let request: IosRemoteEventsApplyRequest =
+        serde_json::from_value(payload).map_err(|error| {
+            BridgeFault::invalid_json(format!("invalid remote events apply payload: {error}"))
+        })?;
+    let logbook_id = request
+        .logbook_id
+        .or_else(|| request.events.first().map(|event| event.logbook_id))
+        .unwrap_or_else(default_logbook_id);
+    if request
+        .events
+        .iter()
+        .any(|event| event.logbook_id != logbook_id)
+    {
+        return Err(BridgeFault::invalid_input(
+            "remote event logbook_id must match request logbook_id",
+        ));
+    }
+    let peer_id = request
+        .peer_id
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "ios-native-transport".to_owned());
+    let app_support_dir = request.app_support_dir;
+    let events = request.events;
+    let runtime = Runtime::new().map_err(|error| BridgeFault::internal(error.to_string()))?;
+    let store = event_store(&app_support_dir)?;
+    let (pull, pending_events) = runtime.block_on(async move {
+        let pull = pull_missing_events(
+            &store,
+            PullEventsRequest {
+                peer_id,
+                logbook_id,
+                local_head_hash: None,
+            },
+            events,
+        )
+        .await;
+        let pending_events = store
+            .list_events(logbook_id)
+            .await
+            .map_err(|error| BridgeFault::storage(error.to_string()))?
+            .len();
+        Ok::<_, BridgeFault>((pull, pending_events))
+    })?;
+    let sync = sync_snapshot_for_support(Some(&app_support_dir), logbook_id)?;
+    Ok(json!({
+        "pull": pull,
+        "sync": sync,
+        "projection": {
+            "source": "rust",
+            "schema_version": BRIDGE_SCHEMA_VERSION,
+            "pending_event_count": pending_events
+        }
     }))
 }
 
@@ -2799,6 +2868,32 @@ mod tests {
         serde_json::from_str(&take_string(ptr)).unwrap()
     }
 
+    fn create_test_qso_event(
+        app_support_dir: &Path,
+        logbook_id: Uuid,
+        callsign: &str,
+        minute: u32,
+    ) -> Value {
+        let create = call_json(json!({
+            "command": "qso.create",
+            "payload": {
+                "app_support_dir": app_support_dir.to_string_lossy(),
+                "logbook_id": logbook_id,
+                "operation_id": Uuid::new_v4().to_string(),
+                "qso": {
+                    "contacted_callsign": callsign,
+                    "station_callsign": "ke8ygw",
+                    "operator_callsign": "ke8ygw",
+                    "started_at": format!("2026-07-10T12:{minute:02}:00Z"),
+                    "mode": "ssb",
+                    "band": "20m"
+                }
+            }
+        }));
+        assert_eq!(create["ok"], true);
+        create["data"]["official_event"].clone()
+    }
+
     #[test]
     fn version_payload_is_json() {
         let ptr = ham_ios_version_json();
@@ -3230,6 +3325,79 @@ mod tests {
             "missing_local_official_event"
         );
         let _ = std::fs::remove_dir_all(app_support_dir);
+    }
+
+    #[test]
+    fn sync_remote_events_apply_pulls_verified_official_events() {
+        let source_dir = std::env::temp_dir().join(format!("ham-ios-{}", Uuid::new_v4()));
+        let target_dir = std::env::temp_dir().join(format!("ham-ios-{}", Uuid::new_v4()));
+        let logbook_id = default_logbook_id();
+        let first = create_test_qso_event(&source_dir, logbook_id, "k1pull", 0);
+        let second = create_test_qso_event(&source_dir, logbook_id, "k2pull", 1);
+
+        let apply = call_json(json!({
+            "command": "sync.remote_events.apply",
+            "payload": {
+                "app_support_dir": target_dir.to_string_lossy(),
+                "logbook_id": logbook_id,
+                "peer_id": "ios-test-peer",
+                "events": [first.clone(), second.clone()]
+            }
+        }));
+
+        assert_eq!(apply["ok"], true);
+        assert_eq!(apply["data"]["pull"]["status"], "pulled");
+        assert_eq!(apply["data"]["pull"]["accepted_count"], 2);
+        assert_eq!(apply["data"]["projection"]["pending_event_count"], 2);
+        assert_eq!(apply["data"]["sync"]["pending_events"], 2);
+
+        let duplicate = call_json(json!({
+            "command": "sync.remote_events.apply",
+            "payload": {
+                "app_support_dir": target_dir.to_string_lossy(),
+                "logbook_id": logbook_id,
+                "peer_id": "ios-test-peer",
+                "events": [first, second]
+            }
+        }));
+        assert_eq!(duplicate["ok"], true);
+        assert_eq!(duplicate["data"]["pull"]["status"], "in_sync");
+        assert_eq!(duplicate["data"]["pull"]["accepted_count"], 0);
+
+        let _ = std::fs::remove_dir_all(source_dir);
+        let _ = std::fs::remove_dir_all(target_dir);
+    }
+
+    #[test]
+    fn sync_remote_events_apply_reports_divergence_without_mutating_store() {
+        let source_dir = std::env::temp_dir().join(format!("ham-ios-{}", Uuid::new_v4()));
+        let target_dir = std::env::temp_dir().join(format!("ham-ios-{}", Uuid::new_v4()));
+        let logbook_id = default_logbook_id();
+        let remote = create_test_qso_event(&source_dir, logbook_id, "k1remote", 0);
+        let local = create_test_qso_event(&target_dir, logbook_id, "k1local", 0);
+
+        let apply = call_json(json!({
+            "command": "sync.remote_events.apply",
+            "payload": {
+                "app_support_dir": target_dir.to_string_lossy(),
+                "logbook_id": logbook_id,
+                "peer_id": "ios-test-peer",
+                "events": [remote]
+            }
+        }));
+
+        assert_eq!(apply["ok"], true);
+        assert_eq!(apply["data"]["pull"]["status"], "diverged");
+        assert_eq!(apply["data"]["pull"]["accepted_count"], 0);
+        assert_eq!(apply["data"]["pull"]["rejected_count"], 1);
+        assert_eq!(
+            apply["data"]["pull"]["local_head_hash"],
+            local["event_hash"]
+        );
+        assert_eq!(apply["data"]["projection"]["pending_event_count"], 1);
+
+        let _ = std::fs::remove_dir_all(source_dir);
+        let _ = std::fs::remove_dir_all(target_dir);
     }
 
     #[test]
