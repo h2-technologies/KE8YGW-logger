@@ -1076,6 +1076,38 @@ final class RustBridgeTests: XCTestCase {
         XCTAssertEqual(client.remoteApplyPayloads.first?["logbook_id"] as? String, logbookID)
     }
 
+    func testBackgroundSyncRunsAutoPullWhenNoQueuedEventsAreReady() async throws {
+        let logbookID = "00000000-0000-4000-8000-000000000001"
+        let remoteEvent = sampleOfficialEvent(logbookID: logbookID, eventHash: "event-hash-autopull")
+        let client = try RetryExecutorRustBridgeClient(
+            retryPlanPayload: retryPlanPayload(operationIds: [], events: [])
+        )
+        let pushTransport = StubSyncPushTransport(error: SyncHTTPTransportError.emptyEventBatch)
+        let pullTransport = StubSyncPullTransport(response: pullResponse(logbookID: logbookID, events: [remoteEvent]))
+        let store = await RustBridgeStore(client: client)
+
+        let result = try await store.executeBackgroundSync(
+            serverURL: try XCTUnwrap(URL(string: "https://api.example.test")),
+            syncToken: "sync-secret",
+            pushEndpointStyle: SyncPushEndpointStyle(setting: "hosted_sync"),
+            pullEndpointStyle: SyncPullEndpointStyle(setting: "hosted_sync"),
+            autoPullEnabled: true,
+            pushTransport: pushTransport,
+            pullTransport: pullTransport
+        )
+
+        XCTAssertEqual(result.retryResult.status, .noReadyEvents)
+        XCTAssertEqual(result.pullResult?.status, .applied)
+        XCTAssertTrue(result.taskCompleted)
+        XCTAssertTrue(pushTransport.requests.isEmpty)
+        XCTAssertEqual(pullTransport.requests.first?.endpointStyle, .hostedSync)
+        XCTAssertEqual(pullTransport.requests.first?.syncToken, "sync-secret")
+        XCTAssertEqual(client.retryResultPayloads.count, 0)
+        XCTAssertEqual(client.remoteApplyPayloads.count, 1)
+        XCTAssertEqual(client.remoteApplyPayloads.first?["logbook_id"] as? String, logbookID)
+        XCTAssertEqual(client.remoteApplyPayloads.first?["peer_id"] as? String, "cloud")
+    }
+
     func testBackgroundSyncSkipsPullAfterUserActionPushFailure() async throws {
         let logbookID = UUID().uuidString
         let event = sampleOfficialEvent(logbookID: logbookID, eventHash: "event-hash-auth")

@@ -38,7 +38,8 @@ a valid sync URL, a Keychain sync token, and either pending Rust queue work or
 Auto Pull. The handler delegates to the existing Rust-plan -> Swift-transport
 -> Rust-result executor and can run configured Auto Pull after a clean push or
 no-ready-events push plan, with pulled envelopes applied by
-`sync.remote_events.apply`.
+`sync.remote_events.apply`. Simulator tests cover both trigger paths, including
+the no-ready queue plan path where no push transport should run.
 The Sync API setting is persisted through the Rust settings schema and routes
 native manual/background retry to either self-hosted logbook-scoped endpoints or
 hosted `/api/v1/sync/*` endpoints.

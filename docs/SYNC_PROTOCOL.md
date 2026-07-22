@@ -194,7 +194,9 @@ no-ready-events push plan, Auto Pull can fetch remote official envelopes through
 the configured endpoint style and pass them to `sync.remote_events.apply`. It
 does not create official events or classify domain failures in Swift, and it
 does not pull after auth, validation, divergence, missing-event, blocked,
-partial-failure, or transient push results.
+partial-failure, or transient push results. Simulator tests cover both the
+clean-push and no-ready queue-plan Auto Pull paths; the no-ready test proves no
+push transport is invoked before the pull/apply path.
 `cross_client_golden_partial_push_accepts_prefix_and_blocks_rejected_tail`
 proves the shared Rust cloud/queue path accepts the valid prefix, blocks the
 rejected tail as `user_action_required`, avoids local and cloud duplicates, and

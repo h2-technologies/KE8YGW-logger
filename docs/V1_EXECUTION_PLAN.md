@@ -80,7 +80,8 @@ outside issue #2.
      permitted iOS background retry task only when Rust settings, a valid sync
      URL, a Keychain sync token, and either pending Rust queue work or Auto
      Pull make it eligible, run configured Auto Pull after a clean accepted
-     push or no-ready-events push plan through `sync.remote_events.apply`,
+     push or no-ready-events push plan through `sync.remote_events.apply`
+     with simulator coverage for both trigger paths,
      refresh SwiftData QSO cache rows from the Rust `qso.list` projection after
      verified manual/background/LAN pull applies, and surface no-network/user-action
      retry and pull outcomes without owning event creation or domain rules.

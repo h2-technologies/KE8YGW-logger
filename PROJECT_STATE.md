@@ -145,8 +145,9 @@ operations, and release qualification.
   LAN peer identity mismatch rejection, pulled-event apply decoding, partial
   divergence result recording, hosted endpoint-style execution routing,
   background retry scheduling policy boundaries, background auto-pull
-  sequencing after a clean push, Rust-projection SwiftData cache refresh, and
-  pull suppression after user-action push failures,
+  sequencing after a clean push and after a no-ready queue plan,
+  Rust-projection SwiftData cache refresh, and pull suppression after
+  user-action push failures,
   shared accepted-prefix/rejected-tail queue
   recovery, expired cloud-auth user-action recovery, durable local identity
   decoding, and LAN trust

@@ -41,7 +41,9 @@ Last audited: 2026-07-22
   queue work or Auto Pull before scheduling the same Rust-plan ->
   Swift-transport -> Rust-result executor. Background Auto Pull runs only after
   a clean accepted push or no-ready-events push plan and applies fetched remote
-  events through `sync.remote_events.apply`.
+  events through `sync.remote_events.apply`. Simulator tests cover both Auto
+  Pull paths: after a clean accepted push and after a no-ready queue plan where
+  no push transport should run.
 - Native iOS manual hosted/self-hosted pull, trusted LAN pull, and background
   Auto Pull refresh the SwiftData QSO cache from the Rust `qso.list`
   projection after Rust accepts remote events. Swift still treats SwiftData as
