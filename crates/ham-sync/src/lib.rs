@@ -3979,22 +3979,87 @@ mod tests {
                 && !conflict.safe_auto_merge
         }));
 
-        let review_store = JsonConflictReviewStore::new(&review_path);
-        let review = review_store
+        let report_json = serde_json::to_value(&report).unwrap();
+        let round_tripped_report: SyncConflictReport =
+            serde_json::from_value(report_json.clone()).unwrap();
+        assert_eq!(
+            round_tripped_report, report,
+            "client-ready conflict reports must survive exact JSON round trips"
+        );
+
+        let desktop_review_store = JsonConflictReviewStore::new(&review_path);
+        let desktop_review = desktop_review_store
             .create_review(report.clone(), fixed_time(92))
             .unwrap();
-        let resolved = review_store
+        let unsafe_desktop_pull = desktop_review_store.resolve_review(
+            desktop_review.review_id,
+            ManualConflictResolution::new(ManualConflictResolutionChoice::PullRemoteAfterReview)
+                .with_note("operator tried to pull a conflicting branch")
+                .with_resolved_by_device_id(desktop_device),
+            fixed_time(93),
+        );
+        assert!(matches!(
+            unsafe_desktop_pull,
+            Err(ConflictReviewError::UnsafeResolution {
+                resolution: ManualConflictResolutionChoice::PullRemoteAfterReview,
+                status: ReplicationStatus::RemoteAhead
+            })
+        ));
+        let desktop_resolved = desktop_review_store
             .resolve_review(
-                review.review_id,
+                desktop_review.review_id,
+                ManualConflictResolution::new(
+                    ManualConflictResolutionChoice::MarkUserActionRequired,
+                )
+                .with_note("Desktop kept local pending work visible for manual review")
+                .with_resolved_by_device_id(desktop_device),
+                fixed_time(94),
+            )
+            .unwrap();
+        assert_eq!(desktop_resolved.status, ConflictReviewStatus::Resolved);
+        let marked_local_correction = queue
+            .mark_user_action_required(
+                local_correction_operation,
+                "manual conflict review required",
+                Some("manual_conflict_review".to_owned()),
+                fixed_time(95),
+            )
+            .unwrap();
+        assert_eq!(
+            marked_local_correction.status,
+            OfflineMutationStatus::UserActionRequired
+        );
+        assert_eq!(
+            queue
+                .load_snapshot(fixed_time(95))
+                .unwrap()
+                .health
+                .user_action_required,
+            1
+        );
+
+        let ios_review_store = JsonConflictReviewStore::new(root.join("ios-conflict-reviews.json"));
+        let ios_report: SyncConflictReport = serde_json::from_value(report_json).unwrap();
+        let ios_review = ios_review_store
+            .create_review(ios_report.clone(), fixed_time(96))
+            .unwrap();
+        assert_eq!(ios_review.report, report);
+        let ios_resolved = ios_review_store
+            .resolve_review(
+                ios_review.review_id,
                 ManualConflictResolution::new(
                     ManualConflictResolutionChoice::CreateCorrectiveEvents,
                 )
-                .with_corrective_event_hashes(vec!["operator-reviewed-corrective-hash".to_owned()])
-                .with_resolved_by_device_id(ios_device),
-                fixed_time(93),
+                .with_corrective_event_hashes(vec![
+                    "ios-operator-reviewed-corrective-hash".to_owned()
+                ])
+                .with_resolved_by_device_id(ios_device)
+                .with_note("iOS resolved with corrective proposal hashes"),
+                fixed_time(97),
             )
             .unwrap();
-        assert_eq!(resolved.status, ConflictReviewStatus::Resolved);
+        assert_eq!(ios_resolved.status, ConflictReviewStatus::Resolved);
+        assert_eq!(ios_review_store.load_snapshot().unwrap().health.resolved, 1);
 
         let ios_store = InMemoryLogbookEventStore::new();
         ios_store
@@ -4020,13 +4085,41 @@ mod tests {
         assert_eq!(divergent_preview.status, ReplicationStatus::Diverged);
         let divergent_report = conflict_report_from_preview(
             &divergent_preview,
-            std::slice::from_ref(&local_correction),
+            std::slice::from_ref(&marked_local_correction),
             fixed_time(121),
         );
         assert!(divergent_report
             .conflicts
             .iter()
             .any(|conflict| conflict.kind == SyncConflictKind::DivergentHeads));
+        let before_divergent_pull_head = ios_store.get_head(logbook_id).await.unwrap();
+        let before_divergent_pull_events = ios_store.list_events(logbook_id).await.unwrap();
+        let divergent_pull = pull_missing_events(
+            &ios_store,
+            PullEventsRequest {
+                peer_id: "cloud".to_owned(),
+                logbook_id,
+                local_head_hash: before_divergent_pull_head.clone(),
+            },
+            vec![
+                base.clone(),
+                remote_correction.clone(),
+                remote_delete.clone(),
+            ],
+        )
+        .await;
+        assert_eq!(divergent_pull.status, ReplicationStatus::Diverged);
+        assert_eq!(divergent_pull.accepted_count, 0);
+        assert_eq!(
+            ios_store.get_head(logbook_id).await.unwrap(),
+            before_divergent_pull_head
+        );
+        assert_eq!(
+            ios_store.list_events(logbook_id).await.unwrap(),
+            before_divergent_pull_events,
+            "divergent branch review must not silently append remote events"
+        );
+        ios_store.verify_chain(logbook_id).await.unwrap();
 
         let legacy_queue = JsonOfflineMutationQueue::new(root.join("legacy-offline.json"));
         let legacy_operation = Uuid::new_v4();

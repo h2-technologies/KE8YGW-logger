@@ -114,9 +114,10 @@ Last audited: 2026-07-22
 - Apple multicast entitlement/provisioning and full release-device iOS LAN
   discovery/pairing qualification.
 - Physical-device LAN and iOS Local Network permission prompt validation.
-- End-to-end cross-client branch review and reconciliation workflow beyond the
-  current guided browser review surface, native saved-review display, and
-  desktop/iOS corrective-event endpoints.
+- Release-device cross-client branch review and reconciliation workflow beyond
+  the current deterministic shared golden tests, guided browser review surface,
+  native saved-review display, desktop/iOS review stores, and desktop/iOS
+  corrective-event endpoints.
 - Release-device iOS background task execution, poor-network behavior, and
   local-network permission validation, including real hosted/self-hosted
   endpoint qualification for native push/pull transport execution.

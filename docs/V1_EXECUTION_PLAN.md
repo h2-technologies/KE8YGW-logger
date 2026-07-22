@@ -52,8 +52,10 @@ outside issue #2.
      cover desktop-style crash recovery, transient network retry, duplicate
      replay, reordered delivery rejection, iOS-style pull/projection replay,
      clock-skewed timestamps ordered by event hashes, divergent heads,
-     concurrent correction and tombstone/restore review, v0.2 legacy queue
-     migration, and LAN revocation.
+     concurrent correction and tombstone/restore review, client-ready
+     conflict-report JSON portability across desktop and iOS review stores,
+     unsafe-resolution rejection, user-action queue marking, no-mutation
+     divergent pull rejection, v0.2 legacy queue migration, and LAN revocation.
      The iOS FFI bridge also exposes bounded background retry planning and
      result classification commands so Swift can use native transport while
      Rust owns queue ordering, `sending` recovery, accepted-hash
@@ -74,12 +76,12 @@ outside issue #2.
      `/api/sync/state` identity probing before listing peers, and trusted-peer
      identity probing before signed LAN reads, and surface no-network/user-action
      retry and pull outcomes without owning event creation or domain rules.
-   - Remaining: Apple multicast entitlement/provisioning, end-to-end
-     cross-client branch review/reconciliation workflow qualification, physical-device LAN/iOS
-     local-network validation, release-device iOS background task and poor-network
-     qualification, real hosted/self-hosted endpoint qualification for native
-     push/pull execution, and real hosted web/desktop/iOS/self-hosted
-     migration/recovery qualification.
+   - Remaining: Apple multicast entitlement/provisioning, release-device
+     cross-client branch review/reconciliation workflow qualification,
+     physical-device LAN/iOS local-network validation, release-device iOS
+     background task and poor-network qualification, real hosted/self-hosted
+     endpoint qualification for native push/pull execution, and real hosted
+     web/desktop/iOS/self-hosted migration/recovery qualification.
    - Blockers: Apple multicast entitlement/provisioning, local network
      permission behavior on iOS, physical test devices, and acceptance
      criteria for manual conflict resolution.
@@ -168,7 +170,7 @@ outside issue #2.
 ## Next Three Goals
 
 1. Finish sync/reconciliation hardening: Apple multicast
-   entitlement/provisioning, end-to-end cross-client branch
+   entitlement/provisioning, release-device cross-client branch
    review/reconciliation workflow qualification,
    physical-device LAN/iOS local-network validation, and iOS background task and
    poor-network validation on release devices.

@@ -383,6 +383,7 @@ The current self-hosted server uses durable local storage by default: embedded S
   code plus HMAC request-proof model.
 - Release-device iOS LAN discovery validation.
 - Physical-device LAN and iOS Local Network permission prompt validation.
-- End-to-end cross-client branch review and reconciliation workflow beyond the
-  current guided browser review surface and explicit corrective-event commands.
+- Release-device cross-client branch review and reconciliation workflow beyond
+  the current deterministic shared golden tests, guided browser review surface,
+  desktop/iOS review stores, and explicit corrective-event commands.
 - Durable cloud server database.

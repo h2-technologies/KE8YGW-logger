@@ -449,7 +449,8 @@ and the summit reference. Deleted/cancelled QSOs are excluded by default.
 Current MVP limitations: one active activation per station/operator is assumed;
 multi-op, multi-park/multi-summit, spotting integration, online reference
 lookups, GPS auto-detection, offline reference caches, award tracking, and
-end-to-end cross-client conflict-review workflow qualification are future work.
+release-device cross-client conflict-review workflow qualification are future
+work.
 
 ## Callsign Lookup And Smart Autofill Plugin
 
@@ -937,11 +938,15 @@ recovery-path choices, and submits corrective QSO note events through the Rust
 desktop endpoints. Native iOS decodes the saved review list, selected recovery
 path, structured conflict messages, and review health, and the Sync workspace
 shows open review actions, peer IDs, and conflict details without owning merge
-rules. LAN auth credential rotation/recovery is available through the GUI trust
-endpoint. End-to-end cross-client branch review workflow qualification, signed
-events, Apple multicast entitlement/provisioning, physical-device LAN/iOS
-local-network validation, and formal asymmetric LAN key exchange beyond the
-current endpoint-auth/HMAC model are still deferred.
+rules. The shared cross-client golden tests now prove server-derived conflict
+reports round-trip through JSON, persist in desktop and iOS review stores,
+reject unsafe pull-after-review decisions, mark queued work as user-action
+required, and refuse to append a divergent remote branch. LAN auth credential
+rotation/recovery is available through the GUI trust endpoint. Release-device
+cross-client branch review workflow qualification, signed events, Apple
+multicast entitlement/provisioning, physical-device LAN/iOS local-network
+validation, and formal asymmetric LAN key exchange beyond the current
+endpoint-auth/HMAC model are still deferred.
 
 ## Durable Offline Queue And LAN Trust
 

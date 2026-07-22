@@ -127,7 +127,8 @@ wrapper is not the iOS client. See `V1_RELEASE_PLAN.md`,
      retry planning/result classification, and iOS LAN trust
      snapshot/issue/accept/trust/rotate/revoke bridge commands, reciprocal
      peer-URL pairing, and multicast discovery peer selection.
-     End-to-end cross-client branch review/reconciliation workflow qualification,
+     Release-device cross-client branch review/reconciliation workflow
+     qualification,
      physical-device LAN/iOS local-network validation, and release-device iOS
      background task/poor-network qualification remain planned.
 
@@ -138,7 +139,7 @@ The dependency-ordered v1 critical path is tracked in
 rewrites:
 
 1. Finish the remaining sync/reconciliation hardening: Apple multicast
-   entitlement/provisioning, end-to-end cross-client branch
+   entitlement/provisioning, release-device cross-client branch
    review/reconciliation workflow qualification,
    physical-device LAN/iOS local-network validation, and release-device iOS
    background task/poor-network qualification before unattended desktop/iOS

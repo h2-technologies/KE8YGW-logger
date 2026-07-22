@@ -58,7 +58,7 @@ wrapper.
   retry decisions using native network state, apply pulled official envelopes
   through shared verification, surface open review actions, and manage LAN trust
   without storing raw LAN auth secrets in Rust support state. Full real endpoint
-  qualification, production reciprocal LAN transport completion UX, release-device
+  qualification, Apple multicast entitlement/provisioning, release-device
   scheduling, and broader reconciliation workflows are not complete end-to-end
   on iOS.
 - MapKit surfaces exist, but cached/offline map regions and production map
@@ -78,13 +78,13 @@ wrapper.
 
 ## Required Remaining Work
 
-- Complete offline queue and reconciliation behavior through shared Rust/API
-  validation.
-- Finish real native sync endpoint qualification, full divergence review
-  decisions, corrective-event conflict handling, production reciprocal LAN
-  pairing completion UX, release-device BGTask execution, hosted/self-hosted
-  qualification for native push/pull paths, and physical poor-network validation
-  through the Rust bridge/API contract.
+- Complete release-device offline queue and reconciliation qualification through
+  shared Rust/API validation.
+- Finish real native sync endpoint qualification, release-device divergence
+  review/corrective-event workflow qualification, Apple multicast
+  entitlement/provisioning for LAN discovery, release-device BGTask execution,
+  hosted/self-hosted qualification for native push/pull paths, and physical
+  poor-network validation through the Rust bridge/API contract.
 - Finish native ADIF import/restore, backup inspect/dry-run/apply, and
   diagnostic export flows without storing secrets.
 - Add cached/offline map region selection and validation against an approved
