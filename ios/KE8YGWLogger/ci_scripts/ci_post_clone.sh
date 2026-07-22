@@ -4,10 +4,34 @@ set -euo pipefail
 # Xcode Cloud images do not include Rust by default. Install a minimal stable
 # toolchain before xcodebuild starts so the Xcode build phase can build
 # HamIOSFFI through scripts/ios/build-xcframework.sh.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 CARGO_HOME="${CARGO_HOME:-$HOME/.cargo}"
 RUSTUP_HOME="${RUSTUP_HOME:-$HOME/.rustup}"
 export CARGO_HOME RUSTUP_HOME
+export CARGO_NET_RETRY="${CARGO_NET_RETRY:-5}"
 export PATH="$CARGO_HOME/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+
+retry_command() {
+  local attempts="$1"
+  shift
+  local attempt=1
+  local delay=5
+
+  until "$@"; do
+    local status="$?"
+    if [[ "$attempt" -ge "$attempts" ]]; then
+      return "$status"
+    fi
+
+    echo "warning: command failed on attempt ${attempt}/${attempts}; retrying in ${delay}s: $*" >&2
+    sleep "$delay"
+    attempt="$((attempt + 1))"
+    if [[ "$delay" -lt 60 ]]; then
+      delay="$((delay * 2))"
+    fi
+  done
+}
 
 if ! command -v rustup >/dev/null 2>&1; then
   RUSTUP_VERSION="1.29.0"
@@ -55,3 +79,6 @@ fi
 
 rustc --version
 cargo --version
+
+cd "$REPO_ROOT"
+retry_command 5 cargo fetch --locked
