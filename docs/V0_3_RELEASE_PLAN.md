@@ -46,7 +46,8 @@ Last audited: 2026-07-22
   no push transport should run.
 - Governance validation now enforces the iOS Local Network usage string,
   local-network ATS allowance, background-processing mode, permitted sync retry
-  task identifier, and absence of tracked generated Xcode/iOS artifacts.
+  task identifier matching the Swift runtime constant, and absence of tracked
+  generated Xcode/iOS artifacts.
 - Native iOS manual hosted/self-hosted pull, trusted LAN pull, and background
   Auto Pull refresh the SwiftData QSO cache from the Rust `qso.list`
   projection after Rust accepts remote events. Swift still treats SwiftData as

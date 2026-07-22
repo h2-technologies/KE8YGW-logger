@@ -182,13 +182,25 @@ foreach ($file in $trackedFiles) {
 
 $iosInfoPlistPath = 'ios/KE8YGWLogger/KE8YGWLogger/Resources/Info.plist'
 Assert-File $iosInfoPlistPath
+$iosRustBridgePath = 'ios/KE8YGWLogger/KE8YGWLogger/Shared/RustBridge/RustBridge.swift'
+Assert-File $iosRustBridgePath
+$iosRustBridgeSource = Get-Content -Raw $iosRustBridgePath
+$backgroundTaskMatch = [regex]::Match(
+    $iosRustBridgeSource,
+    'static\s+let\s+identifier\s*=\s*"([^"]+)"'
+)
+if (-not $backgroundTaskMatch.Success) {
+    Fail 'Swift SyncBackgroundRetryTask.identifier was not found.'
+}
+$syncBackgroundTaskIdentifier = $backgroundTaskMatch.Groups[1].Value
+
 [xml]$iosInfoPlist = Get-Content -Raw $iosInfoPlistPath
 $iosInfoDict = $iosInfoPlist.plist.dict
 if ($null -eq $iosInfoDict) {
     Fail 'iOS Info.plist must contain a top-level dict.'
 }
 Assert-PlistString $iosInfoDict 'NSLocalNetworkUsageDescription' | Out-Null
-Assert-PlistArrayContains $iosInfoDict 'BGTaskSchedulerPermittedIdentifiers' 'com.h2technologiesllc.ke8ygw-logger.sync.retry'
+Assert-PlistArrayContains $iosInfoDict 'BGTaskSchedulerPermittedIdentifiers' $syncBackgroundTaskIdentifier
 Assert-PlistArrayContains $iosInfoDict 'UIBackgroundModes' 'processing'
 $ats = Get-PlistValue $iosInfoDict 'NSAppTransportSecurity'
 if ($null -eq $ats -or $ats.Name -ne 'dict') {

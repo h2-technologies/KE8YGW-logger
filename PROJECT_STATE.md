@@ -156,8 +156,9 @@ operations, and release qualification.
   persistence. The iOS bundle now declares Local Network usage and allows local
   networking for paired-device sync, and declares the background processing
   mode plus the permitted retry task identifier; the governance check now
-  enforces those Info.plist declarations and rejects tracked generated
-  Xcode/iOS artifacts. Apple multicast
+  enforces those Info.plist declarations, verifies the permitted identifier
+  matches the Swift runtime constant, and rejects tracked generated Xcode/iOS
+  artifacts. Apple multicast
   entitlement/provisioning,
   release-device cross-device reconciliation workflow qualification,
   physical-device LAN/iOS Local Network
