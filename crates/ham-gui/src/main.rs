@@ -52,9 +52,10 @@ use ham_sync::{
     CloudSyncStatusResponse, ConflictReviewSnapshot, ConflictReviewStatus,
     DiagnosticReportUploadRequest, DiagnosticReportUploadResponse, DiagnosticReportUploadType,
     DiscoveryPacket, GetEventMetadataResponse, GetEventRangeResponse, HandshakeRequest,
-    InMemoryCloudSyncServer, JsonConflictReviewStore, JsonLanTrustStore, JsonOfflineMutationQueue,
-    LanDiscoveryService, LanPairingAcceptance, LanPeerTrustUpdate, LanTrustSnapshot,
-    ListLogbooksResponse, LocalPeerIdentity, LogbookHeadSummary, ManualConflictResolution,
+    InMemoryCloudSyncServer, JsonConflictReviewStore, JsonLanTrustStore,
+    JsonLocalSyncIdentityStore, JsonOfflineMutationQueue, LanDiscoveryService,
+    LanPairingAcceptance, LanPeerTrustUpdate, LanTrustSnapshot, ListLogbooksResponse,
+    LocalPeerIdentity, LogbookHeadSummary, ManualConflictResolution,
     ManualConflictResolutionChoice, OfflineMutationEnvelope, OfflineMutationInput,
     OfflineQueueSnapshot, PairDeviceRequest, PeerObservation, PeerRecord, PeerRegistry,
     PreviewPullRequest, PreviewPullResponse, PullEventsRequest, PullEventsResponse,
@@ -133,6 +134,31 @@ fn main() {
     let conflict_review_store =
         JsonConflictReviewStore::new(support_dir.join("conflict-reviews.json"));
     let lan_trust_store = JsonLanTrustStore::new(support_dir.join("lan-trust.json"));
+    let local_sync_identity_store =
+        JsonLocalSyncIdentityStore::new(support_dir.join("local-sync-identity.json"));
+    let local_api_port = local_api_port_from_bound_addr(&bound_addr);
+    let sync_identity = match local_sync_identity_store.load_or_create(
+        "KE8YGW Logger Local",
+        local_api_port,
+        chrono::Utc::now(),
+    ) {
+        Ok(identity) => identity,
+        Err(error) => {
+            let _ = bridge.publish(RuntimeEventInput {
+                event_type: "sync.local_identity.load_failed".to_owned(),
+                severity: RuntimeEventSeverity::Warn,
+                source: "ham-sync".to_owned(),
+                source_plugin_id: None,
+                workspace_id: Some("dashboard".to_owned()),
+                payload_summary:
+                    "Local sync identity could not be loaded; using an ephemeral identity"
+                        .to_owned(),
+                redacted_payload: None,
+                error: Some(error.to_string()),
+            });
+            LocalPeerIdentity::new("KE8YGW Logger Local", local_api_port)
+        }
+    };
     let mut station_book = station_store.load().unwrap_or_default();
     if station_book.profiles.is_empty() {
         seed_default_station_book(&mut station_book);
@@ -355,7 +381,7 @@ fn main() {
         store,
         logbook_id,
         proposal_runtime,
-        sync: Mutex::new(SyncUiState::new(bound_addr.clone())),
+        sync: Mutex::new(SyncUiState::new(sync_identity)),
         offline_queue,
         conflict_review_store,
         lan_trust_store,
@@ -514,13 +540,10 @@ struct SyncUiState {
 }
 
 impl SyncUiState {
-    fn new(bound_addr: String) -> Self {
-        let port = bound_addr
-            .rsplit_once(':')
-            .and_then(|(_, port)| port.parse::<u16>().ok());
+    fn new(identity: LocalPeerIdentity) -> Self {
         Self {
             config: SyncConfig::default(),
-            identity: LocalPeerIdentity::new("KE8YGW Logger Local", port),
+            identity,
             registry: PeerRegistry::default(),
             discovery_running: false,
             discovery_generation: 0,
@@ -547,6 +570,12 @@ impl SyncUiState {
             warning_count: 0,
         }
     }
+}
+
+fn local_api_port_from_bound_addr(bound_addr: &str) -> Option<u16> {
+    bound_addr
+        .rsplit_once(':')
+        .and_then(|(_, port)| port.parse::<u16>().ok())
 }
 
 fn seed_default_station_book(book: &mut StationBook) {
@@ -7836,7 +7865,10 @@ mod tests {
             store,
             logbook_id: uuid::Uuid::new_v4(),
             proposal_runtime: tokio::runtime::Runtime::new().unwrap(),
-            sync: Mutex::new(SyncUiState::new("127.0.0.1:0".to_owned())),
+            sync: Mutex::new(SyncUiState::new(LocalPeerIdentity::new(
+                "KE8YGW Logger Test",
+                Some(0),
+            ))),
             offline_queue: JsonOfflineMutationQueue::new(
                 support_dir.join("offline-mutations.json"),
             ),

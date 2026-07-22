@@ -233,6 +233,11 @@ conflict details without owning merge or validation rules.
 - immediate revocation
 - replay nonce hashing and rejection
 
+`local-sync-identity.json` is separate durable support state used by desktop
+and iOS clients to keep the local device ID stable across restarts. The file
+stores version, device ID, display name, optional user hash, and timestamps.
+Runtime discovery session IDs are regenerated on load and are not persisted.
+
 The GUI exposes trust-state, pairing-token, pairing-accept, pairing-complete,
 auth-rotation, and revoke endpoints. The browser Sync panel wraps those
 endpoints in guided LAN pairing/trust controls for issuing local one-time
@@ -265,7 +270,9 @@ workspace can issue a local one-time code, accept a locally issued pairing code
 for a typed peer, directly trust a peer, rotate Keychain-backed LAN auth
 credentials, and revoke trust. The accept-pairing command requires an
 `auth_credential_id`; Swift creates the LAN auth secret in Keychain first and
-Rust persists only that credential ID. Pairing codes are returned only from the
+Rust persists only that credential ID. `sync.snapshot` returns the durable
+local identity, and issue-token uses that local device ID when the caller does
+not provide an issuer device ID. Pairing codes are returned only from the
 issue-token command and are not present in snapshots.
 
 LAN `list-logbooks`, `get-head`, `events-since`, and `event-metadata` requests
@@ -310,8 +317,8 @@ trust-gated; protected LAN read endpoints require reciprocal trust state,
 fresh nonces, and HMAC-SHA256 request proof. The current LAN HTTP transport is
 still not encrypted and must not be exposed outside trusted local networks.
 Production iOS reciprocal LAN transport completion UX, stronger LAN key-exchange
-hardening, physical-device LAN validation, and iOS Local Network permission
-validation remain before unattended LAN sync is considered complete.
+hardening, physical-device LAN validation, and physical iOS Local Network
+permission validation remain before unattended LAN sync is considered complete.
 
 ## Cloud Relay and Self-Hosted Sync
 
@@ -355,7 +362,7 @@ The current self-hosted server uses durable local storage by default: embedded S
 - Signed official events.
 - End-to-end encrypted relay.
 - Stronger LAN key-exchange hardening and production iOS reciprocal LAN transport completion UX.
-- Physical-device LAN and iOS Local Network permission validation.
+- Physical-device LAN and iOS Local Network permission prompt validation.
 - End-to-end cross-client branch review and reconciliation workflow beyond the
   current guided browser review surface and explicit corrective-event commands.
 - Durable cloud server database.

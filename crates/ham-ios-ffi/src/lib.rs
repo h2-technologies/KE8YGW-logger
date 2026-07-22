@@ -38,14 +38,14 @@ use ham_plugin_sdk::{
 };
 use ham_sync::{
     pull_missing_events, CloudConnectionState, CloudSyncConfig, ConflictReviewStatus,
-    JsonConflictReviewStore, JsonLanTrustStore, JsonOfflineMutationQueue, LanPairingAcceptance,
-    LanPeerTrustUpdate, LocalPeerIdentity, ManualConflictResolution,
-    ManualConflictResolutionChoice, OfflineMutationEnvelope, OfflineMutationInput,
-    PullEventsRequest, SyncConfig, SyncConflictReport, MAX_CONFLICT_REVIEW_NOTE_BYTES,
-    OFFLINE_OP_ACTIVATION_END, OFFLINE_OP_ACTIVATION_START, OFFLINE_OP_NET_CHECKIN_CREATE,
-    OFFLINE_OP_NET_CHECKIN_DELETE, OFFLINE_OP_NET_SESSION_END, OFFLINE_OP_NET_SESSION_START,
-    OFFLINE_OP_NET_TRAFFIC_CREATE, OFFLINE_OP_QSO_CORRECT, OFFLINE_OP_QSO_CREATE,
-    OFFLINE_OP_QSO_DELETE, OFFLINE_OP_QSO_NOTE_ADD, OFFLINE_OP_QSO_RESTORE,
+    JsonConflictReviewStore, JsonLanTrustStore, JsonLocalSyncIdentityStore,
+    JsonOfflineMutationQueue, LanPairingAcceptance, LanPeerTrustUpdate, LocalPeerIdentity,
+    ManualConflictResolution, ManualConflictResolutionChoice, OfflineMutationEnvelope,
+    OfflineMutationInput, PullEventsRequest, SyncConfig, SyncConflictReport,
+    MAX_CONFLICT_REVIEW_NOTE_BYTES, OFFLINE_OP_ACTIVATION_END, OFFLINE_OP_ACTIVATION_START,
+    OFFLINE_OP_NET_CHECKIN_CREATE, OFFLINE_OP_NET_CHECKIN_DELETE, OFFLINE_OP_NET_SESSION_END,
+    OFFLINE_OP_NET_SESSION_START, OFFLINE_OP_NET_TRAFFIC_CREATE, OFFLINE_OP_QSO_CORRECT,
+    OFFLINE_OP_QSO_CREATE, OFFLINE_OP_QSO_DELETE, OFFLINE_OP_QSO_NOTE_ADD, OFFLINE_OP_QSO_RESTORE,
     OFFLINE_OP_STATION_EQUIPMENT_CREATE, OFFLINE_OP_STATION_PROFILE_CREATE,
     OFFLINE_OP_STATION_PROFILE_SELECT,
 };
@@ -1597,14 +1597,26 @@ fn sync_lan_trust_issue_pairing_token_command(payload: Value) -> Result<Value, B
     let request: LanPairingTokenIssueRequest = serde_json::from_value(payload)
         .map_err(|error| BridgeFault::invalid_input(error.to_string()))?;
     let store = lan_trust_store(&request.app_support_dir)?;
+    let issuer_display_name = request
+        .issuer_display_name
+        .filter(|name| !name.trim().is_empty())
+        .unwrap_or_else(|| "KE8YGW Logger iOS".to_owned());
+    let issuer_device_id = match request.issuer_device_id {
+        Some(device_id) => device_id,
+        None => {
+            local_sync_identity_for_support(
+                Some(&request.app_support_dir),
+                &issuer_display_name,
+                None,
+            )?
+            .device_id
+        }
+    };
     let pairing = store
         .issue_pairing_token(
-            request.issuer_device_id.unwrap_or_else(Uuid::new_v4),
+            issuer_device_id,
             request.logbook_id.unwrap_or_else(default_logbook_id),
-            request
-                .issuer_display_name
-                .filter(|name| !name.trim().is_empty())
-                .unwrap_or_else(|| "KE8YGW Logger iOS".to_owned()),
+            issuer_display_name,
             request.approved_by_operator,
             Utc::now(),
         )
@@ -1781,9 +1793,10 @@ fn sync_snapshot_for_support(
                 + snapshot.health.user_action_required
         })
         .unwrap_or(0);
+    let identity = local_sync_identity_for_support(app_support_dir, "KE8YGW Logger iOS", None)?;
     Ok(json!({
         "config": SyncConfig::default(),
-        "identity": LocalPeerIdentity::new("KE8YGW Logger iOS", None),
+        "identity": identity,
         "cloud_config": CloudSyncConfig::default(),
         "cloud_connection_state": CloudConnectionState::Disconnected,
         "sync_protocol_version": ham_sync::PROTOCOL_VERSION,
@@ -2585,6 +2598,27 @@ fn lan_trust_store(app_support_dir: &str) -> Result<JsonLanTrustStore, BridgeFau
     Ok(JsonLanTrustStore::new(
         rust_support_dir(app_support_dir)?.join("lan-trust.json"),
     ))
+}
+
+fn local_sync_identity_store(
+    app_support_dir: &str,
+) -> Result<JsonLocalSyncIdentityStore, BridgeFault> {
+    Ok(JsonLocalSyncIdentityStore::new(
+        rust_support_dir(app_support_dir)?.join("local-sync-identity.json"),
+    ))
+}
+
+fn local_sync_identity_for_support(
+    app_support_dir: Option<&str>,
+    display_name: &str,
+    local_api_port: Option<u16>,
+) -> Result<LocalPeerIdentity, BridgeFault> {
+    match app_support_dir {
+        Some(dir) => local_sync_identity_store(dir)?
+            .load_or_create(display_name, local_api_port, Utc::now())
+            .map_err(|error| BridgeFault::storage(error.to_string())),
+        None => Ok(LocalPeerIdentity::new(display_name, local_api_port)),
+    }
 }
 
 struct IosMutationQueueInput<'a> {
@@ -3637,6 +3671,40 @@ mod tests {
     }
 
     #[test]
+    fn sync_snapshot_persists_local_identity_device_id() {
+        let app_support_dir = std::env::temp_dir().join(format!("ham-ios-{}", Uuid::new_v4()));
+        let first = call_json(json!({
+            "command": "sync.snapshot",
+            "payload": {
+                "app_support_dir": app_support_dir.to_string_lossy()
+            }
+        }));
+        let second = call_json(json!({
+            "command": "sync.snapshot",
+            "payload": {
+                "app_support_dir": app_support_dir.to_string_lossy()
+            }
+        }));
+
+        assert_eq!(first["ok"], true);
+        assert_eq!(second["ok"], true);
+        assert_eq!(
+            first["data"]["identity"]["device_id"],
+            second["data"]["identity"]["device_id"]
+        );
+        assert_ne!(
+            first["data"]["identity"]["session_id"],
+            second["data"]["identity"]["session_id"]
+        );
+        let raw =
+            std::fs::read_to_string(app_support_dir.join("Rust/local-sync-identity.json")).unwrap();
+        assert!(raw.contains(first["data"]["identity"]["device_id"].as_str().unwrap()));
+        assert!(!raw.contains(first["data"]["identity"]["session_id"].as_str().unwrap()));
+        assert!(!raw.contains(second["data"]["identity"]["session_id"].as_str().unwrap()));
+        let _ = std::fs::remove_dir_all(app_support_dir);
+    }
+
+    #[test]
     fn station_profile_create_uses_rust_station_store() {
         let app_support_dir = std::env::temp_dir().join(format!("ham-ios-{}", Uuid::new_v4()));
         let profile_id = Uuid::new_v4();
@@ -3902,6 +3970,17 @@ mod tests {
         let peer_device_id = Uuid::new_v4();
         let auth_credential_id = Uuid::new_v4();
         let rotated_credential_id = Uuid::new_v4();
+        let initial_snapshot = call_json(json!({
+            "command": "sync.snapshot",
+            "payload": {
+                "app_support_dir": app_support_dir.to_string_lossy()
+            }
+        }));
+        assert_eq!(initial_snapshot["ok"], true);
+        let local_device_id = initial_snapshot["data"]["identity"]["device_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
         let issued = call_json(json!({
             "command": "sync.lan_trust.issue_pairing_token",
             "payload": {
@@ -3919,6 +3998,10 @@ mod tests {
         assert_eq!(
             issued["data"]["lan_trust"]["pairing_tokens"][0]["issuer_display_name"],
             "iOS Field Phone"
+        );
+        assert_eq!(
+            issued["data"]["lan_trust"]["pairing_tokens"][0]["issuer_device_id"].as_str(),
+            Some(local_device_id.as_str())
         );
         assert!(issued["data"]["lan_trust"]["pairing_tokens"][0]
             .get("pairing_code")

@@ -4,7 +4,7 @@ use std::{
     collections::{BTreeMap, HashMap, HashSet},
     fmt::Write as FmtWrite,
     fs,
-    io::{self, Write},
+    io::{self, ErrorKind, Write},
     path::{Path, PathBuf},
 };
 
@@ -17,11 +17,12 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 use uuid::Uuid;
 
-use crate::{EventMetadata, PreviewPullResponse, ReplicationStatus};
+use crate::{EventMetadata, LocalPeerIdentity, PreviewPullResponse, ReplicationStatus};
 
 pub const OFFLINE_MUTATION_SCHEMA_VERSION: u32 = 1;
 pub const OFFLINE_QUEUE_FILE_VERSION: u32 = 1;
 pub const OFFLINE_QUEUE_LEGACY_V0_2_FILE_VERSION: u32 = 0;
+pub const LOCAL_SYNC_IDENTITY_FILE_VERSION: u32 = 1;
 pub const LAN_TRUST_FILE_VERSION: u32 = 1;
 pub const CONFLICT_REVIEW_SCHEMA_VERSION: u32 = 1;
 pub const CONFLICT_REVIEW_FILE_VERSION: u32 = 1;
@@ -90,6 +91,16 @@ pub enum OfflineQueueError {
     MutationNotFound(Uuid),
     #[error("offline mutation {operation_id} has no accepted local official event")]
     MissingLocalOfficialEvent { operation_id: Uuid },
+}
+
+#[derive(Debug, Error)]
+pub enum LocalSyncIdentityError {
+    #[error("local sync identity I/O error: {0}")]
+    Io(#[from] io::Error),
+    #[error("local sync identity serialization error: {0}")]
+    Serde(#[from] serde_json::Error),
+    #[error("local sync identity file version {0} is not supported")]
+    UnsupportedFileVersion(u32),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -1824,6 +1835,101 @@ pub fn conflict_report_from_preview(
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct LocalSyncIdentityFile {
+    version: u32,
+    device_id: Uuid,
+    display_name: String,
+    #[serde(default)]
+    user_hash: Option<String>,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+}
+
+impl LocalSyncIdentityFile {
+    fn validate(&self) -> Result<(), LocalSyncIdentityError> {
+        if self.version != LOCAL_SYNC_IDENTITY_FILE_VERSION {
+            return Err(LocalSyncIdentityError::UnsupportedFileVersion(self.version));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct JsonLocalSyncIdentityStore {
+    path: PathBuf,
+}
+
+impl JsonLocalSyncIdentityStore {
+    pub fn new(path: impl Into<PathBuf>) -> Self {
+        Self { path: path.into() }
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub fn load_or_create(
+        &self,
+        display_name: impl Into<String>,
+        local_api_port: Option<u16>,
+        now: DateTime<Utc>,
+    ) -> Result<LocalPeerIdentity, LocalSyncIdentityError> {
+        match self.load_file() {
+            Ok(file) => Ok(identity_from_local_sync_file(&file, local_api_port)),
+            Err(LocalSyncIdentityError::Io(error)) if error.kind() == ErrorKind::NotFound => {
+                let identity = LocalPeerIdentity::new(
+                    normalized_local_identity_display_name(display_name),
+                    local_api_port,
+                );
+                let file = LocalSyncIdentityFile {
+                    version: LOCAL_SYNC_IDENTITY_FILE_VERSION,
+                    device_id: identity.device_id,
+                    display_name: identity.display_name.clone(),
+                    user_hash: identity.user_hash.clone(),
+                    created_at: now,
+                    updated_at: now,
+                };
+                self.save_file(&file)?;
+                Ok(identity)
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    fn load_file(&self) -> Result<LocalSyncIdentityFile, LocalSyncIdentityError> {
+        let contents = fs::read_to_string(&self.path)?;
+        let file: LocalSyncIdentityFile = serde_json::from_str(&contents)?;
+        file.validate()?;
+        Ok(file)
+    }
+
+    fn save_file(&self, file: &LocalSyncIdentityFile) -> Result<(), LocalSyncIdentityError> {
+        write_json_atomically(&self.path, file)?;
+        Ok(())
+    }
+}
+
+fn identity_from_local_sync_file(
+    file: &LocalSyncIdentityFile,
+    local_api_port: Option<u16>,
+) -> LocalPeerIdentity {
+    let mut identity = LocalPeerIdentity::new(file.display_name.clone(), local_api_port);
+    identity.device_id = file.device_id;
+    identity.user_hash = file.user_hash.clone();
+    identity
+}
+
+fn normalized_local_identity_display_name(display_name: impl Into<String>) -> String {
+    let display_name = display_name.into();
+    let trimmed = display_name.trim();
+    if trimmed.is_empty() {
+        "KE8YGW Logger".to_owned()
+    } else {
+        trimmed.to_owned()
+    }
+}
+
 #[derive(Debug, Error)]
 pub enum LanTrustError {
     #[error("LAN trust I/O error: {0}")]
@@ -2423,6 +2529,14 @@ mod tests {
         )
     }
 
+    fn identity_store() -> (JsonLocalSyncIdentityStore, PathBuf) {
+        let dir = std::env::temp_dir().join(format!("ham-sync-identity-{}", Uuid::new_v4()));
+        (
+            JsonLocalSyncIdentityStore::new(dir.join("local-sync-identity.json")),
+            dir,
+        )
+    }
+
     fn input(logbook_id: Uuid, device_id: Uuid, operation_type: &str) -> OfflineMutationInput {
         OfflineMutationInput::new(
             logbook_id,
@@ -2784,6 +2898,56 @@ mod tests {
         assert!(!atomic_temp_path(queue.path()).exists());
         let snapshot = queue.load_snapshot(now).unwrap();
         assert_eq!(snapshot.health.retrying, 1);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn local_sync_identity_persists_device_id_and_rotates_session() {
+        let (store, dir) = identity_store();
+        let first = store
+            .load_or_create("Desktop", Some(9468), Utc::now())
+            .unwrap();
+        let second = store
+            .load_or_create("Ignored Rename", Some(9469), Utc::now())
+            .unwrap();
+
+        assert_eq!(first.device_id, second.device_id);
+        assert_ne!(first.session_id, second.session_id);
+        assert_eq!(second.display_name, "Desktop");
+        assert_eq!(second.local_api_port, Some(9469));
+        let raw = fs::read_to_string(store.path()).unwrap();
+        assert!(raw.contains(&first.device_id.to_string()));
+        assert!(!raw.contains(&first.session_id.to_string()));
+        assert!(!raw.contains(&second.session_id.to_string()));
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn local_sync_identity_rejects_unknown_version_without_regenerating() {
+        let (store, dir) = identity_store();
+        fs::create_dir_all(&dir).unwrap();
+        let device_id = Uuid::new_v4();
+        let now = Utc::now();
+        fs::write(
+            store.path(),
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "version": LOCAL_SYNC_IDENTITY_FILE_VERSION + 1,
+                "device_id": device_id,
+                "display_name": "Old Client",
+                "created_at": now,
+                "updated_at": now
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        assert!(matches!(
+            store.load_or_create("Desktop", Some(9468), Utc::now()),
+            Err(LocalSyncIdentityError::UnsupportedFileVersion(version))
+                if version == LOCAL_SYNC_IDENTITY_FILE_VERSION + 1
+        ));
+        let raw = fs::read_to_string(store.path()).unwrap();
+        assert!(raw.contains(&device_id.to_string()));
         let _ = fs::remove_dir_all(dir);
     }
 

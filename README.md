@@ -818,6 +818,11 @@ optional user hash, display name, capabilities, optional local API port, and
 timestamp. They do not include secrets, API keys, profile details, log contents,
 or official events.
 
+Desktop GUI and native iOS clients persist `local-sync-identity.json` as
+support state so a trusted peer keeps the same local device ID across restarts.
+Discovery session IDs are regenerated from memory for each load and are not
+stored in that file.
+
 The first handshake exchanges protocol version, device/session IDs,
 capabilities, available logbook IDs, current head hash, and event count hints.
 The response reports matching logbooks and head comparison states:
@@ -835,12 +840,13 @@ replication protocol can compare event ancestry safely.
 The GUI Sync Status panel can start/stop discovery, refresh peers, handshake
 with a selected peer, manually add a direct LAN HTTP peer, preview a pull, issue
 local one-time pairing codes, enter peer token/code/fingerprint values,
-complete reciprocal pairing with a generated endpoint auth code, generate replacement LAN auth codes, rotate trust
-credentials, revoke a selected peer, recover the offline queue, pull missing
-events from trusted peers, and copy the local sync identity. The current implementation
-keeps peers in memory, includes a demo refresh path for local testing, and can
-discover reachable GUI peers over IPv4/IPv6 multicast or preview/pull from a
-manually entered numeric loopback/private/link-local `http://ip:port`.
+complete reciprocal pairing with a generated endpoint auth code, generate
+replacement LAN auth codes, rotate trust credentials, revoke a selected peer,
+recover the offline queue, pull missing events from trusted peers, and copy the
+local sync identity. The current implementation keeps peers in memory, includes
+a demo refresh path for local testing, and can discover reachable GUI peers
+over IPv4/IPv6 multicast or preview/pull from a manually entered numeric
+loopback/private/link-local `http://ip:port`.
 Discovered peers are recorded only after their advertised API port serves a
 matching `/api/sync/state` identity.
 
@@ -849,8 +855,9 @@ the Rust credential path instead of reusing the one-time pairing code. Durable
 LAN trust state stores credential IDs, not raw secrets.
 Native iOS uses the same Rust trust store through FFI for trust snapshots,
 local one-time code issue and acceptance, direct peer trust, Keychain-backed
-LAN auth credential rotation, and revocation. Pairing codes are only returned
-by the issue command and are not stored in trust snapshots.
+LAN auth credential rotation, and revocation. `sync.snapshot` also returns the
+durable local identity for Swift to decode. Pairing codes are only returned by
+the issue command and are not stored in trust snapshots.
 
 Runtime events include:
 
@@ -866,7 +873,7 @@ Security limitations for MVP: peers are untrusted until they pass the durable
 LAN trust store, no destructive commands are accepted, automatic replication is
 disabled, protected LAN reads require HMAC-SHA256 request proof after pairing,
 and production iOS reciprocal LAN transport completion UX, stronger LAN key-exchange
-hardening, plus physical-device LAN/iOS validation remain TODOs before
+hardening, plus physical-device LAN/iOS Local Network validation remain TODOs before
 unattended LAN sync.
 
 ## Safe LAN Event Replication
@@ -1004,6 +1011,9 @@ replayed peers before appending remote official events.
 Native iOS exposes the same Rust trust state for local code issue/acceptance,
 direct trust, Keychain-backed auth rotation, and revocation; Swift stores LAN
 auth secrets in Keychain and Rust stores only credential IDs.
+Local sync identities are durable support state too: the file stores version,
+device ID, display name, optional user hash, and timestamps, but not runtime
+session IDs or LAN auth secrets.
 Manual conflict-review records are also durable support state. They store
 structured conflict reports and the operator-selected recovery path without
 rewriting official history. Unsafe divergent pulls are rejected by the shared
@@ -1045,9 +1055,10 @@ For two real local instances, run two GUI processes on different ports and set
 separate `HAM_PLATFORM_EVENT_LOG` paths so they do not share the same JSONL
 store. For manual same-machine testing, enter the other instance URL such as
 `http://127.0.0.1:9468`, click `Add Peer`, issue a pairing code on one peer,
-complete pairing from the other peer in the guided LAN pairing panel, then preview and pull. For automatic LAN
-discovery, both GUI instances must have discovery running and the peer being
-discovered must bind its GUI API to a LAN-reachable address such as
+complete pairing from the other peer in the guided LAN pairing panel, then
+preview and pull. For automatic LAN discovery, both GUI instances must have
+discovery running and the peer being discovered must bind its GUI API to a
+LAN-reachable address such as
 `0.0.0.0:<port>` or a specific private interface; loopback-only peers can still
 use manual loopback URLs. Mutating LAN pull also requires the explicit
 `sync.lan.pull` permission, durable peer trust, and signed remote read requests.

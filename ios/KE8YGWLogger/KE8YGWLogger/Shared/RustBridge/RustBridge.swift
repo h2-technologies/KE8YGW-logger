@@ -1224,6 +1224,22 @@ struct FallbackRustBridgeClient: RustBridgeClient {
     }
 }
 
+private enum FallbackSyncIdentity {
+    static let deviceID = "00000000-0000-4000-8000-0000000000f1"
+    static let sessionID = "00000000-0000-4000-8000-0000000000f2"
+
+    static func payload(displayName: String = "KE8YGW Logger iOS") -> [String: Any] {
+        [
+            "device_id": deviceID,
+            "session_id": sessionID,
+            "user_hash": NSNull(),
+            "display_name": displayName,
+            "capabilities": ["discovery.v1", "handshake.v1", "head-compare.v1"],
+            "local_api_port": NSNull()
+        ]
+    }
+}
+
 private enum FallbackLanTrustMemory {
     private static let lock = NSLock()
     private static var pairingTokensByDirectory: [String: [[String: Any]]] = [:]
@@ -1241,11 +1257,12 @@ private enum FallbackLanTrustMemory {
         let now = timestamp()
         let tokenID = UUID().uuidString
         let pairingCode = UUID().uuidString.replacingOccurrences(of: "-", with: "")
+        let issuerDisplayName = payload["issuer_display_name"] as? String ?? "KE8YGW Logger iOS"
         let token: [String: Any] = [
             "token_id": tokenID,
-            "issuer_device_id": payload["issuer_device_id"] as? String ?? UUID().uuidString,
+            "issuer_device_id": payload["issuer_device_id"] as? String ?? FallbackSyncIdentity.deviceID,
             "logbook_id": payload["logbook_id"] as? String ?? SyncDefaults.defaultLogbookId,
-            "issuer_display_name": payload["issuer_display_name"] as? String ?? "KE8YGW Logger iOS",
+            "issuer_display_name": issuerDisplayName,
             "created_at": now,
             "expires_at": timestamp(daysFromNow: 1),
             "consumed_at": NSNull(),
@@ -1830,6 +1847,7 @@ enum FallbackBridgeData {
     ) -> [String: Any] {
         [
             "cloud_connection_state": "disconnected",
+            "identity": FallbackSyncIdentity.payload(),
             "logbook_id": "00000000-0000-4000-8000-000000000001",
             "local_head_hash": NSNull(),
             "pending_events": 0,
@@ -2149,6 +2167,7 @@ struct MapMarkerSnapshot: Decodable, Identifiable {
 
 struct SyncSnapshot: Decodable {
     var cloudConnectionState: String?
+    var identity: SyncPeerIdentity?
     var logbookId: String?
     var localHeadHash: String?
     var pendingEvents: Int?
@@ -2163,6 +2182,7 @@ struct SyncSnapshot: Decodable {
 
     enum CodingKeys: String, CodingKey {
         case cloudConnectionState
+        case identity
         case logbookId
         case localHeadHash
         case pendingEvents
@@ -2178,6 +2198,7 @@ struct SyncSnapshot: Decodable {
 
     static let placeholder = SyncSnapshot(
         cloudConnectionState: "disconnected",
+        identity: nil,
         logbookId: nil,
         localHeadHash: nil,
         pendingEvents: 0,
@@ -2193,6 +2214,7 @@ struct SyncSnapshot: Decodable {
 
     init(
         cloudConnectionState: String?,
+        identity: SyncPeerIdentity?,
         logbookId: String?,
         localHeadHash: String?,
         pendingEvents: Int?,
@@ -2206,6 +2228,7 @@ struct SyncSnapshot: Decodable {
         retryPolicy: SyncRetryPolicy?
     ) {
         self.cloudConnectionState = cloudConnectionState
+        self.identity = identity
         self.logbookId = logbookId
         self.localHeadHash = localHeadHash
         self.pendingEvents = pendingEvents
@@ -2222,6 +2245,7 @@ struct SyncSnapshot: Decodable {
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         cloudConnectionState = try container.decodeIfPresent(String.self, forKey: .cloudConnectionState)
+        identity = try? container.decodeIfPresent(SyncPeerIdentity.self, forKey: .identity)
         logbookId = try container.decodeIfPresent(String.self, forKey: .logbookId)
         localHeadHash = try container.decodeIfPresent(String.self, forKey: .localHeadHash)
         pendingEvents = try container.decodeIfPresent(Int.self, forKey: .pendingEvents)
@@ -2238,6 +2262,7 @@ struct SyncSnapshot: Decodable {
     func replacingOfflineQueue(_ queue: SyncOfflineQueueSnapshot) -> SyncSnapshot {
         SyncSnapshot(
             cloudConnectionState: cloudConnectionState,
+            identity: identity,
             logbookId: logbookId,
             localHeadHash: localHeadHash,
             pendingEvents: pendingEvents,
@@ -2255,6 +2280,7 @@ struct SyncSnapshot: Decodable {
     func replacingConflictReviews(_ reviews: SyncConflictReviewSnapshot) -> SyncSnapshot {
         SyncSnapshot(
             cloudConnectionState: cloudConnectionState,
+            identity: identity,
             logbookId: logbookId,
             localHeadHash: localHeadHash,
             pendingEvents: pendingEvents,
@@ -2272,6 +2298,7 @@ struct SyncSnapshot: Decodable {
     func replacingLanTrust(_ trust: SyncLanTrustSnapshot, error: String?) -> SyncSnapshot {
         SyncSnapshot(
             cloudConnectionState: cloudConnectionState,
+            identity: identity,
             logbookId: logbookId,
             localHeadHash: localHeadHash,
             pendingEvents: pendingEvents,
@@ -2285,6 +2312,15 @@ struct SyncSnapshot: Decodable {
             retryPolicy: retryPolicy
         )
     }
+}
+
+struct SyncPeerIdentity: Decodable, Equatable {
+    var deviceId: String
+    var sessionId: String
+    var userHash: String?
+    var displayName: String
+    var capabilities: [String]
+    var localApiPort: Int?
 }
 
 struct SyncOfflineQueueSnapshot: Decodable {

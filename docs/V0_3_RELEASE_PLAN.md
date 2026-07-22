@@ -69,6 +69,8 @@ Last audited: 2026-07-22
 - Durable LAN trust store with explicit approval, hashed short-lived single-use
   pairing tokens, logbook-scoped trusted devices, replay nonce rejection, and
   immediate revocation.
+- Durable local sync identity store for desktop and iOS so trusted-peer device
+  IDs survive restart while discovery sessions remain ephemeral.
 - Manual direct LAN HTTP peer add, handshake, preview, and trusted pull between
   GUI instances using `/api/sync/state`, `/api/sync/get-head`, and
   `/api/sync/events-since`.
@@ -85,9 +87,11 @@ Last audited: 2026-07-22
   trusted peers without prompt-only handling.
 - Native iOS LAN trust bridge and Sync workspace controls for Rust-owned
   trust snapshots, local one-time code issue and acceptance, direct peer trust,
-  Keychain-backed LAN auth credential rotation, and revocation. Pairing codes
-  are returned only by the issue command; snapshots and `lan-trust.json` do not
-  store raw pairing codes or LAN auth secrets.
+  Keychain-backed LAN auth credential rotation, and revocation. `sync.snapshot`
+  returns the durable local identity, and the bundle declares Local Network
+  usage plus local networking for paired-device sync. Pairing codes are returned
+  only by the issue command; snapshots and `lan-trust.json` do not store raw
+  pairing codes or LAN auth secrets.
 - Automatic IPv4/IPv6 multicast discovery worker that probes reachable peer
   identity before recording peers.
 - Older trust records without an `auth_credential_id` remain readable but must
@@ -98,7 +102,7 @@ Last audited: 2026-07-22
 - Production iOS reciprocal LAN transport completion UX and full release-device
   pairing qualification.
 - Stronger LAN key-exchange hardening.
-- Physical-device LAN and iOS Local Network permission validation.
+- Physical-device LAN and iOS Local Network permission prompt validation.
 - End-to-end cross-client branch review and reconciliation workflow beyond the
   current guided browser review surface, native saved-review display, and
   desktop/iOS corrective-event endpoints.

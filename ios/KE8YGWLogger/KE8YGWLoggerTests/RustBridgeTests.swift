@@ -86,6 +86,21 @@ final class RustBridgeTests: XCTestCase {
         XCTAssertEqual(result.offlineQueue.health.total, 0)
     }
 
+    func testFallbackSyncSnapshotDecodesLocalIdentity() async throws {
+        let client = FallbackRustBridgeClient()
+        let snapshot: SyncSnapshot = try await decodeCommand(
+            client: client,
+            command: "sync.snapshot",
+            payload: ["app_support_dir": "swift-sync-\(UUID().uuidString)"]
+        )
+
+        XCTAssertEqual(snapshot.identity?.deviceId, "00000000-0000-4000-8000-0000000000f1")
+        XCTAssertEqual(snapshot.identity?.sessionId, "00000000-0000-4000-8000-0000000000f2")
+        XCTAssertEqual(snapshot.identity?.displayName, "KE8YGW Logger iOS")
+        XCTAssertEqual(snapshot.identity?.capabilities.contains("handshake.v1"), true)
+        XCTAssertNil(snapshot.identity?.localApiPort)
+    }
+
     func testFallbackSyncRetryResultSurfacesUserActionFailures() async throws {
         let store = await RustBridgeStore(client: FallbackRustBridgeClient())
         let operationID = "11111111-1111-4111-8111-111111111111"
@@ -244,6 +259,7 @@ final class RustBridgeTests: XCTestCase {
 
         XCTAssertFalse(issued.pairing.pairingCode.isEmpty)
         XCTAssertEqual(snapshot.lanTrust.pairingTokens.first?.tokenId, issued.pairing.tokenId)
+        XCTAssertEqual(snapshot.lanTrust.pairingTokens.first?.issuerDeviceId, "00000000-0000-4000-8000-0000000000f1")
         XCTAssertFalse(snapshotJSON.contains(issued.pairing.pairingCode))
     }
 

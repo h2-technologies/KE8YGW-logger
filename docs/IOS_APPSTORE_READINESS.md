@@ -26,7 +26,9 @@ pull request construction, native pull fetch -> Rust apply coordination, saved
 conflict-review records, selected recovery paths, and structured conflict
 messages, and LAN trust snapshot/issue/accept/trust/rotate/revoke controls
 that keep LAN auth secrets in Keychain and store only credential IDs in Rust support
-state. Signing, provisioning, TestFlight, App Store metadata, privacy manifest,
+state. `sync.snapshot` decodes the durable local sync identity, and the bundle
+declares Local Network usage plus local networking for paired-device sync.
+Signing, provisioning, TestFlight, App Store metadata, privacy manifest,
 physical-device validation, release-safe BGTask execution, real
 hosted/self-hosted native sync endpoint qualification, production reciprocal
 LAN pairing completion UX, and full v1 offline/sync/provider qualification
@@ -111,6 +113,8 @@ network, or background modes speculatively.
   trust/revoke peers, and rotate LAN auth credentials without storing raw
   pairing codes or LAN auth secrets in Rust support state, logs, diagnostics,
   or SwiftData.
+- The app declares the Local Network permission copy used for paired-device
+  LAN sync and allows local networking for those connections.
 - ADIF import/export works through native document flows.
 - POTA/SOTA and Net Control features are usable or clearly gated by account
   capability.

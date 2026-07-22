@@ -26,6 +26,13 @@
 	<true/>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>Your location is used to calculate your Maidenhead grid square and support station and activation logging.</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>KE8YGW Logger uses the local network only to discover and sync with devices you explicitly pair.</string>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
 	<key>UILaunchScreen</key>
