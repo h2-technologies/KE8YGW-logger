@@ -559,6 +559,118 @@ final class RustBridgeStore: ObservableObject {
         return result
     }
 
+    func refreshLanTrust() async throws -> SyncLanTrustBridgeResult {
+        let supportURL = try RustBridgePaths.applicationSupportDirectory()
+        let result = try await command(
+            "sync.lan_trust.snapshot",
+            payload: AppSupportBridgeRequest(appSupportDir: supportURL.path),
+            as: SyncLanTrustBridgeResult.self
+        )
+        sync = sync.replacingLanTrust(result.lanTrust, error: nil)
+        lastError = nil
+        return result
+    }
+
+    func issueLanPairingToken(
+        issuerDeviceId: String? = nil,
+        logbookId: String? = nil,
+        issuerDisplayName: String? = nil,
+        approvedByOperator: Bool
+    ) async throws -> SyncLanPairingTokenBridgeResult {
+        let supportURL = try RustBridgePaths.applicationSupportDirectory()
+        let request = SyncLanPairingTokenIssueBridgeRequest(
+            appSupportDir: supportURL.path,
+            issuerDeviceId: issuerDeviceId,
+            logbookId: logbookId,
+            issuerDisplayName: issuerDisplayName,
+            approvedByOperator: approvedByOperator
+        )
+        let result = try await command("sync.lan_trust.issue_pairing_token", payload: request, as: SyncLanPairingTokenBridgeResult.self)
+        sync = sync.replacingLanTrust(result.lanTrust, error: nil)
+        lastError = nil
+        return result
+    }
+
+    func acceptLanPairingToken(
+        tokenId: String,
+        pairingCode: String,
+        peerDeviceId: String,
+        peerDisplayName: String,
+        requestedLogbooks: [String] = [],
+        publicKeyFingerprint: String? = nil,
+        authCredentialId: String
+    ) async throws -> SyncLanTrustedDeviceBridgeResult {
+        let supportURL = try RustBridgePaths.applicationSupportDirectory()
+        let request = SyncLanPairingAcceptBridgeRequest(
+            appSupportDir: supportURL.path,
+            tokenId: tokenId,
+            pairingCode: pairingCode,
+            peerDeviceId: peerDeviceId,
+            peerDisplayName: peerDisplayName,
+            requestedLogbooks: requestedLogbooks,
+            publicKeyFingerprint: publicKeyFingerprint,
+            authCredentialId: authCredentialId
+        )
+        let result = try await command("sync.lan_trust.accept_pairing_token", payload: request, as: SyncLanTrustedDeviceBridgeResult.self)
+        sync = sync.replacingLanTrust(result.lanTrust, error: nil)
+        lastError = nil
+        return result
+    }
+
+    func trustLanPeer(
+        peerDeviceId: String,
+        peerDisplayName: String,
+        logbookId: String? = nil,
+        pairingTokenId: String? = nil,
+        publicKeyFingerprint: String? = nil,
+        authCredentialId: String
+    ) async throws -> SyncLanTrustedDeviceBridgeResult {
+        let supportURL = try RustBridgePaths.applicationSupportDirectory()
+        let request = SyncLanTrustPeerBridgeRequest(
+            appSupportDir: supportURL.path,
+            peerDeviceId: peerDeviceId,
+            peerDisplayName: peerDisplayName,
+            logbookId: logbookId,
+            pairingTokenId: pairingTokenId,
+            publicKeyFingerprint: publicKeyFingerprint,
+            authCredentialId: authCredentialId
+        )
+        let result = try await command("sync.lan_trust.trust_peer", payload: request, as: SyncLanTrustedDeviceBridgeResult.self)
+        sync = sync.replacingLanTrust(result.lanTrust, error: nil)
+        lastError = nil
+        return result
+    }
+
+    func rotateLanAuthCredential(
+        deviceId: String,
+        logbookId: String? = nil,
+        newAuthCredentialId: String
+    ) async throws -> SyncLanAuthRotateBridgeResult {
+        let supportURL = try RustBridgePaths.applicationSupportDirectory()
+        let request = SyncLanAuthRotateBridgeRequest(
+            appSupportDir: supportURL.path,
+            deviceId: deviceId,
+            logbookId: logbookId,
+            newAuthCredentialId: newAuthCredentialId
+        )
+        let result = try await command("sync.lan_trust.rotate_auth", payload: request, as: SyncLanAuthRotateBridgeResult.self)
+        sync = sync.replacingLanTrust(result.lanTrust, error: nil)
+        lastError = nil
+        return result
+    }
+
+    func revokeLanPeer(deviceId: String) async throws -> SyncLanTrustedDeviceBridgeResult {
+        let supportURL = try RustBridgePaths.applicationSupportDirectory()
+        let result = try await command(
+            "sync.lan_trust.revoke",
+            payload: SyncLanRevokeBridgeRequest(appSupportDir: supportURL.path, deviceId: deviceId),
+            as: SyncLanTrustedDeviceBridgeResult.self
+        )
+        sync = sync.replacingLanTrust(result.lanTrust, error: nil)
+        lastError = nil
+        return result
+    }
+
     private func assign<T: Decodable>(
         endpoint: RustBridgeEndpoint,
         to keyPath: ReferenceWritableKeyPath<RustBridgeStore, T>,
@@ -1005,8 +1117,27 @@ struct FallbackRustBridgeClient: RustBridgeClient {
         case "sync.snapshot", "sync.conflict_reviews.snapshot":
             let appSupportDir = payload["app_support_dir"] as? String ?? "fallback"
             data = FallbackBridgeData.sync(
-                conflictReviews: FallbackConflictReviewMemory.snapshot(appSupportDir: appSupportDir)
+                conflictReviews: FallbackConflictReviewMemory.snapshot(appSupportDir: appSupportDir),
+                lanTrust: FallbackLanTrustMemory.snapshot(appSupportDir: appSupportDir)
             )
+        case "sync.lan_trust.snapshot":
+            let appSupportDir = payload["app_support_dir"] as? String ?? "fallback"
+            data = ["lan_trust": FallbackLanTrustMemory.snapshot(appSupportDir: appSupportDir)]
+        case "sync.lan_trust.issue_pairing_token":
+            let appSupportDir = payload["app_support_dir"] as? String ?? "fallback"
+            data = FallbackLanTrustMemory.issue(appSupportDir: appSupportDir, payload: payload)
+        case "sync.lan_trust.accept_pairing_token":
+            let appSupportDir = payload["app_support_dir"] as? String ?? "fallback"
+            data = FallbackLanTrustMemory.accept(appSupportDir: appSupportDir, payload: payload)
+        case "sync.lan_trust.trust_peer":
+            let appSupportDir = payload["app_support_dir"] as? String ?? "fallback"
+            data = FallbackLanTrustMemory.trustPeer(appSupportDir: appSupportDir, payload: payload)
+        case "sync.lan_trust.rotate_auth":
+            let appSupportDir = payload["app_support_dir"] as? String ?? "fallback"
+            data = FallbackLanTrustMemory.rotateAuth(appSupportDir: appSupportDir, payload: payload)
+        case "sync.lan_trust.revoke":
+            let appSupportDir = payload["app_support_dir"] as? String ?? "fallback"
+            data = FallbackLanTrustMemory.revoke(appSupportDir: appSupportDir, payload: payload)
         case "sync.conflict_reviews.create":
             let appSupportDir = payload["app_support_dir"] as? String ?? "fallback"
             let report = payload["report"] as? [String: Any] ?? FallbackConflictReviewMemory.defaultReport()
@@ -1090,6 +1221,212 @@ struct FallbackRustBridgeClient: RustBridgeClient {
         case RustBridgeEndpoint.diagnostics.command: return .diagnostics
         default: return .version
         }
+    }
+}
+
+private enum FallbackLanTrustMemory {
+    private static let lock = NSLock()
+    private static var pairingTokensByDirectory: [String: [[String: Any]]] = [:]
+    private static var trustedDevicesByDirectory: [String: [[String: Any]]] = [:]
+
+    static func snapshot(appSupportDir: String = "fallback") -> [String: Any] {
+        lock.lock()
+        defer { lock.unlock() }
+        return snapshotUnlocked(appSupportDir: appSupportDir)
+    }
+
+    static func issue(appSupportDir: String, payload: [String: Any]) -> [String: Any] {
+        lock.lock()
+        defer { lock.unlock() }
+        let now = timestamp()
+        let tokenID = UUID().uuidString
+        let pairingCode = UUID().uuidString.replacingOccurrences(of: "-", with: "")
+        let token: [String: Any] = [
+            "token_id": tokenID,
+            "issuer_device_id": payload["issuer_device_id"] as? String ?? UUID().uuidString,
+            "logbook_id": payload["logbook_id"] as? String ?? SyncDefaults.defaultLogbookId,
+            "issuer_display_name": payload["issuer_display_name"] as? String ?? "KE8YGW Logger iOS",
+            "created_at": now,
+            "expires_at": timestamp(daysFromNow: 1),
+            "consumed_at": NSNull(),
+            "approved_by_operator": payload["approved_by_operator"] as? Bool ?? true
+        ]
+        pairingTokensByDirectory[appSupportDir, default: []].append(token)
+        return [
+            "pairing": [
+                "token_id": tokenID,
+                "pairing_code": pairingCode,
+                "expires_at": token["expires_at"] ?? now
+            ],
+            "lan_trust": snapshotUnlocked(appSupportDir: appSupportDir)
+        ]
+    }
+
+    static func accept(appSupportDir: String, payload: [String: Any]) -> [String: Any] {
+        lock.lock()
+        defer { lock.unlock() }
+        let tokenID = payload["token_id"] as? String ?? UUID().uuidString
+        let now = timestamp()
+        if var tokens = pairingTokensByDirectory[appSupportDir],
+           let index = tokens.firstIndex(where: { ($0["token_id"] as? String) == tokenID }) {
+            var token = tokens[index]
+            token["consumed_at"] = now
+            tokens[index] = token
+            pairingTokensByDirectory[appSupportDir] = tokens
+        }
+        let device = devicePayload(
+            deviceID: payload["peer_device_id"] as? String ?? UUID().uuidString,
+            displayName: payload["peer_display_name"] as? String ?? "LAN Peer",
+            logbookIDs: payload["requested_logbooks"] as? [String] ?? [SyncDefaults.defaultLogbookId],
+            pairingTokenID: tokenID,
+            publicKeyFingerprint: payload["public_key_fingerprint"] as? String,
+            authCredentialID: payload["auth_credential_id"] as? String,
+            trustedAt: now
+        )
+        upsertDevice(device, appSupportDir: appSupportDir)
+        return [
+            "trusted_device": device,
+            "lan_trust": snapshotUnlocked(appSupportDir: appSupportDir)
+        ]
+    }
+
+    static func trustPeer(appSupportDir: String, payload: [String: Any]) -> [String: Any] {
+        lock.lock()
+        defer { lock.unlock() }
+        let device = devicePayload(
+            deviceID: payload["peer_device_id"] as? String ?? UUID().uuidString,
+            displayName: payload["peer_display_name"] as? String ?? "LAN Peer",
+            logbookIDs: [payload["logbook_id"] as? String ?? SyncDefaults.defaultLogbookId],
+            pairingTokenID: payload["pairing_token_id"] as? String,
+            publicKeyFingerprint: payload["public_key_fingerprint"] as? String,
+            authCredentialID: payload["auth_credential_id"] as? String,
+            trustedAt: timestamp()
+        )
+        upsertDevice(device, appSupportDir: appSupportDir)
+        return [
+            "trusted_device": device,
+            "lan_trust": snapshotUnlocked(appSupportDir: appSupportDir)
+        ]
+    }
+
+    static func rotateAuth(appSupportDir: String, payload: [String: Any]) -> [String: Any] {
+        lock.lock()
+        defer { lock.unlock() }
+        let deviceID = payload["device_id"] as? String ?? UUID().uuidString
+        let newCredentialID = payload["new_auth_credential_id"] as? String ?? UUID().uuidString
+        let now = timestamp()
+        var devices = trustedDevicesByDirectory[appSupportDir] ?? []
+        let trustedDevice: [String: Any]
+        let previousCredentialID: String?
+        if let index = devices.firstIndex(where: { ($0["device_id"] as? String) == deviceID }) {
+            var device = devices[index]
+            previousCredentialID = device["auth_credential_id"] as? String
+            device["auth_credential_id"] = newCredentialID
+            device["auth_rotated_at"] = now
+            devices[index] = device
+            trustedDevice = device
+        } else {
+            previousCredentialID = nil
+            trustedDevice = devicePayload(
+                deviceID: deviceID,
+                displayName: "LAN Peer",
+                logbookIDs: [payload["logbook_id"] as? String ?? SyncDefaults.defaultLogbookId],
+                pairingTokenID: nil,
+                publicKeyFingerprint: nil,
+                authCredentialID: newCredentialID,
+                trustedAt: now,
+                authRotatedAt: now
+            )
+            devices.append(trustedDevice)
+        }
+        trustedDevicesByDirectory[appSupportDir] = devices
+        return [
+            "rotation": [
+                "trusted_device": trustedDevice,
+                "previous_auth_credential_id": previousCredentialID as Any? ?? NSNull()
+            ],
+            "lan_trust": snapshotUnlocked(appSupportDir: appSupportDir)
+        ]
+    }
+
+    static func revoke(appSupportDir: String, payload: [String: Any]) -> [String: Any] {
+        lock.lock()
+        defer { lock.unlock() }
+        let deviceID = payload["device_id"] as? String ?? UUID().uuidString
+        let now = timestamp()
+        var devices = trustedDevicesByDirectory[appSupportDir] ?? []
+        let trustedDevice: [String: Any]
+        if let index = devices.firstIndex(where: { ($0["device_id"] as? String) == deviceID }) {
+            var device = devices[index]
+            device["revoked_at"] = now
+            devices[index] = device
+            trustedDevice = device
+        } else {
+            trustedDevice = devicePayload(
+                deviceID: deviceID,
+                displayName: "LAN Peer",
+                logbookIDs: [SyncDefaults.defaultLogbookId],
+                pairingTokenID: nil,
+                publicKeyFingerprint: nil,
+                authCredentialID: nil,
+                trustedAt: now,
+                revokedAt: now
+            )
+            devices.append(trustedDevice)
+        }
+        trustedDevicesByDirectory[appSupportDir] = devices
+        return [
+            "trusted_device": trustedDevice,
+            "lan_trust": snapshotUnlocked(appSupportDir: appSupportDir)
+        ]
+    }
+
+    private static func snapshotUnlocked(appSupportDir: String) -> [String: Any] {
+        [
+            "version": 1,
+            "pairing_tokens": pairingTokensByDirectory[appSupportDir] ?? [],
+            "trusted_devices": trustedDevicesByDirectory[appSupportDir] ?? []
+        ]
+    }
+
+    private static func upsertDevice(_ device: [String: Any], appSupportDir: String) {
+        var devices = trustedDevicesByDirectory[appSupportDir] ?? []
+        if let index = devices.firstIndex(where: { ($0["device_id"] as? String) == (device["device_id"] as? String) }) {
+            devices[index] = device
+        } else {
+            devices.append(device)
+        }
+        trustedDevicesByDirectory[appSupportDir] = devices
+    }
+
+    private static func devicePayload(
+        deviceID: String,
+        displayName: String,
+        logbookIDs: [String],
+        pairingTokenID: String?,
+        publicKeyFingerprint: String?,
+        authCredentialID: String?,
+        trustedAt: String,
+        revokedAt: String? = nil,
+        authRotatedAt: String? = nil
+    ) -> [String: Any] {
+        [
+            "device_id": deviceID,
+            "display_name": displayName,
+            "logbook_ids": logbookIDs,
+            "trusted_at": trustedAt,
+            "revoked_at": revokedAt as Any? ?? NSNull(),
+            "pairing_token_id": pairingTokenID as Any? ?? NSNull(),
+            "public_key_fingerprint": publicKeyFingerprint as Any? ?? NSNull(),
+            "auth_credential_id": authCredentialID as Any? ?? NSNull(),
+            "auth_rotated_at": authRotatedAt as Any? ?? NSNull(),
+            "last_seen_at": NSNull()
+        ]
+    }
+
+    private static func timestamp(daysFromNow: Int = 0) -> String {
+        let date = Calendar(identifier: .gregorian).date(byAdding: .day, value: daysFromNow, to: Date()) ?? Date()
+        return ISO8601DateFormatter().string(from: date)
     }
 }
 
@@ -1487,7 +1824,10 @@ enum FallbackBridgeData {
         ]
     ]
 
-    static func sync(conflictReviews: [String: Any]? = nil) -> [String: Any] {
+    static func sync(
+        conflictReviews: [String: Any]? = nil,
+        lanTrust: [String: Any]? = nil
+    ) -> [String: Any] {
         [
             "cloud_connection_state": "disconnected",
             "logbook_id": "00000000-0000-4000-8000-000000000001",
@@ -1496,6 +1836,8 @@ enum FallbackBridgeData {
             "pending_changes": 0,
             "offline_queue": offlineQueue(),
             "conflict_reviews": conflictReviews ?? ["health": ["open": 0, "resolved": 0, "total": 0], "reviews": []],
+            "lan_trust": lanTrust ?? FallbackLanTrustMemory.snapshot(),
+            "lan_trust_error": NSNull(),
             "conflicts": [],
             "history": [],
             "retry_policy": [
@@ -1813,6 +2155,8 @@ struct SyncSnapshot: Decodable {
     var pendingChanges: Int?
     var offlineQueue: SyncOfflineQueueSnapshot?
     var conflictReviews: SyncConflictReviewSnapshot?
+    var lanTrust: SyncLanTrustSnapshot?
+    var lanTrustError: String?
     var conflicts: [String]?
     var history: [String]?
     var retryPolicy: SyncRetryPolicy?
@@ -1825,6 +2169,8 @@ struct SyncSnapshot: Decodable {
         case pendingChanges
         case offlineQueue
         case conflictReviews
+        case lanTrust
+        case lanTrustError
         case conflicts
         case history
         case retryPolicy
@@ -1838,6 +2184,8 @@ struct SyncSnapshot: Decodable {
         pendingChanges: 0,
         offlineQueue: nil,
         conflictReviews: nil,
+        lanTrust: nil,
+        lanTrustError: nil,
         conflicts: [],
         history: [],
         retryPolicy: nil
@@ -1851,6 +2199,8 @@ struct SyncSnapshot: Decodable {
         pendingChanges: Int?,
         offlineQueue: SyncOfflineQueueSnapshot?,
         conflictReviews: SyncConflictReviewSnapshot?,
+        lanTrust: SyncLanTrustSnapshot?,
+        lanTrustError: String?,
         conflicts: [String]?,
         history: [String]?,
         retryPolicy: SyncRetryPolicy?
@@ -1862,6 +2212,8 @@ struct SyncSnapshot: Decodable {
         self.pendingChanges = pendingChanges
         self.offlineQueue = offlineQueue
         self.conflictReviews = conflictReviews
+        self.lanTrust = lanTrust
+        self.lanTrustError = lanTrustError
         self.conflicts = conflicts
         self.history = history
         self.retryPolicy = retryPolicy
@@ -1876,6 +2228,8 @@ struct SyncSnapshot: Decodable {
         pendingChanges = try container.decodeIfPresent(Int.self, forKey: .pendingChanges)
         offlineQueue = try? container.decodeIfPresent(SyncOfflineQueueSnapshot.self, forKey: .offlineQueue)
         conflictReviews = try? container.decodeIfPresent(SyncConflictReviewSnapshot.self, forKey: .conflictReviews)
+        lanTrust = try? container.decodeIfPresent(SyncLanTrustSnapshot.self, forKey: .lanTrust)
+        lanTrustError = try container.decodeIfPresent(String.self, forKey: .lanTrustError)
         conflicts = (try? container.decodeIfPresent([String].self, forKey: .conflicts)) ?? []
         history = (try? container.decodeIfPresent([String].self, forKey: .history)) ?? []
         retryPolicy = try? container.decodeIfPresent(SyncRetryPolicy.self, forKey: .retryPolicy)
@@ -1890,6 +2244,8 @@ struct SyncSnapshot: Decodable {
             pendingChanges: queue.health.pendingChangeCount,
             offlineQueue: queue,
             conflictReviews: conflictReviews,
+            lanTrust: lanTrust,
+            lanTrustError: lanTrustError,
             conflicts: conflicts,
             history: history,
             retryPolicy: retryPolicy
@@ -1905,6 +2261,25 @@ struct SyncSnapshot: Decodable {
             pendingChanges: pendingChanges,
             offlineQueue: offlineQueue,
             conflictReviews: reviews,
+            lanTrust: lanTrust,
+            lanTrustError: lanTrustError,
+            conflicts: conflicts,
+            history: history,
+            retryPolicy: retryPolicy
+        )
+    }
+
+    func replacingLanTrust(_ trust: SyncLanTrustSnapshot, error: String?) -> SyncSnapshot {
+        SyncSnapshot(
+            cloudConnectionState: cloudConnectionState,
+            logbookId: logbookId,
+            localHeadHash: localHeadHash,
+            pendingEvents: pendingEvents,
+            pendingChanges: pendingChanges,
+            offlineQueue: offlineQueue,
+            conflictReviews: conflictReviews,
+            lanTrust: trust,
+            lanTrustError: error,
             conflicts: conflicts,
             history: history,
             retryPolicy: retryPolicy
@@ -1950,6 +2325,121 @@ struct SyncOfflineMutation: Decodable, Identifiable {
     var failureReason: String?
     var lastErrorCode: String?
     var localEventHash: String?
+}
+
+struct SyncLanTrustSnapshot: Decodable {
+    var version: Int?
+    var pairingTokens: [SyncPairingTokenSummary]
+    var trustedDevices: [SyncTrustedPeerDevice]
+
+    var activePairingTokens: [SyncPairingTokenSummary] {
+        pairingTokens.filter { $0.consumedAt == nil }
+    }
+
+    var activeTrustedDevices: [SyncTrustedPeerDevice] {
+        trustedDevices.filter { $0.revokedAt == nil }
+    }
+}
+
+struct SyncPairingTokenSummary: Decodable, Identifiable {
+    var id: String { tokenId ?? UUID().uuidString }
+    var tokenId: String?
+    var issuerDeviceId: String?
+    var logbookId: String?
+    var issuerDisplayName: String?
+    var createdAt: String?
+    var expiresAt: String?
+    var consumedAt: String?
+    var approvedByOperator: Bool?
+}
+
+struct SyncTrustedPeerDevice: Decodable, Identifiable {
+    var id: String { deviceId ?? UUID().uuidString }
+    var deviceId: String?
+    var displayName: String?
+    var logbookIds: [String]?
+    var trustedAt: String?
+    var revokedAt: String?
+    var pairingTokenId: String?
+    var publicKeyFingerprint: String?
+    var authCredentialId: String?
+    var authRotatedAt: String?
+    var lastSeenAt: String?
+
+    var statusLabel: String {
+        revokedAt == nil ? "Trusted" : "Revoked"
+    }
+}
+
+struct SyncLanTrustBridgeResult: Decodable {
+    var lanTrust: SyncLanTrustSnapshot
+}
+
+struct SyncLanPairingTokenBridgeResult: Decodable {
+    var pairing: SyncIssuedPairingToken
+    var lanTrust: SyncLanTrustSnapshot
+}
+
+struct SyncLanTrustedDeviceBridgeResult: Decodable {
+    var trustedDevice: SyncTrustedPeerDevice
+    var lanTrust: SyncLanTrustSnapshot
+}
+
+struct SyncLanAuthRotateBridgeResult: Decodable {
+    var rotation: SyncLanAuthCredentialRotation
+    var lanTrust: SyncLanTrustSnapshot
+}
+
+struct SyncIssuedPairingToken: Decodable {
+    var tokenId: String
+    var pairingCode: String
+    var expiresAt: String
+}
+
+struct SyncLanAuthCredentialRotation: Decodable {
+    var trustedDevice: SyncTrustedPeerDevice
+    var previousAuthCredentialId: String?
+}
+
+struct SyncLanPairingTokenIssueBridgeRequest: Encodable {
+    var appSupportDir: String
+    var issuerDeviceId: String?
+    var logbookId: String?
+    var issuerDisplayName: String?
+    var approvedByOperator: Bool
+}
+
+struct SyncLanPairingAcceptBridgeRequest: Encodable {
+    var appSupportDir: String
+    var tokenId: String
+    var pairingCode: String
+    var peerDeviceId: String
+    var peerDisplayName: String
+    var requestedLogbooks: [String]
+    var publicKeyFingerprint: String?
+    var authCredentialId: String
+}
+
+struct SyncLanTrustPeerBridgeRequest: Encodable {
+    var appSupportDir: String
+    var peerDeviceId: String
+    var peerDisplayName: String
+    var logbookId: String?
+    var pairingTokenId: String?
+    var publicKeyFingerprint: String?
+    var authCredentialId: String
+}
+
+struct SyncLanAuthRotateBridgeRequest: Encodable {
+    var appSupportDir: String
+    var deviceId: String
+    var logbookId: String?
+    var newAuthCredentialId: String
+}
+
+struct SyncLanRevokeBridgeRequest: Encodable {
+    var appSupportDir: String
+    var deviceId: String
 }
 
 struct SyncConflictReviewSnapshot: Decodable {

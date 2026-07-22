@@ -106,7 +106,7 @@ secret-free.
 
 Future work:
 
-- production iOS reciprocal LAN pairing UX on top of the durable LAN trust store
+- production iOS reciprocal pairing completion UX on top of the durable LAN trust store
 - stronger LAN key-exchange hardening
 - signed official events
 - end-to-end encrypted relay

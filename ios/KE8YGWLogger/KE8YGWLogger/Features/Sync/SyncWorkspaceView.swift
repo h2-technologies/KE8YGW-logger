@@ -8,6 +8,12 @@ struct SyncWorkspaceView: View {
     @State private var backgroundSync = true
     @State private var retryAutomatically = true
     @State private var syncMessage: String?
+    @State private var lanPeerDeviceId = ""
+    @State private var lanPeerDisplayName = ""
+    @State private var lanPairingTokenId = ""
+    @State private var lanPairingFingerprint = ""
+    @State private var lanSelectedDeviceId = ""
+    @State private var lanIssuedPairing: SyncIssuedPairingToken?
     private let credentialVault = KeychainCredentialVault()
 
     var body: some View {
@@ -87,6 +93,80 @@ struct SyncWorkspaceView: View {
                 }
             }
 
+            Section("LAN Trust") {
+                let trust = bridge.sync.lanTrust
+                DetailRow(title: "Trusted Devices", value: "\(trust?.activeTrustedDevices.count ?? 0)")
+                DetailRow(title: "Pairing Codes", value: "\(trust?.activePairingTokens.count ?? 0)")
+                if let error = bridge.sync.lanTrustError {
+                    Text(error)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                }
+                if let lanIssuedPairing {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(lanIssuedPairing.pairingCode)
+                            .font(.system(.body, design: .monospaced))
+                            .textSelection(.enabled)
+                        Text("Expires \(lanIssuedPairing.expiresAt)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                ForEach(trust?.trustedDevices ?? []) { device in
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack {
+                            Text(device.displayName ?? "LAN Peer")
+                            Spacer()
+                            Text(device.statusLabel)
+                                .font(.caption)
+                                .foregroundStyle(device.revokedAt == nil ? .green : .secondary)
+                        }
+                        Text(device.deviceId ?? "unknown device")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                        if let authCredentialId = device.authCredentialId {
+                            Text("Credential \(authCredentialId)")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                                .textSelection(.enabled)
+                        }
+                    }
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        lanSelectedDeviceId = device.deviceId ?? ""
+                    }
+                }
+                TextField("Peer Device ID", text: $lanPeerDeviceId)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                TextField("Peer Name", text: $lanPeerDisplayName)
+                TextField("Pairing Token ID", text: $lanPairingTokenId)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                TextField("Fingerprint", text: $lanPairingFingerprint)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                HStack {
+                    Button("Issue Code") {
+                        Task { await issueLanPairingToken() }
+                    }
+                    Button("Trust Peer") {
+                        Task { await trustLanPeer() }
+                    }
+                }
+                HStack {
+                    Button("Rotate Auth") {
+                        Task { await rotateLanAuth() }
+                    }
+                    .disabled(selectedLanDeviceId() == nil)
+                    Button("Revoke") {
+                        Task { await revokeLanPeer() }
+                    }
+                    .disabled(selectedLanDeviceId() == nil)
+                }
+            }
+
             Section("Actions") {
                 Button("Sync Now") {
                     Task { await executeRetryPush() }
@@ -115,6 +195,108 @@ struct SyncWorkspaceView: View {
         .task {
             connectivity.start()
             await bridge.refreshSync()
+        }
+    }
+
+    private func issueLanPairingToken() async {
+        do {
+            let result = try await bridge.issueLanPairingToken(
+                issuerDisplayName: "KE8YGW Logger iOS",
+                approvedByOperator: true
+            )
+            lanIssuedPairing = result.pairing
+            syncMessage = "Issued LAN pairing code \(result.pairing.tokenId)."
+        } catch {
+            syncMessage = error.localizedDescription
+        }
+    }
+
+    private func trustLanPeer() async {
+        let peerDeviceId = lanPeerDeviceId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard UUID(uuidString: peerDeviceId) != nil else {
+            syncMessage = "Enter a valid peer device UUID."
+            return
+        }
+        let displayName = lanPeerDisplayName
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .nonEmpty ?? "LAN Peer"
+        let credentialId = UUID().uuidString
+        do {
+            try credentialVault.save(
+                secret: generateLanAuthSecret(),
+                account: lanAuthAccount(credentialId),
+                providerId: "lan_sync"
+            )
+            let result = try await bridge.trustLanPeer(
+                peerDeviceId: peerDeviceId,
+                peerDisplayName: displayName,
+                pairingTokenId: lanPairingTokenId.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty,
+                publicKeyFingerprint: lanPairingFingerprint.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty,
+                authCredentialId: credentialId
+            )
+            lanSelectedDeviceId = result.trustedDevice.deviceId ?? peerDeviceId
+            lanPeerDeviceId = ""
+            lanPeerDisplayName = ""
+            syncMessage = "Trusted \(result.trustedDevice.displayName ?? displayName) for LAN sync."
+        } catch {
+            try? credentialVault.delete(
+                account: lanAuthAccount(credentialId),
+                providerId: "lan_sync"
+            )
+            syncMessage = error.localizedDescription
+        }
+    }
+
+    private func rotateLanAuth() async {
+        guard let deviceId = selectedLanDeviceId() else {
+            syncMessage = "Select a trusted LAN device first."
+            return
+        }
+        let credentialId = UUID().uuidString
+        do {
+            try credentialVault.save(
+                secret: generateLanAuthSecret(),
+                account: lanAuthAccount(credentialId),
+                providerId: "lan_sync"
+            )
+            let result = try await bridge.rotateLanAuthCredential(
+                deviceId: deviceId,
+                newAuthCredentialId: credentialId
+            )
+            if let previous = result.rotation.previousAuthCredentialId {
+                try? credentialVault.delete(
+                    account: lanAuthAccount(previous),
+                    providerId: "lan_sync"
+                )
+            }
+            lanSelectedDeviceId = result.rotation.trustedDevice.deviceId ?? deviceId
+            syncMessage = "Rotated LAN auth credential."
+        } catch {
+            try? credentialVault.delete(
+                account: lanAuthAccount(credentialId),
+                providerId: "lan_sync"
+            )
+            syncMessage = error.localizedDescription
+        }
+    }
+
+    private func revokeLanPeer() async {
+        guard let deviceId = selectedLanDeviceId() else {
+            syncMessage = "Select a trusted LAN device first."
+            return
+        }
+        do {
+            let result = try await bridge.revokeLanPeer(deviceId: deviceId)
+            if let credentialId = result.trustedDevice.authCredentialId {
+                try? credentialVault.delete(
+                    account: lanAuthAccount(credentialId),
+                    providerId: "lan_sync"
+                )
+            }
+            lanSelectedDeviceId = ""
+            syncMessage = "Revoked LAN trust for \(result.trustedDevice.displayName ?? "peer")."
+        } catch {
+            syncMessage = error.localizedDescription
         }
     }
 
@@ -234,6 +416,25 @@ struct SyncWorkspaceView: View {
         return token
     }
 
+    private func selectedLanDeviceId() -> String? {
+        let selected = lanSelectedDeviceId.trimmingCharacters(in: .whitespacesAndNewlines)
+        if UUID(uuidString: selected) != nil {
+            return selected
+        }
+        return bridge.sync.lanTrust?.activeTrustedDevices
+            .compactMap(\.deviceId)
+            .first { UUID(uuidString: $0) != nil }
+    }
+
+    private func lanAuthAccount(_ credentialId: String) -> String {
+        "lan_auth:\(credentialId)"
+    }
+
+    private func generateLanAuthSecret() -> String {
+        UUID().uuidString.replacingOccurrences(of: "-", with: "")
+            + UUID().uuidString.replacingOccurrences(of: "-", with: "")
+    }
+
     private func syncPullResultMessage(_ result: SyncPullExecutionResult) -> String {
         switch result.status {
         case .blockedByNetwork:
@@ -268,5 +469,11 @@ struct SyncWorkspaceView: View {
         case .diverged:
             return "Sync peer history diverged; manual review is required."
         }
+    }
+}
+
+private extension String {
+    var nonEmpty: String? {
+        isEmpty ? nil : self
     }
 }

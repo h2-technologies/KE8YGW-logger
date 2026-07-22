@@ -206,7 +206,9 @@ Sync is local-first. LAN discovery and replication are preferred when reachable;
 - LAN Trust: mutating LAN replication requires durable trust records,
   short-lived single-use pairing tokens, logbook scoping, HMAC-SHA256 signed
   LAN read endpoint authorization, replay nonce checks, credential references,
-  and immediate revocation.
+  and immediate revocation. GUI and native iOS bridge clients must store raw LAN
+  auth secrets only through approved credential storage and persist only
+  credential references in trust support state.
 - Divergence: detect and report divergent heads, missing dependencies,
   unsupported schemas, concurrent corrections, and tombstone/restore overlaps;
   do not auto-merge in MVP.

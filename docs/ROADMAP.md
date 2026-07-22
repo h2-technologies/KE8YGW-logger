@@ -38,7 +38,9 @@ wrapper is not the iOS client. See `V1_RELEASE_PLAN.md`,
      manual direct LAN HTTP preview/pull is available between GUI instances;
      the GUI also runs IPv4/IPv6 multicast discovery with reachable identity
      probing, plus guided browser LAN pairing/trust controls and GUI LAN auth
-     credential rotation/recovery. Production iOS reciprocal LAN pairing UX,
+     credential rotation/recovery. Native iOS now has Rust-owned LAN trust
+     snapshot/issue/trust/rotate/revoke bridge commands with Keychain-backed
+     credential references. Production iOS reciprocal pairing completion UX,
      stronger LAN key-exchange hardening, and physical-device LAN/iOS
      local-network validation remain high priority.
 
@@ -119,9 +121,10 @@ wrapper is not the iOS client. See `V1_RELEASE_PLAN.md`,
      LAN revocation.
    - Status: implemented as a v0.3 foundation with HMAC-SHA256 signed LAN read
      endpoint authorization, GUI LAN auth credential rotation/recovery, desktop
-     cloud reconnect auto-drain when auto-push is enabled, and iOS FFI
-     background retry planning/result classification.
-     Production iOS reciprocal LAN pairing UX, stronger LAN key-exchange
+     cloud reconnect auto-drain when auto-push is enabled, iOS FFI background
+     retry planning/result classification, and iOS LAN trust
+     snapshot/issue/trust/rotate/revoke bridge commands.
+     Production iOS reciprocal pairing completion UX, stronger LAN key-exchange
      hardening, end-to-end cross-client branch review/reconciliation workflow
      qualification,
      physical-device LAN/iOS local-network validation, and release-device iOS
@@ -134,7 +137,7 @@ The dependency-ordered v1 critical path is tracked in
 rewrites:
 
 1. Finish the remaining sync/reconciliation hardening: production iOS reciprocal
-   LAN pairing UX, stronger LAN key-exchange hardening,
+   pairing completion UX, stronger LAN key-exchange hardening,
    end-to-end cross-client branch review/reconciliation workflow qualification,
    physical-device LAN/iOS local-network validation, and release-device iOS
    background task/poor-network qualification before unattended desktop/iOS

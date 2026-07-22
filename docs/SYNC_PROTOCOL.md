@@ -221,7 +221,7 @@ conflict details without owning merge or validation rules.
 ## LAN Trust
 
 `ham-sync::offline` includes durable LAN trust records persisted as
-`lan-trust.json` by the GUI. The trust model includes:
+`lan-trust.json` by GUI and iOS bridge clients. The trust model includes:
 
 - explicit operator approval before issuing a pairing token
 - short-lived single-use pairing tokens stored only as hashes
@@ -251,8 +251,20 @@ endpoint that probes another GUI instance over a numeric
 loopback/private/link-local `http://ip:port`, reads `/api/sync/state` for the
 peer identity, stores the peer with its advertised API port, then uses protected
 `/api/sync/get-head` and `/api/sync/events-since` requests for direct
-preview/pull. LAN `list-logbooks`, `get-head`, `events-since`, and
-`event-metadata` requests must include these headers:
+preview/pull.
+
+Native iOS exposes the same durable trust store through Rust FFI commands:
+`sync.lan_trust.snapshot`, `sync.lan_trust.issue_pairing_token`,
+`sync.lan_trust.accept_pairing_token`, `sync.lan_trust.trust_peer`,
+`sync.lan_trust.rotate_auth`, and `sync.lan_trust.revoke`. The iOS Sync
+workspace can issue a local one-time code, directly trust a peer, rotate
+Keychain-backed LAN auth credentials, and revoke trust. The accept-pairing
+command requires an `auth_credential_id`; Swift creates the LAN auth secret in
+Keychain first and Rust persists only that credential ID. Pairing codes are
+returned only from the issue-token command and are not present in snapshots.
+
+LAN `list-logbooks`, `get-head`, `events-since`, and `event-metadata` requests
+must include these headers:
 
 - `x-ke8ygw-lan-device-id`: requester device ID
 - `x-ke8ygw-lan-replay-nonce`: fresh requester nonce
@@ -292,9 +304,9 @@ reachability and reduce spoofing; official event writes remain local and
 trust-gated; protected LAN read endpoints require reciprocal trust state,
 fresh nonces, and HMAC-SHA256 request proof. The current LAN HTTP transport is
 still not encrypted and must not be exposed outside trusted local networks.
-Production iOS reciprocal LAN pairing UX, stronger LAN key-exchange hardening,
-physical-device LAN validation, and iOS Local Network permission validation
-remain before unattended LAN sync is considered complete.
+Production iOS reciprocal pairing completion UX, stronger LAN key-exchange
+hardening, physical-device LAN validation, and iOS Local Network permission
+validation remain before unattended LAN sync is considered complete.
 
 ## Cloud Relay and Self-Hosted Sync
 
@@ -334,10 +346,10 @@ The current self-hosted server uses durable local storage by default: embedded S
 
 ## Deferred Work
 
-- Production iOS reciprocal LAN pairing UX over the durable trust store.
+- Production iOS reciprocal pairing completion UX over the durable trust store.
 - Signed official events.
 - End-to-end encrypted relay.
-- Stronger LAN key-exchange hardening and production iOS reciprocal LAN pairing UX.
+- Stronger LAN key-exchange hardening and production iOS reciprocal pairing completion UX.
 - Physical-device LAN and iOS Local Network permission validation.
 - End-to-end cross-client branch review and reconciliation workflow beyond the
   current guided browser review surface and explicit corrective-event commands.

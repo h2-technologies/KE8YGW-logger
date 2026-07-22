@@ -38,7 +38,8 @@ use ham_plugin_sdk::{
 };
 use ham_sync::{
     pull_missing_events, CloudConnectionState, CloudSyncConfig, ConflictReviewStatus,
-    JsonConflictReviewStore, JsonOfflineMutationQueue, LocalPeerIdentity, ManualConflictResolution,
+    JsonConflictReviewStore, JsonLanTrustStore, JsonOfflineMutationQueue, LanPairingAcceptance,
+    LanPeerTrustUpdate, LocalPeerIdentity, ManualConflictResolution,
     ManualConflictResolutionChoice, OfflineMutationEnvelope, OfflineMutationInput,
     PullEventsRequest, SyncConfig, SyncConflictReport, MAX_CONFLICT_REVIEW_NOTE_BYTES,
     OFFLINE_OP_ACTIVATION_END, OFFLINE_OP_ACTIVATION_START, OFFLINE_OP_NET_CHECKIN_CREATE,
@@ -293,6 +294,68 @@ struct IosRemoteEventsApplyRequest {
     peer_id: Option<String>,
     #[serde(default)]
     events: Vec<CoreEventEnvelope>,
+}
+
+#[derive(Debug, Deserialize)]
+struct LanTrustSnapshotRequest {
+    app_support_dir: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct LanPairingTokenIssueRequest {
+    app_support_dir: String,
+    #[serde(default)]
+    issuer_device_id: Option<Uuid>,
+    #[serde(default)]
+    logbook_id: Option<Uuid>,
+    #[serde(default)]
+    issuer_display_name: Option<String>,
+    #[serde(default)]
+    approved_by_operator: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct LanPairingAcceptRequest {
+    app_support_dir: String,
+    token_id: Uuid,
+    pairing_code: String,
+    peer_device_id: Uuid,
+    peer_display_name: String,
+    #[serde(default)]
+    requested_logbooks: Vec<Uuid>,
+    #[serde(default)]
+    public_key_fingerprint: Option<String>,
+    #[serde(default)]
+    auth_credential_id: Option<Uuid>,
+}
+
+#[derive(Debug, Deserialize)]
+struct LanTrustPeerRequest {
+    app_support_dir: String,
+    peer_device_id: Uuid,
+    peer_display_name: String,
+    #[serde(default)]
+    logbook_id: Option<Uuid>,
+    #[serde(default)]
+    pairing_token_id: Option<Uuid>,
+    #[serde(default)]
+    public_key_fingerprint: Option<String>,
+    auth_credential_id: Uuid,
+}
+
+#[derive(Debug, Deserialize)]
+struct LanRotateAuthRequest {
+    app_support_dir: String,
+    device_id: Uuid,
+    #[serde(default)]
+    logbook_id: Option<Uuid>,
+    new_auth_credential_id: Uuid,
+}
+
+#[derive(Debug, Deserialize)]
+struct LanRevokeRequest {
+    app_support_dir: String,
+    device_id: Uuid,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
@@ -591,6 +654,14 @@ fn dispatch_call(call: BridgeCall, correlation_id: Uuid) -> Result<Value, Bridge
         "sync.conflict_reviews.corrective_events" => {
             sync_conflict_review_corrective_events_command(payload, correlation_id)
         }
+        "sync.lan_trust.snapshot" => sync_lan_trust_snapshot_command(payload),
+        "sync.lan_trust.issue_pairing_token" => sync_lan_trust_issue_pairing_token_command(payload),
+        "sync.lan_trust.accept_pairing_token" => {
+            sync_lan_trust_accept_pairing_token_command(payload)
+        }
+        "sync.lan_trust.trust_peer" => sync_lan_trust_trust_peer_command(payload),
+        "sync.lan_trust.rotate_auth" => sync_lan_trust_rotate_auth_command(payload),
+        "sync.lan_trust.revoke" => sync_lan_trust_revoke_command(payload),
         "diagnostics.snapshot" => diagnostics_command_payload(payload),
         "settings.get" => settings_get_command(payload),
         "settings.create_default" => settings_create_default_command(payload),
@@ -1510,6 +1581,143 @@ fn sync_conflict_review_corrective_events_command(
     })
 }
 
+fn sync_lan_trust_snapshot_command(payload: Value) -> Result<Value, BridgeFault> {
+    let request: LanTrustSnapshotRequest = serde_json::from_value(payload)
+        .map_err(|error| BridgeFault::invalid_input(error.to_string()))?;
+    let store = lan_trust_store(&request.app_support_dir)?;
+    let snapshot = store
+        .snapshot()
+        .map_err(|error| BridgeFault::storage(error.to_string()))?;
+    Ok(json!({
+        "lan_trust": snapshot
+    }))
+}
+
+fn sync_lan_trust_issue_pairing_token_command(payload: Value) -> Result<Value, BridgeFault> {
+    let request: LanPairingTokenIssueRequest = serde_json::from_value(payload)
+        .map_err(|error| BridgeFault::invalid_input(error.to_string()))?;
+    let store = lan_trust_store(&request.app_support_dir)?;
+    let pairing = store
+        .issue_pairing_token(
+            request.issuer_device_id.unwrap_or_else(Uuid::new_v4),
+            request.logbook_id.unwrap_or_else(default_logbook_id),
+            request
+                .issuer_display_name
+                .filter(|name| !name.trim().is_empty())
+                .unwrap_or_else(|| "KE8YGW Logger iOS".to_owned()),
+            request.approved_by_operator,
+            Utc::now(),
+        )
+        .map_err(|error| BridgeFault::domain(error.to_string()))?;
+    let snapshot = store
+        .snapshot()
+        .map_err(|error| BridgeFault::storage(error.to_string()))?;
+    Ok(json!({
+        "pairing": pairing,
+        "lan_trust": snapshot
+    }))
+}
+
+fn sync_lan_trust_accept_pairing_token_command(payload: Value) -> Result<Value, BridgeFault> {
+    let request: LanPairingAcceptRequest = serde_json::from_value(payload)
+        .map_err(|error| BridgeFault::invalid_input(error.to_string()))?;
+    let auth_credential_id = request.auth_credential_id.ok_or_else(|| {
+        BridgeFault::invalid_input(
+            "field `auth_credential_id` is required before iOS can trust a LAN peer",
+        )
+    })?;
+    let store = lan_trust_store(&request.app_support_dir)?;
+    let requested_logbooks = if request.requested_logbooks.is_empty() {
+        vec![default_logbook_id()]
+    } else {
+        request.requested_logbooks
+    };
+    let device = store
+        .accept_pairing_token(
+            LanPairingAcceptance {
+                token_id: request.token_id,
+                pairing_code: request.pairing_code,
+                peer_device_id: request.peer_device_id,
+                peer_display_name: request.peer_display_name,
+                requested_logbooks,
+                public_key_fingerprint: request.public_key_fingerprint,
+                auth_credential_id: Some(auth_credential_id),
+            },
+            Utc::now(),
+        )
+        .map_err(|error| BridgeFault::domain(error.to_string()))?;
+    let snapshot = store
+        .snapshot()
+        .map_err(|error| BridgeFault::storage(error.to_string()))?;
+    Ok(json!({
+        "trusted_device": device,
+        "lan_trust": snapshot
+    }))
+}
+
+fn sync_lan_trust_trust_peer_command(payload: Value) -> Result<Value, BridgeFault> {
+    let request: LanTrustPeerRequest = serde_json::from_value(payload)
+        .map_err(|error| BridgeFault::invalid_input(error.to_string()))?;
+    let store = lan_trust_store(&request.app_support_dir)?;
+    let device = store
+        .trust_peer_with_auth_credential(
+            LanPeerTrustUpdate {
+                peer_device_id: request.peer_device_id,
+                peer_display_name: request.peer_display_name,
+                logbook_id: request.logbook_id.unwrap_or_else(default_logbook_id),
+                pairing_token_id: request.pairing_token_id,
+                public_key_fingerprint: request.public_key_fingerprint,
+                auth_credential_id: request.auth_credential_id,
+            },
+            Utc::now(),
+        )
+        .map_err(|error| BridgeFault::domain(error.to_string()))?;
+    let snapshot = store
+        .snapshot()
+        .map_err(|error| BridgeFault::storage(error.to_string()))?;
+    Ok(json!({
+        "trusted_device": device,
+        "lan_trust": snapshot
+    }))
+}
+
+fn sync_lan_trust_rotate_auth_command(payload: Value) -> Result<Value, BridgeFault> {
+    let request: LanRotateAuthRequest = serde_json::from_value(payload)
+        .map_err(|error| BridgeFault::invalid_input(error.to_string()))?;
+    let store = lan_trust_store(&request.app_support_dir)?;
+    let rotation = store
+        .rotate_auth_credential(
+            request.device_id,
+            request.logbook_id.unwrap_or_else(default_logbook_id),
+            request.new_auth_credential_id,
+            Utc::now(),
+        )
+        .map_err(|error| BridgeFault::domain(error.to_string()))?;
+    let snapshot = store
+        .snapshot()
+        .map_err(|error| BridgeFault::storage(error.to_string()))?;
+    Ok(json!({
+        "rotation": rotation,
+        "lan_trust": snapshot
+    }))
+}
+
+fn sync_lan_trust_revoke_command(payload: Value) -> Result<Value, BridgeFault> {
+    let request: LanRevokeRequest = serde_json::from_value(payload)
+        .map_err(|error| BridgeFault::invalid_input(error.to_string()))?;
+    let store = lan_trust_store(&request.app_support_dir)?;
+    let device = store
+        .revoke_device(request.device_id, Utc::now())
+        .map_err(|error| BridgeFault::domain(error.to_string()))?;
+    let snapshot = store
+        .snapshot()
+        .map_err(|error| BridgeFault::storage(error.to_string()))?;
+    Ok(json!({
+        "trusted_device": device,
+        "lan_trust": snapshot
+    }))
+}
+
 fn sync_snapshot_for_support(
     app_support_dir: Option<&str>,
     logbook_id: Uuid,
@@ -1535,6 +1743,17 @@ fn sync_snapshot_for_support(
             )
         }
         None => None,
+    };
+    let (lan_trust, lan_trust_error) = match app_support_dir {
+        Some(dir) => match lan_trust_store(dir).and_then(|store| {
+            store
+                .snapshot()
+                .map_err(|error| BridgeFault::storage(error.to_string()))
+        }) {
+            Ok(snapshot) => (Some(snapshot), None),
+            Err(error) => (None, Some(error.message)),
+        },
+        None => (None, None),
     };
     let (pending_events, local_head_hash) = match app_support_dir {
         Some(dir) => {
@@ -1574,6 +1793,8 @@ fn sync_snapshot_for_support(
         "pending_events": pending_events,
         "offline_queue": queue_snapshot,
         "conflict_reviews": conflict_reviews,
+        "lan_trust": lan_trust,
+        "lan_trust_error": lan_trust_error,
         "conflicts": Vec::<Value>::new(),
         "history": Vec::<Value>::new(),
         "retry_policy": {
@@ -2357,6 +2578,12 @@ fn offline_queue(app_support_dir: &str) -> Result<JsonOfflineMutationQueue, Brid
 fn conflict_review_store(app_support_dir: &str) -> Result<JsonConflictReviewStore, BridgeFault> {
     Ok(JsonConflictReviewStore::new(
         rust_support_dir(app_support_dir)?.join("conflict-reviews.json"),
+    ))
+}
+
+fn lan_trust_store(app_support_dir: &str) -> Result<JsonLanTrustStore, BridgeFault> {
+    Ok(JsonLanTrustStore::new(
+        rust_support_dir(app_support_dir)?.join("lan-trust.json"),
     ))
 }
 
@@ -3666,6 +3893,146 @@ mod tests {
             }
         }));
         assert_eq!(snapshot["data"]["conflict_reviews"]["health"]["open"], 1);
+        let _ = std::fs::remove_dir_all(app_support_dir);
+    }
+
+    #[test]
+    fn sync_lan_trust_commands_issue_trust_rotate_and_revoke_without_secrets() {
+        let app_support_dir = std::env::temp_dir().join(format!("ham-ios-{}", Uuid::new_v4()));
+        let peer_device_id = Uuid::new_v4();
+        let auth_credential_id = Uuid::new_v4();
+        let rotated_credential_id = Uuid::new_v4();
+        let issued = call_json(json!({
+            "command": "sync.lan_trust.issue_pairing_token",
+            "payload": {
+                "app_support_dir": app_support_dir.to_string_lossy(),
+                "issuer_display_name": "iOS Field Phone",
+                "approved_by_operator": true
+            }
+        }));
+        assert_eq!(issued["ok"], true);
+        let pairing_code = issued["data"]["pairing"]["pairing_code"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        assert!(!pairing_code.is_empty());
+        assert_eq!(
+            issued["data"]["lan_trust"]["pairing_tokens"][0]["issuer_display_name"],
+            "iOS Field Phone"
+        );
+        assert!(issued["data"]["lan_trust"]["pairing_tokens"][0]
+            .get("pairing_code")
+            .is_none());
+        assert!(issued["data"]["lan_trust"]["pairing_tokens"][0]
+            .get("token_hash")
+            .is_none());
+
+        let trusted = call_json(json!({
+            "command": "sync.lan_trust.trust_peer",
+            "payload": {
+                "app_support_dir": app_support_dir.to_string_lossy(),
+                "peer_device_id": peer_device_id,
+                "peer_display_name": "Desktop on LAN",
+                "auth_credential_id": auth_credential_id,
+                "public_key_fingerprint": "sha256:test-fingerprint"
+            }
+        }));
+        assert_eq!(trusted["ok"], true);
+        assert_eq!(
+            trusted["data"]["trusted_device"]["auth_credential_id"],
+            auth_credential_id.to_string()
+        );
+        assert_eq!(
+            trusted["data"]["trusted_device"]["revoked_at"],
+            serde_json::Value::Null
+        );
+
+        let rotated = call_json(json!({
+            "command": "sync.lan_trust.rotate_auth",
+            "payload": {
+                "app_support_dir": app_support_dir.to_string_lossy(),
+                "device_id": peer_device_id,
+                "new_auth_credential_id": rotated_credential_id
+            }
+        }));
+        assert_eq!(rotated["ok"], true);
+        assert_eq!(
+            rotated["data"]["rotation"]["previous_auth_credential_id"],
+            auth_credential_id.to_string()
+        );
+        assert_eq!(
+            rotated["data"]["rotation"]["trusted_device"]["auth_credential_id"],
+            rotated_credential_id.to_string()
+        );
+
+        let revoked = call_json(json!({
+            "command": "sync.lan_trust.revoke",
+            "payload": {
+                "app_support_dir": app_support_dir.to_string_lossy(),
+                "device_id": peer_device_id
+            }
+        }));
+        assert_eq!(revoked["ok"], true);
+        assert!(revoked["data"]["trusted_device"]["revoked_at"]
+            .as_str()
+            .is_some());
+
+        let snapshot = call_json(json!({
+            "command": "sync.snapshot",
+            "payload": {
+                "app_support_dir": app_support_dir.to_string_lossy()
+            }
+        }));
+        assert_eq!(snapshot["ok"], true);
+        assert_eq!(
+            snapshot["data"]["lan_trust"]["trusted_devices"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(snapshot["data"]["lan_trust_error"], serde_json::Value::Null);
+
+        let raw = std::fs::read_to_string(app_support_dir.join("Rust/lan-trust.json")).unwrap();
+        assert!(!raw.contains(&pairing_code));
+        assert!(!raw.contains("super-secret"));
+        let _ = std::fs::remove_dir_all(app_support_dir);
+    }
+
+    #[test]
+    fn sync_lan_trust_rejects_unapproved_or_missing_auth_credential() {
+        let app_support_dir = std::env::temp_dir().join(format!("ham-ios-{}", Uuid::new_v4()));
+        let rejected = call_json(json!({
+            "command": "sync.lan_trust.issue_pairing_token",
+            "payload": {
+                "app_support_dir": app_support_dir.to_string_lossy(),
+                "approved_by_operator": false
+            }
+        }));
+        assert_eq!(rejected["ok"], false);
+        assert_eq!(rejected["error"]["code"], "domain_rejected");
+
+        let issued = call_json(json!({
+            "command": "sync.lan_trust.issue_pairing_token",
+            "payload": {
+                "app_support_dir": app_support_dir.to_string_lossy(),
+                "approved_by_operator": true
+            }
+        }));
+        let token_id = issued["data"]["pairing"]["token_id"].as_str().unwrap();
+        let pairing_code = issued["data"]["pairing"]["pairing_code"].as_str().unwrap();
+        let missing_auth = call_json(json!({
+            "command": "sync.lan_trust.accept_pairing_token",
+            "payload": {
+                "app_support_dir": app_support_dir.to_string_lossy(),
+                "token_id": token_id,
+                "pairing_code": pairing_code,
+                "peer_device_id": Uuid::new_v4(),
+                "peer_display_name": "Desktop without credential"
+            }
+        }));
+        assert_eq!(missing_auth["ok"], false);
+        assert_eq!(missing_auth["error"]["code"], "invalid_input");
         let _ = std::fs::remove_dir_all(app_support_dir);
     }
 

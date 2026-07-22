@@ -190,6 +190,87 @@ final class RustBridgeTests: XCTestCase {
         XCTAssertEqual(resolved.conflictReviews.health?.resolved, 1)
     }
 
+    func testFallbackLanTrustSnapshotDecodesCredentialReferences() async throws {
+        let client = FallbackRustBridgeClient()
+        let appSupportDir = "swift-lan-\(UUID().uuidString)"
+        let peerDeviceID = UUID().uuidString
+        let authCredentialID = UUID().uuidString
+        let trusted: SyncLanTrustedDeviceBridgeResult = try await decodeCommand(
+            client: client,
+            command: "sync.lan_trust.trust_peer",
+            payload: [
+                "app_support_dir": appSupportDir,
+                "peer_device_id": peerDeviceID,
+                "peer_display_name": "Desktop LAN Peer",
+                "auth_credential_id": authCredentialID,
+                "public_key_fingerprint": "sha256:test"
+            ]
+        )
+        let snapshot: SyncSnapshot = try await decodeCommand(
+            client: client,
+            command: "sync.snapshot",
+            payload: ["app_support_dir": appSupportDir]
+        )
+
+        XCTAssertEqual(trusted.trustedDevice.deviceId, peerDeviceID)
+        XCTAssertEqual(snapshot.lanTrust?.trustedDevices.first?.authCredentialId, authCredentialID)
+        XCTAssertEqual(snapshot.lanTrust?.trustedDevices.first?.publicKeyFingerprint, "sha256:test")
+        XCTAssertNil(snapshot.lanTrustError)
+    }
+
+    func testFallbackLanPairingTokenDoesNotPersistPairingCodeInSnapshot() async throws {
+        let client = FallbackRustBridgeClient()
+        let appSupportDir = "swift-lan-\(UUID().uuidString)"
+        let issued: SyncLanPairingTokenBridgeResult = try await decodeCommand(
+            client: client,
+            command: "sync.lan_trust.issue_pairing_token",
+            payload: [
+                "app_support_dir": appSupportDir,
+                "issuer_display_name": "iOS Field Phone",
+                "approved_by_operator": true
+            ]
+        )
+        let request = try JSONSerialization.data(withJSONObject: [
+            "command": "sync.lan_trust.snapshot",
+            "correlation_id": UUID().uuidString,
+            "payload": ["app_support_dir": appSupportDir]
+        ])
+        let snapshotData = try await client.callJSON(request)
+        let snapshotJSON = String(decoding: snapshotData, as: UTF8.self)
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        let envelope = try decoder.decode(RustBridgeEnvelope<SyncLanTrustBridgeResult>.self, from: snapshotData)
+        let snapshot = try XCTUnwrap(envelope.data)
+
+        XCTAssertFalse(issued.pairing.pairingCode.isEmpty)
+        XCTAssertEqual(snapshot.lanTrust.pairingTokens.first?.tokenId, issued.pairing.tokenId)
+        XCTAssertFalse(snapshotJSON.contains(issued.pairing.pairingCode))
+    }
+
+    @MainActor
+    func testLanTrustBridgeMethodsUpdateSyncSnapshot() async throws {
+        let store = RustBridgeStore(client: FallbackRustBridgeClient())
+        let peerDeviceID = UUID().uuidString
+        let authCredentialID = UUID().uuidString
+        let rotatedCredentialID = UUID().uuidString
+        let trusted = try await store.trustLanPeer(
+            peerDeviceId: peerDeviceID,
+            peerDisplayName: "Desktop LAN Peer",
+            authCredentialId: authCredentialID
+        )
+        let rotated = try await store.rotateLanAuthCredential(
+            deviceId: peerDeviceID,
+            newAuthCredentialId: rotatedCredentialID
+        )
+        let revoked = try await store.revokeLanPeer(deviceId: peerDeviceID)
+
+        XCTAssertEqual(trusted.trustedDevice.authCredentialId, authCredentialID)
+        XCTAssertEqual(rotated.rotation.previousAuthCredentialId, authCredentialID)
+        XCTAssertEqual(rotated.rotation.trustedDevice.authCredentialId, rotatedCredentialID)
+        XCTAssertEqual(revoked.trustedDevice.deviceId, peerDeviceID)
+        XCTAssertNotNil(store.sync.lanTrust?.trustedDevices.first(where: { $0.deviceId == peerDeviceID })?.revokedAt)
+    }
+
     func testSyncRetryPlanDecodesTransportableOfficialEvents() throws {
         let event = officialEventPayload()
         let envelope: [String: Any] = [

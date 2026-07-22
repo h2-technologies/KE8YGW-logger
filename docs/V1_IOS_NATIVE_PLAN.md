@@ -52,11 +52,15 @@ wrapper.
   `sync.remote_events.apply`, self-hosted/logbook-scoped and hosted pull request
   construction, native pull fetch -> Rust apply coordination, saved
   conflict-review records, selected recovery paths, and structured conflict
-  messages so the Sync workspace can ask Rust for no-network/user-action retry
-  decisions using native network state, apply pulled official envelopes through
-  shared verification, and surface open review actions. Full real endpoint
-  qualification, release-device scheduling, and broader reconciliation workflows
-  are not complete end-to-end on iOS.
+  messages, plus Rust-owned LAN trust snapshots, local one-time pairing-code
+  issue, direct peer trust, Keychain-backed LAN auth credential rotation, and
+  revocation controls. The Sync workspace can ask Rust for no-network/user-action
+  retry decisions using native network state, apply pulled official envelopes
+  through shared verification, surface open review actions, and manage LAN trust
+  without storing raw LAN auth secrets in Rust support state. Full real endpoint
+  qualification, production reciprocal pairing completion UX, release-device
+  scheduling, and broader reconciliation workflows are not complete end-to-end
+  on iOS.
 - MapKit surfaces exist, but cached/offline map regions and production map
   provider integration are not complete.
 - Keychain plumbing exists, but production provider credential setup and App
@@ -77,9 +81,10 @@ wrapper.
 - Complete offline queue and reconciliation behavior through shared Rust/API
   validation.
 - Finish real native sync endpoint qualification, full divergence review
-  decisions, corrective-event conflict handling, release-device BGTask
-  execution, hosted/self-hosted qualification for native push/pull paths, and
-  physical poor-network validation through the Rust bridge/API contract.
+  decisions, corrective-event conflict handling, production reciprocal LAN
+  pairing completion UX, release-device BGTask execution, hosted/self-hosted
+  qualification for native push/pull paths, and physical poor-network validation
+  through the Rust bridge/API contract.
 - Finish native ADIF import/restore, backup inspect/dry-run/apply, and
   diagnostic export flows without storing secrets.
 - Add cached/offline map region selection and validation against an approved
