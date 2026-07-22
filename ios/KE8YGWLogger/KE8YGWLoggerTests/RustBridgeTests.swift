@@ -1605,6 +1605,7 @@ private final class RetryExecutorRustBridgeClient: RustBridgeClient {
                 "rejected_count": 0,
                 "local_head_hash": NSNull(),
                 "remote_head_hash": remoteHeadHash,
+                "errors": [],
                 "message": events.isEmpty ? "Local and remote heads match" : "\(events.count) remote events applied"
             ]
         ]
