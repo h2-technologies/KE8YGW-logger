@@ -85,13 +85,15 @@ outside issue #2.
      refresh SwiftData QSO cache rows from the Rust `qso.list` projection after
      verified manual/background/LAN pull applies, and surface no-network/user-action
      retry and pull outcomes without owning event creation or domain rules.
-   - Remaining: Apple multicast entitlement/provisioning, release-device
+   - Remaining: Apple Developer account approval/provisioning for the declared
+     multicast entitlement, release-device
      cross-client branch review/reconciliation workflow qualification,
      physical-device LAN/iOS local-network validation, release-device iOS
      background task execution and poor-network qualification, release-device
      hosted/self-hosted native push/pull execution, and release-device hosted
      web/desktop/iOS/self-hosted migration/recovery qualification.
-   - Blockers: Apple multicast entitlement/provisioning, local network
+   - Blockers: Apple Developer multicast entitlement approval/provisioning,
+     local network
      permission behavior on iOS, physical test devices, and acceptance
      criteria for manual conflict resolution.
 
@@ -178,8 +180,9 @@ outside issue #2.
 
 ## Next Three Goals
 
-1. Finish sync/reconciliation hardening: Apple multicast
-   entitlement/provisioning, release-device cross-client branch
+1. Finish sync/reconciliation hardening: Apple Developer account
+   approval/provisioning for the declared multicast entitlement,
+   release-device cross-client branch
    review/reconciliation workflow qualification,
    physical-device LAN/iOS local-network validation, and iOS background task
    execution plus poor-network validation on release devices.

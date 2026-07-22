@@ -47,9 +47,16 @@ function Assert-PlistArrayContains($dictNode, $keyName, $expectedValue) {
     }
 }
 
+function Assert-PlistBooleanTrue($dictNode, $keyName, $fileName) {
+    $value = Get-PlistValue $dictNode $keyName
+    if ($null -eq $value -or $value.Name -ne 'true') {
+        Fail "$fileName must set $keyName to true."
+    }
+}
+
 function Get-TextFiles {
     git ls-files | Where-Object {
-        $_ -match '\.(md|yml|yaml|toml|rs|js|css|html|json|ps1)$' -or
+        $_ -match '\.(md|yml|yaml|toml|rs|js|css|html|json|plist|entitlements|ps1)$' -or
         $_ -in @('LICENSE', 'justfile', 'Dockerfile.sync-server')
     }
 }
@@ -182,6 +189,8 @@ foreach ($file in $trackedFiles) {
 
 $iosInfoPlistPath = 'ios/KE8YGWLogger/KE8YGWLogger/Resources/Info.plist'
 Assert-File $iosInfoPlistPath
+$iosEntitlementsPath = 'ios/KE8YGWLogger/KE8YGWLogger/KE8YGWLogger.entitlements'
+Assert-File $iosEntitlementsPath
 $iosRustBridgePath = 'ios/KE8YGWLogger/KE8YGWLogger/Shared/RustBridge/RustBridge.swift'
 Assert-File $iosRustBridgePath
 $iosRustBridgeSource = Get-Content -Raw $iosRustBridgePath
@@ -209,6 +218,25 @@ if ($null -eq $ats -or $ats.Name -ne 'dict') {
 $allowsLocalNetworking = Get-PlistValue $ats 'NSAllowsLocalNetworking'
 if ($null -eq $allowsLocalNetworking -or $allowsLocalNetworking.Name -ne 'true') {
     Fail 'Info.plist NSAppTransportSecurity must enable NSAllowsLocalNetworking for paired-device sync.'
+}
+
+[xml]$iosEntitlements = Get-Content -Raw $iosEntitlementsPath
+$iosEntitlementsDict = $iosEntitlements.plist.dict
+if ($null -eq $iosEntitlementsDict) {
+    Fail 'iOS entitlements must contain a top-level dict.'
+}
+Assert-PlistBooleanTrue $iosEntitlementsDict 'com.apple.developer.networking.multicast' $iosEntitlementsPath
+
+$iosProjectPath = 'ios/KE8YGWLogger/KE8YGWLogger.xcodeproj/project.pbxproj'
+Assert-File $iosProjectPath
+$iosProject = Get-Content -Raw $iosProjectPath
+$expectedEntitlementsSetting = 'CODE_SIGN_ENTITLEMENTS = KE8YGWLogger/KE8YGWLogger.entitlements;'
+$entitlementsReferences = [regex]::Matches(
+    $iosProject,
+    [regex]::Escape($expectedEntitlementsSetting)
+)
+if ($entitlementsReferences.Count -lt 2) {
+    Fail 'The iOS app Debug and Release configurations must reference KE8YGWLogger.entitlements.'
 }
 
 $markdownFiles = git ls-files '*.md'
