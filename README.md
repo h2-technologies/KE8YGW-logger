@@ -1124,9 +1124,9 @@ Cloud API surface:
 The hosted `ham-server` route for bearer/session clients is
 `POST /api/v1/sync/push`; the logbook-scoped routes above are the self-hosted
 sync-server compatibility surface used by sync-token clients.
-`ham-sync-server` route tests cover pairing, scoped logbook listing, durable
-canonical-event push, duplicate replay handling, missing-event pull, invalid
-tokens, and expired sync-token sessions.
+`ham-sync-server` route and loopback TCP wire tests cover pairing, scoped
+logbook listing, durable canonical-event push, duplicate replay handling,
+missing-event pull, invalid tokens, and expired sync-token sessions.
 
 Push behavior:
 

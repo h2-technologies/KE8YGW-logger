@@ -532,6 +532,56 @@ mod tests {
         response_json(&response)
     }
 
+    fn raw_json_http_request(
+        method: &str,
+        target: impl AsRef<str>,
+        body: impl Serialize,
+    ) -> Vec<u8> {
+        let body = serde_json::to_vec(&body).expect("test request should serialize");
+        let mut request = format!(
+            "{method} {} HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nAccept: application/json\r\nX-Request-Id: sync-wire-test\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            target.as_ref(),
+            body.len()
+        )
+        .into_bytes();
+        request.extend_from_slice(&body);
+        request
+    }
+
+    fn wire_round_trip(server: Arc<DurableCloudSyncServer>, request: Vec<u8>) -> Vec<u8> {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("test listener should bind");
+        let addr = listener
+            .local_addr()
+            .expect("test listener should have a local address");
+        let server_thread = server.clone();
+        let handle = std::thread::spawn(move || {
+            let runtime = tokio::runtime::Runtime::new().expect("test runtime should start");
+            let (stream, _) = listener.accept().expect("test request should connect");
+            handle_client(server_thread, &runtime, stream);
+        });
+
+        let mut client = TcpStream::connect(addr).expect("test client should connect");
+        client
+            .write_all(&request)
+            .expect("test client should write request");
+        client
+            .shutdown(std::net::Shutdown::Write)
+            .expect("test client should close request body");
+
+        let mut response = Vec::new();
+        client
+            .read_to_end(&mut response)
+            .expect("test client should read response");
+        handle.join().expect("test server thread should finish");
+        response
+    }
+
+    fn wire_json<T: DeserializeOwned>(server: Arc<DurableCloudSyncServer>, request: Vec<u8>) -> T {
+        let response = wire_round_trip(server, request);
+        assert_eq!(response_status(&response), 200);
+        response_json(&response)
+    }
+
     fn sample_qso_event(
         logbook_id: Uuid,
         previous_hash: Option<String>,
@@ -681,6 +731,69 @@ mod tests {
         assert_eq!(response_status(&bad_auth_response), 401);
         let error: ApiErrorBody = response_json(&bad_auth_response);
         assert_eq!(error.code, ApiErrorCode::InvalidToken.as_str());
+
+        let _ = std::fs::remove_dir_all(
+            paths
+                .metadata_store_path
+                .parent()
+                .expect("test paths should have a root"),
+        );
+    }
+
+    #[test]
+    fn self_hosted_wire_endpoint_pair_push_pull_round_trip() {
+        let paths = durable_paths("wire-round-trip");
+        let server = durable_server(CloudServerConfig::default(), &paths);
+        let logbook_id = Uuid::new_v4();
+        let device_id = Uuid::new_v4();
+
+        let pair: PairDeviceResponse = wire_json(
+            server.clone(),
+            raw_json_http_request(
+                "POST",
+                "/api/v1/auth/pair",
+                pair_request(logbook_id, device_id),
+            ),
+        );
+        assert!(pair.accepted);
+        let session = pair.session.expect("wire pairing should return a session");
+        let auth = CloudAuth {
+            sync_token: session.sync_token,
+        };
+
+        let event = sample_qso_event(logbook_id, None, device_id);
+        let push: CloudPushEventsResponse = wire_json(
+            server.clone(),
+            raw_json_http_request(
+                "POST",
+                format!("/api/v1/logbooks/{logbook_id}/push"),
+                CloudPushEventsRequest {
+                    auth: auth.clone(),
+                    logbook_id,
+                    events: vec![event.clone()],
+                },
+            ),
+        );
+        assert_eq!(push.status, ReplicationStatus::Pulled);
+        assert_eq!(push.accepted_count, 1);
+        assert_eq!(push.server_head_hash, Some(event.event_hash.clone()));
+
+        let pull: CloudPullEventsResponse = wire_json(
+            server,
+            raw_json_http_request(
+                "POST",
+                format!("/api/v1/logbooks/{logbook_id}/pull"),
+                json!({
+                    "auth": {
+                        "sync_token": auth.sync_token,
+                    },
+                    "logbook_id": logbook_id,
+                    "local_head_hash": null,
+                }),
+            ),
+        );
+        assert_eq!(pull.preview.status, ReplicationStatus::RemoteAhead);
+        assert_eq!(pull.events, vec![event]);
 
         let _ = std::fs::remove_dir_all(
             paths

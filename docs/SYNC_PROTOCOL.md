@@ -373,10 +373,10 @@ Current REST surface:
 The hosted `ham-server` API exposes bearer/session-scoped sync push as
 `POST /api/v1/sync/push`; the logbook-scoped routes above are the self-hosted
 sync-server compatibility surface used by sync-token clients.
-`ham-sync-server` route tests cover device pairing, scoped logbook listing,
-canonical official-event push, duplicate replay handling, pull of missing
-events, invalid-token rejection, and expired-token rejection against the durable
-self-hosted backend.
+`ham-sync-server` route and loopback TCP wire tests cover device pairing, scoped
+logbook listing, canonical official-event push, duplicate replay handling, pull
+of missing events, invalid-token rejection, and expired-token rejection against
+the durable self-hosted backend.
 
 Pull application uses the same Rust verification path for hosted, self-hosted,
 LAN, desktop, and iOS clients. `ham-sync::pull_missing_events` accepts either a
