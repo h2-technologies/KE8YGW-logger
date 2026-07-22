@@ -1020,8 +1020,11 @@ hosted/self-hosted server endpoint tests now cover the CI-safe wire surfaces;
 the iOS bundle also declares a permitted `BGProcessingTask` retry identifier
 and processing background mode. The app schedules that task only when Rust
 settings enable background sync, a valid sync URL and Keychain sync token are
-present, and the Rust queue snapshot reports pending work; the task handler
-delegates to the same Rust-plan -> Swift-transport -> Rust-result executor.
+present, and either the Rust queue snapshot reports pending work or Auto Pull
+is enabled; the task handler delegates to the same Rust-plan ->
+Swift-transport -> Rust-result executor and, after a clean push or no-ready
+push plan, can fetch missing remote events and hand them back to
+`sync.remote_events.apply`.
 Release-device BGTask execution, native endpoint qualification, poor-network,
 and local-network permission behavior remain v0.3/v1 qualification work.
 

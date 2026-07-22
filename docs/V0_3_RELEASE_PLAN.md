@@ -37,9 +37,11 @@ Last audited: 2026-07-22
 - Native iOS background retry registration for a permitted
   `BGProcessingTask` identifier, with bundle background-processing
   declarations and a scheduler eligibility policy that requires enabled Rust
-  settings, a valid sync URL, a Keychain sync token, and pending Rust queue
-  work before scheduling the same Rust-plan -> Swift-transport -> Rust-result
-  executor.
+  settings, a valid sync URL, a Keychain sync token, and either pending Rust
+  queue work or Auto Pull before scheduling the same Rust-plan ->
+  Swift-transport -> Rust-result executor. Background Auto Pull runs only after
+  a clean accepted push or no-ready-events push plan and applies fetched remote
+  events through `sync.remote_events.apply`.
 - Shared sync golden coverage proves a partial push can accept a valid prefix,
   stop the rejected tail as `user_action_required`, avoid local or cloud
   duplicates, and complete the reviewed tail by acknowledged event hash.

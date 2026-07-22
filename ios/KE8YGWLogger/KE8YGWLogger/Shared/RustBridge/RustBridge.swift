@@ -594,6 +594,47 @@ final class RustBridgeStore: ObservableObject {
         }
     }
 
+    func executeBackgroundSync<P: SyncPushTransporting, Q: SyncPullTransporting>(
+        serverURL: URL,
+        bearerToken: String? = nil,
+        syncToken: String? = nil,
+        pushEndpointStyle: SyncPushEndpointStyle = .logbookScoped,
+        pullEndpointStyle: SyncPullEndpointStyle = .logbookScoped,
+        autoPullEnabled: Bool,
+        maxMutations: Int = 25,
+        networkAvailable: Bool = true,
+        backgroundTimeBudgetSeconds: Int = 25,
+        pushTransport: P,
+        pullTransport: Q
+    ) async throws -> SyncBackgroundSyncExecutionResult {
+        let retryResult = try await executeOfflineRetryPush(
+            serverURL: serverURL,
+            bearerToken: bearerToken,
+            syncToken: syncToken,
+            endpointStyle: pushEndpointStyle,
+            maxMutations: maxMutations,
+            networkAvailable: networkAvailable,
+            backgroundTimeBudgetSeconds: backgroundTimeBudgetSeconds,
+            transport: pushTransport
+        )
+        guard autoPullEnabled,
+              !Task.isCancelled,
+              SyncBackgroundSyncExecutionResult.shouldAttemptPull(after: retryResult.status)
+        else {
+            return SyncBackgroundSyncExecutionResult(retryResult: retryResult, pullResult: nil)
+        }
+
+        let pullResult = try await executeRemotePull(
+            serverURL: serverURL,
+            bearerToken: bearerToken,
+            syncToken: syncToken,
+            endpointStyle: pullEndpointStyle,
+            networkAvailable: networkAvailable,
+            transport: pullTransport
+        )
+        return SyncBackgroundSyncExecutionResult(retryResult: retryResult, pullResult: pullResult)
+    }
+
     private func recordRetryResponse(
         plan: SyncRetryPlan,
         response: SyncPushResponse
@@ -3079,7 +3120,7 @@ enum SyncBackgroundRetrySkipReason: Equatable {
     case disabled
     case missingServerURL
     case missingSyncToken
-    case noPendingChanges
+    case noBackgroundWork
 }
 
 struct SyncBackgroundRetryScheduleDecision: Equatable {
@@ -3134,8 +3175,9 @@ struct SyncBackgroundRetryPolicy {
         guard hasSyncToken else {
             return .skip(.missingSyncToken)
         }
-        if let pendingChanges, pendingChanges <= 0 {
-            return .skip(.noPendingChanges)
+        let hasPendingChanges = pendingChanges.map { $0 > 0 } ?? true
+        guard hasPendingChanges || syncSettings.autoPullEnabled else {
+            return .skip(.noBackgroundWork)
         }
         return .schedule(earliestBeginDate: now.addingTimeInterval(minimumDelaySeconds))
     }
@@ -3157,6 +3199,25 @@ struct SyncBackgroundRetryRunResult {
     var taskCompleted: Bool
     var syncSettings: RustSyncSettings?
     var remainingPendingChanges: Int?
+}
+
+struct SyncBackgroundSyncExecutionResult {
+    var retryResult: SyncRetryExecutionResult
+    var pullResult: SyncPullExecutionResult?
+
+    var taskCompleted: Bool {
+        guard retryResult.status != .blockedByNetwork else {
+            return false
+        }
+        guard pullResult?.status != .blockedByNetwork else {
+            return false
+        }
+        return true
+    }
+
+    static func shouldAttemptPull(after status: SyncRetryExecutionStatus) -> Bool {
+        status == .accepted || status == .noReadyEvents
+    }
 }
 
 struct SyncRetryExecutionResult {

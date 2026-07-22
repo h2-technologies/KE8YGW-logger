@@ -187,10 +187,14 @@ deserialize instead of silently changing transport semantics.
 The native iOS bundle declares the permitted background retry task identifier
 and background processing mode. Swift schedules that `BGProcessingTask` only
 when Rust settings enable background sync, a valid sync server URL and Keychain
-sync token are present, and the Rust queue snapshot reports pending work. The
-task handler delegates to the same Rust-plan -> Swift-transport -> Rust-result
-executor and does not create official events or classify domain failures in
-Swift.
+sync token are present, and either the Rust queue snapshot reports pending work
+or Auto Pull is enabled. The task handler delegates to the same Rust-plan ->
+Swift-transport -> Rust-result executor; after a clean accepted push or a
+no-ready-events push plan, Auto Pull can fetch remote official envelopes through
+the configured endpoint style and pass them to `sync.remote_events.apply`. It
+does not create official events or classify domain failures in Swift, and it
+does not pull after auth, validation, divergence, missing-event, blocked,
+partial-failure, or transient push results.
 `cross_client_golden_partial_push_accepts_prefix_and_blocks_rejected_tail`
 proves the shared Rust cloud/queue path accepts the valid prefix, blocks the
 rejected tail as `user_action_required`, avoids local and cloud duplicates, and

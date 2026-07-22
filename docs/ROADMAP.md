@@ -128,7 +128,8 @@ wrapper is not the iOS client. See `V1_RELEASE_PLAN.md`,
      retry planning/result classification, and iOS LAN trust
      snapshot/issue/accept/trust/rotate/revoke bridge commands, reciprocal
      peer-URL pairing, multicast discovery peer selection, native iOS
-     background retry task registration/scheduling policy, and explicit native
+     background retry task registration/scheduling policy, background Auto Pull
+     sequencing through `sync.remote_events.apply`, and explicit native
      self-hosted versus hosted sync endpoint routing.
      Release-device cross-client branch review/reconciliation workflow
      qualification,

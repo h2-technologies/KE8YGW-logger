@@ -78,8 +78,10 @@ outside issue #2.
      `/api/sync/state` identity probing before listing peers, and trusted-peer
      identity probing before signed LAN reads, register and schedule a
      permitted iOS background retry task only when Rust settings, a valid sync
-     URL, a Keychain sync token, and pending Rust queue work make it eligible,
-     and surface no-network/user-action
+     URL, a Keychain sync token, and either pending Rust queue work or Auto
+     Pull make it eligible, run configured Auto Pull after a clean accepted
+     push or no-ready-events push plan through `sync.remote_events.apply`, and
+     surface no-network/user-action
      retry and pull outcomes without owning event creation or domain rules.
    - Remaining: Apple multicast entitlement/provisioning, release-device
      cross-client branch review/reconciliation workflow qualification,

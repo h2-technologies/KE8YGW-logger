@@ -1028,6 +1028,72 @@ final class RustBridgeTests: XCTestCase {
         XCTAssertEqual(transport.requests.first?.logbookId, logbookID)
     }
 
+    func testBackgroundSyncRunsConfiguredPullAfterCleanPushWhenAutoPullIsEnabled() async throws {
+        let logbookID = "00000000-0000-4000-8000-000000000001"
+        let localEvent = sampleOfficialEvent(logbookID: logbookID, eventHash: "event-hash-local")
+        let remoteEvent = sampleOfficialEvent(logbookID: logbookID, eventHash: "event-hash-remote", previousHash: "event-hash-local")
+        let operationID = UUID().uuidString
+        let client = try RetryExecutorRustBridgeClient(
+            retryPlanPayload: retryPlanPayload(operationIds: [operationID], events: [localEvent])
+        )
+        let pushTransport = StubSyncPushTransport(response: SyncPushResponse(
+            status: "pulled",
+            acceptedCount: 1,
+            ignoredDuplicateCount: 0,
+            rejectedCount: 0,
+            serverHeadHash: localEvent.eventHash,
+            errors: []
+        ))
+        let pullTransport = StubSyncPullTransport(response: pullResponse(logbookID: logbookID, events: [remoteEvent]))
+        let store = await RustBridgeStore(client: client)
+
+        let result = try await store.executeBackgroundSync(
+            serverURL: try XCTUnwrap(URL(string: "https://api.example.test")),
+            syncToken: "sync-secret",
+            pushEndpointStyle: SyncPushEndpointStyle(setting: "hosted_sync"),
+            pullEndpointStyle: SyncPullEndpointStyle(setting: "hosted_sync"),
+            autoPullEnabled: true,
+            pushTransport: pushTransport,
+            pullTransport: pullTransport
+        )
+
+        XCTAssertEqual(result.retryResult.status, .accepted)
+        XCTAssertEqual(result.pullResult?.status, .applied)
+        XCTAssertTrue(result.taskCompleted)
+        XCTAssertEqual(pushTransport.requests.first?.endpointStyle, .hostedSync)
+        XCTAssertEqual(pullTransport.requests.first?.endpointStyle, .hostedSync)
+        XCTAssertEqual(pullTransport.requests.first?.syncToken, "sync-secret")
+        XCTAssertEqual(client.remoteApplyPayloads.count, 1)
+        XCTAssertEqual(client.remoteApplyPayloads.first?["logbook_id"] as? String, logbookID)
+    }
+
+    func testBackgroundSyncSkipsPullAfterUserActionPushFailure() async throws {
+        let logbookID = UUID().uuidString
+        let event = sampleOfficialEvent(logbookID: logbookID, eventHash: "event-hash-auth")
+        let operationID = UUID().uuidString
+        let client = try RetryExecutorRustBridgeClient(
+            retryPlanPayload: retryPlanPayload(operationIds: [operationID], events: [event])
+        )
+        let pullTransport = StubSyncPullTransport(response: pullResponse(logbookID: logbookID, events: []))
+        let store = await RustBridgeStore(client: client)
+
+        let result = try await store.executeBackgroundSync(
+            serverURL: try XCTUnwrap(URL(string: "https://sync.example.test")),
+            syncToken: "sync-secret",
+            autoPullEnabled: true,
+            pushTransport: StubSyncPushTransport(error: SyncHTTPTransportError.serverRejected(
+                statusCode: 401,
+                message: "unauthorized"
+            )),
+            pullTransport: pullTransport
+        )
+
+        XCTAssertEqual(result.retryResult.status, .userActionRequired)
+        XCTAssertNil(result.pullResult)
+        XCTAssertTrue(pullTransport.requests.isEmpty)
+        XCTAssertEqual(client.retryResultPayloads.first?["result"] as? String, "auth_failed")
+    }
+
     func testSyncRetryExecutorRecordsAuthFailureWithoutLeakingToken() async throws {
         let logbookID = UUID().uuidString
         let event = sampleOfficialEvent(logbookID: logbookID, eventHash: "event-hash-auth")
@@ -1140,7 +1206,14 @@ final class RustBridgeTests: XCTestCase {
                 pendingChanges: 0,
                 hasSyncToken: true
             ).skipReason,
-            .noPendingChanges
+            .noBackgroundWork
+        )
+        XCTAssertTrue(
+            policy.decision(
+                syncSettings: backgroundSyncSettings(serverURL: "https://sync.example.test", enabled: true, autoPullEnabled: true),
+                pendingChanges: 0,
+                hasSyncToken: true
+            ).shouldSchedule
         )
     }
 
@@ -1402,14 +1475,14 @@ final class RustBridgeTests: XCTestCase {
         )
     }
 
-    private func backgroundSyncSettings(serverURL: String, enabled: Bool) -> RustSyncSettings {
+    private func backgroundSyncSettings(serverURL: String, enabled: Bool, autoPullEnabled: Bool = false) -> RustSyncSettings {
         RustSyncSettings(
             syncServerUrl: serverURL,
             deviceName: "KE8YGW Logger iOS",
             syncEndpointStyle: "logbook_scoped",
             preferLanSync: true,
             autoPushEnabled: true,
-            autoPullEnabled: false,
+            autoPullEnabled: autoPullEnabled,
             syncIntervalMinutes: 15,
             backgroundSyncEnabled: enabled,
             accountLabel: nil
@@ -1447,6 +1520,7 @@ private final class RetryExecutorRustBridgeClient: RustBridgeClient {
     let isLive = false
     private let retryPlanPayload: [String: Any]
     private(set) var retryResultPayloads: [[String: Any]] = []
+    private(set) var remoteApplyPayloads: [[String: Any]] = []
 
     init(retryPlanPayload: [String: Any]) throws {
         self.retryPlanPayload = retryPlanPayload
@@ -1472,6 +1546,11 @@ private final class RetryExecutorRustBridgeClient: RustBridgeClient {
         case "sync.offline_queue.retry_result":
             retryResultPayloads.append(payload)
             return try envelope(data: retryResultResponse(payload: payload), correlationID: correlationID)
+        case "sync.snapshot":
+            return try envelope(data: FallbackBridgeData.sync(), correlationID: correlationID)
+        case "sync.remote_events.apply":
+            remoteApplyPayloads.append(payload)
+            return try envelope(data: remoteApplyResponse(payload: payload), correlationID: correlationID)
         default:
             return try envelope(
                 ok: false,
@@ -1508,6 +1587,25 @@ private final class RetryExecutorRustBridgeClient: RustBridgeClient {
             ],
             "affected_mutations": mutations,
             "offline_queue": FallbackBridgeData.offlineQueue(mutations: mutations)
+        ]
+    }
+
+    private func remoteApplyResponse(payload: [String: Any]) -> [String: Any] {
+        let events = payload["events"] as? [[String: Any]] ?? []
+        let remoteHeadHash = events.last?["event_hash"] as? String ?? "remote-head"
+        return [
+            "sync": FallbackBridgeData.sync(),
+            "pull": [
+                "schema_version": 1,
+                "peer_id": payload["peer_id"] ?? "cloud",
+                "logbook_id": payload["logbook_id"] ?? retryPlanPayload["logbook_id"] ?? "",
+                "status": events.isEmpty ? "in_sync" : "pulled",
+                "accepted_count": events.count,
+                "rejected_count": 0,
+                "local_head_hash": NSNull(),
+                "remote_head_hash": remoteHeadHash,
+                "message": events.isEmpty ? "Local and remote heads match" : "\(events.count) remote events applied"
+            ]
         ]
     }
 

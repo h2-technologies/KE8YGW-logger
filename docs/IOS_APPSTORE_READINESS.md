@@ -34,9 +34,11 @@ sender address plus advertised API port, probe `/api/sync/state`, and list only
 peers whose probed device/session identity matches the packet.
 The bundle now declares the permitted background retry `BGProcessingTask`
 identifier and background processing mode. Scheduling is gated by Rust settings,
-a valid sync URL, a Keychain sync token, and pending Rust queue work, and the
-handler delegates to the existing Rust-plan -> Swift-transport -> Rust-result
-executor.
+a valid sync URL, a Keychain sync token, and either pending Rust queue work or
+Auto Pull. The handler delegates to the existing Rust-plan -> Swift-transport
+-> Rust-result executor and can run configured Auto Pull after a clean push or
+no-ready-events push plan, with pulled envelopes applied by
+`sync.remote_events.apply`.
 The Sync API setting is persisted through the Rust settings schema and routes
 native manual/background retry to either self-hosted logbook-scoped endpoints or
 hosted `/api/v1/sync/*` endpoints.
@@ -158,8 +160,9 @@ processing must remain tied to implemented native features and App Review copy.
   auth-failure user-action classification plus fallback conflict-review
   creation/decoding, selected recovery-path resolution, event-envelope decoding,
   hosted/self-hosted push request construction, accepted retry execution,
-  auth-failure result recording without token leakage, and partial-divergence
-  retry-result splitting.
+  background Auto Pull sequencing after clean pushes, pull suppression after
+  user-action push failures, auth-failure result recording without token
+  leakage, and partial-divergence retry-result splitting.
 - ADIF document import/export is tested with Files and share sheet flows.
 - Keychain values survive app restart and are cleared on sign-out.
 - Privacy manifest is included in the archive.

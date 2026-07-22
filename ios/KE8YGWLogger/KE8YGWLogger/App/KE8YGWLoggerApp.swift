@@ -119,16 +119,19 @@ final class SyncBackgroundRetryCoordinator {
                 )
             }
 
-            let result = try await bridge.executeOfflineRetryPush(
+            let result = try await bridge.executeBackgroundSync(
                 serverURL: serverURL,
                 syncToken: syncToken,
-                endpointStyle: SyncPushEndpointStyle(setting: syncSettings.syncEndpointStyle),
+                pushEndpointStyle: SyncPushEndpointStyle(setting: syncSettings.syncEndpointStyle),
+                pullEndpointStyle: SyncPullEndpointStyle(setting: syncSettings.syncEndpointStyle),
+                autoPullEnabled: syncSettings.autoPullEnabled,
                 maxMutations: SyncBackgroundRetryTask.maxMutations,
                 networkAvailable: true,
                 backgroundTimeBudgetSeconds: SyncBackgroundRetryTask.backgroundTimeBudgetSeconds,
-                transport: SyncHTTPTransport()
+                pushTransport: SyncHTTPTransport(),
+                pullTransport: SyncHTTPTransport()
             )
-            let taskCompleted = !Task.isCancelled && result.status != .blockedByNetwork
+            let taskCompleted = !Task.isCancelled && result.taskCompleted
             return SyncBackgroundRetryRunResult(
                 taskCompleted: taskCompleted,
                 syncSettings: syncSettings,
