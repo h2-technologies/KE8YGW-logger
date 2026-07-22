@@ -150,6 +150,10 @@ Last audited: 2026-07-22
 
 ## Still Incomplete For v1
 
+- The remaining epic #5 release-device checks are tracked in
+  [v0.3 Sync Qualification Runbook](V0_3_SYNC_QUALIFICATION.md). Keep #28-#31
+  open until that runbook has physical-device and endpoint evidence for each
+  applicable row.
 - Apple multicast entitlement/provisioning and full release-device iOS LAN
   discovery/pairing qualification. See
   [iOS Multicast Provisioning](IOS_MULTICAST_PROVISIONING.md) for the

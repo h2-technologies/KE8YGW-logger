@@ -292,5 +292,6 @@ entitlement/provisioning, release-device cross-client branch review and
 reconciliation workflow qualification, physical LAN/iOS local-network
 validation, release-device hosted/self-hosted native endpoint
 qualification, and release-device iOS background task and poor-network
-qualification. That goal unblocks unattended desktop/iOS operation, cached
+qualification. Use `docs/V0_3_SYNC_QUALIFICATION.md` as the evidence checklist
+for #28-#31. That goal unblocks unattended desktop/iOS operation, cached
 map/offline work, contesting, EmComm, and release qualification.

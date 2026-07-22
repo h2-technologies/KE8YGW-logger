@@ -23,6 +23,8 @@ passes should start with these documents:
   acceptance criteria, risks, and v1 delta.
 - [v0.3 Release Plan](docs/V0_3_RELEASE_PLAN.md): offline-sync queue/trust
   foundation, validation, and remaining v1 sync gaps.
+- [v0.3 Sync Qualification Runbook](docs/V0_3_SYNC_QUALIFICATION.md): physical
+  and endpoint evidence required before closing #28-#31.
 - [v1 Release Plan](docs/V1_RELEASE_PLAN.md): November 24, 2026 hosted web,
   native iOS, Windows/macOS/Linux desktop, shared core/API, sync, providers,
   contesting, EmComm, and release qualification scope.

@@ -152,6 +152,7 @@ Repository absences that matter:
 | `docs/plugins/*` and `docs/plugin-map-providers/*` | Provider and plugin-development guidance. |
 | `docs/maps`, `docs/grid-system`, `docs/propagation`, `docs/weather` | GIS, Maidenhead, propagation, and weather model guidance. |
 | `docs/*RELEASE*.md`, `docs/ROADMAP.md`, `docs/V*_PLAN.md`, `docs/IOS_APPSTORE_READINESS.md` | Release sequencing and gap tracking. |
+| `docs/V0_3_SYNC_QUALIFICATION.md` | Release-device and endpoint evidence checklist for closing sync issues #28-#31. |
 
 ## 5. Core Architectural Invariants
 
