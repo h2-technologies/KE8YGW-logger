@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 #if os(iOS)
@@ -395,6 +396,102 @@ final class RustBridgeStore: ObservableObject {
             acceptedCount: applyResult.pull.acceptedCount,
             rejectedCount: applyResult.pull.rejectedCount
         )
+    }
+
+    func executeLanPull<T: SyncLanPullTransporting>(
+        peerURL: URL,
+        trustedDevice: SyncTrustedPeerDevice,
+        authSecret: String,
+        logbookId requestedLogbookId: String? = nil,
+        networkAvailable: Bool = true,
+        transport: T
+    ) async throws -> SyncPullExecutionResult {
+        guard networkAvailable else {
+            return SyncPullExecutionResult(
+                pullResponse: nil,
+                applyResult: nil,
+                status: .blockedByNetwork,
+                acceptedCount: 0,
+                rejectedCount: 0
+            )
+        }
+        guard trustedDevice.revokedAt == nil else {
+            throw SyncLanHTTPTransportError.revokedTrustedPeer
+        }
+        guard trustedDevice.deviceId?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else {
+            throw SyncLanHTTPTransportError.untrustedPeer
+        }
+        guard trustedDevice.authCredentialId?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false,
+              !authSecret.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else {
+            throw SyncLanHTTPTransportError.missingLanAuthCredential
+        }
+
+        let supportURL = try RustBridgePaths.applicationSupportDirectory()
+        let snapshot = try await command("sync.snapshot", payload: AppSupportBridgeRequest(appSupportDir: supportURL.path), as: SyncSnapshot.self)
+        sync = snapshot
+        guard let identity = snapshot.identity else {
+            throw SyncLanHTTPTransportError.missingLocalIdentity
+        }
+        let logbookId = [requestedLogbookId, snapshot.logbookId]
+            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .first { !$0.isEmpty } ?? SyncDefaults.defaultLogbookId
+        if let allowedLogbooks = trustedDevice.logbookIds,
+           !allowedLogbooks.isEmpty,
+           !allowedLogbooks.contains(where: { sameUUID($0, logbookId) }) {
+            throw SyncLanHTTPTransportError.untrustedPeer
+        }
+
+        let pullResponse = try await transport.pull(
+            peerURL: peerURL,
+            localIdentity: identity,
+            trustedDevice: trustedDevice,
+            authSecret: authSecret,
+            logbookId: logbookId,
+            localHeadHash: snapshot.localHeadHash
+        )
+        guard !pullResponse.events.isEmpty else {
+            let previewStatus = pullResponse.preview.status.lowercased()
+            let status: SyncPullExecutionStatus
+            if previewStatus == "diverged" {
+                status = .diverged
+            } else if previewStatus == "rejected" {
+                status = .rejected
+            } else {
+                status = .noRemoteEvents
+            }
+            return SyncPullExecutionResult(
+                pullResponse: pullResponse,
+                applyResult: nil,
+                status: status,
+                acceptedCount: 0,
+                rejectedCount: 0
+            )
+        }
+
+        let peerId = trustedDevice.deviceId ?? pullResponse.preview.peerId
+        let applyResult = try await applyRemoteEvents(
+            logbookId: logbookId,
+            peerId: peerId,
+            events: pullResponse.events
+        )
+        let status = SyncPullExecutionStatus(status: applyResult.pull.status)
+        return SyncPullExecutionResult(
+            pullResponse: pullResponse,
+            applyResult: applyResult,
+            status: status,
+            acceptedCount: applyResult.pull.acceptedCount,
+            rejectedCount: applyResult.pull.rejectedCount
+        )
+    }
+
+    private func sameUUID(_ left: String, _ right: String) -> Bool {
+        guard let left = UUID(uuidString: left),
+              let right = UUID(uuidString: right)
+        else {
+            return false
+        }
+        return left.uuidString.lowercased() == right.uuidString.lowercased()
     }
 
     func executeOfflineRetryPush<T: SyncPushTransporting>(
@@ -2760,6 +2857,30 @@ struct SyncEventMetadata: Decodable, Equatable {
     var schemaVersion: Int
 }
 
+extension SyncEventMetadata {
+    init(event: SyncOfficialEvent) {
+        self.eventId = event.eventId
+        self.logbookId = event.logbookId
+        self.entityId = event.entityId
+        self.previousHash = event.previousHash
+        self.eventHash = event.eventHash
+        self.timestamp = event.timestamp
+        self.eventType = event.eventType
+        self.schemaVersion = event.schemaVersion
+    }
+}
+
+struct SyncLogbookHeadSummary: Decodable, Equatable {
+    var logbookId: String
+    var headHash: String?
+    var eventCount: Int?
+}
+
+struct SyncLanEventRangeResponse: Decodable, Equatable {
+    var logbookId: String
+    var events: [SyncOfficialEvent]
+}
+
 enum SyncPushEndpointStyle: Equatable {
     case logbookScoped
     case hostedSync
@@ -2805,6 +2926,17 @@ protocol SyncPullTransporting {
         bearerToken: String?,
         syncToken: String?,
         endpointStyle: SyncPullEndpointStyle,
+        logbookId: String,
+        localHeadHash: String?
+    ) async throws -> SyncPullResponse
+}
+
+protocol SyncLanPullTransporting {
+    func pull(
+        peerURL: URL,
+        localIdentity: SyncPeerIdentity,
+        trustedDevice: SyncTrustedPeerDevice,
+        authSecret: String,
         logbookId: String,
         localHeadHash: String?
     ) async throws -> SyncPullResponse
@@ -2879,6 +3011,315 @@ enum SyncHTTPTransportError: LocalizedError, Equatable {
         case .serverRejected(let statusCode, let message):
             return "The sync server rejected the push with HTTP \(statusCode): \(message)"
         }
+    }
+}
+
+enum SyncLanHTTPTransportError: LocalizedError, Equatable {
+    case invalidPeerURL
+    case invalidLocalIdentity
+    case invalidLogbookID
+    case invalidReplayNonce
+    case missingLocalIdentity
+    case untrustedPeer
+    case revokedTrustedPeer
+    case missingLanAuthCredential
+    case invalidPeerPayload
+    case invalidHTTPResponse
+    case peerRejected(statusCode: Int, message: String)
+
+    var errorDescription: String? {
+        switch self {
+        case .invalidPeerURL:
+            return "The LAN peer URL is invalid."
+        case .invalidLocalIdentity:
+            return "The local LAN sync identity is invalid."
+        case .invalidLogbookID:
+            return "The LAN sync logbook ID is invalid."
+        case .invalidReplayNonce:
+            return "The LAN sync replay nonce is invalid."
+        case .missingLocalIdentity:
+            return "The local LAN sync identity is unavailable."
+        case .untrustedPeer:
+            return "Select a trusted LAN peer for this logbook before pulling."
+        case .revokedTrustedPeer:
+            return "The selected LAN peer has been revoked."
+        case .missingLanAuthCredential:
+            return "The selected LAN peer is missing its endpoint auth credential."
+        case .invalidPeerPayload:
+            return "The LAN peer returned an invalid sync payload."
+        case .invalidHTTPResponse:
+            return "The LAN peer returned an invalid HTTP response."
+        case .peerRejected(let statusCode, let message):
+            return "The LAN peer rejected the pull with HTTP \(statusCode): \(message)"
+        }
+    }
+}
+
+private let syncLanAuthSignatureVersion = "hmac-sha256-v1"
+private let syncLanDeviceIDHeader = "x-ke8ygw-lan-device-id"
+private let syncLanReplayNonceHeader = "x-ke8ygw-lan-replay-nonce"
+private let syncLanSignatureVersionHeader = "x-ke8ygw-lan-signature-version"
+private let syncLanSignatureHeader = "x-ke8ygw-lan-signature"
+
+struct SyncLanHTTPTransport: SyncLanPullTransporting {
+    func makeHeadRequest(
+        peerURL: URL,
+        localDeviceId: String,
+        logbookId: String,
+        authSecret: String,
+        replayNonce: String = UUID().uuidString
+    ) throws -> URLRequest {
+        let canonicalLogbookId = try canonicalUUIDString(logbookId, error: .invalidLogbookID)
+        return try makeSignedGetRequest(
+            peerURL: peerURL,
+            path: "/api/sync/get-head",
+            queryItems: [URLQueryItem(name: "logbook_id", value: canonicalLogbookId)],
+            localDeviceId: localDeviceId,
+            logbookId: logbookId,
+            authSecret: authSecret,
+            replayNonce: replayNonce
+        )
+    }
+
+    func makeEventsSinceRequest(
+        peerURL: URL,
+        localDeviceId: String,
+        logbookId: String,
+        localHeadHash: String?,
+        authSecret: String,
+        replayNonce: String = UUID().uuidString
+    ) throws -> URLRequest {
+        let canonicalLogbookId = try canonicalUUIDString(logbookId, error: .invalidLogbookID)
+        var queryItems = [URLQueryItem(name: "logbook_id", value: canonicalLogbookId)]
+        if let localHeadHash = localHeadHash?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !localHeadHash.isEmpty {
+            queryItems.append(URLQueryItem(name: "after_hash", value: localHeadHash))
+        }
+        return try makeSignedGetRequest(
+            peerURL: peerURL,
+            path: "/api/sync/events-since",
+            queryItems: queryItems,
+            localDeviceId: localDeviceId,
+            logbookId: logbookId,
+            authSecret: authSecret,
+            replayNonce: replayNonce
+        )
+    }
+
+    func makeSignedGetRequest(
+        peerURL: URL,
+        path: String,
+        queryItems: [URLQueryItem],
+        localDeviceId: String,
+        logbookId: String,
+        authSecret: String,
+        replayNonce: String = UUID().uuidString
+    ) throws -> URLRequest {
+        let canonicalDeviceId = try canonicalUUIDString(localDeviceId, error: .invalidLocalIdentity)
+        let canonicalLogbookId = try canonicalUUIDString(logbookId, error: .invalidLogbookID)
+        let trimmedSecret = authSecret.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedSecret.isEmpty else {
+            throw SyncLanHTTPTransportError.missingLanAuthCredential
+        }
+        let trimmedReplayNonce = replayNonce.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedReplayNonce.isEmpty && trimmedReplayNonce.count <= 128 else {
+            throw SyncLanHTTPTransportError.invalidReplayNonce
+        }
+        guard var components = URLComponents(url: peerURL, resolvingAgainstBaseURL: false),
+              let scheme = components.scheme?.lowercased(),
+              (scheme == "http" || scheme == "https"),
+              components.host != nil,
+              components.query == nil,
+              components.fragment == nil
+        else {
+            throw SyncLanHTTPTransportError.invalidPeerURL
+        }
+        let basePath = components.percentEncodedPath.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        guard basePath.isEmpty else {
+            throw SyncLanHTTPTransportError.invalidPeerURL
+        }
+
+        components.path = path.hasPrefix("/") ? path : "/\(path)"
+        components.queryItems = queryItems
+        guard let url = components.url else {
+            throw SyncLanHTTPTransportError.invalidPeerURL
+        }
+
+        let target = components.percentEncodedPath
+            + (components.percentEncodedQuery.map { "?\($0)" } ?? "")
+        let signature = lanAuthSignature(
+            secret: trimmedSecret,
+            deviceId: canonicalDeviceId,
+            logbookId: canonicalLogbookId,
+            method: "GET",
+            target: target,
+            replayNonce: trimmedReplayNonce
+        )
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.timeoutInterval = 8
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.setValue(canonicalDeviceId, forHTTPHeaderField: syncLanDeviceIDHeader)
+        request.setValue(trimmedReplayNonce, forHTTPHeaderField: syncLanReplayNonceHeader)
+        request.setValue(syncLanAuthSignatureVersion, forHTTPHeaderField: syncLanSignatureVersionHeader)
+        request.setValue(signature, forHTTPHeaderField: syncLanSignatureHeader)
+        return request
+    }
+
+    func pull(
+        peerURL: URL,
+        localIdentity: SyncPeerIdentity,
+        trustedDevice: SyncTrustedPeerDevice,
+        authSecret: String,
+        logbookId: String,
+        localHeadHash: String?
+    ) async throws -> SyncPullResponse {
+        let localDeviceId = localIdentity.deviceId
+        let headRequest = try makeHeadRequest(
+            peerURL: peerURL,
+            localDeviceId: localDeviceId,
+            logbookId: logbookId,
+            authSecret: authSecret
+        )
+        let remoteHead: SyncLogbookHeadSummary = try await fetchJSON(headRequest)
+        guard equivalentUUID(remoteHead.logbookId, logbookId) else {
+            throw SyncLanHTTPTransportError.invalidPeerPayload
+        }
+
+        let eventsRequest = try makeEventsSinceRequest(
+            peerURL: peerURL,
+            localDeviceId: localDeviceId,
+            logbookId: logbookId,
+            localHeadHash: localHeadHash,
+            authSecret: authSecret
+        )
+        let range: SyncLanEventRangeResponse = try await fetchJSON(eventsRequest)
+        guard equivalentUUID(range.logbookId, logbookId) else {
+            throw SyncLanHTTPTransportError.invalidPeerPayload
+        }
+        guard range.events.allSatisfy({ equivalentUUID($0.logbookId, logbookId) }) else {
+            throw SyncLanHTTPTransportError.invalidPeerPayload
+        }
+
+        let normalizedLocalHead = localHeadHash?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+        let remoteHeadHash = remoteHead.headHash ?? range.events.last?.eventHash
+        let peerId = trustedDevice.deviceId?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty ?? "lan-peer"
+        let remoteEventCount = remoteHead.eventCount ?? range.events.count
+
+        if normalizedLocalHead == remoteHeadHash {
+            return SyncPullResponse(
+                preview: SyncPullPreview(
+                    peerId: peerId,
+                    logbookId: logbookId,
+                    status: "in_sync",
+                    localHeadHash: normalizedLocalHead,
+                    remoteHeadHash: remoteHeadHash,
+                    missingEventCount: 0,
+                    remoteEventCount: remoteEventCount,
+                    events: [],
+                    message: "Local and LAN peer heads match"
+                ),
+                events: []
+            )
+        }
+
+        guard batchCanFollowLocalHead(range.events, localHeadHash: normalizedLocalHead) else {
+            return SyncPullResponse(
+                preview: SyncPullPreview(
+                    peerId: peerId,
+                    logbookId: logbookId,
+                    status: "diverged",
+                    localHeadHash: normalizedLocalHead,
+                    remoteHeadHash: remoteHeadHash,
+                    missingEventCount: 0,
+                    remoteEventCount: remoteEventCount,
+                    events: [],
+                    message: "LAN peer history does not contain the local head"
+                ),
+                events: []
+            )
+        }
+
+        return SyncPullResponse(
+            preview: SyncPullPreview(
+                peerId: peerId,
+                logbookId: logbookId,
+                status: "remote_ahead",
+                localHeadHash: normalizedLocalHead,
+                remoteHeadHash: remoteHeadHash,
+                missingEventCount: range.events.count,
+                remoteEventCount: remoteEventCount,
+                events: range.events.map(SyncEventMetadata.init(event:)),
+                message: "\(range.events.count) LAN peer events are available to pull"
+            ),
+            events: range.events
+        )
+    }
+
+    private func fetchJSON<T: Decodable>(_ request: URLRequest) async throws -> T {
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw SyncLanHTTPTransportError.invalidHTTPResponse
+        }
+        guard (200..<300).contains(http.statusCode) else {
+            let message = String(data: data, encoding: .utf8) ?? "LAN sync pull failed"
+            throw SyncLanHTTPTransportError.peerRejected(statusCode: http.statusCode, message: message)
+        }
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        return try decoder.decode(T.self, from: data)
+    }
+
+    private func batchCanFollowLocalHead(_ events: [SyncOfficialEvent], localHeadHash: String?) -> Bool {
+        guard let first = events.first else {
+            return false
+        }
+        if let localHeadHash {
+            return first.previousHash == localHeadHash
+        }
+        return first.previousHash == nil
+    }
+
+    private func equivalentUUID(_ left: String, _ right: String) -> Bool {
+        guard let left = UUID(uuidString: left),
+              let right = UUID(uuidString: right)
+        else {
+            return false
+        }
+        return left.uuidString.lowercased() == right.uuidString.lowercased()
+    }
+
+    private func canonicalUUIDString(_ value: String, error: SyncLanHTTPTransportError) throws -> String {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let uuid = UUID(uuidString: trimmed) else {
+            throw error
+        }
+        return uuid.uuidString.lowercased()
+    }
+
+    private func lanAuthSignature(
+        secret: String,
+        deviceId: String,
+        logbookId: String,
+        method: String,
+        target: String,
+        replayNonce: String
+    ) -> String {
+        let message = [
+            syncLanAuthSignatureVersion,
+            deviceId,
+            logbookId,
+            method.uppercased(),
+            target,
+            replayNonce
+        ].joined(separator: "\n")
+        let key = SymmetricKey(data: Data(secret.utf8))
+        let authenticationCode = HMAC<SHA256>.authenticationCode(
+            for: Data(message.utf8),
+            using: key
+        )
+        return authenticationCode.map { String(format: "%02x", $0) }.joined()
     }
 }
 
@@ -3024,6 +3465,12 @@ struct SyncHTTPTransport: SyncPushTransporting, SyncPullTransporting {
         let decoder = JSONDecoder()
         decoder.keyDecodingStrategy = .convertFromSnakeCase
         return try decoder.decode(SyncPullResponse.self, from: data)
+    }
+}
+
+private extension String {
+    var nilIfEmpty: String? {
+        isEmpty ? nil : self
     }
 }
 

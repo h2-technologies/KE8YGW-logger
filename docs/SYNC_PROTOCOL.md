@@ -272,8 +272,12 @@ credentials, and revoke trust. The accept-pairing command requires an
 `auth_credential_id`; Swift creates the LAN auth secret in Keychain first and
 Rust persists only that credential ID. `sync.snapshot` returns the durable
 local identity, and issue-token uses that local device ID when the caller does
-not provide an issuer device ID. Pairing codes are returned only from the
-issue-token command and are not present in snapshots.
+not provide an issuer device ID. The native Swift LAN pull executor signs
+protected `get-head` and `events-since` requests for an operator-entered
+trusted peer URL with the Keychain-backed LAN auth secret, constructs the
+preview from the returned head/event range, and applies pulled official
+envelopes only through `sync.remote_events.apply`. Pairing codes are returned
+only from the issue-token command and are not present in snapshots.
 
 LAN `list-logbooks`, `get-head`, `events-since`, and `event-metadata` requests
 must include these headers:
@@ -316,9 +320,10 @@ reachability and reduce spoofing; official event writes remain local and
 trust-gated; protected LAN read endpoints require reciprocal trust state,
 fresh nonces, and HMAC-SHA256 request proof. The current LAN HTTP transport is
 still not encrypted and must not be exposed outside trusted local networks.
-Production iOS reciprocal LAN transport completion UX, stronger LAN key-exchange
-hardening, physical-device LAN validation, and physical iOS Local Network
-permission validation remain before unattended LAN sync is considered complete.
+Production iOS reciprocal pairing/address-discovery UX, stronger LAN
+key-exchange hardening, physical-device LAN validation, and physical iOS Local
+Network permission validation remain before unattended LAN sync is considered
+complete.
 
 ## Cloud Relay and Self-Hosted Sync
 
@@ -358,10 +363,12 @@ The current self-hosted server uses durable local storage by default: embedded S
 
 ## Deferred Work
 
-- Production iOS reciprocal LAN transport completion UX over the durable trust store.
+- Production iOS reciprocal LAN pairing/address-discovery UX over the durable
+  trust store.
 - Signed official events.
 - End-to-end encrypted relay.
-- Stronger LAN key-exchange hardening and production iOS reciprocal LAN transport completion UX.
+- Stronger LAN key-exchange hardening and production iOS reciprocal LAN
+  pairing/address-discovery UX.
 - Physical-device LAN and iOS Local Network permission prompt validation.
 - End-to-end cross-client branch review and reconciliation workflow beyond the
   current guided browser review surface and explicit corrective-event commands.

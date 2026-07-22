@@ -65,14 +65,14 @@ outside issue #2.
      `/api/v1/sync/push` request bodies, accepted-prefix/rejected-tail retry
      result recording, Rust-owned pulled-event apply through
      `sync.remote_events.apply`, self-hosted/logbook-scoped and hosted pull
-     request construction, native pull fetch -> Rust apply coordination, request
-     retry plans with native network monitor state, display saved conflict-review
+     request construction, native hosted/self-hosted and signed LAN pull
+     fetch -> Rust apply coordination, request retry plans with native network monitor state, display saved conflict-review
      records with recommended actions and structured conflict messages, expose
      Rust-owned LAN trust snapshots, local one-time code issue/acceptance,
      direct peer trust, Keychain-backed LAN auth rotation, and revocation, and surface
      no-network/user-action retry and pull outcomes without owning event
      creation or domain rules.
-   - Remaining: production iOS reciprocal LAN transport completion UX, stronger LAN
+   - Remaining: production iOS reciprocal LAN pairing/address-discovery UX, stronger LAN
      key-exchange hardening, end-to-end cross-client branch review/reconciliation workflow
      qualification, physical-device LAN/iOS local-network
      validation, release-device iOS background task and poor-network
@@ -166,8 +166,8 @@ outside issue #2.
 
 ## Next Three Goals
 
-1. Finish sync/reconciliation hardening: production iOS reciprocal pairing
-   completion UX, stronger LAN key-exchange hardening, end-to-end cross-client branch
+1. Finish sync/reconciliation hardening: production iOS reciprocal
+   pairing/address-discovery UX, stronger LAN key-exchange hardening, end-to-end cross-client branch
    review/reconciliation workflow qualification, physical-device LAN/iOS
    local-network validation, and iOS background task and poor-network
    validation on release devices.

@@ -856,8 +856,12 @@ LAN trust state stores credential IDs, not raw secrets.
 Native iOS uses the same Rust trust store through FFI for trust snapshots,
 local one-time code issue and acceptance, direct peer trust, Keychain-backed
 LAN auth credential rotation, and revocation. `sync.snapshot` also returns the
-durable local identity for Swift to decode. Pairing codes are only returned by
-the issue command and are not stored in trust snapshots.
+durable local identity for Swift to decode. The native Swift LAN pull executor
+signs protected peer `get-head` and `events-since` requests with the
+Keychain-backed auth secret, then applies pulled official envelopes through
+`sync.remote_events.apply` so Rust still verifies the chain before append.
+Pairing codes are only returned by the issue command and are not stored in trust
+snapshots.
 
 Runtime events include:
 
@@ -872,9 +876,9 @@ Runtime events include:
 Security limitations for MVP: peers are untrusted until they pass the durable
 LAN trust store, no destructive commands are accepted, automatic replication is
 disabled, protected LAN reads require HMAC-SHA256 request proof after pairing,
-and production iOS reciprocal LAN transport completion UX, stronger LAN key-exchange
-hardening, plus physical-device LAN/iOS Local Network validation remain TODOs before
-unattended LAN sync.
+and production iOS reciprocal LAN pairing/address-discovery UX, stronger LAN
+key-exchange hardening, plus physical-device LAN/iOS Local Network validation
+remain TODOs before unattended LAN sync.
 
 ## Safe LAN Event Replication
 
@@ -932,9 +936,9 @@ path, structured conflict messages, and review health, and the Sync workspace
 shows open review actions, peer IDs, and conflict details without owning merge
 rules. LAN auth credential rotation/recovery is available through the GUI trust
 endpoint. End-to-end cross-client branch review workflow qualification, signed
-events, production iOS reciprocal LAN transport completion UX, stronger LAN key-exchange
-hardening, and physical-device LAN/iOS local-network validation are still
-deferred.
+events, production iOS reciprocal LAN pairing/address-discovery UX, stronger
+LAN key-exchange hardening, and physical-device LAN/iOS local-network
+validation are still deferred.
 
 ## Durable Offline Queue And LAN Trust
 
@@ -1062,9 +1066,9 @@ LAN-reachable address such as
 `0.0.0.0:<port>` or a specific private interface; loopback-only peers can still
 use manual loopback URLs. Mutating LAN pull also requires the explicit
 `sync.lan.pull` permission, durable peer trust, and signed remote read requests.
-Production iOS reciprocal LAN transport completion UX, stronger LAN key-exchange
-hardening, and physical iOS Local Network permission validation remain next sync
-tasks.
+Production iOS reciprocal LAN pairing/address-discovery UX, stronger LAN
+key-exchange hardening, and physical iOS Local Network permission validation
+remain next sync tasks.
 
 ## Cloud Relay And Self-Hosted Sync
 

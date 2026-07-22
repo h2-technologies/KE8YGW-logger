@@ -453,6 +453,33 @@ final class RustBridgeTests: XCTestCase {
         XCTAssertFalse(bodyString.contains("secret-bearer"))
     }
 
+    func testSyncLanHTTPTransportBuildsSignedEventsSinceRequest() throws {
+        let logbookID = "00000000-0000-4000-8000-000000000001"
+        let localDeviceID = "00000000-0000-4000-8000-0000000000f1"
+        let request = try SyncLanHTTPTransport().makeEventsSinceRequest(
+            peerURL: try XCTUnwrap(URL(string: "http://192.168.1.20:17673")),
+            localDeviceId: localDeviceID.uppercased(),
+            logbookId: logbookID.uppercased(),
+            localHeadHash: "local-head",
+            authSecret: "lan-secret",
+            replayNonce: "nonce-fixed"
+        )
+
+        XCTAssertEqual(request.httpMethod, "GET")
+        XCTAssertEqual(
+            request.url?.absoluteString,
+            "http://192.168.1.20:17673/api/sync/events-since?logbook_id=\(logbookID)&after_hash=local-head"
+        )
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "application/json")
+        XCTAssertEqual(request.value(forHTTPHeaderField: "x-ke8ygw-lan-device-id"), localDeviceID)
+        XCTAssertEqual(request.value(forHTTPHeaderField: "x-ke8ygw-lan-replay-nonce"), "nonce-fixed")
+        XCTAssertEqual(request.value(forHTTPHeaderField: "x-ke8ygw-lan-signature-version"), "hmac-sha256-v1")
+        XCTAssertEqual(
+            request.value(forHTTPHeaderField: "x-ke8ygw-lan-signature"),
+            "d8539f894553c9b5dd6804d40d4ddc3a1c8545ce59d5c2cb14027cbc15df3f15"
+        )
+    }
+
     func testSyncHTTPTransportRejectsEmptyEventBatches() throws {
         XCTAssertThrowsError(
             try SyncHTTPTransport().makePushRequest(
@@ -499,6 +526,73 @@ final class RustBridgeTests: XCTestCase {
 
         XCTAssertEqual(result.status, .blockedByNetwork)
         XCTAssertTrue(transport.requests.isEmpty)
+    }
+
+    func testSyncLanPullExecutorFetchesAndAppliesRemoteEvents() async throws {
+        let logbookID = "00000000-0000-4000-8000-000000000001"
+        let event = sampleOfficialEvent(logbookID: logbookID, eventHash: "lan-remote-head")
+        let peerDeviceID = "00000000-0000-4000-8000-0000000000f3"
+        let transport = StubSyncLanPullTransport(response: pullResponse(logbookID: logbookID, events: [event]))
+        let store = await RustBridgeStore(client: FallbackRustBridgeClient())
+        let trustedDevice = SyncTrustedPeerDevice(
+            deviceId: peerDeviceID,
+            displayName: "Desktop LAN Peer",
+            logbookIds: [logbookID],
+            trustedAt: "2026-07-21T12:00:00Z",
+            revokedAt: nil,
+            pairingTokenId: nil,
+            publicKeyFingerprint: "sha256:desktop",
+            authCredentialId: "credential-id",
+            authRotatedAt: nil,
+            lastSeenAt: nil
+        )
+
+        let result = try await store.executeLanPull(
+            peerURL: try XCTUnwrap(URL(string: "http://192.168.1.20:17673")),
+            trustedDevice: trustedDevice,
+            authSecret: "lan-secret",
+            transport: transport
+        )
+
+        XCTAssertEqual(result.status, .applied)
+        XCTAssertEqual(result.acceptedCount, 1)
+        XCTAssertEqual(result.applyResult?.pull.peerId, peerDeviceID)
+        XCTAssertEqual(result.applyResult?.pull.remoteHeadHash, "lan-remote-head")
+        XCTAssertEqual(transport.requests.first?.localIdentity.deviceId, "00000000-0000-4000-8000-0000000000f1")
+        XCTAssertEqual(transport.requests.first?.trustedDevice.deviceId, peerDeviceID)
+        XCTAssertEqual(transport.requests.first?.authSecret, "lan-secret")
+    }
+
+    func testSyncLanPullExecutorRejectsRevokedPeerBeforeTransport() async throws {
+        let logbookID = "00000000-0000-4000-8000-000000000001"
+        let peerDeviceID = "00000000-0000-4000-8000-0000000000f3"
+        let transport = StubSyncLanPullTransport(response: pullResponse(logbookID: logbookID, events: []))
+        let store = await RustBridgeStore(client: FallbackRustBridgeClient())
+        let trustedDevice = SyncTrustedPeerDevice(
+            deviceId: peerDeviceID,
+            displayName: "Desktop LAN Peer",
+            logbookIds: [logbookID],
+            trustedAt: "2026-07-21T12:00:00Z",
+            revokedAt: "2026-07-21T12:05:00Z",
+            pairingTokenId: nil,
+            publicKeyFingerprint: nil,
+            authCredentialId: "credential-id",
+            authRotatedAt: nil,
+            lastSeenAt: nil
+        )
+
+        do {
+            _ = try await store.executeLanPull(
+                peerURL: try XCTUnwrap(URL(string: "http://192.168.1.20:17673")),
+                trustedDevice: trustedDevice,
+                authSecret: "lan-secret",
+                transport: transport
+            )
+            XCTFail("Expected revoked LAN peer to be rejected")
+        } catch {
+            XCTAssertEqual(error as? SyncLanHTTPTransportError, .revokedTrustedPeer)
+            XCTAssertTrue(transport.requests.isEmpty)
+        }
     }
 
     func testSyncRetryExecutorRecordsAcceptedPushResult() async throws {
@@ -1091,6 +1185,66 @@ private final class StubSyncPullTransport: SyncPullTransporting {
                 remoteEventCount: 0,
                 events: [],
                 message: "Local and remote heads match"
+            ),
+            events: []
+        )
+    }
+}
+
+private final class StubSyncLanPullTransport: SyncLanPullTransporting {
+    struct Request {
+        var peerURL: URL
+        var localIdentity: SyncPeerIdentity
+        var trustedDevice: SyncTrustedPeerDevice
+        var authSecret: String
+        var logbookId: String
+        var localHeadHash: String?
+    }
+
+    private let response: SyncPullResponse?
+    private let error: Error?
+    private(set) var requests: [Request] = []
+
+    init(response: SyncPullResponse) {
+        self.response = response
+        self.error = nil
+    }
+
+    init(error: Error) {
+        self.response = nil
+        self.error = error
+    }
+
+    func pull(
+        peerURL: URL,
+        localIdentity: SyncPeerIdentity,
+        trustedDevice: SyncTrustedPeerDevice,
+        authSecret: String,
+        logbookId: String,
+        localHeadHash: String?
+    ) async throws -> SyncPullResponse {
+        requests.append(Request(
+            peerURL: peerURL,
+            localIdentity: localIdentity,
+            trustedDevice: trustedDevice,
+            authSecret: authSecret,
+            logbookId: logbookId,
+            localHeadHash: localHeadHash
+        ))
+        if let error {
+            throw error
+        }
+        return response ?? SyncPullResponse(
+            preview: SyncPullPreview(
+                peerId: trustedDevice.deviceId ?? "lan-peer",
+                logbookId: logbookId,
+                status: "in_sync",
+                localHeadHash: localHeadHash,
+                remoteHeadHash: localHeadHash,
+                missingEventCount: 0,
+                remoteEventCount: 0,
+                events: [],
+                message: "Local and LAN peer heads match"
             ),
             events: []
         )

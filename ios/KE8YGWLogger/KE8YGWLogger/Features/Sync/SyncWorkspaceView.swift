@@ -14,6 +14,7 @@ struct SyncWorkspaceView: View {
     @State private var lanPairingCode = ""
     @State private var lanPairingFingerprint = ""
     @State private var lanSelectedDeviceId = ""
+    @State private var lanPeerURL = ""
     @State private var lanIssuedPairing: SyncIssuedPairingToken?
     private let credentialVault = KeychainCredentialVault()
 
@@ -151,6 +152,10 @@ struct SyncWorkspaceView: View {
                 TextField("Fingerprint", text: $lanPairingFingerprint)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
+                TextField("Peer URL", text: $lanPeerURL)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .keyboardType(.URL)
                 HStack {
                     Button("Issue Code") {
                         Task { await issueLanPairingToken() }
@@ -181,6 +186,10 @@ struct SyncWorkspaceView: View {
                 Button("Pull Missing") {
                     Task { await executePull() }
                 }
+                Button("Pull From LAN Peer") {
+                    Task { await executeLanPull() }
+                }
+                .disabled(selectedLanTrustedDevice() == nil)
                 Button("Retry Pending Uploads") {
                     Task { await executeRetryPush() }
                 }
@@ -430,6 +439,51 @@ struct SyncWorkspaceView: View {
         }
     }
 
+    private func executeLanPull() async {
+        guard let peerURL = lanPeerURLValue() else {
+            syncMessage = "Enter the trusted LAN peer URL, such as http://192.168.1.20:17673."
+            return
+        }
+        guard let trustedDevice = selectedLanTrustedDevice() else {
+            syncMessage = "Select a trusted LAN device before pulling."
+            return
+        }
+        guard let credentialId = trustedDevice.authCredentialId?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .nonEmpty
+        else {
+            syncMessage = "Selected LAN device is missing an auth credential."
+            return
+        }
+
+        let authSecret: String?
+        do {
+            authSecret = try credentialVault
+                .read(account: lanAuthAccount(credentialId), providerId: "lan_sync")?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        } catch {
+            syncMessage = "Unable to read LAN auth credential: \(error.localizedDescription)"
+            return
+        }
+        guard let authSecret, !authSecret.isEmpty else {
+            syncMessage = "Selected LAN device is missing an auth credential."
+            return
+        }
+
+        do {
+            let result = try await bridge.executeLanPull(
+                peerURL: peerURL,
+                trustedDevice: trustedDevice,
+                authSecret: authSecret,
+                networkAvailable: connectivity.state.hasUsableInternet,
+                transport: SyncLanHTTPTransport()
+            )
+            syncMessage = syncPullResultMessage(result)
+        } catch {
+            syncMessage = error.localizedDescription
+        }
+    }
+
     private func planRetry(markSending: Bool) async {
         do {
             let result = try await bridge.planOfflineRetry(
@@ -471,6 +525,28 @@ struct SyncWorkspaceView: View {
             return nil
         }
         return token
+    }
+
+    private func lanPeerURLValue() -> URL? {
+        let rawValue = lanPeerURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let url = URL(string: rawValue),
+              let scheme = url.scheme?.lowercased(),
+              (scheme == "http" || scheme == "https"),
+              url.host != nil
+        else {
+            return nil
+        }
+        return url
+    }
+
+    private func selectedLanTrustedDevice() -> SyncTrustedPeerDevice? {
+        let selected = lanSelectedDeviceId.trimmingCharacters(in: .whitespacesAndNewlines)
+        let devices = bridge.sync.lanTrust?.activeTrustedDevices ?? []
+        if UUID(uuidString: selected) != nil,
+           let device = devices.first(where: { $0.deviceId == selected }) {
+            return device
+        }
+        return devices.first
     }
 
     private func selectedLanDeviceId() -> String? {

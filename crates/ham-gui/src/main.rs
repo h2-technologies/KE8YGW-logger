@@ -7822,6 +7822,7 @@ fn start_demo_runtime_publisher(bridge: GuiRuntimeBridge) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ham_core::InsecureDevCredentialStore;
 
     fn test_root(prefix: &str) -> std::path::PathBuf {
         let root = std::env::temp_dir().join(format!("{prefix}-{}", uuid::Uuid::new_v4()));
@@ -7886,7 +7887,10 @@ mod tests {
             rig_config: Mutex::new(RigUiConfig::default()),
             station_store,
             station_book: Mutex::new(StationBook::default()),
-            credential_store: Mutex::new(default_credential_store(&support_dir, true)),
+            credential_store: Mutex::new(Box::new(
+                InsecureDevCredentialStore::open(support_dir.join("dev-credentials.json"), true)
+                    .unwrap(),
+            )),
             upload_queue: Mutex::new(default_upload_queue()),
             online_support: Mutex::new(OnlineSupportState::default()),
             last_report: Mutex::new(None),
