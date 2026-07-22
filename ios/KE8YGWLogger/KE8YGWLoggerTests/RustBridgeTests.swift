@@ -1601,6 +1601,7 @@ private final class RetryExecutorRustBridgeClient: RustBridgeClient {
                 "logbook_id": payload["logbook_id"] ?? retryPlanPayload["logbook_id"] ?? "",
                 "status": events.isEmpty ? "in_sync" : "pulled",
                 "accepted_count": events.count,
+                "ignored_duplicate_count": 0,
                 "rejected_count": 0,
                 "local_head_hash": NSNull(),
                 "remote_head_hash": remoteHeadHash,
