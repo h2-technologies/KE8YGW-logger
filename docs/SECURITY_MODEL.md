@@ -106,8 +106,10 @@ secret-free.
 
 Future work:
 
-- production iOS reciprocal LAN transport completion UX on top of the durable LAN trust store
-- stronger LAN key-exchange hardening
+- Apple multicast entitlement/provisioning and release-device iOS LAN
+  validation on top of the durable LAN trust store
+- formal asymmetric LAN key exchange beyond the current distinct endpoint-auth
+  code plus HMAC request-proof model
 - signed official events
 - end-to-end encrypted relay
 - organization-managed policies

@@ -113,7 +113,6 @@ Last audited: 2026-07-22
 
 - Apple multicast entitlement/provisioning and full release-device iOS LAN
   discovery/pairing qualification.
-- Stronger LAN key-exchange hardening.
 - Physical-device LAN and iOS Local Network permission prompt validation.
 - End-to-end cross-client branch review and reconciliation workflow beyond the
   current guided browser review surface, native saved-review display, and

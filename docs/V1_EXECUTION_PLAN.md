@@ -74,9 +74,8 @@ outside issue #2.
      `/api/sync/state` identity probing before listing peers, and trusted-peer
      identity probing before signed LAN reads, and surface no-network/user-action
      retry and pull outcomes without owning event creation or domain rules.
-   - Remaining: Apple multicast entitlement/provisioning, stronger LAN
-     key-exchange hardening, end-to-end cross-client branch
-     review/reconciliation workflow qualification, physical-device LAN/iOS
+   - Remaining: Apple multicast entitlement/provisioning, end-to-end
+     cross-client branch review/reconciliation workflow qualification, physical-device LAN/iOS
      local-network validation, release-device iOS background task and poor-network
      qualification, real hosted/self-hosted endpoint qualification for native
      push/pull execution, and real hosted web/desktop/iOS/self-hosted
@@ -169,8 +168,8 @@ outside issue #2.
 ## Next Three Goals
 
 1. Finish sync/reconciliation hardening: Apple multicast
-   entitlement/provisioning, stronger LAN key-exchange hardening, end-to-end
-   cross-client branch review/reconciliation workflow qualification,
+   entitlement/provisioning, end-to-end cross-client branch
+   review/reconciliation workflow qualification,
    physical-device LAN/iOS local-network validation, and iOS background task and
    poor-network validation on release devices.
 2. Complete production provider qualification and release-runner live validation

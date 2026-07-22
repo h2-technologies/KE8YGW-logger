@@ -40,10 +40,10 @@ wrapper is not the iOS client. See `V1_RELEASE_PLAN.md`,
      probing, plus guided browser LAN pairing/trust controls and GUI LAN auth
      credential rotation/recovery. Native iOS now has Rust-owned LAN trust
      snapshot/issue/accept/trust/rotate/revoke bridge commands with
-     Keychain-backed credential references. Production iOS reciprocal LAN
-     transport completion UX,
-     stronger LAN key-exchange hardening, and physical-device LAN/iOS
-     local-network validation remain high priority.
+     Keychain-backed credential references, reciprocal peer-URL pairing, and
+     multicast discovery peer selection. Apple multicast
+     entitlement/provisioning and physical-device LAN/iOS local-network
+     validation remain high priority.
 
 6. **Cloud/Self-Hosted Sync**
    - Sync server/client, pairing-token MVP auth, push/pull/preview via cloud, self-hosted config/Docker, GUI cloud settings, tests.
@@ -125,10 +125,9 @@ wrapper is not the iOS client. See `V1_RELEASE_PLAN.md`,
      endpoint authorization, GUI LAN auth credential rotation/recovery, desktop
      cloud reconnect auto-drain when auto-push is enabled, iOS FFI background
      retry planning/result classification, and iOS LAN trust
-     snapshot/issue/accept/trust/rotate/revoke bridge commands.
-     Production iOS reciprocal LAN transport completion UX, stronger LAN key-exchange
-     hardening, end-to-end cross-client branch review/reconciliation workflow
-     qualification,
+     snapshot/issue/accept/trust/rotate/revoke bridge commands, reciprocal
+     peer-URL pairing, and multicast discovery peer selection.
+     End-to-end cross-client branch review/reconciliation workflow qualification,
      physical-device LAN/iOS local-network validation, and release-device iOS
      background task/poor-network qualification remain planned.
 
@@ -138,9 +137,9 @@ The dependency-ordered v1 critical path is tracked in
 `V1_EXECUTION_PLAN.md`. The next high-impact work should minimize future
 rewrites:
 
-1. Finish the remaining sync/reconciliation hardening: production iOS reciprocal
-   pairing completion UX, stronger LAN key-exchange hardening,
-   end-to-end cross-client branch review/reconciliation workflow qualification,
+1. Finish the remaining sync/reconciliation hardening: Apple multicast
+   entitlement/provisioning, end-to-end cross-client branch
+   review/reconciliation workflow qualification,
    physical-device LAN/iOS local-network validation, and release-device iOS
    background task/poor-network qualification before unattended desktop/iOS
    operation.

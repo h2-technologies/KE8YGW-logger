@@ -246,10 +246,10 @@ pairing, generating replacement auth codes, rotating LAN auth, and revoking
 trusted peers. `pairing-complete` posts the operator-entered peer token and
 pairing code plus a browser-generated `auth_code` to the selected peer, stores
 that generated endpoint-auth code through `CredentialStore` on both sides, and
-records only the resulting credential IDs in durable trust state. New browser
-clients no longer use the one-time pairing code as the long-lived LAN endpoint
-auth secret; the `pairing-accept` endpoint still falls back to the pairing code
-only for compatibility with older clients that omit `auth_code`.
+records only the resulting credential IDs in durable trust state. The
+`pairing-accept` endpoint requires a distinct endpoint `auth_code` and rejects
+requests that omit it or try to reuse the one-time pairing code as the
+long-lived LAN endpoint auth secret.
 `/api/sync/lan/rotate-auth` lets an operator replace a trusted peer's LAN auth
 credential reference for the current logbook; the replacement secret is stored
 through `CredentialStore`, the trust record is updated only after the new
@@ -334,9 +334,8 @@ candidate peer URL from the sender address and advertised API port, probes
 `/api/sync/state`, lists only peers whose probed device/session identity matches
 the discovery packet, and lets the operator copy that discovered peer into the
 existing pairing/pull controls. Apple multicast entitlement/provisioning,
-stronger LAN key-exchange hardening, physical-device LAN validation, and
-physical iOS Local Network permission validation remain before unattended LAN
-sync is considered complete.
+physical-device LAN validation, and physical iOS Local Network permission
+validation remain before unattended LAN sync is considered complete.
 
 ## Cloud Relay and Self-Hosted Sync
 
@@ -380,8 +379,9 @@ The current self-hosted server uses durable local storage by default: embedded S
   native iOS LAN discovery over the durable trust store.
 - Signed official events.
 - End-to-end encrypted relay.
-- Stronger LAN key-exchange hardening and release-device iOS LAN discovery
-  validation.
+- Formal asymmetric LAN key exchange beyond the current distinct endpoint-auth
+  code plus HMAC request-proof model.
+- Release-device iOS LAN discovery validation.
 - Physical-device LAN and iOS Local Network permission prompt validation.
 - End-to-end cross-client branch review and reconciliation workflow beyond the
   current guided browser review surface and explicit corrective-event commands.

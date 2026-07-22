@@ -5332,10 +5332,13 @@ fn handle_lan_pairing_complete(state: &AppState, body: &[u8]) -> Vec<u8> {
     if pairing_code.is_empty() {
         return json_error(400, "pairing code is required");
     }
-    let auth_code = match lan_endpoint_auth_code(request.auth_code.as_deref(), &pairing_code) {
-        Ok(auth_code) => auth_code,
-        Err(error) => return json_response_with_status(400, &json!({"ok": false, "error": error})),
-    };
+    let auth_code =
+        match lan_endpoint_auth_code_or_generate(request.auth_code.as_deref(), &pairing_code) {
+            Ok(auth_code) => auth_code,
+            Err(error) => {
+                return json_response_with_status(400, &json!({"ok": false, "error": error}))
+            }
+        };
     let local_identity = local_sync_identity(state);
     let remote_accept = LanPairingAcceptRequest {
         token_id: request.token_id,
@@ -5524,16 +5527,38 @@ fn handle_lan_trust_revoke(state: &AppState, body: &[u8]) -> Vec<u8> {
 
 fn lan_endpoint_auth_code(
     provided_auth_code: Option<&str>,
-    fallback_pairing_code: &str,
+    pairing_code: &str,
 ) -> Result<String, String> {
-    let auth_code = match provided_auth_code {
-        Some(value) => value.trim(),
-        None => fallback_pairing_code.trim(),
-    };
-    if auth_code.is_empty() {
-        return Err("LAN auth code is required".to_owned());
+    let pairing_code = pairing_code.trim();
+    let auth_code = provided_auth_code
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "LAN endpoint auth code is required".to_owned())?;
+    if auth_code == pairing_code {
+        return Err("LAN endpoint auth code must be distinct from the pairing code".to_owned());
+    }
+    if auth_code.len() < 32 {
+        return Err("LAN auth code is too short for endpoint authentication".to_owned());
     }
     Ok(auth_code.to_owned())
+}
+
+fn lan_endpoint_auth_code_or_generate(
+    provided_auth_code: Option<&str>,
+    pairing_code: &str,
+) -> Result<String, String> {
+    match provided_auth_code {
+        Some(_) => lan_endpoint_auth_code(provided_auth_code, pairing_code),
+        None => Ok(generated_lan_endpoint_auth_code()),
+    }
+}
+
+fn generated_lan_endpoint_auth_code() -> String {
+    format!(
+        "{}{}",
+        uuid::Uuid::new_v4().simple(),
+        uuid::Uuid::new_v4().simple()
+    )
 }
 
 fn store_lan_auth_credential(
@@ -7909,6 +7934,14 @@ mod tests {
         serde_json::from_slice(http_response_body(&response).unwrap()).unwrap()
     }
 
+    fn response_json_any_status(response: Vec<u8>) -> Value {
+        let header_end = response
+            .windows(4)
+            .position(|window| window == b"\r\n\r\n")
+            .expect("test HTTP response should include headers");
+        serde_json::from_slice(&response[header_end + 4..]).unwrap()
+    }
+
     fn create_test_qso(state: &AppState, callsign: &str) -> Value {
         response_json(handle_qso_create(
             state,
@@ -8182,6 +8215,84 @@ mod tests {
             serde_json::to_string(&state.lan_trust_store.snapshot().unwrap()).unwrap();
         assert!(!snapshot_json.contains(&token.pairing_code));
         assert!(!snapshot_json.contains(&auth_code));
+    }
+
+    #[test]
+    fn lan_pairing_accept_rejects_missing_or_reused_endpoint_auth_code() {
+        let state = test_state("ke8ygw-ham-gui-lan-pairing-auth-code-required");
+        let issuer = local_sync_device_id(&state);
+        let peer_device_id = uuid::Uuid::new_v4();
+        let token = state
+            .lan_trust_store
+            .issue_pairing_token(
+                issuer,
+                state.logbook_id,
+                "Desktop LAN Peer",
+                true,
+                chrono::Utc::now(),
+            )
+            .unwrap();
+
+        let missing_response = response_json_any_status(handle_lan_pairing_accept(
+            &state,
+            serde_json::to_vec(&json!({
+                "token_id": token.token_id,
+                "pairing_code": token.pairing_code,
+                "peer_device_id": peer_device_id,
+                "peer_display_name": "iOS Field Phone",
+                "logbook_id": state.logbook_id
+            }))
+            .unwrap()
+            .as_slice(),
+        ));
+        assert_eq!(missing_response["ok"], false);
+        assert!(missing_response["error"]
+            .as_str()
+            .unwrap()
+            .contains("endpoint auth code is required"));
+
+        let reused_response = response_json_any_status(handle_lan_pairing_accept(
+            &state,
+            serde_json::to_vec(&json!({
+                "token_id": token.token_id,
+                "pairing_code": token.pairing_code,
+                "auth_code": token.pairing_code,
+                "peer_device_id": peer_device_id,
+                "peer_display_name": "iOS Field Phone",
+                "logbook_id": state.logbook_id
+            }))
+            .unwrap()
+            .as_slice(),
+        ));
+        assert_eq!(reused_response["ok"], false);
+        assert!(reused_response["error"]
+            .as_str()
+            .unwrap()
+            .contains("must be distinct"));
+
+        let short_response = response_json_any_status(handle_lan_pairing_accept(
+            &state,
+            serde_json::to_vec(&json!({
+                "token_id": token.token_id,
+                "pairing_code": token.pairing_code,
+                "auth_code": "short",
+                "peer_device_id": peer_device_id,
+                "peer_display_name": "iOS Field Phone",
+                "logbook_id": state.logbook_id
+            }))
+            .unwrap()
+            .as_slice(),
+        ));
+        assert_eq!(short_response["ok"], false);
+        assert!(short_response["error"]
+            .as_str()
+            .unwrap()
+            .contains("too short"));
+
+        let snapshot = state.lan_trust_store.snapshot().unwrap();
+        assert_eq!(snapshot.trusted_devices.len(), 0);
+        assert_eq!(snapshot.pairing_tokens.len(), 1);
+        assert!(snapshot.pairing_tokens[0].consumed_at.is_none());
     }
 
     #[test]
