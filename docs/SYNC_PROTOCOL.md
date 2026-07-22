@@ -373,6 +373,9 @@ Current REST surface:
 The hosted `ham-server` API exposes bearer/session-scoped sync push as
 `POST /api/v1/sync/push`; the logbook-scoped routes above are the self-hosted
 sync-server compatibility surface used by sync-token clients.
+`ham-server` binary loopback TCP wire tests cover hosted admin bootstrap,
+proposal-backed QSO creation, hosted sync pull, duplicate hosted sync push, and
+durable JSONL official-event storage without duplicate replay.
 `ham-sync-server` route and loopback TCP wire tests cover device pairing, scoped
 logbook listing, canonical official-event push, duplicate replay handling, pull
 of missing events, invalid-token rejection, and expired-token rejection against

@@ -81,8 +81,8 @@ outside issue #2.
    - Remaining: Apple multicast entitlement/provisioning, release-device
      cross-client branch review/reconciliation workflow qualification,
      physical-device LAN/iOS local-network validation, release-device iOS
-     background task and poor-network qualification, real hosted/self-hosted
-     endpoint qualification for native push/pull execution, and real hosted
+     background task and poor-network qualification, release-device
+     hosted/self-hosted native push/pull execution, and release-device hosted
      web/desktop/iOS/self-hosted migration/recovery qualification.
    - Blockers: Apple multicast entitlement/provisioning, local network
      permission behavior on iOS, physical test devices, and acceptance

@@ -1011,9 +1011,10 @@ so native pull transports can pass official event envelopes back through shared
 Rust hash-chain verification, including verified missing-tail responses that
 directly follow the actual local head. Swift now builds self-hosted
 logbook-scoped and hosted pull requests, fetches missing events through native
-transport, and immediately applies them through the Rust bridge. Real
-hosted/self-hosted endpoint qualification and release-device background
-behavior remain v0.3/v1 qualification work.
+transport, and immediately applies them through the Rust bridge. Automated
+hosted/self-hosted server endpoint tests now cover the CI-safe wire surfaces;
+release-device native transport, background, poor-network, and local-network
+permission behavior remain v0.3/v1 qualification work.
 
 LAN trust records are durable support state. Pairing tokens require explicit
 operator approval, expire quickly, are single use, and are stored only as
@@ -1124,6 +1125,9 @@ Cloud API surface:
 The hosted `ham-server` route for bearer/session clients is
 `POST /api/v1/sync/push`; the logbook-scoped routes above are the self-hosted
 sync-server compatibility surface used by sync-token clients.
+`ham-server` binary loopback TCP wire tests cover hosted admin bootstrap,
+proposal-backed QSO creation, hosted sync pull, duplicate hosted sync push, and
+durable JSONL official-event storage without duplicate replay.
 `ham-sync-server` route and loopback TCP wire tests cover pairing, scoped
 logbook listing, durable canonical-event push, duplicate replay handling,
 missing-event pull, invalid tokens, and expired sync-token sessions.

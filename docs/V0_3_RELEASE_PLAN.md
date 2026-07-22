@@ -65,6 +65,9 @@ Last audited: 2026-07-22
 - Self-hosted sync-server route and loopback TCP wire coverage for pairing,
   scoped logbook listing, durable canonical-event push, duplicate replay,
   missing-event pull, invalid tokens, and expired sync-token sessions.
+- Hosted ham-server binary loopback TCP wire coverage for admin bootstrap,
+  proposal-backed QSO creation, hosted sync pull, duplicate hosted sync push,
+  and durable JSONL official-event storage without duplicate replay.
 - Structured conflict reports for divergent previews, dependency-blocked queued
   mutations, unsupported remote schema versions, concurrent QSO corrections, and
   remote QSO tombstone/restore events that overlap local pending mutations.
@@ -134,9 +137,9 @@ Last audited: 2026-07-22
   native saved-review display, desktop/iOS review stores, and desktop/iOS
   corrective-event endpoints.
 - Release-device iOS background task execution, poor-network behavior, and
-  local-network permission validation, including real hosted/self-hosted
-  endpoint qualification for native push/pull transport execution.
-- Real hosted web/desktop/iOS/self-hosted end-to-end device qualification,
+  local-network permission validation, including release-device
+  hosted/self-hosted native push/pull transport execution.
+- Release-device hosted web/desktop/iOS/self-hosted end-to-end qualification,
   physical-device tests, and full migration matrix.
 
 ## Validation Targets
