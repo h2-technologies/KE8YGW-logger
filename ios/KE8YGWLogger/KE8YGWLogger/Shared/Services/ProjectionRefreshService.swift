@@ -2,6 +2,24 @@ import Foundation
 import SwiftData
 
 enum ProjectionRefreshService {
+    @MainActor
+    @discardableResult
+    static func refreshQSOProjection(
+        from bridge: RustBridgeStore,
+        modelContainer: ModelContainer,
+        logbookId: String? = nil
+    ) async throws -> Int {
+        let result = try await bridge.listQSOs(logbookId: logbookId, includeDeleted: true)
+        let modelContext = ModelContext(modelContainer)
+        let existing = try modelContext.fetch(FetchDescriptor<QSO>())
+        return try rebuildQSOProjection(
+            from: result.records,
+            existing: existing,
+            modelContext: modelContext,
+            syncStatus: "synced"
+        )
+    }
+
     static func upsertQSO(
         from record: RustQSORecord,
         event: RustOfficialEvent,
@@ -9,6 +27,63 @@ enum ProjectionRefreshService {
         existing qsos: [QSO],
         modelContext: ModelContext
     ) throws -> QSO {
+        let target = upsertQSORecord(
+            from: record,
+            eventID: event.eventId,
+            eventHash: event.eventHash,
+            operationID: operationID,
+            syncStatus: record.deleted ? "deleted" : "accepted_local",
+            existing: qsos,
+            modelContext: modelContext
+        )
+        try modelContext.save()
+        return target
+    }
+
+    @discardableResult
+    static func rebuildQSOProjection(
+        from records: [RustQSORecord],
+        existing qsos: [QSO],
+        modelContext: ModelContext,
+        syncStatus: String = "synced"
+    ) throws -> Int {
+        let recordIDs = Set(records.map(\.qsoId))
+        var refreshed = 0
+
+        for record in records {
+            _ = upsertQSORecord(
+                from: record,
+                eventID: nil,
+                eventHash: record.lastEventHash,
+                operationID: record.payload.clientOperationId,
+                syncStatus: record.deleted ? "deleted" : syncStatus,
+                existing: qsos,
+                modelContext: modelContext
+            )
+            refreshed += 1
+        }
+
+        for qso in qsos where qso.projectionSource == "rust" && !recordIDs.contains(qso.canonicalID) {
+            qso.isTombstoned = true
+            qso.syncStatus = "deleted"
+            qso.lastProjectionRefreshAt = Date()
+            qso.updatedAt = Date()
+            refreshed += 1
+        }
+
+        try modelContext.save()
+        return refreshed
+    }
+
+    private static func upsertQSORecord(
+        from record: RustQSORecord,
+        eventID: String?,
+        eventHash: String?,
+        operationID: String?,
+        syncStatus: String,
+        existing qsos: [QSO],
+        modelContext: ModelContext
+    ) -> QSO {
         let target = qsos.first {
             $0.canonicalID == record.qsoId || $0.id.uuidString.caseInsensitiveCompare(record.qsoId) == .orderedSame
         } ?? QSO(
@@ -28,7 +103,7 @@ enum ProjectionRefreshService {
         }
 
         target.canonicalID = record.qsoId
-        target.clientOperationID = operationID
+        target.clientOperationID = operationID ?? target.clientOperationID
         target.callsign = record.payload.contactedCallsign ?? target.callsign
         target.contactDate = parsedDate(record.payload.startedAt) ?? target.contactDate
         target.band = record.payload.band ?? target.band
@@ -55,10 +130,10 @@ enum ProjectionRefreshService {
         target.sotaReferences = record.payload.sotaReferences ?? target.sotaReferences
         target.notes = record.payload.notes ?? target.notes
         target.uploadStatus = "pending"
-        target.syncStatus = record.deleted ? "deleted" : "accepted_local"
-        target.rustEventID = event.eventId
+        target.syncStatus = syncStatus
+        target.rustEventID = eventID ?? target.rustEventID
         target.lastEventHash = record.lastEventHash
-        target.lastRustRevision = event.eventHash
+        target.lastRustRevision = eventHash ?? record.lastEventHash
         target.projectionVersion = record.schemaVersion ?? 1
         target.projectionSource = record.projectionSource ?? "rust"
         target.projectionSchemaVersion = record.schemaVersion ?? 1
@@ -66,7 +141,6 @@ enum ProjectionRefreshService {
         target.lastProjectionRefreshAt = Date()
         target.updatedAt = Date()
 
-        try modelContext.save()
         return target
     }
 

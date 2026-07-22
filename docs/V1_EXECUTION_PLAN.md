@@ -1,6 +1,6 @@
 # v1 Execution Plan
 
-Last audited: 2026-07-21
+Last audited: 2026-07-22
 
 This plan converts the remaining issue #2 scope into a dependency-ordered
 critical path for the November 24, 2026 v1 release. It does not add features
@@ -27,12 +27,73 @@ outside issue #2.
      URLs; infrastructure sizing; retention/monitoring; and deployment secrets.
 
 3. Offline-first sync and reconciliation
-   - Finish desktop/iOS offline operation, queued mutations, replay, safe
-     reconciliation, divergence review, and user-directed conflict handling.
-   - Add real LAN peer-to-peer HTTP transport and trust pairing while preserving
-     the existing verification rules.
-   - Blockers: local network permission behavior on iOS, trust-pairing UX, and
-     test devices for multi-device scenarios.
+   - Implemented foundation: durable versioned mutation queue, deterministic
+     per-logbook order, idempotency/dependency checks, retry/backoff state,
+     interrupted-send recovery, deterministic desktop restart/reconnect
+     queue-drain coverage, desktop cloud reconnect auto-drain when auto-push is
+     enabled, v0.2 absent/legacy queue migration, corrupt queue quarantine,
+     interrupted atomic-write promotion, desktop/iOS queue hooks for
+     implemented mutations, optional queued target-entity metadata, queue-aware
+     cloud push acknowledgments, structured conflict reports for divergent
+     heads, missing dependencies, unsupported schemas, concurrent QSO
+     corrections, and tombstone/restore overlaps, durable manual
+     conflict-review records, manual direct LAN HTTP preview/pull transport,
+     automatic IPv4/IPv6 multicast LAN discovery with reachable identity
+     probing, durable LAN trust records with single-use tokens, replay nonce
+     rejection, revocation, HMAC-SHA256 signed LAN read endpoint authorization,
+     GUI LAN auth credential rotation/recovery, and desktop/iOS
+     corrective-event commands that submit explicit proposals and resolve
+     reviews with generated official event hashes. The browser divergence screen
+     now exposes saved review selection, structured conflict summaries,
+     explicit recovery-path choices, and form-based corrective QSO note events
+     through the Rust desktop endpoints; the browser Sync panel exposes guided
+     LAN pairing/trust controls for local one-time codes, reciprocal pairing,
+     auth rotation, and trust revocation. Deterministic shared sync golden tests
+     cover desktop-style crash recovery, transient network retry, duplicate
+     replay, reordered delivery rejection, iOS-style pull/projection replay,
+     partial push accepted-prefix/rejected-tail queue recovery, revoked and
+     expired cloud-auth user-action recovery, clock-skewed timestamps ordered by
+     event hashes, divergent heads, concurrent correction and tombstone/restore
+     review, client-ready
+     conflict-report JSON portability across desktop and iOS review stores,
+     unsafe-resolution rejection, user-action queue marking, no-mutation
+     divergent pull rejection, v0.2 legacy queue migration, and LAN revocation.
+     The iOS FFI bridge also exposes bounded background retry planning and
+     result classification commands so Swift can use native transport while
+     Rust owns queue ordering, `sending` recovery, accepted-hash
+     acknowledgment, transient backoff, and user-action stops for auth,
+     validation, divergence, missing-event, and permanent failures. Native
+     Swift bridge methods and the iOS Sync workspace now decode Rust queue
+     health/mutations, Rust-planned official event envelopes,
+     self-hosted/logbook-scoped and hosted `/api/v1/sync/*` execution routing,
+     accepted-prefix/rejected-tail retry result recording, Rust-owned pulled-event apply through
+     `sync.remote_events.apply`, self-hosted/logbook-scoped and hosted pull
+     request construction, native hosted/self-hosted and peer-identity-gated
+     signed LAN pull fetch -> Rust apply coordination, request retry plans with native
+     network monitor state, display saved conflict-review
+     records with recommended actions and structured conflict messages, expose
+     Rust-owned LAN trust snapshots, local one-time code issue/acceptance,
+     reciprocal peer-URL pairing, direct peer trust, Keychain-backed LAN auth
+     rotation, revocation, multicast discovery peer selection with
+     `/api/sync/state` identity probing before listing peers, and trusted-peer
+     identity probing before signed LAN reads, register and schedule a
+     permitted iOS background retry task only when Rust settings, a valid sync
+     URL, a Keychain sync token, and either pending Rust queue work or Auto
+     Pull make it eligible, run configured Auto Pull after a clean accepted
+     push or no-ready-events push plan through `sync.remote_events.apply`
+     with simulator coverage for both trigger paths,
+     refresh SwiftData QSO cache rows from the Rust `qso.list` projection after
+     verified manual/background/LAN pull applies, and surface no-network/user-action
+     retry and pull outcomes without owning event creation or domain rules.
+   - Remaining: Apple multicast entitlement/provisioning, release-device
+     cross-client branch review/reconciliation workflow qualification,
+     physical-device LAN/iOS local-network validation, release-device iOS
+     background task execution and poor-network qualification, release-device
+     hosted/self-hosted native push/pull execution, and release-device hosted
+     web/desktop/iOS/self-hosted migration/recovery qualification.
+   - Blockers: Apple multicast entitlement/provisioning, local network
+     permission behavior on iOS, physical test devices, and acceptance
+     criteria for manual conflict resolution.
 
 4. Production provider qualification
    - Complete QRZ, QRZ Logbook, LoTW/TQSL, eQSL, Club Log, POTA, SOTAWatch, DX
@@ -117,8 +178,11 @@ outside issue #2.
 
 ## Next Three Goals
 
-1. Implement desktop/iOS sync and offline reconciliation, including LAN trust
-   pairing.
+1. Finish sync/reconciliation hardening: Apple multicast
+   entitlement/provisioning, release-device cross-client branch
+   review/reconciliation workflow qualification,
+   physical-device LAN/iOS local-network validation, and iOS background task
+   execution plus poor-network validation on release devices.
 2. Complete production provider qualification and release-runner live validation
    for the issue #2 provider set.
 3. Wire hosted web, desktop, and iOS UI flows to the implemented account,

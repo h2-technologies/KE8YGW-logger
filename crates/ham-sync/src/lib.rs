@@ -1,10 +1,14 @@
 //! Local-first LAN discovery and sync handshake primitives.
 
+pub mod offline;
+pub use offline::*;
+
 use std::{
     collections::{HashMap, HashSet},
+    io::ErrorKind,
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, UdpSocket},
     sync::Arc,
-    time::Duration,
+    time::{Duration, Instant},
 };
 #[cfg(feature = "surreal-storage")]
 use std::{fs, path::PathBuf, thread};
@@ -20,6 +24,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 #[cfg(feature = "surreal-storage")]
 use sha2::{Digest, Sha256};
+use socket2::{Domain, Protocol, SockAddr, Socket, Type};
 #[cfg(feature = "surreal-storage")]
 use surrealdb::{
     engine::{
@@ -38,6 +43,7 @@ use uuid::Uuid;
 
 pub const PROTOCOL_NAME: &str = "ke8ygw-logger-sync";
 pub const PROTOCOL_VERSION: u16 = 1;
+pub const DEFAULT_CLOUD_SYNC_SESSION_TTL_SECONDS: i64 = 2_592_000;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SyncConfig {
@@ -178,6 +184,10 @@ impl PeerRegistry {
             return PeerObservation::IgnoredSelf;
         }
 
+        let address = packet
+            .local_api_port
+            .map(|port| SocketAddr::new(address.ip(), port))
+            .unwrap_or(address);
         let peer_id = packet.peer_id();
         let now = Utc::now();
         match self.peers.get_mut(&peer_id) {
@@ -382,6 +392,7 @@ pub struct GetEventRangeRequest {
 pub struct EventMetadata {
     pub event_id: Uuid,
     pub logbook_id: Uuid,
+    pub entity_id: Option<Uuid>,
     pub previous_hash: Option<String>,
     pub event_hash: String,
     pub timestamp: DateTime<Utc>,
@@ -483,6 +494,7 @@ pub fn metadata_for_event(event: &CoreEventEnvelope) -> EventMetadata {
     EventMetadata {
         event_id: event.event_id,
         logbook_id: event.logbook_id,
+        entity_id: event.entity_id,
         previous_hash: event.previous_hash.clone(),
         event_hash: event.event_hash.clone(),
         timestamp: event.timestamp,
@@ -575,6 +587,11 @@ where
 
     let missing = match missing_events_after(&remote_events, local_head_hash.as_deref()) {
         MissingEvents::Events(events) => events,
+        MissingEvents::Diverged
+            if remote_events_are_missing_tail(&remote_events, local_head_hash.as_deref()) =>
+        {
+            remote_events.clone()
+        }
         MissingEvents::Diverged => {
             return PullEventsResponse {
                 peer_id: request.peer_id,
@@ -684,6 +701,16 @@ fn missing_events_after(
             .position(|event| event.event_hash == hash)
             .map(|index| MissingEvents::Events(remote_events[index + 1..].to_vec()))
             .unwrap_or(MissingEvents::Diverged),
+    }
+}
+
+fn remote_events_are_missing_tail(
+    remote_events: &[CoreEventEnvelope],
+    local_head_hash: Option<&str>,
+) -> bool {
+    match (local_head_hash, remote_events.first()) {
+        (Some(hash), Some(first)) => first.previous_hash.as_deref() == Some(hash),
+        _ => false,
     }
 }
 
@@ -820,6 +847,8 @@ pub struct CloudSession {
     pub sync_token: String,
     pub authorized_logbooks: Vec<Uuid>,
     pub issued_at: DateTime<Utc>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -949,6 +978,8 @@ pub struct CloudServerConfig {
     pub mode: CloudServiceMode,
     pub public_url: String,
     pub pairing_code: String,
+    /// `None` is accepted for legacy/local compatibility; production configs should use a bounded TTL.
+    pub sync_session_ttl_seconds: Option<i64>,
 }
 
 impl Default for CloudServerConfig {
@@ -957,8 +988,22 @@ impl Default for CloudServerConfig {
             mode: CloudServiceMode::SelfHosted,
             public_url: "http://127.0.0.1:9740".to_owned(),
             pairing_code: "local-dev-pairing-code".to_owned(),
+            sync_session_ttl_seconds: Some(DEFAULT_CLOUD_SYNC_SESSION_TTL_SECONDS),
         }
     }
+}
+
+fn cloud_session_expiry(
+    issued_at: DateTime<Utc>,
+    ttl_seconds: Option<i64>,
+) -> Option<DateTime<Utc>> {
+    ttl_seconds.and_then(|seconds| issued_at.checked_add_signed(chrono::Duration::seconds(seconds)))
+}
+
+fn cloud_session_is_expired(session: &CloudSession, now: DateTime<Utc>) -> bool {
+    session
+        .expires_at
+        .is_some_and(|expires_at| expires_at <= now)
 }
 
 #[derive(Debug, Default)]
@@ -1256,6 +1301,9 @@ impl SurrealCloudMetadataStore {
             else {
                 return Err(CloudSyncError::Unauthenticated);
             };
+            if cloud_session_is_expired(&session, Utc::now()) {
+                return Err(CloudSyncError::Unauthenticated);
+            }
             let devices = select_cloud_payloads::<CloudSession>(&client, "sync_devices").await?;
             let Some(device) = devices
                 .into_iter()
@@ -1712,6 +1760,7 @@ impl InMemoryCloudSyncServer {
         }
 
         let token = format!("sync-{}-{}", request.account_id, Uuid::new_v4());
+        let issued_at = Utc::now();
         let session = CloudSession {
             account_id: request.account_id,
             user_id: request.user_id,
@@ -1719,7 +1768,8 @@ impl InMemoryCloudSyncServer {
             device_name: request.device_name,
             sync_token: token.clone(),
             authorized_logbooks: request.requested_logbooks,
-            issued_at: Utc::now(),
+            issued_at,
+            expires_at: cloud_session_expiry(issued_at, self.config.sync_session_ttl_seconds),
         };
         let mut auth = self.auth.write().await;
         auth.account_logbooks
@@ -2013,13 +2063,18 @@ impl InMemoryCloudSyncServer {
     }
 
     async fn authorize(&self, auth: &CloudAuth) -> Result<CloudSession, CloudSyncError> {
-        self.auth
+        let session = self
+            .auth
             .read()
             .await
             .sessions_by_token
             .get(&auth.sync_token)
             .cloned()
-            .ok_or(CloudSyncError::Unauthenticated)
+            .ok_or(CloudSyncError::Unauthenticated)?;
+        if cloud_session_is_expired(&session, Utc::now()) {
+            return Err(CloudSyncError::Unauthenticated);
+        }
+        Ok(session)
     }
 
     async fn authorize_logbook(
@@ -2032,6 +2087,27 @@ impl InMemoryCloudSyncServer {
             return Err(CloudSyncError::UnauthorizedLogbook(logbook_id));
         }
         Ok(session)
+    }
+
+    pub async fn revoke_device(&self, device_id: Uuid) -> Result<(), CloudSyncError> {
+        let mut auth = self.auth.write().await;
+        auth.sessions_by_token
+            .retain(|_, session| session.device_id != device_id);
+        Ok(())
+    }
+
+    #[cfg(test)]
+    async fn expire_device_session(&self, device_id: Uuid) -> Result<(), CloudSyncError> {
+        let mut auth = self.auth.write().await;
+        let expires_at = Utc::now() - chrono::Duration::seconds(1);
+        for session in auth
+            .sessions_by_token
+            .values_mut()
+            .filter(|session| session.device_id == device_id)
+        {
+            session.expires_at = Some(expires_at);
+        }
+        Ok(())
     }
 }
 
@@ -2077,6 +2153,7 @@ impl DurableCloudSyncServer {
         }
 
         let token = format!("sync-{}-{}", request.account_id, Uuid::new_v4());
+        let issued_at = Utc::now();
         let session = CloudSession {
             account_id: request.account_id,
             user_id: request.user_id,
@@ -2084,7 +2161,8 @@ impl DurableCloudSyncServer {
             device_name: request.device_name,
             sync_token: token,
             authorized_logbooks: request.requested_logbooks,
-            issued_at: Utc::now(),
+            issued_at,
+            expires_at: cloud_session_expiry(issued_at, self.config.sync_session_ttl_seconds),
         };
         if let Err(error) = self.metadata.save_session(&session) {
             return PairDeviceResponse {
@@ -2518,6 +2596,12 @@ pub enum DiscoveryServiceError {
     Serde(#[from] serde_json::Error),
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DiscoveryObservation {
+    pub packet: DiscoveryPacket,
+    pub source: SocketAddr,
+}
+
 #[derive(Debug)]
 pub struct LanDiscoveryService {
     pub config: SyncConfig,
@@ -2536,7 +2620,7 @@ impl LanDiscoveryService {
             self.config.discovery_port,
         );
         let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0))?;
-        socket.set_multicast_loop_v4(false)?;
+        socket.set_multicast_loop_v4(true)?;
         socket.send_to(&bytes, ipv4)?;
 
         let ipv6 = SocketAddr::new(
@@ -2544,10 +2628,133 @@ impl LanDiscoveryService {
             self.config.discovery_port,
         );
         if let Ok(socket) = UdpSocket::bind((Ipv6Addr::UNSPECIFIED, 0)) {
+            let _ = socket.set_multicast_loop_v6(true);
             let _ = socket.send_to(&bytes, ipv6);
         }
         Ok(())
     }
+
+    pub fn discover_once(
+        &self,
+        listen_for: Duration,
+    ) -> Result<Vec<DiscoveryObservation>, DiscoveryServiceError> {
+        if !self.config.enable_lan_discovery {
+            return Ok(Vec::new());
+        }
+        let receivers = discovery_receiver_sockets(&self.config)?;
+        self.send_once()?;
+        receive_discovery_packets(&receivers, listen_for)
+    }
+}
+
+fn discovery_receiver_sockets(
+    config: &SyncConfig,
+) -> Result<Vec<UdpSocket>, DiscoveryServiceError> {
+    let mut sockets = Vec::new();
+    let mut last_error = None;
+
+    match bind_reusable_udp_socket(SocketAddr::new(
+        IpAddr::V4(Ipv4Addr::UNSPECIFIED),
+        config.discovery_port,
+    )) {
+        Ok(socket) => match socket
+            .join_multicast_v4(&config.ipv4_multicast_address, &Ipv4Addr::UNSPECIFIED)
+            .and_then(|()| socket.set_nonblocking(true))
+        {
+            Ok(()) => sockets.push(socket),
+            Err(error) => last_error = Some(error),
+        },
+        Err(error) => last_error = Some(error),
+    }
+
+    match bind_reusable_udp_socket(SocketAddr::new(
+        IpAddr::V6(Ipv6Addr::UNSPECIFIED),
+        config.discovery_port,
+    )) {
+        Ok(socket) => match socket
+            .join_multicast_v6(&config.ipv6_multicast_address, 0)
+            .and_then(|()| socket.set_nonblocking(true))
+        {
+            Ok(()) => sockets.push(socket),
+            Err(error) => last_error = Some(error),
+        },
+        Err(error) => last_error = Some(error),
+    }
+
+    if sockets.is_empty() {
+        return Err(DiscoveryServiceError::Io(last_error.unwrap_or_else(|| {
+            std::io::Error::new(
+                ErrorKind::AddrNotAvailable,
+                "no usable LAN discovery sockets",
+            )
+        })));
+    }
+
+    Ok(sockets)
+}
+
+fn bind_reusable_udp_socket(address: SocketAddr) -> std::io::Result<UdpSocket> {
+    let domain = if address.is_ipv4() {
+        Domain::IPV4
+    } else {
+        Domain::IPV6
+    };
+    let socket = Socket::new(domain, Type::DGRAM, Some(Protocol::UDP))?;
+    socket.set_reuse_address(true)?;
+    #[cfg(unix)]
+    socket.set_reuse_port(true)?;
+    if address.is_ipv6() {
+        socket.set_only_v6(true)?;
+    }
+    socket.bind(&SockAddr::from(address))?;
+    Ok(socket.into())
+}
+
+fn receive_discovery_packets(
+    sockets: &[UdpSocket],
+    listen_for: Duration,
+) -> Result<Vec<DiscoveryObservation>, DiscoveryServiceError> {
+    let deadline = Instant::now() + listen_for;
+    let mut observations = Vec::new();
+    let mut buf = [0_u8; 4096];
+
+    loop {
+        let mut made_progress = false;
+        for socket in sockets {
+            loop {
+                match socket.recv_from(&mut buf) {
+                    Ok((size, source)) => {
+                        made_progress = true;
+                        if let Some(observation) =
+                            discovery_observation_from_datagram(&buf[..size], source)
+                        {
+                            observations.push(observation);
+                        }
+                    }
+                    Err(error) if error.kind() == ErrorKind::WouldBlock => break,
+                    Err(error) if error.kind() == ErrorKind::TimedOut => break,
+                    Err(error) => return Err(DiscoveryServiceError::Io(error)),
+                }
+            }
+        }
+        if Instant::now() >= deadline {
+            break;
+        }
+        if !made_progress {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    Ok(observations)
+}
+
+fn discovery_observation_from_datagram(
+    bytes: &[u8],
+    source: SocketAddr,
+) -> Option<DiscoveryObservation> {
+    serde_json::from_slice::<DiscoveryPacket>(bytes)
+        .ok()
+        .map(|packet| DiscoveryObservation { packet, source })
 }
 
 #[cfg(test)]
@@ -2556,6 +2763,11 @@ mod tests {
     use ham_core::{CoreEventEnvelope, InMemoryLogbookEventStore, NewLogbookEvent};
     use serde_json::json;
 
+    const EVENT_QSO_CREATED: &str = "official.log.qso.created";
+    const EVENT_QSO_CORRECTED: &str = "official.log.qso.corrected";
+    const EVENT_QSO_DELETED: &str = "official.log.qso.deleted";
+    const EVENT_QSO_RESTORED: &str = "official.log.qso.restored";
+
     fn local() -> LocalPeerIdentity {
         LocalPeerIdentity::new("Local", Some(9738))
     }
@@ -2563,7 +2775,7 @@ mod tests {
     fn new_event(logbook_id: Uuid, previous_hash: Option<String>) -> CoreEventEnvelope {
         CoreEventEnvelope::from_new(
             NewLogbookEvent {
-                event_type: "official.log.qso.created".to_owned(),
+                event_type: EVENT_QSO_CREATED.to_owned(),
                 logbook_id,
                 entity_id: Some(Uuid::new_v4()),
                 author_operator_id: None,
@@ -2587,6 +2799,109 @@ mod tests {
         )
     }
 
+    fn fixed_time(offset_seconds: i64) -> DateTime<Utc> {
+        chrono::DateTime::parse_from_rfc3339("2026-07-05T12:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc)
+            + chrono::Duration::seconds(offset_seconds)
+    }
+
+    fn qso_event(
+        logbook_id: Uuid,
+        entity_id: Uuid,
+        previous_hash: Option<String>,
+        event_type: &str,
+        source_device_id: Uuid,
+        timestamp: DateTime<Utc>,
+        payload: JsonValue,
+    ) -> CoreEventEnvelope {
+        let mut event = CoreEventEnvelope::from_new(
+            NewLogbookEvent {
+                event_type: event_type.to_owned(),
+                logbook_id,
+                entity_id: Some(entity_id),
+                author_operator_id: None,
+                station_callsign: "KE8YGW".to_owned(),
+                operator_callsign: Some("KE8YGW".to_owned()),
+                author_device_id: source_device_id,
+                source_device_id,
+                correlation_id: Uuid::new_v4(),
+                source_plugin_id: Some("sync-golden-test".to_owned()),
+                schema_version: 1,
+                payload,
+            },
+            previous_hash,
+        );
+        event.timestamp = timestamp;
+        event.event_hash = event.calculate_hash();
+        event
+    }
+
+    fn qso_create_event(
+        logbook_id: Uuid,
+        entity_id: Uuid,
+        previous_hash: Option<String>,
+        source_device_id: Uuid,
+        timestamp: DateTime<Utc>,
+        contacted_callsign: &str,
+    ) -> CoreEventEnvelope {
+        qso_event(
+            logbook_id,
+            entity_id,
+            previous_hash,
+            EVENT_QSO_CREATED,
+            source_device_id,
+            timestamp,
+            json!({
+                "qso_id": entity_id,
+                "station_callsign": "KE8YGW",
+                "operator_callsign": "KE8YGW",
+                "contacted_callsign": contacted_callsign,
+                "started_at": "2026-07-05T12:00:00Z",
+                "band": "20m",
+                "mode": "SSB"
+            }),
+        )
+    }
+
+    fn qso_correction_event(
+        logbook_id: Uuid,
+        entity_id: Uuid,
+        previous_hash: Option<String>,
+        source_device_id: Uuid,
+        timestamp: DateTime<Utc>,
+        mode: &str,
+    ) -> CoreEventEnvelope {
+        qso_event(
+            logbook_id,
+            entity_id,
+            previous_hash,
+            EVENT_QSO_CORRECTED,
+            source_device_id,
+            timestamp,
+            json!({ "mode": mode }),
+        )
+    }
+
+    fn qso_tombstone_event(
+        logbook_id: Uuid,
+        entity_id: Uuid,
+        previous_hash: Option<String>,
+        event_type: &str,
+        source_device_id: Uuid,
+        timestamp: DateTime<Utc>,
+    ) -> CoreEventEnvelope {
+        qso_event(
+            logbook_id,
+            entity_id,
+            previous_hash,
+            event_type,
+            source_device_id,
+            timestamp,
+            json!({ "reason": "sync golden scenario" }),
+        )
+    }
+
     fn remote_chain(logbook_id: Uuid, count: usize) -> Vec<CoreEventEnvelope> {
         let mut events = Vec::new();
         let mut previous_hash = None;
@@ -2603,20 +2918,68 @@ mod tests {
     }
 
     async fn paired_client(server: InMemoryCloudSyncServer, logbook_id: Uuid) -> CloudSyncClient {
+        paired_client_for_device(server, logbook_id, Uuid::new_v4(), "Test Device".to_owned()).await
+    }
+
+    async fn paired_client_for_device(
+        server: InMemoryCloudSyncServer,
+        logbook_id: Uuid,
+        device_id: Uuid,
+        device_name: String,
+    ) -> CloudSyncClient {
+        paired_client_and_session_for_device(server, logbook_id, device_id, device_name)
+            .await
+            .0
+    }
+
+    async fn paired_client_and_session_for_device(
+        server: InMemoryCloudSyncServer,
+        logbook_id: Uuid,
+        device_id: Uuid,
+        device_name: String,
+    ) -> (CloudSyncClient, CloudSession) {
         let mut client = CloudSyncClient::in_memory(server);
-        client
+        let session = client
             .pair(PairDeviceRequest {
                 pairing_code: "local-dev-pairing-code".to_owned(),
                 account_id: "acct-1".to_owned(),
                 user_id: "user-1".to_owned(),
-                device_id: Uuid::new_v4(),
-                device_name: "Test Device".to_owned(),
+                device_id,
+                device_name,
                 requested_logbooks: vec![logbook_id],
                 role_hints: vec!["admin".to_owned()],
             })
             .await
             .unwrap();
-        client
+        (client, session)
+    }
+
+    fn enqueue_event_for_sync(
+        queue: &JsonOfflineMutationQueue,
+        event: &CoreEventEnvelope,
+        operation_type: &str,
+        operation_id: Uuid,
+        now: DateTime<Utc>,
+    ) -> OfflineMutationEnvelope {
+        let mutation = queue
+            .enqueue_input(
+                OfflineMutationInput::new(
+                    event.logbook_id,
+                    event.source_device_id,
+                    event.source_device_id,
+                    operation_type,
+                    event.payload.clone(),
+                )
+                .with_operation_id(operation_id)
+                .with_correlation_id(event.correlation_id)
+                .with_entity_id(event.entity_id)
+                .with_idempotency_key(format!("{operation_type}-{operation_id}")),
+                now,
+            )
+            .unwrap();
+        queue
+            .record_local_event(mutation.operation_id, event, now)
+            .unwrap()
     }
 
     #[cfg(feature = "surreal-storage")]
@@ -2695,6 +3058,47 @@ mod tests {
     }
 
     #[test]
+    fn discovery_datagram_decodes_valid_packets_and_ignores_noise() {
+        let source = "192.168.1.10:9737".parse().unwrap();
+        let packet = DiscoveryPacket::from_identity(&local());
+        let bytes = serde_json::to_vec(&packet).unwrap();
+        let observation = discovery_observation_from_datagram(&bytes, source).unwrap();
+        assert_eq!(observation.packet.device_id, packet.device_id);
+        assert_eq!(observation.source, source);
+        assert!(discovery_observation_from_datagram(b"not-json", source).is_none());
+    }
+
+    #[test]
+    fn disabled_lan_discovery_returns_no_observations() {
+        let config = SyncConfig {
+            enable_lan_discovery: false,
+            ..SyncConfig::default()
+        };
+        let service = LanDiscoveryService {
+            config,
+            identity: local(),
+        };
+        let observations = service.discover_once(Duration::from_millis(1)).unwrap();
+        assert!(observations.is_empty());
+    }
+
+    #[test]
+    fn discovery_receiver_sockets_allow_same_port_reuse() {
+        let temporary = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let port = temporary.local_addr().unwrap().port();
+        drop(temporary);
+
+        let config = SyncConfig {
+            discovery_port: port,
+            ..SyncConfig::default()
+        };
+        let first = discovery_receiver_sockets(&config).unwrap();
+        let second = discovery_receiver_sockets(&config).unwrap();
+        assert!(!first.is_empty());
+        assert!(!second.is_empty());
+    }
+
+    #[test]
     fn self_and_incompatible_discovery_are_ignored() {
         let local = local();
         let mut registry = PeerRegistry::default();
@@ -2731,6 +3135,18 @@ mod tests {
             Duration::from_secs(1),
         );
         assert_eq!(expired.len(), 1);
+    }
+
+    #[test]
+    fn peer_registry_uses_advertised_api_port() {
+        let local = local();
+        let mut registry = PeerRegistry::default();
+        let packet = DiscoveryPacket::from_identity(&LocalPeerIdentity::new("Peer", Some(9468)));
+        let source_address = "192.0.2.10:58124".parse().unwrap();
+        registry.observe(&local, packet, source_address);
+        let peers = registry.list();
+        assert_eq!(peers.len(), 1);
+        assert_eq!(peers[0].addresses, vec!["192.0.2.10:9468".parse().unwrap()]);
     }
 
     #[test]
@@ -2837,6 +3253,26 @@ mod tests {
     }
 
     #[test]
+    fn cloud_session_deserializes_legacy_without_expiry() {
+        let session: CloudSession = serde_json::from_value(json!({
+            "account_id": "account",
+            "user_id": "user",
+            "device_id": Uuid::new_v4(),
+            "device_name": "Legacy Device",
+            "sync_token": "sync-token",
+            "authorized_logbooks": [Uuid::new_v4()],
+            "issued_at": fixed_time(0)
+        }))
+        .unwrap();
+
+        assert_eq!(session.expires_at, None);
+        assert!(
+            !cloud_session_is_expired(&session, fixed_time(1)),
+            "legacy sessions without expiry remain readable for compatibility"
+        );
+    }
+
+    #[test]
     fn preview_pull_with_no_missing_events_is_in_sync() {
         let logbook_id = Uuid::new_v4();
         let remote = remote_chain(logbook_id, 2);
@@ -2895,6 +3331,36 @@ mod tests {
         );
         let projection = store.rebuild_projections(logbook_id).await.unwrap();
         assert_eq!(projection.list(false).len(), 2);
+    }
+
+    #[tokio::test]
+    async fn successful_pull_accepts_verified_missing_tail() {
+        let logbook_id = Uuid::new_v4();
+        let remote = remote_chain(logbook_id, 3);
+        let store = InMemoryLogbookEventStore::new();
+        store
+            .append_verified_remote_event(remote[0].clone())
+            .await
+            .unwrap();
+        let local_head = store.get_head(logbook_id).await.unwrap();
+
+        let response = pull_missing_events(
+            &store,
+            PullEventsRequest {
+                peer_id: "peer".to_owned(),
+                logbook_id,
+                local_head_hash: local_head,
+            },
+            remote[1..].to_vec(),
+        )
+        .await;
+
+        assert_eq!(response.status, ReplicationStatus::Pulled);
+        assert_eq!(response.accepted_count, 2);
+        assert_eq!(
+            store.get_head(logbook_id).await.unwrap(),
+            remote.last().map(|event| event.event_hash.clone())
+        );
     }
 
     #[tokio::test]
@@ -3066,6 +3532,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn cloud_pairing_sets_expiring_sessions_and_rejects_expired_auth() {
+        let logbook_id = Uuid::new_v4();
+        let server = InMemoryCloudSyncServer::new(CloudServerConfig {
+            sync_session_ttl_seconds: Some(0),
+            ..CloudServerConfig::default()
+        });
+        let response = server
+            .pair_device(PairDeviceRequest {
+                pairing_code: "local-dev-pairing-code".to_owned(),
+                account_id: "acct".to_owned(),
+                user_id: "user".to_owned(),
+                device_id: Uuid::new_v4(),
+                device_name: "Expired Device".to_owned(),
+                requested_logbooks: vec![logbook_id],
+                role_hints: Vec::new(),
+            })
+            .await;
+        let session = response.session.expect("pairing should issue a session");
+        assert!(session.expires_at.is_some());
+
+        let error = server
+            .list_logbooks(&CloudAuth {
+                sync_token: session.sync_token,
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(error, CloudSyncError::Unauthenticated);
+    }
+
+    #[tokio::test]
     async fn report_upload_rejects_unauthenticated_request() {
         let server = cloud_server();
         let result = server.upload_report(sample_report_request("missing")).await;
@@ -3170,6 +3666,1061 @@ mod tests {
             .unwrap();
 
         assert_eq!(push.status, ReplicationStatus::Rejected);
+    }
+
+    #[tokio::test]
+    async fn desktop_queue_recovers_restart_and_drains_to_cloud_without_duplicates() {
+        let logbook_id = Uuid::new_v4();
+        let device_id = Uuid::new_v4();
+        let root =
+            std::env::temp_dir().join(format!("ke8ygw-ham-sync-desktop-drain-{}", Uuid::new_v4()));
+        let queue_path = root.join("offline-mutations.json");
+        let queue = JsonOfflineMutationQueue::new(&queue_path);
+        let local_store = InMemoryLogbookEventStore::new();
+        let local_events = remote_chain(logbook_id, 2);
+        let now = Utc::now();
+        let mut operation_ids = Vec::new();
+
+        for (index, event) in local_events.iter().enumerate() {
+            local_store
+                .append_verified_remote_event(event.clone())
+                .await
+                .unwrap();
+            let operation_id = Uuid::new_v4();
+            let mutation = queue
+                .enqueue_input(
+                    OfflineMutationInput::new(
+                        logbook_id,
+                        device_id,
+                        device_id,
+                        OFFLINE_OP_QSO_CREATE,
+                        json!({
+                            "contacted_callsign": format!("K1DRAIN{index}"),
+                            "mode": "SSB"
+                        }),
+                    )
+                    .with_operation_id(operation_id)
+                    .with_correlation_id(operation_id)
+                    .with_idempotency_key(format!("desktop-qso-create-{index}")),
+                    now + chrono::Duration::seconds(index as i64),
+                )
+                .unwrap();
+            queue
+                .record_local_event(mutation.operation_id, event, now)
+                .unwrap();
+            operation_ids.push(mutation.operation_id);
+        }
+
+        queue
+            .mark_sending(operation_ids[0], now + chrono::Duration::seconds(10))
+            .unwrap();
+
+        let restarted_queue = JsonOfflineMutationQueue::new(&queue_path);
+        let restart_time = now + chrono::Duration::seconds(20);
+        assert_eq!(
+            restarted_queue
+                .recover_interrupted_writes(restart_time)
+                .unwrap(),
+            1
+        );
+        let recovered = restarted_queue.load_snapshot(restart_time).unwrap();
+        assert_eq!(recovered.health.retrying, 1);
+        assert_eq!(recovered.health.pending, 1);
+        assert_eq!(recovered.health.ready_to_send, 2);
+
+        let client = paired_client(cloud_server(), logbook_id).await;
+        let listed_local_events = local_store.list_events(logbook_id).await.unwrap();
+        let batch = restarted_queue
+            .ready_event_batch(logbook_id, &listed_local_events, restart_time)
+            .unwrap();
+        assert_eq!(batch.operation_ids, operation_ids);
+        assert_eq!(batch.events, local_events);
+        assert!(batch.missing_local_event_operation_ids.is_empty());
+
+        for operation_id in &batch.operation_ids {
+            restarted_queue
+                .mark_sending(*operation_id, restart_time)
+                .unwrap();
+        }
+        let push = client
+            .push_events(logbook_id, batch.events.clone())
+            .await
+            .unwrap();
+        assert_eq!(push.status, ReplicationStatus::Pulled);
+        assert_eq!(push.accepted_count, 2);
+        assert_eq!(push.ignored_duplicate_count, 0);
+
+        let accepted_hashes = batch
+            .events
+            .iter()
+            .map(|event| event.event_hash.clone())
+            .collect::<std::collections::HashSet<_>>();
+        assert_eq!(
+            restarted_queue
+                .mark_accepted_by_event_hashes(&accepted_hashes, restart_time)
+                .unwrap(),
+            2
+        );
+
+        let after_drain = JsonOfflineMutationQueue::new(&queue_path)
+            .load_snapshot(restart_time)
+            .unwrap();
+        assert_eq!(after_drain.health.accepted, 2);
+        assert_eq!(after_drain.health.ready_to_send, 0);
+        assert_eq!(
+            local_store.list_events(logbook_id).await.unwrap().len(),
+            2,
+            "desktop local official log must not gain duplicate events while draining"
+        );
+
+        let duplicate_push = client
+            .push_events(logbook_id, batch.events.clone())
+            .await
+            .unwrap();
+        assert_eq!(duplicate_push.accepted_count, 0);
+        assert_eq!(duplicate_push.ignored_duplicate_count, 2);
+        let cloud_pull = client.pull_events(logbook_id, None).await.unwrap();
+        assert_eq!(cloud_pull.events.len(), 2);
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn cross_client_golden_retry_duplicate_reorder_and_restore_path() {
+        let logbook_id = Uuid::new_v4();
+        let qso_id = Uuid::new_v4();
+        let desktop_device = Uuid::new_v4();
+        let ios_device = Uuid::new_v4();
+        let root = std::env::temp_dir().join(format!("ke8ygw-ham-sync-golden-{}", Uuid::new_v4()));
+        let queue_path = root.join("offline-mutations.json");
+        let queue = JsonOfflineMutationQueue::new(&queue_path);
+        let local_store = InMemoryLogbookEventStore::new();
+        let server = cloud_server();
+        let desktop_client = paired_client_for_device(
+            server.clone(),
+            logbook_id,
+            desktop_device,
+            "Desktop".to_owned(),
+        )
+        .await;
+        let ios_client =
+            paired_client_for_device(server, logbook_id, ios_device, "iOS".to_owned()).await;
+        let now = fixed_time(10_000);
+
+        let created = qso_create_event(
+            logbook_id,
+            qso_id,
+            None,
+            desktop_device,
+            fixed_time(-3_600),
+            "K1GOLD",
+        );
+        let deleted = qso_tombstone_event(
+            logbook_id,
+            qso_id,
+            Some(created.event_hash.clone()),
+            EVENT_QSO_DELETED,
+            desktop_device,
+            fixed_time(30),
+        );
+        let restored = qso_tombstone_event(
+            logbook_id,
+            qso_id,
+            Some(deleted.event_hash.clone()),
+            EVENT_QSO_RESTORED,
+            desktop_device,
+            fixed_time(-1_800),
+        );
+        let local_events = vec![created.clone(), deleted.clone(), restored.clone()];
+        for event in &local_events {
+            local_store
+                .append_verified_remote_event(event.clone())
+                .await
+                .unwrap();
+        }
+        local_store.verify_chain(logbook_id).await.unwrap();
+
+        let create_operation = Uuid::new_v4();
+        let delete_operation = Uuid::new_v4();
+        let restore_operation = Uuid::new_v4();
+        enqueue_event_for_sync(
+            &queue,
+            &created,
+            OFFLINE_OP_QSO_CREATE,
+            create_operation,
+            now,
+        );
+        enqueue_event_for_sync(
+            &queue,
+            &deleted,
+            OFFLINE_OP_QSO_DELETE,
+            delete_operation,
+            now + chrono::Duration::seconds(1),
+        );
+        enqueue_event_for_sync(
+            &queue,
+            &restored,
+            OFFLINE_OP_QSO_RESTORE,
+            restore_operation,
+            now + chrono::Duration::seconds(2),
+        );
+
+        queue
+            .mark_sending(create_operation, now + chrono::Duration::seconds(3))
+            .unwrap();
+        let restarted_queue = JsonOfflineMutationQueue::new(&queue_path);
+        let recovered_at = now + chrono::Duration::seconds(4);
+        assert_eq!(
+            restarted_queue
+                .recover_interrupted_writes(recovered_at)
+                .unwrap(),
+            1
+        );
+        restarted_queue
+            .record_transient_failure(
+                create_operation,
+                "network unavailable",
+                Some("network_unavailable".to_owned()),
+                recovered_at,
+            )
+            .unwrap();
+        let retry_at = recovered_at + chrono::Duration::seconds(6);
+        let recovered = restarted_queue.load_snapshot(retry_at).unwrap();
+        assert_eq!(recovered.health.retrying, 1);
+        assert_eq!(recovered.health.pending, 2);
+        assert_eq!(recovered.health.ready_to_send, 3);
+
+        let listed_local_events = local_store.list_events(logbook_id).await.unwrap();
+        let batch = restarted_queue
+            .ready_event_batch(logbook_id, &listed_local_events, retry_at)
+            .unwrap();
+        assert_eq!(
+            batch.operation_ids,
+            vec![create_operation, delete_operation, restore_operation]
+        );
+        assert_eq!(batch.events, local_events);
+        assert!(batch.missing_local_event_operation_ids.is_empty());
+
+        for operation_id in &batch.operation_ids {
+            restarted_queue
+                .mark_sending(*operation_id, retry_at)
+                .unwrap();
+        }
+        let push = desktop_client
+            .push_events(logbook_id, batch.events.clone())
+            .await
+            .unwrap();
+        assert_eq!(push.status, ReplicationStatus::Pulled);
+        assert_eq!(push.accepted_count, 3);
+        assert_eq!(push.ignored_duplicate_count, 0);
+
+        let accepted_hashes = batch
+            .events
+            .iter()
+            .map(|event| event.event_hash.clone())
+            .collect::<HashSet<_>>();
+        assert_eq!(
+            restarted_queue
+                .mark_accepted_by_event_hashes(&accepted_hashes, retry_at)
+                .unwrap(),
+            3
+        );
+        let drained = restarted_queue.load_snapshot(retry_at).unwrap();
+        assert_eq!(drained.health.accepted, 3);
+        assert_eq!(drained.health.ready_to_send, 0);
+
+        let duplicate = desktop_client
+            .push_events(logbook_id, batch.events.clone())
+            .await
+            .unwrap();
+        assert_eq!(duplicate.accepted_count, 0);
+        assert_eq!(duplicate.ignored_duplicate_count, 3);
+
+        let ios_store = InMemoryLogbookEventStore::new();
+        let pulled = ios_client.pull_events(logbook_id, None).await.unwrap();
+        assert_eq!(pulled.preview.status, ReplicationStatus::RemoteAhead);
+        assert_eq!(pulled.events.len(), 3);
+        let applied = pull_missing_events(
+            &ios_store,
+            PullEventsRequest {
+                peer_id: "cloud".to_owned(),
+                logbook_id,
+                local_head_hash: None,
+            },
+            pulled.events,
+        )
+        .await;
+        assert_eq!(applied.status, ReplicationStatus::Pulled);
+        assert_eq!(applied.accepted_count, 3);
+        ios_store.verify_chain(logbook_id).await.unwrap();
+        let projection = ios_store.rebuild_projections(logbook_id).await.unwrap();
+        assert!(projection.get(qso_id).is_some());
+        assert!(!projection.is_tombstoned(qso_id));
+
+        let current_head = desktop_client
+            .preview_pull(logbook_id, Some(restored.event_hash.clone()))
+            .await
+            .unwrap()
+            .remote_head_hash
+            .unwrap();
+        let next_qso_id = Uuid::new_v4();
+        let next_first = qso_create_event(
+            logbook_id,
+            next_qso_id,
+            Some(current_head),
+            desktop_device,
+            fixed_time(120),
+            "K1ORDER",
+        );
+        let next_second = qso_correction_event(
+            logbook_id,
+            next_qso_id,
+            Some(next_first.event_hash.clone()),
+            desktop_device,
+            fixed_time(121),
+            "CW",
+        );
+        let reordered = desktop_client
+            .push_events(logbook_id, vec![next_second.clone(), next_first.clone()])
+            .await
+            .unwrap();
+        assert_eq!(reordered.status, ReplicationStatus::Diverged);
+        assert_eq!(reordered.accepted_count, 0);
+
+        let ordered = desktop_client
+            .push_events(logbook_id, vec![next_first, next_second])
+            .await
+            .unwrap();
+        assert_eq!(ordered.status, ReplicationStatus::Pulled);
+        assert_eq!(ordered.accepted_count, 2);
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn cross_client_golden_partial_push_accepts_prefix_and_blocks_rejected_tail() {
+        let logbook_id = Uuid::new_v4();
+        let qso_id = Uuid::new_v4();
+        let desktop_device = Uuid::new_v4();
+        let server = cloud_server();
+        let client =
+            paired_client_for_device(server, logbook_id, desktop_device, "Desktop".to_owned())
+                .await;
+        let root =
+            std::env::temp_dir().join(format!("ke8ygw-ham-sync-partial-push-{}", Uuid::new_v4()));
+        let queue_path = root.join("offline-mutations.json");
+        let queue = JsonOfflineMutationQueue::new(&queue_path);
+        let local_store = InMemoryLogbookEventStore::new();
+        let now = fixed_time(20_000);
+
+        let created = qso_create_event(
+            logbook_id,
+            qso_id,
+            None,
+            desktop_device,
+            fixed_time(0),
+            "K1PART",
+        );
+        let corrected = qso_correction_event(
+            logbook_id,
+            qso_id,
+            Some(created.event_hash.clone()),
+            desktop_device,
+            fixed_time(30),
+            "CW",
+        );
+        for event in [&created, &corrected] {
+            local_store
+                .append_verified_remote_event(event.clone())
+                .await
+                .unwrap();
+        }
+        local_store.verify_chain(logbook_id).await.unwrap();
+
+        let create_operation = Uuid::new_v4();
+        let correct_operation = Uuid::new_v4();
+        enqueue_event_for_sync(
+            &queue,
+            &created,
+            OFFLINE_OP_QSO_CREATE,
+            create_operation,
+            now,
+        );
+        enqueue_event_for_sync(
+            &queue,
+            &corrected,
+            OFFLINE_OP_QSO_CORRECT,
+            correct_operation,
+            now + chrono::Duration::seconds(1),
+        );
+
+        let mut rejected_tail = corrected.clone();
+        rejected_tail.previous_hash = Some("missing-prefix-head".to_owned());
+        rejected_tail.event_hash = rejected_tail.calculate_hash();
+
+        let partial_push = client
+            .push_events(logbook_id, vec![created.clone(), rejected_tail])
+            .await
+            .unwrap();
+        assert_eq!(partial_push.status, ReplicationStatus::Diverged);
+        assert_eq!(partial_push.accepted_count, 1);
+        assert_eq!(partial_push.ignored_duplicate_count, 0);
+        assert_eq!(partial_push.rejected_count, 1);
+        assert_eq!(
+            partial_push.server_head_hash,
+            Some(created.event_hash.clone())
+        );
+        assert!(partial_push
+            .errors
+            .iter()
+            .any(|error| error.contains("previous hash")));
+
+        let accepted_hashes = HashSet::from([created.event_hash.clone()]);
+        assert_eq!(
+            queue
+                .mark_accepted_by_event_hashes(&accepted_hashes, now)
+                .unwrap(),
+            1
+        );
+        let blocked_tail = queue
+            .mark_user_action_required(
+                correct_operation,
+                "partial transfer rejected tail; manual sync review required",
+                Some("partial_transfer_rejected_tail".to_owned()),
+                now + chrono::Duration::seconds(2),
+            )
+            .unwrap();
+        assert_eq!(
+            blocked_tail.status,
+            OfflineMutationStatus::UserActionRequired
+        );
+        let blocked_snapshot = queue
+            .load_snapshot(now + chrono::Duration::seconds(2))
+            .unwrap();
+        assert_eq!(blocked_snapshot.health.accepted, 1);
+        assert_eq!(blocked_snapshot.health.user_action_required, 1);
+        assert_eq!(blocked_snapshot.health.ready_to_send, 0);
+        assert_eq!(
+            local_store.list_events(logbook_id).await.unwrap(),
+            vec![created.clone(), corrected.clone()],
+            "partial server acceptance must not rewrite or duplicate local official history"
+        );
+
+        let duplicate_prefix = client
+            .push_events(logbook_id, vec![created.clone()])
+            .await
+            .unwrap();
+        assert_eq!(duplicate_prefix.accepted_count, 0);
+        assert_eq!(duplicate_prefix.ignored_duplicate_count, 1);
+        assert_eq!(
+            duplicate_prefix.server_head_hash,
+            Some(created.event_hash.clone())
+        );
+
+        let reviewed_tail = client
+            .push_events(logbook_id, vec![corrected.clone()])
+            .await
+            .unwrap();
+        assert_eq!(reviewed_tail.status, ReplicationStatus::Pulled);
+        assert_eq!(reviewed_tail.accepted_count, 1);
+        assert_eq!(
+            reviewed_tail.server_head_hash,
+            Some(corrected.event_hash.clone())
+        );
+        let reviewed_at = now + chrono::Duration::seconds(3);
+        let accepted_after_review = HashSet::from([corrected.event_hash.clone()]);
+        assert_eq!(
+            queue
+                .mark_accepted_by_event_hashes(&accepted_after_review, reviewed_at)
+                .unwrap(),
+            1
+        );
+        let drained = queue.load_snapshot(reviewed_at).unwrap();
+        assert_eq!(drained.health.accepted, 2);
+        assert_eq!(drained.health.user_action_required, 0);
+        assert_eq!(drained.health.ready_to_send, 0);
+
+        let duplicate_full_chain = client
+            .push_events(logbook_id, vec![created, corrected])
+            .await
+            .unwrap();
+        assert_eq!(duplicate_full_chain.accepted_count, 0);
+        assert_eq!(duplicate_full_chain.ignored_duplicate_count, 2);
+        let cloud_pull = client.pull_events(logbook_id, None).await.unwrap();
+        assert_eq!(cloud_pull.events.len(), 2);
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn cross_client_golden_revoked_cloud_auth_blocks_queue_until_repaired() {
+        let logbook_id = Uuid::new_v4();
+        let qso_id = Uuid::new_v4();
+        let desktop_device = Uuid::new_v4();
+        let server = cloud_server();
+        let client = paired_client_for_device(
+            server.clone(),
+            logbook_id,
+            desktop_device,
+            "Desktop".to_owned(),
+        )
+        .await;
+        let root =
+            std::env::temp_dir().join(format!("ke8ygw-ham-sync-revoked-auth-{}", Uuid::new_v4()));
+        let queue_path = root.join("offline-mutations.json");
+        let queue = JsonOfflineMutationQueue::new(&queue_path);
+        let local_store = InMemoryLogbookEventStore::new();
+        let now = fixed_time(21_000);
+
+        let created = qso_create_event(
+            logbook_id,
+            qso_id,
+            None,
+            desktop_device,
+            fixed_time(0),
+            "K1AUTH",
+        );
+        local_store
+            .append_verified_remote_event(created.clone())
+            .await
+            .unwrap();
+        local_store.verify_chain(logbook_id).await.unwrap();
+
+        let operation_id = Uuid::new_v4();
+        enqueue_event_for_sync(&queue, &created, OFFLINE_OP_QSO_CREATE, operation_id, now);
+        let local_events = local_store.list_events(logbook_id).await.unwrap();
+        let batch = queue
+            .ready_event_batch(logbook_id, &local_events, now)
+            .unwrap();
+        assert_eq!(batch.operation_ids, vec![operation_id]);
+        assert_eq!(batch.events, vec![created.clone()]);
+
+        queue
+            .mark_sending(operation_id, now + chrono::Duration::seconds(1))
+            .unwrap();
+        server.revoke_device(desktop_device).await.unwrap();
+        let error = client
+            .push_events(logbook_id, batch.events.clone())
+            .await
+            .unwrap_err();
+        assert_eq!(error, CloudSyncError::Unauthenticated);
+
+        let blocked_at = now + chrono::Duration::seconds(2);
+        let blocked = queue
+            .mark_user_action_required(
+                operation_id,
+                "cloud sync auth revoked; re-pair before retry",
+                Some("auth_failed".to_owned()),
+                blocked_at,
+            )
+            .unwrap();
+        assert_eq!(blocked.status, OfflineMutationStatus::UserActionRequired);
+        let blocked_snapshot = queue.load_snapshot(blocked_at).unwrap();
+        assert_eq!(blocked_snapshot.health.user_action_required, 1);
+        assert_eq!(blocked_snapshot.health.ready_to_send, 0);
+        let ready_after_auth_failure = queue
+            .ready_event_batch(logbook_id, &local_events, blocked_at)
+            .unwrap();
+        assert!(ready_after_auth_failure.operation_ids.is_empty());
+        assert!(ready_after_auth_failure.events.is_empty());
+
+        let verifier = paired_client_for_device(
+            server.clone(),
+            logbook_id,
+            Uuid::new_v4(),
+            "Verifier".to_owned(),
+        )
+        .await;
+        let remote_after_auth_failure = verifier.pull_events(logbook_id, None).await.unwrap();
+        assert_eq!(
+            remote_after_auth_failure.events.len(),
+            0,
+            "revoked cloud auth must not append queued events remotely"
+        );
+        assert_eq!(
+            local_store.list_events(logbook_id).await.unwrap(),
+            vec![created.clone()],
+            "auth failure must not rewrite or duplicate local official history"
+        );
+
+        let repaired_client = paired_client_for_device(
+            server.clone(),
+            logbook_id,
+            desktop_device,
+            "Desktop Repaired".to_owned(),
+        )
+        .await;
+        let reviewed_push = repaired_client
+            .push_events(logbook_id, batch.events.clone())
+            .await
+            .unwrap();
+        assert_eq!(reviewed_push.status, ReplicationStatus::Pulled);
+        assert_eq!(reviewed_push.accepted_count, 1);
+        assert_eq!(
+            reviewed_push.server_head_hash,
+            Some(created.event_hash.clone())
+        );
+
+        let accepted_hashes = HashSet::from([created.event_hash.clone()]);
+        assert_eq!(
+            queue
+                .mark_accepted_by_event_hashes(&accepted_hashes, now + chrono::Duration::seconds(3))
+                .unwrap(),
+            1
+        );
+        let drained = queue
+            .load_snapshot(now + chrono::Duration::seconds(3))
+            .unwrap();
+        assert_eq!(drained.health.accepted, 1);
+        assert_eq!(drained.health.user_action_required, 0);
+        assert_eq!(drained.health.ready_to_send, 0);
+
+        let duplicate_after_repair = repaired_client
+            .push_events(logbook_id, batch.events)
+            .await
+            .unwrap();
+        assert_eq!(duplicate_after_repair.accepted_count, 0);
+        assert_eq!(duplicate_after_repair.ignored_duplicate_count, 1);
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn cross_client_golden_expired_cloud_auth_blocks_queue_until_repaired() {
+        let logbook_id = Uuid::new_v4();
+        let qso_id = Uuid::new_v4();
+        let desktop_device = Uuid::new_v4();
+        let server = cloud_server();
+        let (client, session) = paired_client_and_session_for_device(
+            server.clone(),
+            logbook_id,
+            desktop_device,
+            "Desktop".to_owned(),
+        )
+        .await;
+        assert!(
+            session.expires_at.is_some(),
+            "new cloud pairings must carry a bounded session expiry"
+        );
+        let root =
+            std::env::temp_dir().join(format!("ke8ygw-ham-sync-expired-auth-{}", Uuid::new_v4()));
+        let queue_path = root.join("offline-mutations.json");
+        let queue = JsonOfflineMutationQueue::new(&queue_path);
+        let local_store = InMemoryLogbookEventStore::new();
+        let now = fixed_time(22_000);
+
+        let created = qso_create_event(
+            logbook_id,
+            qso_id,
+            None,
+            desktop_device,
+            fixed_time(0),
+            "K1EXPIRED",
+        );
+        local_store
+            .append_verified_remote_event(created.clone())
+            .await
+            .unwrap();
+        local_store.verify_chain(logbook_id).await.unwrap();
+
+        let operation_id = Uuid::new_v4();
+        enqueue_event_for_sync(&queue, &created, OFFLINE_OP_QSO_CREATE, operation_id, now);
+        let local_events = local_store.list_events(logbook_id).await.unwrap();
+        let batch = queue
+            .ready_event_batch(logbook_id, &local_events, now)
+            .unwrap();
+        assert_eq!(batch.operation_ids, vec![operation_id]);
+        assert_eq!(batch.events, vec![created.clone()]);
+
+        queue
+            .mark_sending(operation_id, now + chrono::Duration::seconds(1))
+            .unwrap();
+        server.expire_device_session(desktop_device).await.unwrap();
+        let error = client
+            .push_events(logbook_id, batch.events.clone())
+            .await
+            .unwrap_err();
+        assert_eq!(error, CloudSyncError::Unauthenticated);
+
+        let blocked_at = now + chrono::Duration::seconds(2);
+        let blocked = queue
+            .mark_user_action_required(
+                operation_id,
+                "cloud sync auth expired; re-pair before retry",
+                Some("auth_expired".to_owned()),
+                blocked_at,
+            )
+            .unwrap();
+        assert_eq!(blocked.status, OfflineMutationStatus::UserActionRequired);
+        let blocked_snapshot = queue.load_snapshot(blocked_at).unwrap();
+        assert_eq!(blocked_snapshot.health.user_action_required, 1);
+        assert_eq!(blocked_snapshot.health.ready_to_send, 0);
+        let ready_after_auth_failure = queue
+            .ready_event_batch(logbook_id, &local_events, blocked_at)
+            .unwrap();
+        assert!(ready_after_auth_failure.operation_ids.is_empty());
+        assert!(ready_after_auth_failure.events.is_empty());
+
+        let verifier = paired_client_for_device(
+            server.clone(),
+            logbook_id,
+            Uuid::new_v4(),
+            "Verifier".to_owned(),
+        )
+        .await;
+        let remote_after_auth_failure = verifier.pull_events(logbook_id, None).await.unwrap();
+        assert_eq!(
+            remote_after_auth_failure.events.len(),
+            0,
+            "expired cloud auth must not append queued events remotely"
+        );
+        assert_eq!(
+            local_store.list_events(logbook_id).await.unwrap(),
+            vec![created.clone()],
+            "expired auth failure must not rewrite or duplicate local official history"
+        );
+
+        let (repaired_client, repaired_session) = paired_client_and_session_for_device(
+            server.clone(),
+            logbook_id,
+            desktop_device,
+            "Desktop Repaired".to_owned(),
+        )
+        .await;
+        assert!(
+            repaired_session.expires_at.is_some(),
+            "re-pairing must issue a replacement bounded session"
+        );
+        let reviewed_push = repaired_client
+            .push_events(logbook_id, batch.events.clone())
+            .await
+            .unwrap();
+        assert_eq!(reviewed_push.status, ReplicationStatus::Pulled);
+        assert_eq!(reviewed_push.accepted_count, 1);
+        assert_eq!(
+            reviewed_push.server_head_hash,
+            Some(created.event_hash.clone())
+        );
+
+        let accepted_hashes = HashSet::from([created.event_hash.clone()]);
+        assert_eq!(
+            queue
+                .mark_accepted_by_event_hashes(&accepted_hashes, now + chrono::Duration::seconds(3))
+                .unwrap(),
+            1
+        );
+        let drained = queue
+            .load_snapshot(now + chrono::Duration::seconds(3))
+            .unwrap();
+        assert_eq!(drained.health.accepted, 1);
+        assert_eq!(drained.health.user_action_required, 0);
+        assert_eq!(drained.health.ready_to_send, 0);
+
+        let duplicate_after_repair = repaired_client
+            .push_events(logbook_id, batch.events)
+            .await
+            .unwrap();
+        assert_eq!(duplicate_after_repair.accepted_count, 0);
+        assert_eq!(duplicate_after_repair.ignored_duplicate_count, 1);
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn cross_client_golden_divergence_revocation_and_upgrade_review_path() {
+        let logbook_id = Uuid::new_v4();
+        let qso_id = Uuid::new_v4();
+        let desktop_device = Uuid::new_v4();
+        let ios_device = Uuid::new_v4();
+        let server = cloud_server();
+        let desktop_client = paired_client_for_device(
+            server.clone(),
+            logbook_id,
+            desktop_device,
+            "Desktop".to_owned(),
+        )
+        .await;
+        let ios_client =
+            paired_client_for_device(server.clone(), logbook_id, ios_device, "iOS".to_owned())
+                .await;
+        let base = qso_create_event(
+            logbook_id,
+            qso_id,
+            None,
+            desktop_device,
+            fixed_time(0),
+            "K1REVIEW",
+        );
+        desktop_client
+            .push_events(logbook_id, vec![base.clone()])
+            .await
+            .unwrap();
+
+        let remote_correction = qso_correction_event(
+            logbook_id,
+            qso_id,
+            Some(base.event_hash.clone()),
+            desktop_device,
+            fixed_time(30),
+            "FT8",
+        );
+        let remote_delete = qso_tombstone_event(
+            logbook_id,
+            qso_id,
+            Some(remote_correction.event_hash.clone()),
+            EVENT_QSO_DELETED,
+            desktop_device,
+            fixed_time(60),
+        );
+        desktop_client
+            .push_events(
+                logbook_id,
+                vec![remote_correction.clone(), remote_delete.clone()],
+            )
+            .await
+            .unwrap();
+
+        let root = std::env::temp_dir().join(format!("ke8ygw-ham-sync-review-{}", Uuid::new_v4()));
+        let queue_path = root.join("offline-mutations.json");
+        let review_path = root.join("conflict-reviews.json");
+        let queue = JsonOfflineMutationQueue::new(&queue_path);
+        let local_correction_operation = Uuid::new_v4();
+        let local_correction = queue
+            .enqueue_input(
+                OfflineMutationInput::new(
+                    logbook_id,
+                    ios_device,
+                    ios_device,
+                    OFFLINE_OP_QSO_CORRECT,
+                    json!({ "mode": "CW", "qso_id": qso_id }),
+                )
+                .with_operation_id(local_correction_operation)
+                .with_entity_id(Some(qso_id))
+                .with_idempotency_key("ios-local-correction"),
+                fixed_time(90),
+            )
+            .unwrap();
+        let preview = ios_client
+            .preview_pull(logbook_id, Some(base.event_hash.clone()))
+            .await
+            .unwrap();
+        assert_eq!(preview.status, ReplicationStatus::RemoteAhead);
+        let report = conflict_report_from_preview(
+            &preview,
+            std::slice::from_ref(&local_correction),
+            fixed_time(91),
+        );
+        assert!(report.conflicts.iter().any(|conflict| {
+            conflict.kind == SyncConflictKind::ConcurrentCorrection
+                && conflict.requires_user_action
+                && !conflict.safe_auto_merge
+        }));
+        assert!(report.conflicts.iter().any(|conflict| {
+            conflict.kind == SyncConflictKind::TombstoneRestore
+                && conflict.requires_user_action
+                && !conflict.safe_auto_merge
+        }));
+
+        let report_json = serde_json::to_value(&report).unwrap();
+        let round_tripped_report: SyncConflictReport =
+            serde_json::from_value(report_json.clone()).unwrap();
+        assert_eq!(
+            round_tripped_report, report,
+            "client-ready conflict reports must survive exact JSON round trips"
+        );
+
+        let desktop_review_store = JsonConflictReviewStore::new(&review_path);
+        let desktop_review = desktop_review_store
+            .create_review(report.clone(), fixed_time(92))
+            .unwrap();
+        let unsafe_desktop_pull = desktop_review_store.resolve_review(
+            desktop_review.review_id,
+            ManualConflictResolution::new(ManualConflictResolutionChoice::PullRemoteAfterReview)
+                .with_note("operator tried to pull a conflicting branch")
+                .with_resolved_by_device_id(desktop_device),
+            fixed_time(93),
+        );
+        assert!(matches!(
+            unsafe_desktop_pull,
+            Err(ConflictReviewError::UnsafeResolution {
+                resolution: ManualConflictResolutionChoice::PullRemoteAfterReview,
+                status: ReplicationStatus::RemoteAhead
+            })
+        ));
+        let desktop_resolved = desktop_review_store
+            .resolve_review(
+                desktop_review.review_id,
+                ManualConflictResolution::new(
+                    ManualConflictResolutionChoice::MarkUserActionRequired,
+                )
+                .with_note("Desktop kept local pending work visible for manual review")
+                .with_resolved_by_device_id(desktop_device),
+                fixed_time(94),
+            )
+            .unwrap();
+        assert_eq!(desktop_resolved.status, ConflictReviewStatus::Resolved);
+        let marked_local_correction = queue
+            .mark_user_action_required(
+                local_correction_operation,
+                "manual conflict review required",
+                Some("manual_conflict_review".to_owned()),
+                fixed_time(95),
+            )
+            .unwrap();
+        assert_eq!(
+            marked_local_correction.status,
+            OfflineMutationStatus::UserActionRequired
+        );
+        assert_eq!(
+            queue
+                .load_snapshot(fixed_time(95))
+                .unwrap()
+                .health
+                .user_action_required,
+            1
+        );
+
+        let ios_review_store = JsonConflictReviewStore::new(root.join("ios-conflict-reviews.json"));
+        let ios_report: SyncConflictReport = serde_json::from_value(report_json).unwrap();
+        let ios_review = ios_review_store
+            .create_review(ios_report.clone(), fixed_time(96))
+            .unwrap();
+        assert_eq!(ios_review.report, report);
+        let ios_resolved = ios_review_store
+            .resolve_review(
+                ios_review.review_id,
+                ManualConflictResolution::new(
+                    ManualConflictResolutionChoice::CreateCorrectiveEvents,
+                )
+                .with_corrective_event_hashes(vec![
+                    "ios-operator-reviewed-corrective-hash".to_owned()
+                ])
+                .with_resolved_by_device_id(ios_device)
+                .with_note("iOS resolved with corrective proposal hashes"),
+                fixed_time(97),
+            )
+            .unwrap();
+        assert_eq!(ios_resolved.status, ConflictReviewStatus::Resolved);
+        assert_eq!(ios_review_store.load_snapshot().unwrap().health.resolved, 1);
+
+        let ios_store = InMemoryLogbookEventStore::new();
+        ios_store
+            .append_verified_remote_event(base.clone())
+            .await
+            .unwrap();
+        let ios_local_correction = qso_correction_event(
+            logbook_id,
+            qso_id,
+            Some(base.event_hash.clone()),
+            ios_device,
+            fixed_time(120),
+            "RTTY",
+        );
+        ios_store
+            .append_verified_remote_event(ios_local_correction.clone())
+            .await
+            .unwrap();
+        let divergent_preview = ios_client
+            .preview_pull(logbook_id, Some(ios_local_correction.event_hash.clone()))
+            .await
+            .unwrap();
+        assert_eq!(divergent_preview.status, ReplicationStatus::Diverged);
+        let divergent_report = conflict_report_from_preview(
+            &divergent_preview,
+            std::slice::from_ref(&marked_local_correction),
+            fixed_time(121),
+        );
+        assert!(divergent_report
+            .conflicts
+            .iter()
+            .any(|conflict| conflict.kind == SyncConflictKind::DivergentHeads));
+        let before_divergent_pull_head = ios_store.get_head(logbook_id).await.unwrap();
+        let before_divergent_pull_events = ios_store.list_events(logbook_id).await.unwrap();
+        let divergent_pull = pull_missing_events(
+            &ios_store,
+            PullEventsRequest {
+                peer_id: "cloud".to_owned(),
+                logbook_id,
+                local_head_hash: before_divergent_pull_head.clone(),
+            },
+            vec![
+                base.clone(),
+                remote_correction.clone(),
+                remote_delete.clone(),
+            ],
+        )
+        .await;
+        assert_eq!(divergent_pull.status, ReplicationStatus::Diverged);
+        assert_eq!(divergent_pull.accepted_count, 0);
+        assert_eq!(
+            ios_store.get_head(logbook_id).await.unwrap(),
+            before_divergent_pull_head
+        );
+        assert_eq!(
+            ios_store.list_events(logbook_id).await.unwrap(),
+            before_divergent_pull_events,
+            "divergent branch review must not silently append remote events"
+        );
+        ios_store.verify_chain(logbook_id).await.unwrap();
+
+        let legacy_queue = JsonOfflineMutationQueue::new(root.join("legacy-offline.json"));
+        let legacy_operation = Uuid::new_v4();
+        let legacy = json!({
+            "version": OFFLINE_QUEUE_LEGACY_V0_2_FILE_VERSION,
+            "pending_operations": [{
+                "operation_id": legacy_operation,
+                "device_id": ios_device,
+                "logbook_id": logbook_id,
+                "operation_type": OFFLINE_OP_QSO_DELETE,
+                "payload": { "qso_id": qso_id },
+                "local_event_hash": remote_delete.event_hash
+            }]
+        });
+        std::fs::write(
+            legacy_queue.path(),
+            serde_json::to_vec_pretty(&legacy).unwrap(),
+        )
+        .unwrap();
+        let migration = legacy_queue.recover_or_initialize(fixed_time(130)).unwrap();
+        assert!(migration.migrated_v0_2_file);
+        assert_eq!(migration.migrated_legacy_mutations, 1);
+        let migrated_snapshot = legacy_queue.load_snapshot(fixed_time(130)).unwrap();
+        assert_eq!(migrated_snapshot.health.retrying, 1);
+        assert_eq!(
+            migrated_snapshot.mutations[0].operation_id,
+            legacy_operation
+        );
+
+        let trust_store = JsonLanTrustStore::new(root.join("lan-trust.json"));
+        let pairing = trust_store
+            .issue_pairing_token(desktop_device, logbook_id, "ios", true, fixed_time(140))
+            .unwrap();
+        trust_store
+            .accept_pairing_token(
+                LanPairingAcceptance {
+                    token_id: pairing.token_id,
+                    pairing_code: pairing.pairing_code,
+                    peer_device_id: ios_device,
+                    peer_display_name: "iOS".to_owned(),
+                    requested_logbooks: vec![logbook_id],
+                    public_key_fingerprint: Some("ios-fingerprint".to_owned()),
+                    auth_credential_id: Some(Uuid::new_v4()),
+                },
+                fixed_time(141),
+            )
+            .unwrap();
+        trust_store
+            .authorize_peer(ios_device, logbook_id, "nonce-1", fixed_time(142))
+            .unwrap();
+        trust_store
+            .revoke_device(ios_device, fixed_time(143))
+            .unwrap();
+        assert!(matches!(
+            trust_store.authorize_peer(ios_device, logbook_id, "nonce-2", fixed_time(144)),
+            Err(LanTrustError::DeviceRevoked(device)) if device == ios_device
+        ));
+
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[tokio::test]

@@ -244,6 +244,291 @@ enum ConnectivityState: String {
     }
 }
 
+struct SyncLanDiscoveryConfiguration: Equatable {
+    var protocolName = "ke8ygw-logger-sync"
+    var protocolVersion = 1
+    var ipv4MulticastHost = "239.73.89.71"
+    var ipv6MulticastHost = "ff12::73:5947"
+    var discoveryPort: UInt16 = 9737
+    var peerTimeoutSeconds: TimeInterval = 45
+
+    static let `default` = SyncLanDiscoveryConfiguration()
+
+    var multicastEndpoints: [NWEndpoint] {
+        let port = NWEndpoint.Port(rawValue: discoveryPort) ?? NWEndpoint.Port(rawValue: 9737)!
+        return [
+            .hostPort(host: NWEndpoint.Host(ipv4MulticastHost), port: port),
+            .hostPort(host: NWEndpoint.Host(ipv6MulticastHost), port: port)
+        ]
+    }
+}
+
+struct SyncLanDiscoveryPacket: Codable, Equatable {
+    var protocolName: String
+    var protocolVersion: Int
+    var deviceId: String
+    var sessionId: String
+    var userHash: String?
+    var displayName: String
+    var capabilities: [String]
+    var localApiPort: UInt16?
+    var timestamp: String
+
+    enum CodingKeys: String, CodingKey {
+        case protocolName = "protocol_name"
+        case protocolVersion = "protocol_version"
+        case deviceId = "device_id"
+        case sessionId = "session_id"
+        case userHash = "user_hash"
+        case displayName = "display_name"
+        case capabilities
+        case localApiPort = "local_api_port"
+        case timestamp
+    }
+}
+
+struct SyncLanDiscoveredPeer: Identifiable, Equatable {
+    var id: String { "\(deviceId):\(sessionId)" }
+    var deviceId: String
+    var sessionId: String
+    var displayName: String
+    var peerURL: URL
+    var sourceAddress: String
+    var capabilities: [String]
+    var firstSeen: Date
+    var lastSeen: Date
+
+    var detailLabel: String {
+        "\(peerURL.absoluteString) / \(deviceId)"
+    }
+}
+
+enum SyncLanDiscoveryScannerError: LocalizedError, Equatable {
+    case missingLocalIdentity
+    case noUsableMulticastGroup
+
+    var errorDescription: String? {
+        switch self {
+        case .missingLocalIdentity:
+            return "The local LAN sync identity is unavailable."
+        case .noUsableMulticastGroup:
+            return "LAN discovery could not join an IPv4 or IPv6 multicast group."
+        }
+    }
+}
+
+@MainActor
+final class SyncLanDiscoveryScanner: ObservableObject {
+    @Published private(set) var isRunning = false
+    @Published private(set) var discoveredPeers: [SyncLanDiscoveredPeer] = []
+    @Published var lastError: String?
+
+    private let config: SyncLanDiscoveryConfiguration
+    private let queue = DispatchQueue(label: "KE8YGWLogger.SyncLanDiscovery")
+    private var groups: [NWConnectionGroup] = []
+    private var localIdentity: SyncPeerIdentity?
+
+    init(config: SyncLanDiscoveryConfiguration = .default) {
+        self.config = config
+    }
+
+    func start(identity: SyncPeerIdentity?) {
+        stop()
+        guard let identity else {
+            lastError = SyncLanDiscoveryScannerError.missingLocalIdentity.localizedDescription
+            return
+        }
+        localIdentity = identity
+        lastError = nil
+
+        for endpoint in config.multicastEndpoints {
+            do {
+                let group = try makeGroup(endpoint: endpoint)
+                groups.append(group)
+                group.start(queue: queue)
+            } catch {
+                lastError = error.localizedDescription
+            }
+        }
+
+        isRunning = !groups.isEmpty
+        if groups.isEmpty {
+            lastError = SyncLanDiscoveryScannerError.noUsableMulticastGroup.localizedDescription
+        }
+    }
+
+    func stop() {
+        groups.forEach { $0.cancel() }
+        groups.removeAll()
+        isRunning = false
+    }
+
+    func usePeer(_ peer: SyncLanDiscoveredPeer) -> (url: String, deviceId: String, displayName: String) {
+        (peer.peerURL.absoluteString, peer.deviceId, peer.displayName)
+    }
+
+    private func makeGroup(endpoint: NWEndpoint) throws -> NWConnectionGroup {
+        let multicastGroup = try NWMulticastGroup(for: [endpoint])
+        let parameters = NWParameters.udp
+        parameters.allowLocalEndpointReuse = true
+        let group = NWConnectionGroup(with: multicastGroup, using: parameters)
+        group.stateUpdateHandler = { [weak self] state in
+            if case .failed(let error) = state {
+                Task { @MainActor in
+                    self?.lastError = error.localizedDescription
+                }
+            }
+        }
+        group.setReceiveHandler(maximumMessageSize: 4096, rejectOversizedMessages: true) { [weak self] message, content, _ in
+            guard let self,
+                  let content,
+                  let remoteEndpoint = message.remoteEndpoint
+            else {
+                return
+            }
+            Task {
+                await self.processDiscoveryDatagram(content, remoteEndpoint: remoteEndpoint)
+            }
+        }
+        return group
+    }
+
+    private func processDiscoveryDatagram(_ data: Data, remoteEndpoint: NWEndpoint) async {
+        guard let identity = localIdentity,
+              let packet = Self.decodeDiscoveryPacket(data),
+              Self.isSupported(packet, config: config),
+              !Self.isSelf(packet, identity: identity),
+              let peerURL = Self.peerURL(packet: packet, remoteEndpoint: remoteEndpoint)
+        else {
+            return
+        }
+
+        do {
+            let state = try await Self.fetchPeerState(peerURL: peerURL)
+            guard Self.peerStateMatches(packet: packet, state: state) else {
+                return
+            }
+            upsertPeer(packet: packet, peerURL: peerURL, remoteEndpoint: remoteEndpoint)
+        } catch {
+            lastError = error.localizedDescription
+        }
+    }
+
+    private func upsertPeer(packet: SyncLanDiscoveryPacket, peerURL: URL, remoteEndpoint: NWEndpoint) {
+        pruneExpiredPeers()
+        let now = Date()
+        let sourceAddress = Self.sourceAddress(remoteEndpoint) ?? peerURL.absoluteString
+        let displayName = packet.displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let peer = SyncLanDiscoveredPeer(
+            deviceId: packet.deviceId,
+            sessionId: packet.sessionId,
+            displayName: displayName.isEmpty ? "LAN Peer" : displayName,
+            peerURL: peerURL,
+            sourceAddress: sourceAddress,
+            capabilities: packet.capabilities,
+            firstSeen: discoveredPeers.first(where: { $0.deviceId == packet.deviceId && $0.sessionId == packet.sessionId })?.firstSeen ?? now,
+            lastSeen: now
+        )
+        if let index = discoveredPeers.firstIndex(where: { $0.id == peer.id }) {
+            discoveredPeers[index] = peer
+        } else {
+            discoveredPeers.append(peer)
+        }
+        discoveredPeers.sort { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
+    }
+
+    private func pruneExpiredPeers(now: Date = Date()) {
+        discoveredPeers.removeAll { now.timeIntervalSince($0.lastSeen) > config.peerTimeoutSeconds }
+    }
+
+    nonisolated static func decodeDiscoveryPacket(_ data: Data) -> SyncLanDiscoveryPacket? {
+        try? JSONDecoder().decode(SyncLanDiscoveryPacket.self, from: data)
+    }
+
+    nonisolated static func isSupported(_ packet: SyncLanDiscoveryPacket, config: SyncLanDiscoveryConfiguration = .default) -> Bool {
+        packet.protocolName == config.protocolName && packet.protocolVersion == config.protocolVersion
+    }
+
+    nonisolated static func isSelf(_ packet: SyncLanDiscoveryPacket, identity: SyncPeerIdentity) -> Bool {
+        equivalentUUID(packet.deviceId, identity.deviceId) && equivalentUUID(packet.sessionId, identity.sessionId)
+    }
+
+    nonisolated static func peerStateMatches(packet: SyncLanDiscoveryPacket, state: SyncLanPeerStateResponse) -> Bool {
+        guard let identity = state.identity else {
+            return false
+        }
+        return equivalentUUID(packet.deviceId, identity.deviceId)
+            && equivalentUUID(packet.sessionId, identity.sessionId)
+    }
+
+    nonisolated static func peerURL(packet: SyncLanDiscoveryPacket, remoteEndpoint: NWEndpoint) -> URL? {
+        guard case .hostPort(let host, let sourcePort) = remoteEndpoint,
+              let hostString = hostString(host),
+              isUsableDiscoveryHost(hostString)
+        else {
+            return nil
+        }
+        let port = Int(packet.localApiPort ?? sourcePort.rawValue)
+        guard port > 0 else {
+            return nil
+        }
+        var components = URLComponents()
+        components.scheme = "http"
+        components.host = hostString
+        components.port = port
+        return components.url
+    }
+
+    nonisolated static func sourceAddress(_ endpoint: NWEndpoint) -> String? {
+        guard case .hostPort(let host, let port) = endpoint,
+              let hostString = hostString(host)
+        else {
+            return nil
+        }
+        return "\(hostString):\(port.rawValue)"
+    }
+
+    nonisolated private static func fetchPeerState(peerURL: URL) async throws -> SyncLanPeerStateResponse {
+        let request = try SyncLanHTTPTransport().makeStateRequest(peerURL: peerURL)
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse,
+              (200..<300).contains(http.statusCode)
+        else {
+            throw SyncLanHTTPTransportError.invalidHTTPResponse
+        }
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        return try decoder.decode(SyncLanPeerStateResponse.self, from: data)
+    }
+
+    nonisolated private static func hostString(_ host: NWEndpoint.Host) -> String? {
+        switch host {
+        case .name(let name, _):
+            return name
+        case .ipv4(let address):
+            return "\(address)"
+        case .ipv6(let address):
+            return "\(address)"
+        @unknown default:
+            return nil
+        }
+    }
+
+    nonisolated private static func isUsableDiscoveryHost(_ host: String) -> Bool {
+        let normalized = host.lowercased()
+        return !normalized.hasPrefix("fe80:") || normalized.contains("%")
+    }
+
+    nonisolated private static func equivalentUUID(_ left: String, _ right: String) -> Bool {
+        guard let left = UUID(uuidString: left),
+              let right = UUID(uuidString: right)
+        else {
+            return false
+        }
+        return left.uuidString.lowercased() == right.uuidString.lowercased()
+    }
+}
+
 @MainActor
 final class ConnectivityMonitor: ObservableObject {
     @Published var state: ConnectivityState = .unknown

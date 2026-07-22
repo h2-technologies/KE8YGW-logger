@@ -5,6 +5,7 @@
 //! bounded JSON command ABI over stable C symbols.
 
 use std::{
+    collections::HashSet,
     ffi::{CStr, CString},
     os::raw::{c_char, c_uchar},
     panic::{catch_unwind, AssertUnwindSafe},
@@ -18,19 +19,36 @@ use ham_core::{
     default_service_registry, encode_maidenhead, export_adif, grid_to_lat_lon, infer_band,
     maidenhead_to_coordinate, map_provider_metadata, mock_propagation_forecast, mock_weather,
     online_provider_metadata, parse_adif, qso_map_objects, station_markers_from_profiles,
-    submit_proposal, validate_grid, ApplicationSettings, Coordinate, EquipmentItem, EquipmentType,
-    InMemoryEventBus, JsonStationBookStore, JsonSupportStore, JsonlLogbookEventStore,
-    LocalPrefixProvider, LogbookEventStore, MapLayerStack, OperatorRole, ProposalContext,
-    QsoCurrentStateProjection, QsoRecord, StationBook, StationConfiguration, StationProfile,
-    UploadQueue, UploadTarget,
+    submit_proposal, validate_grid, ApplicationSettings, Coordinate, CoreEventEnvelope,
+    EquipmentItem, EquipmentType, InMemoryEventBus, JsonStationBookStore, JsonSupportStore,
+    JsonlLogbookEventStore, LocalPrefixProvider, LogbookEventStore, MapLayerStack, OperatorRole,
+    ProposalContext, QsoCurrentStateProjection, QsoRecord, StationBook, StationConfiguration,
+    StationProfile, UploadQueue, UploadTarget,
 };
 use ham_plugin_sdk::{
     PluginCapability, PluginManifest, ProposalEnvelope, OFFICIAL_LOG_QSO_CREATED,
-    PROPOSAL_ACTIVATION_END, PROPOSAL_ACTIVATION_START, PROPOSAL_NET_CHECKIN_CREATE,
-    PROPOSAL_NET_SESSION_END, PROPOSAL_NET_SESSION_START, PROPOSAL_NET_TRAFFIC_CREATE,
-    PROPOSAL_QSO_CREATE, PROPOSAL_QSO_DELETE,
+    PROPOSAL_ACTIVATION_CANCEL, PROPOSAL_ACTIVATION_CREATE, PROPOSAL_ACTIVATION_END,
+    PROPOSAL_ACTIVATION_NOTE_ADD, PROPOSAL_ACTIVATION_START, PROPOSAL_ACTIVATION_UPDATE,
+    PROPOSAL_NET_CHECKIN_CREATE, PROPOSAL_NET_CHECKIN_DELETE, PROPOSAL_NET_CHECKIN_UPDATE,
+    PROPOSAL_NET_REPORT_EXPORT, PROPOSAL_NET_SESSION_CANCEL, PROPOSAL_NET_SESSION_END,
+    PROPOSAL_NET_SESSION_START, PROPOSAL_NET_TEMPLATE_CREATE, PROPOSAL_NET_TEMPLATE_UPDATE,
+    PROPOSAL_NET_TRAFFIC_CREATE, PROPOSAL_NET_TRAFFIC_UPDATE, PROPOSAL_QSO_ACTIVATION_LINK,
+    PROPOSAL_QSO_ACTIVATION_UNLINK, PROPOSAL_QSO_CORRECT, PROPOSAL_QSO_CREATE, PROPOSAL_QSO_DELETE,
+    PROPOSAL_QSO_NOTE_ADD, PROPOSAL_QSO_RESTORE,
 };
-use ham_sync::{CloudConnectionState, CloudSyncConfig, LocalPeerIdentity, SyncConfig};
+use ham_sync::{
+    pull_missing_events, CloudConnectionState, CloudSyncConfig, ConflictReviewStatus,
+    JsonConflictReviewStore, JsonLanTrustStore, JsonLocalSyncIdentityStore,
+    JsonOfflineMutationQueue, LanPairingAcceptance, LanPeerTrustUpdate, LocalPeerIdentity,
+    ManualConflictResolution, ManualConflictResolutionChoice, OfflineMutationEnvelope,
+    OfflineMutationInput, PullEventsRequest, SyncConfig, SyncConflictReport,
+    MAX_CONFLICT_REVIEW_NOTE_BYTES, OFFLINE_OP_ACTIVATION_END, OFFLINE_OP_ACTIVATION_START,
+    OFFLINE_OP_NET_CHECKIN_CREATE, OFFLINE_OP_NET_CHECKIN_DELETE, OFFLINE_OP_NET_SESSION_END,
+    OFFLINE_OP_NET_SESSION_START, OFFLINE_OP_NET_TRAFFIC_CREATE, OFFLINE_OP_QSO_CORRECT,
+    OFFLINE_OP_QSO_CREATE, OFFLINE_OP_QSO_DELETE, OFFLINE_OP_QSO_NOTE_ADD, OFFLINE_OP_QSO_RESTORE,
+    OFFLINE_OP_STATION_EQUIPMENT_CREATE, OFFLINE_OP_STATION_PROFILE_CREATE,
+    OFFLINE_OP_STATION_PROFILE_SELECT,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tokio::runtime::Runtime;
@@ -166,6 +184,12 @@ struct QsoListRequest {
 struct StationProfileCreateRequest {
     app_support_dir: String,
     #[serde(default)]
+    logbook_id: Option<Uuid>,
+    #[serde(default)]
+    device_id: Option<Uuid>,
+    #[serde(default)]
+    operation_id: Option<String>,
+    #[serde(default)]
     station_profile_id: Option<Uuid>,
     display_name: String,
     station_callsign: String,
@@ -189,6 +213,12 @@ struct StationProfileCreateRequest {
 struct StationEquipmentCreateRequest {
     app_support_dir: String,
     #[serde(default)]
+    logbook_id: Option<Uuid>,
+    #[serde(default)]
+    device_id: Option<Uuid>,
+    #[serde(default)]
+    operation_id: Option<String>,
+    #[serde(default)]
     equipment_id: Option<Uuid>,
     equipment_type: String,
     display_name: String,
@@ -207,7 +237,214 @@ struct StationEquipmentCreateRequest {
 #[derive(Debug, Deserialize)]
 struct StationSelectProfileRequest {
     app_support_dir: String,
+    #[serde(default)]
+    logbook_id: Option<Uuid>,
+    #[serde(default)]
+    device_id: Option<Uuid>,
+    #[serde(default)]
+    operation_id: Option<String>,
     station_profile_id: Uuid,
+}
+
+#[derive(Debug, Deserialize)]
+struct SyncSnapshotRequest {
+    #[serde(default)]
+    app_support_dir: Option<String>,
+    #[serde(default)]
+    logbook_id: Option<Uuid>,
+}
+
+#[derive(Debug, Deserialize)]
+struct IosRetryPlanRequest {
+    app_support_dir: String,
+    #[serde(default)]
+    logbook_id: Option<Uuid>,
+    #[serde(default)]
+    max_mutations: Option<usize>,
+    #[serde(default = "default_true")]
+    mark_sending: bool,
+    #[serde(default = "default_true")]
+    network_available: bool,
+    #[serde(default)]
+    background_time_budget_seconds: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct IosRetryResultRequest {
+    app_support_dir: String,
+    #[serde(default)]
+    logbook_id: Option<Uuid>,
+    #[serde(default)]
+    operation_ids: Vec<Uuid>,
+    #[serde(default)]
+    accepted_event_hashes: Vec<String>,
+    result: IosRetryResultKind,
+    #[serde(default)]
+    error_code: Option<String>,
+    #[serde(default)]
+    message: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct IosRemoteEventsApplyRequest {
+    app_support_dir: String,
+    #[serde(default)]
+    logbook_id: Option<Uuid>,
+    #[serde(default)]
+    peer_id: Option<String>,
+    #[serde(default)]
+    events: Vec<CoreEventEnvelope>,
+}
+
+#[derive(Debug, Deserialize)]
+struct LanTrustSnapshotRequest {
+    app_support_dir: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct LanPairingTokenIssueRequest {
+    app_support_dir: String,
+    #[serde(default)]
+    issuer_device_id: Option<Uuid>,
+    #[serde(default)]
+    logbook_id: Option<Uuid>,
+    #[serde(default)]
+    issuer_display_name: Option<String>,
+    #[serde(default)]
+    approved_by_operator: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct LanPairingAcceptRequest {
+    app_support_dir: String,
+    token_id: Uuid,
+    pairing_code: String,
+    peer_device_id: Uuid,
+    peer_display_name: String,
+    #[serde(default)]
+    requested_logbooks: Vec<Uuid>,
+    #[serde(default)]
+    public_key_fingerprint: Option<String>,
+    #[serde(default)]
+    auth_credential_id: Option<Uuid>,
+}
+
+#[derive(Debug, Deserialize)]
+struct LanTrustPeerRequest {
+    app_support_dir: String,
+    peer_device_id: Uuid,
+    peer_display_name: String,
+    #[serde(default)]
+    logbook_id: Option<Uuid>,
+    #[serde(default)]
+    pairing_token_id: Option<Uuid>,
+    #[serde(default)]
+    public_key_fingerprint: Option<String>,
+    auth_credential_id: Uuid,
+}
+
+#[derive(Debug, Deserialize)]
+struct LanRotateAuthRequest {
+    app_support_dir: String,
+    device_id: Uuid,
+    #[serde(default)]
+    logbook_id: Option<Uuid>,
+    new_auth_credential_id: Uuid,
+}
+
+#[derive(Debug, Deserialize)]
+struct LanRevokeRequest {
+    app_support_dir: String,
+    device_id: Uuid,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum IosRetryResultKind {
+    Accepted,
+    TransientFailure,
+    AuthFailed,
+    ValidationFailed,
+    Diverged,
+    MissingLocalEvent,
+    PermanentFailure,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_ios_retry_result_code(result: IosRetryResultKind) -> &'static str {
+    match result {
+        IosRetryResultKind::Accepted => "accepted",
+        IosRetryResultKind::TransientFailure => "transient_transport_failure",
+        IosRetryResultKind::AuthFailed => "auth_failed",
+        IosRetryResultKind::ValidationFailed => "validation_failed",
+        IosRetryResultKind::Diverged => "diverged",
+        IosRetryResultKind::MissingLocalEvent => "missing_local_official_event",
+        IosRetryResultKind::PermanentFailure => "permanent_failure",
+    }
+}
+
+fn default_ios_retry_result_message(result: IosRetryResultKind) -> &'static str {
+    match result {
+        IosRetryResultKind::Accepted => "queued events were accepted by the sync peer",
+        IosRetryResultKind::TransientFailure => {
+            "transient sync transport failure; retry using bounded backoff"
+        }
+        IosRetryResultKind::AuthFailed => {
+            "sync authentication failed; operator action is required before retry"
+        }
+        IosRetryResultKind::ValidationFailed => {
+            "sync validation failed; operator action is required before retry"
+        }
+        IosRetryResultKind::Diverged => {
+            "sync histories diverged; manual review is required before retry"
+        }
+        IosRetryResultKind::MissingLocalEvent => {
+            "offline mutation has no matching local official event"
+        }
+        IosRetryResultKind::PermanentFailure => {
+            "permanent sync failure; operator action is required before retry"
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct ConflictReviewCreateRequest {
+    app_support_dir: String,
+    report: SyncConflictReport,
+}
+
+#[derive(Debug, Deserialize)]
+struct ConflictReviewResolveRequest {
+    app_support_dir: String,
+    review_id: Uuid,
+    resolution: ManualConflictResolution,
+}
+
+#[derive(Debug, Deserialize)]
+struct ConflictReviewCorrectiveEventsRequest {
+    app_support_dir: String,
+    #[serde(default)]
+    logbook_id: Option<Uuid>,
+    #[serde(default)]
+    device_id: Option<Uuid>,
+    review_id: Uuid,
+    #[serde(default)]
+    operator_note: Option<String>,
+    #[serde(default)]
+    proposals: Vec<IosCorrectiveProposalRequest>,
+}
+
+#[derive(Debug, Deserialize)]
+struct IosCorrectiveProposalRequest {
+    proposal_type: String,
+    entity_id: Option<Uuid>,
+    #[serde(default)]
+    operation_id: Option<String>,
+    #[serde(default)]
+    payload: Value,
 }
 
 #[derive(Debug, Deserialize)]
@@ -405,7 +642,26 @@ fn dispatch_call(call: BridgeCall, correlation_id: Uuid) -> Result<Value, Bridge
         "station.book" => station_book_command_payload(payload),
         "provider.status" => provider_status_payload(),
         "map.snapshot" => map_snapshot_payload(),
-        "sync.snapshot" => sync_snapshot_payload(),
+        "sync.snapshot" => sync_snapshot_command(payload),
+        "sync.offline_queue.snapshot" => sync_snapshot_command(payload),
+        "sync.offline_queue.recover" => sync_offline_queue_recover_command(payload),
+        "sync.offline_queue.retry_plan" => sync_offline_queue_retry_plan_command(payload),
+        "sync.offline_queue.retry_result" => sync_offline_queue_retry_result_command(payload),
+        "sync.remote_events.apply" => sync_remote_events_apply_command(payload),
+        "sync.conflict_reviews.snapshot" => sync_snapshot_command(payload),
+        "sync.conflict_reviews.create" => sync_conflict_review_create_command(payload),
+        "sync.conflict_reviews.resolve" => sync_conflict_review_resolve_command(payload),
+        "sync.conflict_reviews.corrective_events" => {
+            sync_conflict_review_corrective_events_command(payload, correlation_id)
+        }
+        "sync.lan_trust.snapshot" => sync_lan_trust_snapshot_command(payload),
+        "sync.lan_trust.issue_pairing_token" => sync_lan_trust_issue_pairing_token_command(payload),
+        "sync.lan_trust.accept_pairing_token" => {
+            sync_lan_trust_accept_pairing_token_command(payload)
+        }
+        "sync.lan_trust.trust_peer" => sync_lan_trust_trust_peer_command(payload),
+        "sync.lan_trust.rotate_auth" => sync_lan_trust_rotate_auth_command(payload),
+        "sync.lan_trust.revoke" => sync_lan_trust_revoke_command(payload),
         "diagnostics.snapshot" => diagnostics_command_payload(payload),
         "settings.get" => settings_get_command(payload),
         "settings.create_default" => settings_create_default_command(payload),
@@ -439,19 +695,33 @@ fn dispatch_call(call: BridgeCall, correlation_id: Uuid) -> Result<Value, Bridge
         "qso.create" => create_qso_command(payload, correlation_id),
         "qso.delete" => delete_qso_command(payload, correlation_id),
         "qso.list" => list_qsos_command(payload),
-        "station.profile.create" => station_profile_create_command(payload),
-        "station.equipment.create" => station_equipment_create_command(payload),
-        "station.profile.select" => station_profile_select_command(payload),
-        "activation.start" => domain_proposal_command(payload, PROPOSAL_ACTIVATION_START, None),
-        "activation.end" => {
-            domain_proposal_command(payload, PROPOSAL_ACTIVATION_END, Some("activation_id"))
+        "station.profile.create" => station_profile_create_command(payload, correlation_id),
+        "station.equipment.create" => station_equipment_create_command(payload, correlation_id),
+        "station.profile.select" => station_profile_select_command(payload, correlation_id),
+        "activation.start" => {
+            domain_proposal_command(payload, PROPOSAL_ACTIVATION_START, None, correlation_id)
         }
-        "net.session.start" => domain_proposal_command(payload, PROPOSAL_NET_SESSION_START, None),
-        "net.session.end" => {
-            domain_proposal_command(payload, PROPOSAL_NET_SESSION_END, Some("net_session_id"))
+        "activation.end" => domain_proposal_command(
+            payload,
+            PROPOSAL_ACTIVATION_END,
+            Some("activation_id"),
+            correlation_id,
+        ),
+        "net.session.start" => {
+            domain_proposal_command(payload, PROPOSAL_NET_SESSION_START, None, correlation_id)
         }
-        "net.checkin.create" => domain_proposal_command(payload, PROPOSAL_NET_CHECKIN_CREATE, None),
-        "net.traffic.create" => domain_proposal_command(payload, PROPOSAL_NET_TRAFFIC_CREATE, None),
+        "net.session.end" => domain_proposal_command(
+            payload,
+            PROPOSAL_NET_SESSION_END,
+            Some("net_session_id"),
+            correlation_id,
+        ),
+        "net.checkin.create" => {
+            domain_proposal_command(payload, PROPOSAL_NET_CHECKIN_CREATE, None, correlation_id)
+        }
+        "net.traffic.create" => {
+            domain_proposal_command(payload, PROPOSAL_NET_TRAFFIC_CREATE, None, correlation_id)
+        }
         command => Err(BridgeFault::unsupported_command(command)),
     }
 }
@@ -794,17 +1064,757 @@ fn map_snapshot_payload() -> Result<Value, BridgeFault> {
 }
 
 fn sync_snapshot_payload() -> Result<Value, BridgeFault> {
+    sync_snapshot_for_support(None, default_logbook_id())
+}
+
+fn sync_snapshot_command(payload: Value) -> Result<Value, BridgeFault> {
+    let request: SyncSnapshotRequest = serde_json::from_value(payload).map_err(|error| {
+        BridgeFault::invalid_json(format!("invalid sync snapshot payload: {error}"))
+    })?;
+    sync_snapshot_for_support(
+        request.app_support_dir.as_deref(),
+        request.logbook_id.unwrap_or_else(default_logbook_id),
+    )
+}
+
+fn sync_offline_queue_recover_command(payload: Value) -> Result<Value, BridgeFault> {
+    let request: SyncSnapshotRequest = serde_json::from_value(payload).map_err(|error| {
+        BridgeFault::invalid_json(format!("invalid sync recovery payload: {error}"))
+    })?;
+    let app_support_dir = request
+        .app_support_dir
+        .as_deref()
+        .ok_or_else(|| BridgeFault::invalid_input("app_support_dir is required"))?;
+    let queue = offline_queue(app_support_dir)?;
+    let now = Utc::now();
+    let recovery = queue
+        .recover_or_initialize(now)
+        .map_err(|error| BridgeFault::storage(error.to_string()))?;
+    let mut snapshot = sync_snapshot_for_support(
+        Some(app_support_dir),
+        request.logbook_id.unwrap_or_else(default_logbook_id),
+    )?;
+    snapshot["recovered_count"] = json!(recovery.recovered_interrupted_writes);
+    snapshot["recovery"] = json!(recovery);
+    Ok(snapshot)
+}
+
+fn sync_offline_queue_retry_plan_command(payload: Value) -> Result<Value, BridgeFault> {
+    let request: IosRetryPlanRequest = serde_json::from_value(payload).map_err(|error| {
+        BridgeFault::invalid_json(format!("invalid sync retry plan payload: {error}"))
+    })?;
+    if request.max_mutations == Some(0) {
+        return Err(BridgeFault::invalid_input(
+            "max_mutations must be at least 1",
+        ));
+    }
+    let app_support_dir = request.app_support_dir.as_str();
+    let logbook_id = request.logbook_id.unwrap_or_else(default_logbook_id);
+    let max_mutations = request.max_mutations.unwrap_or(25).min(50);
+    let queue = offline_queue(app_support_dir)?;
+    let now = Utc::now();
+    let recovery = queue
+        .recover_or_initialize(now)
+        .map_err(|error| BridgeFault::storage(error.to_string()))?;
+
+    if !request.network_available {
+        let snapshot = queue
+            .load_snapshot(now)
+            .map_err(|error| BridgeFault::storage(error.to_string()))?;
+        return Ok(json!({
+            "retry_plan": {
+                "schema_version": BRIDGE_SCHEMA_VERSION,
+                "logbook_id": logbook_id,
+                "operation_ids": Vec::<Uuid>::new(),
+                "event_hashes": Vec::<String>::new(),
+                "events": Vec::<Value>::new(),
+                "missing_local_event_operation_ids": Vec::<Uuid>::new(),
+                "network_required": true,
+                "blocked_by_network": true,
+                "max_mutations": max_mutations,
+                "background_time_budget_seconds": request.background_time_budget_seconds.unwrap_or(25),
+                "mark_sending": false
+            },
+            "offline_queue": snapshot,
+            "recovery": recovery
+        }));
+    }
+
+    let runtime = Runtime::new().map_err(|error| BridgeFault::internal(error.to_string()))?;
+    let store = event_store(app_support_dir)?;
+    let local_events = runtime
+        .block_on(store.list_events(logbook_id))
+        .map_err(|error| BridgeFault::storage(error.to_string()))?;
+    let mut batch = queue
+        .ready_event_batch(logbook_id, &local_events, now)
+        .map_err(|error| BridgeFault::storage(error.to_string()))?;
+    let missing_local_event_operation_ids = batch.missing_local_event_operation_ids.clone();
+    for operation_id in &missing_local_event_operation_ids {
+        queue
+            .mark_user_action_required(
+                *operation_id,
+                "offline mutation has no matching local official event",
+                Some("missing_local_official_event".to_owned()),
+                now,
+            )
+            .map_err(|error| BridgeFault::storage(error.to_string()))?;
+    }
+    if !missing_local_event_operation_ids.is_empty() {
+        batch = queue
+            .ready_event_batch(logbook_id, &local_events, now)
+            .map_err(|error| BridgeFault::storage(error.to_string()))?;
+    }
+
+    if batch.operation_ids.len() > max_mutations {
+        batch.operation_ids.truncate(max_mutations);
+        batch.events.truncate(max_mutations);
+    }
+    if request.mark_sending {
+        for operation_id in &batch.operation_ids {
+            queue
+                .mark_sending(*operation_id, now)
+                .map_err(|error| BridgeFault::storage(error.to_string()))?;
+        }
+    }
+    let snapshot = queue
+        .load_snapshot(now)
+        .map_err(|error| BridgeFault::storage(error.to_string()))?;
+    let event_hashes = batch
+        .events
+        .iter()
+        .map(|event| event.event_hash.clone())
+        .collect::<Vec<_>>();
+
+    Ok(json!({
+        "retry_plan": {
+            "schema_version": BRIDGE_SCHEMA_VERSION,
+            "logbook_id": logbook_id,
+            "operation_ids": batch.operation_ids,
+            "event_hashes": event_hashes,
+            "events": batch.events,
+            "missing_local_event_operation_ids": missing_local_event_operation_ids,
+            "network_required": true,
+            "blocked_by_network": false,
+            "max_mutations": max_mutations,
+            "background_time_budget_seconds": request.background_time_budget_seconds.unwrap_or(25),
+            "mark_sending": request.mark_sending,
+            "permanent_failure_results": [
+                "auth_failed",
+                "validation_failed",
+                "diverged",
+                "missing_local_event",
+                "permanent_failure"
+            ]
+        },
+        "offline_queue": snapshot,
+        "recovery": recovery
+    }))
+}
+
+fn sync_offline_queue_retry_result_command(payload: Value) -> Result<Value, BridgeFault> {
+    let request: IosRetryResultRequest = serde_json::from_value(payload).map_err(|error| {
+        BridgeFault::invalid_json(format!("invalid sync retry result payload: {error}"))
+    })?;
+    if request.operation_ids.is_empty() {
+        return Err(BridgeFault::invalid_input(
+            "operation_ids must contain at least one operation",
+        ));
+    }
+    let queue = offline_queue(&request.app_support_dir)?;
+    let now = Utc::now();
+    let message = request
+        .message
+        .clone()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| default_ios_retry_result_message(request.result).to_owned());
+    let error_code = request
+        .error_code
+        .clone()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| default_ios_retry_result_code(request.result).to_owned());
+
+    let mut accepted_count = 0usize;
+    match request.result {
+        IosRetryResultKind::Accepted => {
+            if request.accepted_event_hashes.is_empty() {
+                return Err(BridgeFault::invalid_input(
+                    "accepted_event_hashes are required for accepted retry results",
+                ));
+            }
+            let accepted_hashes = request
+                .accepted_event_hashes
+                .iter()
+                .cloned()
+                .collect::<HashSet<_>>();
+            accepted_count = queue
+                .mark_accepted_by_event_hashes(&accepted_hashes, now)
+                .map_err(|error| BridgeFault::storage(error.to_string()))?;
+        }
+        IosRetryResultKind::TransientFailure => {
+            for operation_id in &request.operation_ids {
+                queue
+                    .record_transient_failure(
+                        *operation_id,
+                        message.clone(),
+                        Some(error_code.clone()),
+                        now,
+                    )
+                    .map_err(|error| BridgeFault::storage(error.to_string()))?;
+            }
+        }
+        IosRetryResultKind::Diverged => {
+            for operation_id in &request.operation_ids {
+                queue
+                    .mark_blocked(*operation_id, message.clone(), now)
+                    .map_err(|error| BridgeFault::storage(error.to_string()))?;
+            }
+        }
+        IosRetryResultKind::AuthFailed
+        | IosRetryResultKind::ValidationFailed
+        | IosRetryResultKind::MissingLocalEvent
+        | IosRetryResultKind::PermanentFailure => {
+            for operation_id in &request.operation_ids {
+                queue
+                    .mark_user_action_required(
+                        *operation_id,
+                        message.clone(),
+                        Some(error_code.clone()),
+                        now,
+                    )
+                    .map_err(|error| BridgeFault::storage(error.to_string()))?;
+            }
+        }
+    }
+
+    let snapshot = queue
+        .load_snapshot(now)
+        .map_err(|error| BridgeFault::storage(error.to_string()))?;
+    let operation_ids = request
+        .operation_ids
+        .iter()
+        .copied()
+        .collect::<HashSet<_>>();
+    let affected_mutations = snapshot
+        .mutations
+        .iter()
+        .filter(|mutation| operation_ids.contains(&mutation.operation_id))
+        .cloned()
+        .collect::<Vec<_>>();
+
+    Ok(json!({
+        "retry_result": {
+            "schema_version": BRIDGE_SCHEMA_VERSION,
+            "logbook_id": request.logbook_id.unwrap_or_else(default_logbook_id),
+            "result": request.result,
+            "operation_ids": request.operation_ids,
+            "accepted_count": accepted_count,
+            "error_code": error_code,
+            "message": message
+        },
+        "affected_mutations": affected_mutations,
+        "offline_queue": snapshot
+    }))
+}
+
+fn sync_remote_events_apply_command(payload: Value) -> Result<Value, BridgeFault> {
+    let request: IosRemoteEventsApplyRequest =
+        serde_json::from_value(payload).map_err(|error| {
+            BridgeFault::invalid_json(format!("invalid remote events apply payload: {error}"))
+        })?;
+    let logbook_id = request
+        .logbook_id
+        .or_else(|| request.events.first().map(|event| event.logbook_id))
+        .unwrap_or_else(default_logbook_id);
+    if request
+        .events
+        .iter()
+        .any(|event| event.logbook_id != logbook_id)
+    {
+        return Err(BridgeFault::invalid_input(
+            "remote event logbook_id must match request logbook_id",
+        ));
+    }
+    let peer_id = request
+        .peer_id
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "ios-native-transport".to_owned());
+    let app_support_dir = request.app_support_dir;
+    let events = request.events;
+    let runtime = Runtime::new().map_err(|error| BridgeFault::internal(error.to_string()))?;
+    let store = event_store(&app_support_dir)?;
+    let (pull, pending_events) = runtime.block_on(async move {
+        let pull = pull_missing_events(
+            &store,
+            PullEventsRequest {
+                peer_id,
+                logbook_id,
+                local_head_hash: None,
+            },
+            events,
+        )
+        .await;
+        let pending_events = store
+            .list_events(logbook_id)
+            .await
+            .map_err(|error| BridgeFault::storage(error.to_string()))?
+            .len();
+        Ok::<_, BridgeFault>((pull, pending_events))
+    })?;
+    let sync = sync_snapshot_for_support(Some(&app_support_dir), logbook_id)?;
+    Ok(json!({
+        "pull": pull,
+        "sync": sync,
+        "projection": {
+            "source": "rust",
+            "schema_version": BRIDGE_SCHEMA_VERSION,
+            "pending_event_count": pending_events
+        }
+    }))
+}
+
+fn sync_conflict_review_create_command(payload: Value) -> Result<Value, BridgeFault> {
+    let request: ConflictReviewCreateRequest =
+        serde_json::from_value(payload).map_err(|error| {
+            BridgeFault::invalid_json(format!("invalid conflict review create payload: {error}"))
+        })?;
+    let store = conflict_review_store(&request.app_support_dir)?;
+    let review = store
+        .create_review(request.report, Utc::now())
+        .map_err(|error| BridgeFault::storage(error.to_string()))?;
+    let snapshot = store
+        .load_snapshot()
+        .map_err(|error| BridgeFault::storage(error.to_string()))?;
+    Ok(json!({
+        "conflict_review": review,
+        "conflict_reviews": snapshot
+    }))
+}
+
+fn sync_conflict_review_resolve_command(payload: Value) -> Result<Value, BridgeFault> {
+    let request: ConflictReviewResolveRequest =
+        serde_json::from_value(payload).map_err(|error| {
+            BridgeFault::invalid_json(format!(
+                "invalid conflict review resolution payload: {error}"
+            ))
+        })?;
+    let store = conflict_review_store(&request.app_support_dir)?;
+    let review = store
+        .resolve_review(request.review_id, request.resolution, Utc::now())
+        .map_err(|error| BridgeFault::storage(error.to_string()))?;
+    let snapshot = store
+        .load_snapshot()
+        .map_err(|error| BridgeFault::storage(error.to_string()))?;
+    Ok(json!({
+        "conflict_review": review,
+        "conflict_reviews": snapshot
+    }))
+}
+
+fn sync_conflict_review_corrective_events_command(
+    payload: Value,
+    correlation_id: Uuid,
+) -> Result<Value, BridgeFault> {
+    let request: ConflictReviewCorrectiveEventsRequest =
+        serde_json::from_value(payload).map_err(|error| {
+            BridgeFault::invalid_json(format!(
+                "invalid conflict review corrective-events payload: {error}"
+            ))
+        })?;
+    if request.proposals.is_empty() {
+        return Err(BridgeFault::invalid_input(
+            "at least one corrective proposal is required",
+        ));
+    }
+    if request
+        .operator_note
+        .as_ref()
+        .is_some_and(|note| note.len() > MAX_CONFLICT_REVIEW_NOTE_BYTES)
+    {
+        return Err(BridgeFault::invalid_input(
+            "conflict review note is too large",
+        ));
+    }
+    for proposal in &request.proposals {
+        let proposal_type = proposal.proposal_type.trim();
+        if proposal_type.is_empty() {
+            return Err(BridgeFault::invalid_input(
+                "corrective proposal_type is required",
+            ));
+        }
+        if !is_supported_ios_corrective_proposal(proposal_type) {
+            return Err(BridgeFault::invalid_input(format!(
+                "unsupported corrective proposal type `{proposal_type}`"
+            )));
+        }
+        if !proposal.payload.is_object() {
+            return Err(BridgeFault::invalid_input(
+                "corrective proposal payload must be a JSON object",
+            ));
+        }
+        if corrective_proposal_requires_entity_id(proposal_type) && proposal.entity_id.is_none() {
+            return Err(BridgeFault::invalid_input(
+                "corrective proposal entity_id is required for this proposal type",
+            ));
+        }
+        if let Some(operation_id) = proposal
+            .operation_id
+            .as_ref()
+            .filter(|value| !value.trim().is_empty())
+        {
+            Uuid::parse_str(operation_id).map_err(|_| {
+                BridgeFault::invalid_input("corrective proposal operation_id must be a UUID")
+            })?;
+        }
+    }
+
+    let review_store = conflict_review_store(&request.app_support_dir)?;
+    let review_snapshot = review_store
+        .load_snapshot()
+        .map_err(|error| BridgeFault::storage(error.to_string()))?;
+    if !review_snapshot.reviews.iter().any(|review| {
+        review.review_id == request.review_id && review.status == ConflictReviewStatus::Open
+    }) {
+        return Err(BridgeFault::invalid_input(
+            "open conflict review was not found",
+        ));
+    }
+
+    let runtime = Runtime::new().map_err(|error| BridgeFault::internal(error.to_string()))?;
+    runtime.block_on(async move {
+        let logbook_id = request.logbook_id.unwrap_or_else(default_logbook_id);
+        let device_id = request.device_id.unwrap_or_else(Uuid::new_v4);
+        let event_store = event_store(&request.app_support_dir)?;
+        let mut corrective_events = Vec::new();
+        let mut corrective_event_hashes = Vec::new();
+        let mut offline_mutations = Vec::new();
+
+        for proposal in request.proposals {
+            let proposal_type = proposal.proposal_type.trim().to_owned();
+            let operation_id = proposal
+                .operation_id
+                .filter(|value| !value.trim().is_empty())
+                .unwrap_or_else(|| Uuid::new_v4().to_string());
+            let proposal_payload = corrective_payload_with_entity_id(
+                &proposal_type,
+                proposal.payload,
+                proposal.entity_id,
+            )?;
+            let operation_type = ios_corrective_offline_operation_type(&proposal_type);
+            let queued = enqueue_ios_mutation_with_input(
+                &request.app_support_dir,
+                IosMutationQueueInput {
+                    logbook_id,
+                    device_id,
+                    operation_type: &operation_type,
+                    payload: proposal_payload.clone(),
+                    external_operation_id: &operation_id,
+                    correlation_id,
+                    entity_id: proposal.entity_id,
+                },
+            )?;
+            let proposal = ProposalEnvelope::new(
+                &proposal_type,
+                logbook_id,
+                proposal.entity_id,
+                None,
+                device_id,
+                IOS_PLUGIN_ID,
+                1,
+                proposal_payload,
+            );
+            let outcome = submit_proposal(
+                &event_store,
+                &InMemoryEventBus::default(),
+                &ios_proposal_context(),
+                proposal,
+            )
+            .await
+            .map_err(|error| {
+                mark_ios_user_action_required(
+                    &request.app_support_dir,
+                    &queued,
+                    error.to_string(),
+                    "domain_validation_failed",
+                );
+                BridgeFault::domain(error.to_string())
+            })?;
+            let offline_mutation = record_ios_official_event(
+                &request.app_support_dir,
+                &queued,
+                &outcome.official_event,
+            )?;
+            corrective_event_hashes.push(outcome.official_event.event_hash.clone());
+            corrective_events.push(outcome.official_event);
+            offline_mutations.push(offline_mutation);
+        }
+
+        let mut resolution =
+            ManualConflictResolution::new(ManualConflictResolutionChoice::CreateCorrectiveEvents)
+                .with_corrective_event_hashes(corrective_event_hashes.clone())
+                .with_resolved_by_device_id(device_id);
+        if let Some(note) = request.operator_note.filter(|note| !note.trim().is_empty()) {
+            resolution = resolution.with_note(note);
+        }
+        let review = review_store
+            .resolve_review(request.review_id, resolution, Utc::now())
+            .map_err(|error| BridgeFault::storage(error.to_string()))?;
+        let snapshot = review_store
+            .load_snapshot()
+            .map_err(|error| BridgeFault::storage(error.to_string()))?;
+        let pending_events = event_store
+            .list_events(logbook_id)
+            .await
+            .map_err(|error| BridgeFault::storage(error.to_string()))?
+            .len();
+        Ok(json!({
+            "conflict_review": review,
+            "conflict_reviews": snapshot,
+            "corrective_events": corrective_events,
+            "corrective_event_hashes": corrective_event_hashes,
+            "offline_mutations": offline_mutations,
+            "projection": {
+                "source": "rust",
+                "schema_version": BRIDGE_SCHEMA_VERSION,
+                "pending_event_count": pending_events
+            }
+        }))
+    })
+}
+
+fn sync_lan_trust_snapshot_command(payload: Value) -> Result<Value, BridgeFault> {
+    let request: LanTrustSnapshotRequest = serde_json::from_value(payload)
+        .map_err(|error| BridgeFault::invalid_input(error.to_string()))?;
+    let store = lan_trust_store(&request.app_support_dir)?;
+    let snapshot = store
+        .snapshot()
+        .map_err(|error| BridgeFault::storage(error.to_string()))?;
+    Ok(json!({
+        "lan_trust": snapshot
+    }))
+}
+
+fn sync_lan_trust_issue_pairing_token_command(payload: Value) -> Result<Value, BridgeFault> {
+    let request: LanPairingTokenIssueRequest = serde_json::from_value(payload)
+        .map_err(|error| BridgeFault::invalid_input(error.to_string()))?;
+    let store = lan_trust_store(&request.app_support_dir)?;
+    let issuer_display_name = request
+        .issuer_display_name
+        .filter(|name| !name.trim().is_empty())
+        .unwrap_or_else(|| "KE8YGW Logger iOS".to_owned());
+    let issuer_device_id = match request.issuer_device_id {
+        Some(device_id) => device_id,
+        None => {
+            local_sync_identity_for_support(
+                Some(&request.app_support_dir),
+                &issuer_display_name,
+                None,
+            )?
+            .device_id
+        }
+    };
+    let pairing = store
+        .issue_pairing_token(
+            issuer_device_id,
+            request.logbook_id.unwrap_or_else(default_logbook_id),
+            issuer_display_name,
+            request.approved_by_operator,
+            Utc::now(),
+        )
+        .map_err(|error| BridgeFault::domain(error.to_string()))?;
+    let snapshot = store
+        .snapshot()
+        .map_err(|error| BridgeFault::storage(error.to_string()))?;
+    Ok(json!({
+        "pairing": pairing,
+        "lan_trust": snapshot
+    }))
+}
+
+fn sync_lan_trust_accept_pairing_token_command(payload: Value) -> Result<Value, BridgeFault> {
+    let request: LanPairingAcceptRequest = serde_json::from_value(payload)
+        .map_err(|error| BridgeFault::invalid_input(error.to_string()))?;
+    let auth_credential_id = request.auth_credential_id.ok_or_else(|| {
+        BridgeFault::invalid_input(
+            "field `auth_credential_id` is required before iOS can trust a LAN peer",
+        )
+    })?;
+    let store = lan_trust_store(&request.app_support_dir)?;
+    let requested_logbooks = if request.requested_logbooks.is_empty() {
+        vec![default_logbook_id()]
+    } else {
+        request.requested_logbooks
+    };
+    let device = store
+        .accept_pairing_token(
+            LanPairingAcceptance {
+                token_id: request.token_id,
+                pairing_code: request.pairing_code,
+                peer_device_id: request.peer_device_id,
+                peer_display_name: request.peer_display_name,
+                requested_logbooks,
+                public_key_fingerprint: request.public_key_fingerprint,
+                auth_credential_id: Some(auth_credential_id),
+            },
+            Utc::now(),
+        )
+        .map_err(|error| BridgeFault::domain(error.to_string()))?;
+    let snapshot = store
+        .snapshot()
+        .map_err(|error| BridgeFault::storage(error.to_string()))?;
+    Ok(json!({
+        "trusted_device": device,
+        "lan_trust": snapshot
+    }))
+}
+
+fn sync_lan_trust_trust_peer_command(payload: Value) -> Result<Value, BridgeFault> {
+    let request: LanTrustPeerRequest = serde_json::from_value(payload)
+        .map_err(|error| BridgeFault::invalid_input(error.to_string()))?;
+    let store = lan_trust_store(&request.app_support_dir)?;
+    let device = store
+        .trust_peer_with_auth_credential(
+            LanPeerTrustUpdate {
+                peer_device_id: request.peer_device_id,
+                peer_display_name: request.peer_display_name,
+                logbook_id: request.logbook_id.unwrap_or_else(default_logbook_id),
+                pairing_token_id: request.pairing_token_id,
+                public_key_fingerprint: request.public_key_fingerprint,
+                auth_credential_id: request.auth_credential_id,
+            },
+            Utc::now(),
+        )
+        .map_err(|error| BridgeFault::domain(error.to_string()))?;
+    let snapshot = store
+        .snapshot()
+        .map_err(|error| BridgeFault::storage(error.to_string()))?;
+    Ok(json!({
+        "trusted_device": device,
+        "lan_trust": snapshot
+    }))
+}
+
+fn sync_lan_trust_rotate_auth_command(payload: Value) -> Result<Value, BridgeFault> {
+    let request: LanRotateAuthRequest = serde_json::from_value(payload)
+        .map_err(|error| BridgeFault::invalid_input(error.to_string()))?;
+    let store = lan_trust_store(&request.app_support_dir)?;
+    let rotation = store
+        .rotate_auth_credential(
+            request.device_id,
+            request.logbook_id.unwrap_or_else(default_logbook_id),
+            request.new_auth_credential_id,
+            Utc::now(),
+        )
+        .map_err(|error| BridgeFault::domain(error.to_string()))?;
+    let snapshot = store
+        .snapshot()
+        .map_err(|error| BridgeFault::storage(error.to_string()))?;
+    Ok(json!({
+        "rotation": rotation,
+        "lan_trust": snapshot
+    }))
+}
+
+fn sync_lan_trust_revoke_command(payload: Value) -> Result<Value, BridgeFault> {
+    let request: LanRevokeRequest = serde_json::from_value(payload)
+        .map_err(|error| BridgeFault::invalid_input(error.to_string()))?;
+    let store = lan_trust_store(&request.app_support_dir)?;
+    let device = store
+        .revoke_device(request.device_id, Utc::now())
+        .map_err(|error| BridgeFault::domain(error.to_string()))?;
+    let snapshot = store
+        .snapshot()
+        .map_err(|error| BridgeFault::storage(error.to_string()))?;
+    Ok(json!({
+        "trusted_device": device,
+        "lan_trust": snapshot
+    }))
+}
+
+fn sync_snapshot_for_support(
+    app_support_dir: Option<&str>,
+    logbook_id: Uuid,
+) -> Result<Value, BridgeFault> {
+    let queue_snapshot = match app_support_dir {
+        Some(dir) => {
+            let queue = offline_queue(dir)?;
+            Some(
+                queue
+                    .load_snapshot(Utc::now())
+                    .map_err(|error| BridgeFault::storage(error.to_string()))?,
+            )
+        }
+        None => None,
+    };
+    let conflict_reviews = match app_support_dir {
+        Some(dir) => {
+            let store = conflict_review_store(dir)?;
+            Some(
+                store
+                    .load_snapshot()
+                    .map_err(|error| BridgeFault::storage(error.to_string()))?,
+            )
+        }
+        None => None,
+    };
+    let (lan_trust, lan_trust_error) = match app_support_dir {
+        Some(dir) => match lan_trust_store(dir).and_then(|store| {
+            store
+                .snapshot()
+                .map_err(|error| BridgeFault::storage(error.to_string()))
+        }) {
+            Ok(snapshot) => (Some(snapshot), None),
+            Err(error) => (None, Some(error.message)),
+        },
+        None => (None, None),
+    };
+    let (pending_events, local_head_hash) = match app_support_dir {
+        Some(dir) => {
+            let runtime =
+                Runtime::new().map_err(|error| BridgeFault::internal(error.to_string()))?;
+            let store = event_store(dir)?;
+            runtime
+                .block_on(async {
+                    let events = store.list_events(logbook_id).await?;
+                    let head = store.get_head(logbook_id).await?;
+                    Ok::<_, ham_core::StoreError>((events.len(), head))
+                })
+                .map_err(|error| BridgeFault::storage(error.to_string()))?
+        }
+        None => (0, None),
+    };
+    let pending_changes = queue_snapshot
+        .as_ref()
+        .map(|snapshot| {
+            snapshot.health.pending
+                + snapshot.health.retrying
+                + snapshot.health.sending
+                + snapshot.health.blocked
+                + snapshot.health.failed
+                + snapshot.health.user_action_required
+        })
+        .unwrap_or(0);
+    let identity = local_sync_identity_for_support(app_support_dir, "KE8YGW Logger iOS", None)?;
     Ok(json!({
         "config": SyncConfig::default(),
-        "identity": LocalPeerIdentity::new("KE8YGW Logger iOS", None),
+        "identity": identity,
         "cloud_config": CloudSyncConfig::default(),
         "cloud_connection_state": CloudConnectionState::Disconnected,
         "sync_protocol_version": ham_sync::PROTOCOL_VERSION,
-        "pending_changes": 0,
-        "pending_events": 0,
-        "offline_queue": Vec::<Value>::new(),
+        "logbook_id": logbook_id,
+        "local_head_hash": local_head_hash,
+        "pending_changes": pending_changes,
+        "pending_events": pending_events,
+        "offline_queue": queue_snapshot,
+        "conflict_reviews": conflict_reviews,
+        "lan_trust": lan_trust,
+        "lan_trust_error": lan_trust_error,
         "conflicts": Vec::<Value>::new(),
-        "history": Vec::<Value>::new()
+        "history": Vec::<Value>::new(),
+        "retry_policy": {
+            "network_required": true,
+            "background_retry_supported": true,
+            "permanent_user_action_states": ["blocked", "failed", "user_action_required"]
+        }
     }))
 }
 
@@ -960,6 +1970,15 @@ fn create_qso_command(payload: Value, correlation_id: Uuid) -> Result<Value, Bri
 
         let mut qso_payload = normalize_qso_payload(request.qso, &operation_id)?;
         station_book.apply_defaults_to_qso_payload(&mut qso_payload);
+        let queued = enqueue_ios_mutation(
+            &request.app_support_dir,
+            logbook_id,
+            device_id,
+            OFFLINE_OP_QSO_CREATE,
+            qso_payload.clone(),
+            &operation_id,
+            correlation_id,
+        )?;
 
         let proposal = ProposalEnvelope::new(
             PROPOSAL_QSO_CREATE,
@@ -978,19 +1997,31 @@ fn create_qso_command(payload: Value, correlation_id: Uuid) -> Result<Value, Bri
             proposal,
         )
         .await
-        .map_err(|error| BridgeFault::domain(error.to_string()))?;
+        .map_err(|error| {
+            mark_ios_user_action_required(
+                &request.app_support_dir,
+                &queued,
+                error.to_string(),
+                "domain_validation_failed",
+            );
+            BridgeFault::domain(error.to_string())
+        })?;
+        let offline_mutation =
+            record_ios_official_event(&request.app_support_dir, &queued, &outcome.official_event)?;
         let projection = store
             .rebuild_projections(logbook_id)
             .await
             .map_err(|error| BridgeFault::storage(error.to_string()))?;
-        qso_mutation_result(
+        let mut result = qso_mutation_result(
             &store,
             logbook_id,
             &projection,
             &outcome.official_event,
             false,
         )
-        .await
+        .await?;
+        result["offline_mutation"] = json!(offline_mutation);
+        Ok(result)
     })
 }
 
@@ -1008,9 +2039,19 @@ fn delete_qso_command(payload: Value, correlation_id: Uuid) -> Result<Value, Bri
             .unwrap_or_else(|| correlation_id.to_string());
         let store = event_store(&request.app_support_dir)?;
         let payload = json!({
+            "qso_id": request.qso_id,
             "reason": "ios_delete",
             "client_operation_id": operation_id
         });
+        let queued = enqueue_ios_mutation(
+            &request.app_support_dir,
+            logbook_id,
+            device_id,
+            OFFLINE_OP_QSO_DELETE,
+            payload.clone(),
+            &operation_id,
+            correlation_id,
+        )?;
         let proposal = ProposalEnvelope::new(
             PROPOSAL_QSO_DELETE,
             logbook_id,
@@ -1028,19 +2069,31 @@ fn delete_qso_command(payload: Value, correlation_id: Uuid) -> Result<Value, Bri
             proposal,
         )
         .await
-        .map_err(|error| BridgeFault::domain(error.to_string()))?;
+        .map_err(|error| {
+            mark_ios_user_action_required(
+                &request.app_support_dir,
+                &queued,
+                error.to_string(),
+                "domain_validation_failed",
+            );
+            BridgeFault::domain(error.to_string())
+        })?;
+        let offline_mutation =
+            record_ios_official_event(&request.app_support_dir, &queued, &outcome.official_event)?;
         let projection = store
             .rebuild_projections(logbook_id)
             .await
             .map_err(|error| BridgeFault::storage(error.to_string()))?;
-        qso_mutation_result(
+        let mut result = qso_mutation_result(
             &store,
             logbook_id,
             &projection,
             &outcome.official_event,
             false,
         )
-        .await
+        .await?;
+        result["offline_mutation"] = json!(offline_mutation);
+        Ok(result)
     })
 }
 
@@ -1076,7 +2129,10 @@ fn list_qsos_command(payload: Value) -> Result<Value, BridgeFault> {
     })
 }
 
-fn station_profile_create_command(payload: Value) -> Result<Value, BridgeFault> {
+fn station_profile_create_command(
+    payload: Value,
+    correlation_id: Uuid,
+) -> Result<Value, BridgeFault> {
     let request: StationProfileCreateRequest =
         serde_json::from_value(payload).map_err(|error| {
             BridgeFault::invalid_json(format!("invalid station.profile.create payload: {error}"))
@@ -1087,26 +2143,49 @@ fn station_profile_create_command(payload: Value) -> Result<Value, BridgeFault> 
         .map_err(|error| BridgeFault::storage(error.to_string()))?;
     ensure_station_book_seeded(&store, &mut book)?;
 
-    if let Some(profile_id) = request.station_profile_id {
-        if let Some(existing) = book
-            .profiles
-            .iter()
-            .find(|profile| profile.station_profile_id == profile_id)
-            .cloned()
-        {
-            return Ok(json!({
-                "profile": existing,
-                "station_book": book,
-                "idempotent": true,
-                "projection_source": "rust"
-            }));
-        }
+    let profile_id = request.station_profile_id.unwrap_or_else(Uuid::new_v4);
+    if let Some(existing) = book
+        .profiles
+        .iter()
+        .find(|profile| profile.station_profile_id == profile_id)
+        .cloned()
+    {
+        return Ok(json!({
+            "profile": existing,
+            "station_book": book,
+            "idempotent": true,
+            "projection_source": "rust"
+        }));
     }
 
+    let logbook_id = request.logbook_id.unwrap_or_else(default_logbook_id);
+    let device_id = request.device_id.unwrap_or_else(Uuid::new_v4);
+    let operation_id = request
+        .operation_id
+        .clone()
+        .unwrap_or_else(|| profile_id.to_string());
+    let queued = enqueue_ios_mutation(
+        &request.app_support_dir,
+        logbook_id,
+        device_id,
+        OFFLINE_OP_STATION_PROFILE_CREATE,
+        json!({
+            "station_profile_id": profile_id,
+            "display_name": request.display_name.clone(),
+            "station_callsign": request.station_callsign.clone(),
+            "operator_callsign": request.operator_callsign.clone(),
+            "profile_type": request.profile_type.clone(),
+            "default_grid": request.default_grid.clone(),
+            "default_qth": request.default_qth.clone(),
+            "default_power_watts": request.default_power_watts,
+            "notes": request.notes.clone(),
+            "active": request.active
+        }),
+        &operation_id,
+        correlation_id,
+    )?;
     let mut profile = StationProfile::new(request.display_name, request.station_callsign);
-    if let Some(profile_id) = request.station_profile_id {
-        profile.station_profile_id = profile_id;
-    }
+    profile.station_profile_id = profile_id;
     profile.operator_callsign = request.operator_callsign;
     profile.default_grid = request.default_grid;
     profile.default_qth = request.default_qth;
@@ -1115,19 +2194,30 @@ fn station_profile_create_command(payload: Value) -> Result<Value, BridgeFault> 
     profile.tags = request.profile_type.into_iter().collect();
     profile.active = request.active.unwrap_or(book.profiles.is_empty());
     let created = book.create_profile(profile);
-    store
-        .save(&book)
-        .map_err(|error| BridgeFault::storage(error.to_string()))?;
+    store.save(&book).map_err(|error| {
+        mark_ios_user_action_required(
+            &request.app_support_dir,
+            &queued,
+            error.to_string(),
+            "station_support_save_failed",
+        );
+        BridgeFault::storage(error.to_string())
+    })?;
+    let offline_mutation = mark_ios_mutation_accepted(&request.app_support_dir, &queued)?;
 
     Ok(json!({
         "profile": created,
         "station_book": book,
+        "offline_mutation": offline_mutation,
         "idempotent": false,
         "projection_source": "rust"
     }))
 }
 
-fn station_equipment_create_command(payload: Value) -> Result<Value, BridgeFault> {
+fn station_equipment_create_command(
+    payload: Value,
+    correlation_id: Uuid,
+) -> Result<Value, BridgeFault> {
     let request: StationEquipmentCreateRequest =
         serde_json::from_value(payload).map_err(|error| {
             BridgeFault::invalid_json(format!("invalid station.equipment.create payload: {error}"))
@@ -1138,46 +2228,78 @@ fn station_equipment_create_command(payload: Value) -> Result<Value, BridgeFault
         .map_err(|error| BridgeFault::storage(error.to_string()))?;
     ensure_station_book_seeded(&store, &mut book)?;
 
-    if let Some(equipment_id) = request.equipment_id {
-        if let Some(existing) = book
-            .equipment
-            .iter()
-            .find(|item| item.equipment_id == equipment_id)
-            .cloned()
-        {
-            return Ok(json!({
-                "equipment": existing,
-                "station_book": book,
-                "idempotent": true,
-                "projection_source": "rust"
-            }));
-        }
+    let equipment_id = request.equipment_id.unwrap_or_else(Uuid::new_v4);
+    if let Some(existing) = book
+        .equipment
+        .iter()
+        .find(|item| item.equipment_id == equipment_id)
+        .cloned()
+    {
+        return Ok(json!({
+            "equipment": existing,
+            "station_book": book,
+            "idempotent": true,
+            "projection_source": "rust"
+        }));
     }
 
+    let logbook_id = request.logbook_id.unwrap_or_else(default_logbook_id);
+    let device_id = request.device_id.unwrap_or_else(Uuid::new_v4);
+    let operation_id = request
+        .operation_id
+        .clone()
+        .unwrap_or_else(|| equipment_id.to_string());
+    let queued = enqueue_ios_mutation(
+        &request.app_support_dir,
+        logbook_id,
+        device_id,
+        OFFLINE_OP_STATION_EQUIPMENT_CREATE,
+        json!({
+            "equipment_id": equipment_id,
+            "equipment_type": request.equipment_type.clone(),
+            "display_name": request.display_name.clone(),
+            "manufacturer": request.manufacturer.clone(),
+            "model": request.model.clone(),
+            "serial_number": request.serial_number.clone(),
+            "capabilities": request.capabilities.clone(),
+            "notes": request.notes.clone()
+        }),
+        &operation_id,
+        correlation_id,
+    )?;
     let equipment_type = parse_equipment_type(&request.equipment_type)?;
     let mut item = EquipmentItem::new(equipment_type, request.display_name);
-    if let Some(equipment_id) = request.equipment_id {
-        item.equipment_id = equipment_id;
-    }
+    item.equipment_id = equipment_id;
     item.manufacturer = request.manufacturer;
     item.model = request.model;
     item.serial_number = request.serial_number;
     item.capabilities = request.capabilities;
     item.notes = request.notes;
     let created = book.create_equipment(item);
-    store
-        .save(&book)
-        .map_err(|error| BridgeFault::storage(error.to_string()))?;
+    store.save(&book).map_err(|error| {
+        mark_ios_user_action_required(
+            &request.app_support_dir,
+            &queued,
+            error.to_string(),
+            "station_support_save_failed",
+        );
+        BridgeFault::storage(error.to_string())
+    })?;
+    let offline_mutation = mark_ios_mutation_accepted(&request.app_support_dir, &queued)?;
 
     Ok(json!({
         "equipment": created,
         "station_book": book,
+        "offline_mutation": offline_mutation,
         "idempotent": false,
         "projection_source": "rust"
     }))
 }
 
-fn station_profile_select_command(payload: Value) -> Result<Value, BridgeFault> {
+fn station_profile_select_command(
+    payload: Value,
+    correlation_id: Uuid,
+) -> Result<Value, BridgeFault> {
     let request: StationSelectProfileRequest =
         serde_json::from_value(payload).map_err(|error| {
             BridgeFault::invalid_json(format!("invalid station.profile.select payload: {error}"))
@@ -1187,14 +2309,45 @@ fn station_profile_select_command(payload: Value) -> Result<Value, BridgeFault> 
         .load()
         .map_err(|error| BridgeFault::storage(error.to_string()))?;
     ensure_station_book_seeded(&store, &mut book)?;
+    let logbook_id = request.logbook_id.unwrap_or_else(default_logbook_id);
+    let device_id = request.device_id.unwrap_or_else(Uuid::new_v4);
+    let operation_id = request
+        .operation_id
+        .clone()
+        .unwrap_or_else(|| request.station_profile_id.to_string());
+    let queued = enqueue_ios_mutation(
+        &request.app_support_dir,
+        logbook_id,
+        device_id,
+        OFFLINE_OP_STATION_PROFILE_SELECT,
+        json!({"station_profile_id": request.station_profile_id}),
+        &operation_id,
+        correlation_id,
+    )?;
     book.select_profile(request.station_profile_id)
-        .map_err(|error| BridgeFault::domain(error.to_string()))?;
-    store
-        .save(&book)
-        .map_err(|error| BridgeFault::storage(error.to_string()))?;
+        .map_err(|error| {
+            mark_ios_user_action_required(
+                &request.app_support_dir,
+                &queued,
+                error.to_string(),
+                "station_profile_invalid",
+            );
+            BridgeFault::domain(error.to_string())
+        })?;
+    store.save(&book).map_err(|error| {
+        mark_ios_user_action_required(
+            &request.app_support_dir,
+            &queued,
+            error.to_string(),
+            "station_support_save_failed",
+        );
+        BridgeFault::storage(error.to_string())
+    })?;
+    let offline_mutation = mark_ios_mutation_accepted(&request.app_support_dir, &queued)?;
 
     Ok(json!({
         "station_book": book,
+        "offline_mutation": offline_mutation,
         "projection_source": "rust"
     }))
 }
@@ -1203,6 +2356,7 @@ fn domain_proposal_command(
     payload: Value,
     proposal_type: &str,
     entity_id_field: Option<&str>,
+    correlation_id: Uuid,
 ) -> Result<Value, BridgeFault> {
     let runtime = Runtime::new().map_err(|error| BridgeFault::internal(error.to_string()))?;
     runtime.block_on(async move {
@@ -1226,6 +2380,21 @@ fn domain_proposal_command(
             .and_then(Value::as_str)
             .and_then(|value| Uuid::parse_str(value).ok());
         object.insert("source".to_owned(), json!("ios/native"));
+        let external_operation_id = object
+            .get("operation_id")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+            .unwrap_or_else(|| correlation_id.to_string());
+        let proposal_payload = Value::Object(object);
+        let queued = enqueue_ios_mutation(
+            &app_support_dir,
+            logbook_id,
+            device_id,
+            ios_offline_operation_type(proposal_type),
+            proposal_payload.clone(),
+            &external_operation_id,
+            correlation_id,
+        )?;
 
         let store = event_store(&app_support_dir)?;
         let proposal = ProposalEnvelope::new(
@@ -1236,7 +2405,7 @@ fn domain_proposal_command(
             device_id,
             IOS_PLUGIN_ID,
             1,
-            Value::Object(object),
+            proposal_payload,
         );
         let outcome = submit_proposal(
             &store,
@@ -1245,7 +2414,17 @@ fn domain_proposal_command(
             proposal,
         )
         .await
-        .map_err(|error| BridgeFault::domain(error.to_string()))?;
+        .map_err(|error| {
+            mark_ios_user_action_required(
+                &app_support_dir,
+                &queued,
+                error.to_string(),
+                "domain_validation_failed",
+            );
+            BridgeFault::domain(error.to_string())
+        })?;
+        let offline_mutation =
+            record_ios_official_event(&app_support_dir, &queued, &outcome.official_event)?;
         let pending_events = store
             .list_events(logbook_id)
             .await
@@ -1254,6 +2433,7 @@ fn domain_proposal_command(
         Ok(json!({
             "accepted": true,
             "official_event": outcome.official_event,
+            "offline_mutation": offline_mutation,
             "projection": {
                 "source": "rust",
                 "schema_version": BRIDGE_SCHEMA_VERSION,
@@ -1400,6 +2580,285 @@ fn settings_store(
 fn event_store(app_support_dir: &str) -> Result<JsonlLogbookEventStore, BridgeFault> {
     JsonlLogbookEventStore::open(rust_support_dir(app_support_dir)?.join("official-events.jsonl"))
         .map_err(|error| BridgeFault::storage(error.to_string()))
+}
+
+fn offline_queue(app_support_dir: &str) -> Result<JsonOfflineMutationQueue, BridgeFault> {
+    Ok(JsonOfflineMutationQueue::new(
+        rust_support_dir(app_support_dir)?.join("offline-mutations.json"),
+    ))
+}
+
+fn conflict_review_store(app_support_dir: &str) -> Result<JsonConflictReviewStore, BridgeFault> {
+    Ok(JsonConflictReviewStore::new(
+        rust_support_dir(app_support_dir)?.join("conflict-reviews.json"),
+    ))
+}
+
+fn lan_trust_store(app_support_dir: &str) -> Result<JsonLanTrustStore, BridgeFault> {
+    Ok(JsonLanTrustStore::new(
+        rust_support_dir(app_support_dir)?.join("lan-trust.json"),
+    ))
+}
+
+fn local_sync_identity_store(
+    app_support_dir: &str,
+) -> Result<JsonLocalSyncIdentityStore, BridgeFault> {
+    Ok(JsonLocalSyncIdentityStore::new(
+        rust_support_dir(app_support_dir)?.join("local-sync-identity.json"),
+    ))
+}
+
+fn local_sync_identity_for_support(
+    app_support_dir: Option<&str>,
+    display_name: &str,
+    local_api_port: Option<u16>,
+) -> Result<LocalPeerIdentity, BridgeFault> {
+    match app_support_dir {
+        Some(dir) => local_sync_identity_store(dir)?
+            .load_or_create(display_name, local_api_port, Utc::now())
+            .map_err(|error| BridgeFault::storage(error.to_string())),
+        None => Ok(LocalPeerIdentity::new(display_name, local_api_port)),
+    }
+}
+
+struct IosMutationQueueInput<'a> {
+    logbook_id: Uuid,
+    device_id: Uuid,
+    operation_type: &'a str,
+    payload: Value,
+    external_operation_id: &'a str,
+    correlation_id: Uuid,
+    entity_id: Option<Uuid>,
+}
+
+fn enqueue_ios_mutation(
+    app_support_dir: &str,
+    logbook_id: Uuid,
+    device_id: Uuid,
+    operation_type: &str,
+    payload: Value,
+    external_operation_id: &str,
+    correlation_id: Uuid,
+) -> Result<OfflineMutationEnvelope, BridgeFault> {
+    enqueue_ios_mutation_with_input(
+        app_support_dir,
+        IosMutationQueueInput {
+            logbook_id,
+            device_id,
+            operation_type,
+            payload,
+            external_operation_id,
+            correlation_id,
+            entity_id: None,
+        },
+    )
+}
+
+fn enqueue_ios_mutation_with_input(
+    app_support_dir: &str,
+    input: IosMutationQueueInput<'_>,
+) -> Result<OfflineMutationEnvelope, BridgeFault> {
+    let queue = offline_queue(app_support_dir)?;
+    let operation_id = Uuid::parse_str(input.external_operation_id).unwrap_or(input.correlation_id);
+    let entity_id = input
+        .entity_id
+        .or_else(|| payload_entity_id(input.operation_type, &input.payload));
+    queue
+        .enqueue_input(
+            OfflineMutationInput::new(
+                input.logbook_id,
+                input.device_id,
+                input.device_id,
+                input.operation_type,
+                input.payload,
+            )
+            .with_operation_id(operation_id)
+            .with_correlation_id(input.correlation_id)
+            .with_entity_id(entity_id)
+            .with_idempotency_key(format!(
+                "{}:{}",
+                input.operation_type, input.external_operation_id
+            )),
+            Utc::now(),
+        )
+        .map_err(|error| BridgeFault::storage(error.to_string()))
+}
+
+fn payload_entity_id(operation_type: &str, payload: &Value) -> Option<Uuid> {
+    let fields: &[&str] = match operation_type {
+        OFFLINE_OP_QSO_CREATE
+        | OFFLINE_OP_QSO_CORRECT
+        | OFFLINE_OP_QSO_DELETE
+        | OFFLINE_OP_QSO_RESTORE
+        | OFFLINE_OP_QSO_NOTE_ADD => &["entity_id", "qso_id"],
+        OFFLINE_OP_ACTIVATION_START | OFFLINE_OP_ACTIVATION_END => &["entity_id", "activation_id"],
+        OFFLINE_OP_NET_SESSION_START | OFFLINE_OP_NET_SESSION_END => {
+            &["entity_id", "net_session_id"]
+        }
+        OFFLINE_OP_NET_CHECKIN_CREATE | OFFLINE_OP_NET_CHECKIN_DELETE => {
+            &["entity_id", "checkin_id"]
+        }
+        OFFLINE_OP_NET_TRAFFIC_CREATE => &["entity_id", "traffic_id"],
+        OFFLINE_OP_STATION_PROFILE_CREATE | OFFLINE_OP_STATION_PROFILE_SELECT => {
+            &["entity_id", "station_profile_id"]
+        }
+        OFFLINE_OP_STATION_EQUIPMENT_CREATE => &["entity_id", "equipment_id"],
+        _ => &["entity_id"],
+    };
+    fields.iter().find_map(|field| {
+        payload
+            .get(*field)
+            .and_then(Value::as_str)
+            .and_then(|value| Uuid::parse_str(value).ok())
+    })
+}
+
+fn record_ios_official_event(
+    app_support_dir: &str,
+    queued: &OfflineMutationEnvelope,
+    event: &ham_core::CoreEventEnvelope,
+) -> Result<OfflineMutationEnvelope, BridgeFault> {
+    offline_queue(app_support_dir)?
+        .record_local_event(queued.operation_id, event, Utc::now())
+        .map_err(|error| BridgeFault::storage(error.to_string()))
+}
+
+fn mark_ios_user_action_required(
+    app_support_dir: &str,
+    queued: &OfflineMutationEnvelope,
+    reason: impl Into<String>,
+    error_code: impl Into<String>,
+) {
+    if let Ok(queue) = offline_queue(app_support_dir) {
+        let _ = queue.mark_user_action_required(
+            queued.operation_id,
+            reason.into(),
+            Some(error_code.into()),
+            Utc::now(),
+        );
+    }
+}
+
+fn mark_ios_mutation_accepted(
+    app_support_dir: &str,
+    queued: &OfflineMutationEnvelope,
+) -> Result<OfflineMutationEnvelope, BridgeFault> {
+    offline_queue(app_support_dir)?
+        .mark_accepted(queued.operation_id, Utc::now())
+        .map_err(|error| BridgeFault::storage(error.to_string()))
+}
+
+fn ios_offline_operation_type(proposal_type: &str) -> &'static str {
+    match proposal_type {
+        PROPOSAL_ACTIVATION_START => OFFLINE_OP_ACTIVATION_START,
+        PROPOSAL_ACTIVATION_END => OFFLINE_OP_ACTIVATION_END,
+        PROPOSAL_NET_SESSION_START => OFFLINE_OP_NET_SESSION_START,
+        PROPOSAL_NET_SESSION_END => OFFLINE_OP_NET_SESSION_END,
+        PROPOSAL_NET_CHECKIN_CREATE => OFFLINE_OP_NET_CHECKIN_CREATE,
+        PROPOSAL_NET_TRAFFIC_CREATE => OFFLINE_OP_NET_TRAFFIC_CREATE,
+        _ => "ios.domain.mutation",
+    }
+}
+
+fn ios_corrective_offline_operation_type(proposal_type: &str) -> String {
+    match proposal_type {
+        PROPOSAL_QSO_CREATE => OFFLINE_OP_QSO_CREATE,
+        PROPOSAL_QSO_CORRECT => OFFLINE_OP_QSO_CORRECT,
+        PROPOSAL_QSO_DELETE => OFFLINE_OP_QSO_DELETE,
+        PROPOSAL_QSO_RESTORE => OFFLINE_OP_QSO_RESTORE,
+        PROPOSAL_QSO_NOTE_ADD => OFFLINE_OP_QSO_NOTE_ADD,
+        PROPOSAL_ACTIVATION_START => OFFLINE_OP_ACTIVATION_START,
+        PROPOSAL_ACTIVATION_END => OFFLINE_OP_ACTIVATION_END,
+        PROPOSAL_NET_SESSION_START => OFFLINE_OP_NET_SESSION_START,
+        PROPOSAL_NET_SESSION_END => OFFLINE_OP_NET_SESSION_END,
+        PROPOSAL_NET_CHECKIN_CREATE => OFFLINE_OP_NET_CHECKIN_CREATE,
+        PROPOSAL_NET_CHECKIN_DELETE => OFFLINE_OP_NET_CHECKIN_DELETE,
+        PROPOSAL_NET_TRAFFIC_CREATE => OFFLINE_OP_NET_TRAFFIC_CREATE,
+        _ => proposal_type,
+    }
+    .to_owned()
+}
+
+fn is_supported_ios_corrective_proposal(proposal_type: &str) -> bool {
+    matches!(
+        proposal_type,
+        PROPOSAL_QSO_CREATE
+            | PROPOSAL_QSO_CORRECT
+            | PROPOSAL_QSO_DELETE
+            | PROPOSAL_QSO_RESTORE
+            | PROPOSAL_QSO_NOTE_ADD
+            | PROPOSAL_ACTIVATION_CREATE
+            | PROPOSAL_ACTIVATION_UPDATE
+            | PROPOSAL_ACTIVATION_START
+            | PROPOSAL_ACTIVATION_END
+            | PROPOSAL_ACTIVATION_CANCEL
+            | PROPOSAL_ACTIVATION_NOTE_ADD
+            | PROPOSAL_QSO_ACTIVATION_LINK
+            | PROPOSAL_QSO_ACTIVATION_UNLINK
+            | PROPOSAL_NET_TEMPLATE_CREATE
+            | PROPOSAL_NET_TEMPLATE_UPDATE
+            | PROPOSAL_NET_SESSION_START
+            | PROPOSAL_NET_SESSION_END
+            | PROPOSAL_NET_SESSION_CANCEL
+            | PROPOSAL_NET_CHECKIN_CREATE
+            | PROPOSAL_NET_CHECKIN_UPDATE
+            | PROPOSAL_NET_CHECKIN_DELETE
+            | PROPOSAL_NET_TRAFFIC_CREATE
+            | PROPOSAL_NET_TRAFFIC_UPDATE
+            | PROPOSAL_NET_REPORT_EXPORT
+    )
+}
+
+fn corrective_proposal_requires_entity_id(proposal_type: &str) -> bool {
+    !matches!(
+        proposal_type,
+        PROPOSAL_QSO_CREATE
+            | PROPOSAL_ACTIVATION_CREATE
+            | PROPOSAL_ACTIVATION_START
+            | PROPOSAL_NET_TEMPLATE_CREATE
+            | PROPOSAL_NET_SESSION_START
+            | PROPOSAL_NET_CHECKIN_CREATE
+            | PROPOSAL_NET_TRAFFIC_CREATE
+    )
+}
+
+fn corrective_payload_with_entity_id(
+    proposal_type: &str,
+    payload: Value,
+    entity_id: Option<Uuid>,
+) -> Result<Value, BridgeFault> {
+    let Some(mut object) = payload.as_object().cloned() else {
+        return Err(BridgeFault::invalid_input(
+            "corrective proposal payload must be a JSON object",
+        ));
+    };
+    if let Some(entity_id) = entity_id {
+        let entity_key = proposal_entity_key(proposal_type);
+        object
+            .entry(entity_key.to_owned())
+            .or_insert_with(|| json!(entity_id));
+    }
+    Ok(Value::Object(object))
+}
+
+fn proposal_entity_key(proposal_type: &str) -> &'static str {
+    match proposal_type {
+        PROPOSAL_NET_TEMPLATE_CREATE | PROPOSAL_NET_TEMPLATE_UPDATE => "net_template_id",
+        PROPOSAL_ACTIVATION_CREATE
+        | PROPOSAL_ACTIVATION_UPDATE
+        | PROPOSAL_ACTIVATION_START
+        | PROPOSAL_ACTIVATION_END
+        | PROPOSAL_ACTIVATION_CANCEL
+        | PROPOSAL_ACTIVATION_NOTE_ADD => "activation_id",
+        PROPOSAL_NET_SESSION_START | PROPOSAL_NET_SESSION_END | PROPOSAL_NET_SESSION_CANCEL => {
+            "net_session_id"
+        }
+        PROPOSAL_NET_CHECKIN_CREATE | PROPOSAL_NET_CHECKIN_UPDATE | PROPOSAL_NET_CHECKIN_DELETE => {
+            "checkin_id"
+        }
+        PROPOSAL_NET_TRAFFIC_CREATE | PROPOSAL_NET_TRAFFIC_UPDATE => "traffic_id",
+        _ => "qso_id",
+    }
 }
 
 fn rust_support_dir(app_support_dir: &str) -> Result<PathBuf, BridgeFault> {
@@ -1675,6 +3134,32 @@ mod tests {
         serde_json::from_str(&take_string(ptr)).unwrap()
     }
 
+    fn create_test_qso_event(
+        app_support_dir: &Path,
+        logbook_id: Uuid,
+        callsign: &str,
+        minute: u32,
+    ) -> Value {
+        let create = call_json(json!({
+            "command": "qso.create",
+            "payload": {
+                "app_support_dir": app_support_dir.to_string_lossy(),
+                "logbook_id": logbook_id,
+                "operation_id": Uuid::new_v4().to_string(),
+                "qso": {
+                    "contacted_callsign": callsign,
+                    "station_callsign": "ke8ygw",
+                    "operator_callsign": "ke8ygw",
+                    "started_at": format!("2026-07-10T12:{minute:02}:00Z"),
+                    "mode": "ssb",
+                    "band": "20m"
+                }
+            }
+        }));
+        assert_eq!(create["ok"], true);
+        create["data"]["official_event"].clone()
+    }
+
     #[test]
     fn version_payload_is_json() {
         let ptr = ham_ios_version_json();
@@ -1798,6 +3283,424 @@ mod tests {
             first["data"]["qso"]["qso_id"],
             second["data"]["qso"]["qso_id"]
         );
+        assert_eq!(
+            first["data"]["offline_mutation"]["entity_id"],
+            first["data"]["official_event"]["entity_id"]
+        );
+        let snapshot = call_json(json!({
+            "command": "sync.snapshot",
+            "payload": {
+                "app_support_dir": app_support_dir.to_string_lossy()
+            }
+        }));
+        assert_eq!(snapshot["ok"], true);
+        assert_eq!(snapshot["data"]["offline_queue"]["health"]["pending"], 1);
+        assert_eq!(snapshot["data"]["offline_queue"]["health"]["total"], 1);
+        let _ = std::fs::remove_dir_all(app_support_dir);
+    }
+
+    #[test]
+    fn sync_retry_plan_and_result_acknowledge_ios_background_batch() {
+        let app_support_dir = std::env::temp_dir().join(format!("ham-ios-{}", Uuid::new_v4()));
+        let logbook_id = default_logbook_id();
+        let operation_id = Uuid::new_v4();
+        let create = call_json(json!({
+            "command": "qso.create",
+            "payload": {
+                "app_support_dir": app_support_dir.to_string_lossy(),
+                "logbook_id": logbook_id,
+                "operation_id": operation_id.to_string(),
+                "qso": {
+                    "contacted_callsign": "k1retry",
+                    "station_callsign": "ke8ygw",
+                    "operator_callsign": "ke8ygw",
+                    "started_at": "2026-07-10T12:00:00Z",
+                    "mode": "ssb",
+                    "band": "20m"
+                }
+            }
+        }));
+        assert_eq!(create["ok"], true);
+
+        let plan = call_json(json!({
+            "command": "sync.offline_queue.retry_plan",
+            "payload": {
+                "app_support_dir": app_support_dir.to_string_lossy(),
+                "logbook_id": logbook_id,
+                "max_mutations": 5,
+                "background_time_budget_seconds": 20
+            }
+        }));
+        assert_eq!(plan["ok"], true);
+        assert_eq!(
+            plan["data"]["retry_plan"]["operation_ids"][0],
+            json!(operation_id)
+        );
+        assert_eq!(
+            plan["data"]["retry_plan"]["events"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(plan["data"]["offline_queue"]["health"]["sending"], 1);
+        let event_hash = plan["data"]["retry_plan"]["event_hashes"][0]
+            .as_str()
+            .unwrap()
+            .to_owned();
+
+        let result = call_json(json!({
+            "command": "sync.offline_queue.retry_result",
+            "payload": {
+                "app_support_dir": app_support_dir.to_string_lossy(),
+                "logbook_id": logbook_id,
+                "operation_ids": [operation_id],
+                "accepted_event_hashes": [event_hash],
+                "result": "accepted"
+            }
+        }));
+        assert_eq!(result["ok"], true);
+        assert_eq!(result["data"]["retry_result"]["accepted_count"], 1);
+        assert_eq!(
+            result["data"]["affected_mutations"][0]["status"],
+            "accepted"
+        );
+        assert_eq!(result["data"]["offline_queue"]["health"]["accepted"], 1);
+        assert_eq!(
+            result["data"]["offline_queue"]["health"]["ready_to_send"],
+            0
+        );
+        let _ = std::fs::remove_dir_all(app_support_dir);
+    }
+
+    #[test]
+    fn sync_retry_plan_recovers_terminated_send_and_blocks_without_network() {
+        let app_support_dir = std::env::temp_dir().join(format!("ham-ios-{}", Uuid::new_v4()));
+        let logbook_id = default_logbook_id();
+        let operation_id = Uuid::new_v4();
+        let create = call_json(json!({
+            "command": "qso.create",
+            "payload": {
+                "app_support_dir": app_support_dir.to_string_lossy(),
+                "logbook_id": logbook_id,
+                "operation_id": operation_id.to_string(),
+                "qso": {
+                    "contacted_callsign": "k1term",
+                    "station_callsign": "ke8ygw",
+                    "operator_callsign": "ke8ygw",
+                    "started_at": "2026-07-10T12:00:00Z",
+                    "mode": "ssb",
+                    "band": "20m"
+                }
+            }
+        }));
+        assert_eq!(create["ok"], true);
+
+        let sending = call_json(json!({
+            "command": "sync.offline_queue.retry_plan",
+            "payload": {
+                "app_support_dir": app_support_dir.to_string_lossy(),
+                "logbook_id": logbook_id,
+                "mark_sending": true
+            }
+        }));
+        assert_eq!(sending["ok"], true);
+        assert_eq!(sending["data"]["offline_queue"]["health"]["sending"], 1);
+
+        let offline = call_json(json!({
+            "command": "sync.offline_queue.retry_plan",
+            "payload": {
+                "app_support_dir": app_support_dir.to_string_lossy(),
+                "logbook_id": logbook_id,
+                "network_available": false,
+                "background_time_budget_seconds": 7
+            }
+        }));
+        assert_eq!(offline["ok"], true);
+        assert_eq!(
+            offline["data"]["recovery"]["recovered_interrupted_writes"],
+            1
+        );
+        assert_eq!(offline["data"]["retry_plan"]["blocked_by_network"], true);
+        assert_eq!(offline["data"]["retry_plan"]["mark_sending"], false);
+        assert_eq!(
+            offline["data"]["retry_plan"]["background_time_budget_seconds"],
+            7
+        );
+        assert_eq!(
+            offline["data"]["retry_plan"]["operation_ids"]
+                .as_array()
+                .unwrap()
+                .len(),
+            0
+        );
+        assert_eq!(offline["data"]["offline_queue"]["health"]["retrying"], 1);
+
+        let next_plan = call_json(json!({
+            "command": "sync.offline_queue.retry_plan",
+            "payload": {
+                "app_support_dir": app_support_dir.to_string_lossy(),
+                "logbook_id": logbook_id,
+                "mark_sending": false
+            }
+        }));
+        assert_eq!(next_plan["ok"], true);
+        assert_eq!(
+            next_plan["data"]["retry_plan"]["operation_ids"][0],
+            json!(operation_id)
+        );
+        assert_eq!(next_plan["data"]["offline_queue"]["health"]["retrying"], 1);
+        let _ = std::fs::remove_dir_all(app_support_dir);
+    }
+
+    #[test]
+    fn sync_retry_result_backs_off_transient_and_stops_auth_failures() {
+        let app_support_dir = std::env::temp_dir().join(format!("ham-ios-{}", Uuid::new_v4()));
+        let logbook_id = default_logbook_id();
+        let operation_id = Uuid::new_v4();
+        let create = call_json(json!({
+            "command": "qso.create",
+            "payload": {
+                "app_support_dir": app_support_dir.to_string_lossy(),
+                "logbook_id": logbook_id,
+                "operation_id": operation_id.to_string(),
+                "qso": {
+                    "contacted_callsign": "k1fail",
+                    "station_callsign": "ke8ygw",
+                    "operator_callsign": "ke8ygw",
+                    "started_at": "2026-07-10T12:00:00Z",
+                    "mode": "ssb",
+                    "band": "20m"
+                }
+            }
+        }));
+        assert_eq!(create["ok"], true);
+        let plan = call_json(json!({
+            "command": "sync.offline_queue.retry_plan",
+            "payload": {
+                "app_support_dir": app_support_dir.to_string_lossy(),
+                "logbook_id": logbook_id
+            }
+        }));
+        assert_eq!(plan["ok"], true);
+
+        let transient = call_json(json!({
+            "command": "sync.offline_queue.retry_result",
+            "payload": {
+                "app_support_dir": app_support_dir.to_string_lossy(),
+                "logbook_id": logbook_id,
+                "operation_ids": [operation_id],
+                "result": "transient_failure",
+                "error_code": "network_unavailable",
+                "message": "network unavailable"
+            }
+        }));
+        assert_eq!(transient["ok"], true);
+        assert_eq!(
+            transient["data"]["affected_mutations"][0]["status"],
+            "retrying"
+        );
+        assert_eq!(
+            transient["data"]["affected_mutations"][0]["last_error_code"],
+            "network_unavailable"
+        );
+        assert!(transient["data"]["affected_mutations"][0]["next_attempt_at"].is_string());
+
+        let auth_failed = call_json(json!({
+            "command": "sync.offline_queue.retry_result",
+            "payload": {
+                "app_support_dir": app_support_dir.to_string_lossy(),
+                "logbook_id": logbook_id,
+                "operation_ids": [operation_id],
+                "result": "auth_failed"
+            }
+        }));
+        assert_eq!(auth_failed["ok"], true);
+        assert_eq!(
+            auth_failed["data"]["affected_mutations"][0]["status"],
+            "user_action_required"
+        );
+        assert_eq!(
+            auth_failed["data"]["affected_mutations"][0]["last_error_code"],
+            "auth_failed"
+        );
+        assert_eq!(
+            auth_failed["data"]["offline_queue"]["health"]["user_action_required"],
+            1
+        );
+
+        let next_plan = call_json(json!({
+            "command": "sync.offline_queue.retry_plan",
+            "payload": {
+                "app_support_dir": app_support_dir.to_string_lossy(),
+                "logbook_id": logbook_id
+            }
+        }));
+        assert_eq!(next_plan["ok"], true);
+        assert_eq!(
+            next_plan["data"]["retry_plan"]["operation_ids"]
+                .as_array()
+                .unwrap()
+                .len(),
+            0
+        );
+        let _ = std::fs::remove_dir_all(app_support_dir);
+    }
+
+    #[test]
+    fn sync_retry_plan_marks_missing_local_event_user_action_required() {
+        let app_support_dir = std::env::temp_dir().join(format!("ham-ios-{}", Uuid::new_v4()));
+        let logbook_id = default_logbook_id();
+        let operation_id = Uuid::new_v4();
+        enqueue_ios_mutation(
+            app_support_dir.to_string_lossy().as_ref(),
+            logbook_id,
+            Uuid::new_v4(),
+            OFFLINE_OP_QSO_CREATE,
+            json!({
+                "contacted_callsign": "k1missing",
+                "station_callsign": "ke8ygw",
+                "operator_callsign": "ke8ygw",
+                "started_at": "2026-07-10T12:00:00Z",
+                "mode": "ssb",
+                "band": "20m"
+            }),
+            &operation_id.to_string(),
+            operation_id,
+        )
+        .unwrap();
+
+        let plan = call_json(json!({
+            "command": "sync.offline_queue.retry_plan",
+            "payload": {
+                "app_support_dir": app_support_dir.to_string_lossy(),
+                "logbook_id": logbook_id
+            }
+        }));
+        assert_eq!(plan["ok"], true);
+        assert_eq!(
+            plan["data"]["retry_plan"]["missing_local_event_operation_ids"][0],
+            json!(operation_id)
+        );
+        assert_eq!(
+            plan["data"]["offline_queue"]["health"]["user_action_required"],
+            1
+        );
+        assert_eq!(
+            plan["data"]["offline_queue"]["mutations"][0]["last_error_code"],
+            "missing_local_official_event"
+        );
+        let _ = std::fs::remove_dir_all(app_support_dir);
+    }
+
+    #[test]
+    fn sync_remote_events_apply_pulls_verified_official_events() {
+        let source_dir = std::env::temp_dir().join(format!("ham-ios-{}", Uuid::new_v4()));
+        let target_dir = std::env::temp_dir().join(format!("ham-ios-{}", Uuid::new_v4()));
+        let logbook_id = default_logbook_id();
+        let first = create_test_qso_event(&source_dir, logbook_id, "k1pull", 0);
+        let second = create_test_qso_event(&source_dir, logbook_id, "k2pull", 1);
+
+        let apply = call_json(json!({
+            "command": "sync.remote_events.apply",
+            "payload": {
+                "app_support_dir": target_dir.to_string_lossy(),
+                "logbook_id": logbook_id,
+                "peer_id": "ios-test-peer",
+                "events": [first.clone(), second.clone()]
+            }
+        }));
+
+        assert_eq!(apply["ok"], true);
+        assert_eq!(apply["data"]["pull"]["status"], "pulled");
+        assert_eq!(apply["data"]["pull"]["accepted_count"], 2);
+        assert_eq!(apply["data"]["projection"]["pending_event_count"], 2);
+        assert_eq!(apply["data"]["sync"]["pending_events"], 2);
+        assert_eq!(
+            apply["data"]["sync"]["local_head_hash"],
+            apply["data"]["pull"]["remote_head_hash"]
+        );
+
+        let duplicate = call_json(json!({
+            "command": "sync.remote_events.apply",
+            "payload": {
+                "app_support_dir": target_dir.to_string_lossy(),
+                "logbook_id": logbook_id,
+                "peer_id": "ios-test-peer",
+                "events": [first, second]
+            }
+        }));
+        assert_eq!(duplicate["ok"], true);
+        assert_eq!(duplicate["data"]["pull"]["status"], "in_sync");
+        assert_eq!(duplicate["data"]["pull"]["accepted_count"], 0);
+
+        let _ = std::fs::remove_dir_all(source_dir);
+        let _ = std::fs::remove_dir_all(target_dir);
+    }
+
+    #[test]
+    fn sync_remote_events_apply_reports_divergence_without_mutating_store() {
+        let source_dir = std::env::temp_dir().join(format!("ham-ios-{}", Uuid::new_v4()));
+        let target_dir = std::env::temp_dir().join(format!("ham-ios-{}", Uuid::new_v4()));
+        let logbook_id = default_logbook_id();
+        let remote = create_test_qso_event(&source_dir, logbook_id, "k1remote", 0);
+        let local = create_test_qso_event(&target_dir, logbook_id, "k1local", 0);
+
+        let apply = call_json(json!({
+            "command": "sync.remote_events.apply",
+            "payload": {
+                "app_support_dir": target_dir.to_string_lossy(),
+                "logbook_id": logbook_id,
+                "peer_id": "ios-test-peer",
+                "events": [remote]
+            }
+        }));
+
+        assert_eq!(apply["ok"], true);
+        assert_eq!(apply["data"]["pull"]["status"], "diverged");
+        assert_eq!(apply["data"]["pull"]["accepted_count"], 0);
+        assert_eq!(apply["data"]["pull"]["rejected_count"], 1);
+        assert_eq!(
+            apply["data"]["pull"]["local_head_hash"],
+            local["event_hash"]
+        );
+        assert_eq!(apply["data"]["projection"]["pending_event_count"], 1);
+
+        let _ = std::fs::remove_dir_all(source_dir);
+        let _ = std::fs::remove_dir_all(target_dir);
+    }
+
+    #[test]
+    fn sync_snapshot_persists_local_identity_device_id() {
+        let app_support_dir = std::env::temp_dir().join(format!("ham-ios-{}", Uuid::new_v4()));
+        let first = call_json(json!({
+            "command": "sync.snapshot",
+            "payload": {
+                "app_support_dir": app_support_dir.to_string_lossy()
+            }
+        }));
+        let second = call_json(json!({
+            "command": "sync.snapshot",
+            "payload": {
+                "app_support_dir": app_support_dir.to_string_lossy()
+            }
+        }));
+
+        assert_eq!(first["ok"], true);
+        assert_eq!(second["ok"], true);
+        assert_eq!(
+            first["data"]["identity"]["device_id"],
+            second["data"]["identity"]["device_id"]
+        );
+        assert_ne!(
+            first["data"]["identity"]["session_id"],
+            second["data"]["identity"]["session_id"]
+        );
+        let raw =
+            std::fs::read_to_string(app_support_dir.join("Rust/local-sync-identity.json")).unwrap();
+        assert!(raw.contains(first["data"]["identity"]["device_id"].as_str().unwrap()));
+        assert!(!raw.contains(first["data"]["identity"]["session_id"].as_str().unwrap()));
+        assert!(!raw.contains(second["data"]["identity"]["session_id"].as_str().unwrap()));
         let _ = std::fs::remove_dir_all(app_support_dir);
     }
 
@@ -1822,7 +3725,397 @@ mod tests {
 
         assert_eq!(first["ok"], true);
         assert_eq!(first["data"]["profile"]["station_callsign"], "K1ABC/P");
+        assert_eq!(first["data"]["offline_mutation"]["status"], "accepted");
         assert_eq!(second["data"]["idempotent"], true);
+        let snapshot = call_json(json!({
+            "command": "sync.snapshot",
+            "payload": {
+                "app_support_dir": app_support_dir.to_string_lossy()
+            }
+        }));
+        assert_eq!(snapshot["ok"], true);
+        assert_eq!(snapshot["data"]["offline_queue"]["health"]["accepted"], 1);
+        let _ = std::fs::remove_dir_all(app_support_dir);
+    }
+
+    #[test]
+    fn conflict_review_create_and_resolve_use_rust_store() {
+        let app_support_dir = std::env::temp_dir().join(format!("ham-ios-{}", Uuid::new_v4()));
+        let logbook_id = Uuid::new_v4();
+        let preview = ham_sync::PreviewPullResponse {
+            peer_id: "ios-peer".to_owned(),
+            logbook_id,
+            status: ham_sync::ReplicationStatus::Diverged,
+            local_head_hash: Some("local".to_owned()),
+            remote_head_hash: Some("remote".to_owned()),
+            missing_event_count: 0,
+            remote_event_count: 2,
+            events: Vec::new(),
+            message: "Remote chain does not contain the local head".to_owned(),
+        };
+        let report = ham_sync::conflict_report_from_preview(&preview, &[], Utc::now());
+        let created = call_json(json!({
+            "command": "sync.conflict_reviews.create",
+            "payload": {
+                "app_support_dir": app_support_dir.to_string_lossy(),
+                "report": report
+            }
+        }));
+        assert_eq!(created["ok"], true);
+        assert_eq!(created["data"]["conflict_reviews"]["health"]["open"], 1);
+        let review_id = created["data"]["conflict_review"]["review_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let unsafe_pull = call_json(json!({
+            "command": "sync.conflict_reviews.resolve",
+            "payload": {
+                "app_support_dir": app_support_dir.to_string_lossy(),
+                "review_id": review_id,
+                "resolution": {
+                    "choice": "pull_remote_after_review",
+                    "operator_note": "unsafe attempt",
+                    "corrective_event_hashes": [],
+                    "resolved_by_device_id": Uuid::new_v4()
+                }
+            }
+        }));
+        assert_eq!(unsafe_pull["ok"], false);
+        assert_eq!(unsafe_pull["error"]["code"], "storage_error");
+
+        let resolved = call_json(json!({
+            "command": "sync.conflict_reviews.resolve",
+            "payload": {
+                "app_support_dir": app_support_dir.to_string_lossy(),
+                "review_id": review_id,
+                "resolution": {
+                    "choice": "keep_local_history",
+                    "operator_note": "Keep local append-only history",
+                    "corrective_event_hashes": [],
+                    "resolved_by_device_id": Uuid::new_v4()
+                }
+            }
+        }));
+        assert_eq!(resolved["ok"], true);
+        assert_eq!(resolved["data"]["conflict_review"]["status"], "resolved");
+        let snapshot = call_json(json!({
+            "command": "sync.snapshot",
+            "payload": {
+                "app_support_dir": app_support_dir.to_string_lossy()
+            }
+        }));
+        assert_eq!(
+            snapshot["data"]["conflict_reviews"]["health"]["resolved"],
+            1
+        );
+        let _ = std::fs::remove_dir_all(app_support_dir);
+    }
+
+    #[test]
+    fn conflict_review_corrective_events_use_proposal_pipeline() {
+        let app_support_dir = std::env::temp_dir().join(format!("ham-ios-{}", Uuid::new_v4()));
+        let logbook_id = default_logbook_id();
+        let device_id = Uuid::new_v4();
+        let qso = call_json(json!({
+            "command": "qso.create",
+            "payload": {
+                "app_support_dir": app_support_dir.to_string_lossy(),
+                "logbook_id": logbook_id,
+                "device_id": device_id,
+                "operation_id": Uuid::new_v4().to_string(),
+                "qso": {
+                    "contacted_callsign": "w1aw",
+                    "station_callsign": "ke8ygw",
+                    "operator_callsign": "ke8ygw",
+                    "started_at": "2026-07-10T12:00:00Z",
+                    "mode": "ssb",
+                    "band": "20m"
+                }
+            }
+        }));
+        assert_eq!(qso["ok"], true);
+        let qso_id = qso["data"]["qso"]["qso_id"].as_str().unwrap().to_owned();
+
+        let preview = ham_sync::PreviewPullResponse {
+            peer_id: "ios-peer".to_owned(),
+            logbook_id,
+            status: ham_sync::ReplicationStatus::Diverged,
+            local_head_hash: Some("local".to_owned()),
+            remote_head_hash: Some("remote".to_owned()),
+            missing_event_count: 0,
+            remote_event_count: 2,
+            events: Vec::new(),
+            message: "Remote chain does not contain the local head".to_owned(),
+        };
+        let report = ham_sync::conflict_report_from_preview(&preview, &[], Utc::now());
+        let created = call_json(json!({
+            "command": "sync.conflict_reviews.create",
+            "payload": {
+                "app_support_dir": app_support_dir.to_string_lossy(),
+                "report": report
+            }
+        }));
+        assert_eq!(created["ok"], true);
+        let review_id = created["data"]["conflict_review"]["review_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+
+        let resolved = call_json(json!({
+            "command": "sync.conflict_reviews.corrective_events",
+            "payload": {
+                "app_support_dir": app_support_dir.to_string_lossy(),
+                "logbook_id": logbook_id,
+                "device_id": device_id,
+                "review_id": review_id,
+                "operator_note": "Resolved with corrective note.",
+                "proposals": [{
+                    "proposal_type": PROPOSAL_QSO_NOTE_ADD,
+                    "entity_id": qso_id.clone(),
+                    "operation_id": Uuid::new_v4().to_string(),
+                    "payload": {
+                        "note": "Remote branch reviewed; local QSO retained."
+                    }
+                }]
+            }
+        }));
+        assert_eq!(resolved["ok"], true);
+        assert_eq!(
+            resolved["data"]["conflict_review"]["selected_resolution"]["choice"],
+            "create_corrective_events"
+        );
+        assert_eq!(
+            resolved["data"]["corrective_events"][0]["event_type"],
+            "official.log.qso.note_added"
+        );
+        assert_eq!(
+            resolved["data"]["corrective_event_hashes"][0],
+            resolved["data"]["corrective_events"][0]["event_hash"]
+        );
+        assert_eq!(
+            resolved["data"]["offline_mutations"][0]["entity_id"]
+                .as_str()
+                .unwrap(),
+            qso_id
+        );
+
+        let qsos = call_json(json!({
+            "command": "qso.list",
+            "payload": {
+                "app_support_dir": app_support_dir.to_string_lossy(),
+                "logbook_id": logbook_id
+            }
+        }));
+        assert_eq!(qsos["ok"], true);
+        assert_eq!(
+            qsos["data"]["records"][0]["note_history"][0]["note"],
+            "Remote branch reviewed; local QSO retained."
+        );
+        let _ = std::fs::remove_dir_all(app_support_dir);
+    }
+
+    #[test]
+    fn conflict_review_corrective_events_reject_empty_proposals() {
+        let app_support_dir = std::env::temp_dir().join(format!("ham-ios-{}", Uuid::new_v4()));
+        let logbook_id = default_logbook_id();
+        let preview = ham_sync::PreviewPullResponse {
+            peer_id: "ios-peer".to_owned(),
+            logbook_id,
+            status: ham_sync::ReplicationStatus::Diverged,
+            local_head_hash: Some("local".to_owned()),
+            remote_head_hash: Some("remote".to_owned()),
+            missing_event_count: 0,
+            remote_event_count: 2,
+            events: Vec::new(),
+            message: "Remote chain does not contain the local head".to_owned(),
+        };
+        let report = ham_sync::conflict_report_from_preview(&preview, &[], Utc::now());
+        let created = call_json(json!({
+            "command": "sync.conflict_reviews.create",
+            "payload": {
+                "app_support_dir": app_support_dir.to_string_lossy(),
+                "report": report
+            }
+        }));
+        let review_id = created["data"]["conflict_review"]["review_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+
+        let rejected = call_json(json!({
+            "command": "sync.conflict_reviews.corrective_events",
+            "payload": {
+                "app_support_dir": app_support_dir.to_string_lossy(),
+                "review_id": review_id,
+                "proposals": []
+            }
+        }));
+        assert_eq!(rejected["ok"], false);
+        assert_eq!(rejected["error"]["code"], "invalid_input");
+
+        let snapshot = call_json(json!({
+            "command": "sync.conflict_reviews.snapshot",
+            "payload": {
+                "app_support_dir": app_support_dir.to_string_lossy(),
+                "logbook_id": logbook_id
+            }
+        }));
+        assert_eq!(snapshot["data"]["conflict_reviews"]["health"]["open"], 1);
+        let _ = std::fs::remove_dir_all(app_support_dir);
+    }
+
+    #[test]
+    fn sync_lan_trust_commands_issue_trust_rotate_and_revoke_without_secrets() {
+        let app_support_dir = std::env::temp_dir().join(format!("ham-ios-{}", Uuid::new_v4()));
+        let peer_device_id = Uuid::new_v4();
+        let auth_credential_id = Uuid::new_v4();
+        let rotated_credential_id = Uuid::new_v4();
+        let initial_snapshot = call_json(json!({
+            "command": "sync.snapshot",
+            "payload": {
+                "app_support_dir": app_support_dir.to_string_lossy()
+            }
+        }));
+        assert_eq!(initial_snapshot["ok"], true);
+        let local_device_id = initial_snapshot["data"]["identity"]["device_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let issued = call_json(json!({
+            "command": "sync.lan_trust.issue_pairing_token",
+            "payload": {
+                "app_support_dir": app_support_dir.to_string_lossy(),
+                "issuer_display_name": "iOS Field Phone",
+                "approved_by_operator": true
+            }
+        }));
+        assert_eq!(issued["ok"], true);
+        let pairing_code = issued["data"]["pairing"]["pairing_code"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        assert!(!pairing_code.is_empty());
+        assert_eq!(
+            issued["data"]["lan_trust"]["pairing_tokens"][0]["issuer_display_name"],
+            "iOS Field Phone"
+        );
+        assert_eq!(
+            issued["data"]["lan_trust"]["pairing_tokens"][0]["issuer_device_id"].as_str(),
+            Some(local_device_id.as_str())
+        );
+        assert!(issued["data"]["lan_trust"]["pairing_tokens"][0]
+            .get("pairing_code")
+            .is_none());
+        assert!(issued["data"]["lan_trust"]["pairing_tokens"][0]
+            .get("token_hash")
+            .is_none());
+
+        let trusted = call_json(json!({
+            "command": "sync.lan_trust.trust_peer",
+            "payload": {
+                "app_support_dir": app_support_dir.to_string_lossy(),
+                "peer_device_id": peer_device_id,
+                "peer_display_name": "Desktop on LAN",
+                "auth_credential_id": auth_credential_id,
+                "public_key_fingerprint": "sha256:test-fingerprint"
+            }
+        }));
+        assert_eq!(trusted["ok"], true);
+        assert_eq!(
+            trusted["data"]["trusted_device"]["auth_credential_id"],
+            auth_credential_id.to_string()
+        );
+        assert_eq!(
+            trusted["data"]["trusted_device"]["revoked_at"],
+            serde_json::Value::Null
+        );
+
+        let rotated = call_json(json!({
+            "command": "sync.lan_trust.rotate_auth",
+            "payload": {
+                "app_support_dir": app_support_dir.to_string_lossy(),
+                "device_id": peer_device_id,
+                "new_auth_credential_id": rotated_credential_id
+            }
+        }));
+        assert_eq!(rotated["ok"], true);
+        assert_eq!(
+            rotated["data"]["rotation"]["previous_auth_credential_id"],
+            auth_credential_id.to_string()
+        );
+        assert_eq!(
+            rotated["data"]["rotation"]["trusted_device"]["auth_credential_id"],
+            rotated_credential_id.to_string()
+        );
+
+        let revoked = call_json(json!({
+            "command": "sync.lan_trust.revoke",
+            "payload": {
+                "app_support_dir": app_support_dir.to_string_lossy(),
+                "device_id": peer_device_id
+            }
+        }));
+        assert_eq!(revoked["ok"], true);
+        assert!(revoked["data"]["trusted_device"]["revoked_at"]
+            .as_str()
+            .is_some());
+
+        let snapshot = call_json(json!({
+            "command": "sync.snapshot",
+            "payload": {
+                "app_support_dir": app_support_dir.to_string_lossy()
+            }
+        }));
+        assert_eq!(snapshot["ok"], true);
+        assert_eq!(
+            snapshot["data"]["lan_trust"]["trusted_devices"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(snapshot["data"]["lan_trust_error"], serde_json::Value::Null);
+
+        let raw = std::fs::read_to_string(app_support_dir.join("Rust/lan-trust.json")).unwrap();
+        assert!(!raw.contains(&pairing_code));
+        assert!(!raw.contains("super-secret"));
+        let _ = std::fs::remove_dir_all(app_support_dir);
+    }
+
+    #[test]
+    fn sync_lan_trust_rejects_unapproved_or_missing_auth_credential() {
+        let app_support_dir = std::env::temp_dir().join(format!("ham-ios-{}", Uuid::new_v4()));
+        let rejected = call_json(json!({
+            "command": "sync.lan_trust.issue_pairing_token",
+            "payload": {
+                "app_support_dir": app_support_dir.to_string_lossy(),
+                "approved_by_operator": false
+            }
+        }));
+        assert_eq!(rejected["ok"], false);
+        assert_eq!(rejected["error"]["code"], "domain_rejected");
+
+        let issued = call_json(json!({
+            "command": "sync.lan_trust.issue_pairing_token",
+            "payload": {
+                "app_support_dir": app_support_dir.to_string_lossy(),
+                "approved_by_operator": true
+            }
+        }));
+        let token_id = issued["data"]["pairing"]["token_id"].as_str().unwrap();
+        let pairing_code = issued["data"]["pairing"]["pairing_code"].as_str().unwrap();
+        let missing_auth = call_json(json!({
+            "command": "sync.lan_trust.accept_pairing_token",
+            "payload": {
+                "app_support_dir": app_support_dir.to_string_lossy(),
+                "token_id": token_id,
+                "pairing_code": pairing_code,
+                "peer_device_id": Uuid::new_v4(),
+                "peer_display_name": "Desktop without credential"
+            }
+        }));
+        assert_eq!(missing_auth["ok"], false);
+        assert_eq!(missing_auth["error"]["code"], "invalid_input");
         let _ = std::fs::remove_dir_all(app_support_dir);
     }
 

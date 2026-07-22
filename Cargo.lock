@@ -90,9 +90,9 @@ checksum = "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923"
 
 [[package]]
 name = "ammonia"
-version = "4.1.3"
+version = "4.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "68b9d3370580a12f4b7a10fdcc18b28942c083ba570e3d954fe59d10951b85a2"
+checksum = "dc6d763210e2eb7670d1a5183a08bebefa3f97db2a738a684f2ce00bd49f681d"
 dependencies = [
  "cssparser 0.37.0",
  "html5ever 0.39.0",
@@ -2236,7 +2236,7 @@ dependencies = [
 
 [[package]]
 name = "ham-api-contract"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -2244,7 +2244,7 @@ dependencies = [
 
 [[package]]
 name = "ham-cli"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "ham-core",
  "ham-plugin-sdk",
@@ -2254,7 +2254,7 @@ dependencies = [
 
 [[package]]
 name = "ham-core"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "async-trait",
  "chrono",
@@ -2272,7 +2272,7 @@ dependencies = [
 
 [[package]]
 name = "ham-desktop"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -2280,7 +2280,7 @@ dependencies = [
 
 [[package]]
 name = "ham-gui"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "async-trait",
  "chrono",
@@ -2295,7 +2295,7 @@ dependencies = [
 
 [[package]]
 name = "ham-ios-ffi"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "ham-core",
@@ -2309,7 +2309,7 @@ dependencies = [
 
 [[package]]
 name = "ham-plugin-sdk"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "serde",
@@ -2319,7 +2319,7 @@ dependencies = [
 
 [[package]]
 name = "ham-server"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "ham-api-contract",
@@ -2338,13 +2338,15 @@ dependencies = [
 
 [[package]]
 name = "ham-sync"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "ham-core",
+ "hmac",
  "serde",
  "serde_json",
  "sha2",
+ "socket2",
  "surrealdb",
  "thiserror 1.0.69",
  "tokio",
@@ -2353,9 +2355,10 @@ dependencies = [
 
 [[package]]
 name = "ham-sync-server"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "ham-api-contract",
+ "ham-core",
  "ham-sync",
  "serde",
  "serde_json",
@@ -3106,7 +3109,7 @@ dependencies = [
 
 [[package]]
 name = "ke8ygw-logger-desktop"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "ham-desktop",
  "rfd",

@@ -1,0 +1,3566 @@
+//! Durable offline mutation queues, conflict reporting, and LAN trust state.
+
+use std::{
+    collections::{BTreeMap, HashMap, HashSet},
+    fmt::Write as FmtWrite,
+    fs,
+    io::{self, ErrorKind, Write},
+    path::{Path, PathBuf},
+};
+
+use chrono::{DateTime, Duration as ChronoDuration, Utc};
+use ham_core::CoreEventEnvelope;
+use hmac::{Hmac, Mac};
+use serde::{Deserialize, Serialize};
+use serde_json::Value as JsonValue;
+use sha2::{Digest, Sha256};
+use thiserror::Error;
+use uuid::Uuid;
+
+use crate::{EventMetadata, LocalPeerIdentity, PreviewPullResponse, ReplicationStatus};
+
+pub const OFFLINE_MUTATION_SCHEMA_VERSION: u32 = 1;
+pub const OFFLINE_QUEUE_FILE_VERSION: u32 = 1;
+pub const OFFLINE_QUEUE_LEGACY_V0_2_FILE_VERSION: u32 = 0;
+pub const LOCAL_SYNC_IDENTITY_FILE_VERSION: u32 = 1;
+pub const LAN_TRUST_FILE_VERSION: u32 = 1;
+pub const CONFLICT_REVIEW_SCHEMA_VERSION: u32 = 1;
+pub const CONFLICT_REVIEW_FILE_VERSION: u32 = 1;
+pub const LAN_AUTH_SIGNATURE_VERSION: &str = "hmac-sha256-v1";
+pub const DEFAULT_PAIRING_TOKEN_TTL_SECONDS: i64 = 10 * 60;
+pub const DEFAULT_REPLAY_NONCE_TTL_SECONDS: i64 = 10 * 60;
+
+pub const OFFLINE_OP_QSO_CREATE: &str = "qso.create";
+pub const OFFLINE_OP_QSO_CORRECT: &str = "qso.correct";
+pub const OFFLINE_OP_QSO_DELETE: &str = "qso.delete";
+pub const OFFLINE_OP_QSO_RESTORE: &str = "qso.restore";
+pub const OFFLINE_OP_QSO_NOTE_ADD: &str = "qso.note.add";
+pub const OFFLINE_OP_ACTIVATION_START: &str = "activation.start";
+pub const OFFLINE_OP_ACTIVATION_END: &str = "activation.end";
+pub const OFFLINE_OP_NET_SESSION_START: &str = "net.session.start";
+pub const OFFLINE_OP_NET_SESSION_END: &str = "net.session.end";
+pub const OFFLINE_OP_NET_CHECKIN_CREATE: &str = "net.checkin.create";
+pub const OFFLINE_OP_NET_CHECKIN_DELETE: &str = "net.checkin.delete";
+pub const OFFLINE_OP_NET_TRAFFIC_CREATE: &str = "net.traffic.create";
+pub const OFFLINE_OP_STATION_PROFILE_CREATE: &str = "station.profile.create";
+pub const OFFLINE_OP_STATION_PROFILE_SELECT: &str = "station.profile.select";
+pub const OFFLINE_OP_STATION_EQUIPMENT_CREATE: &str = "station.equipment.create";
+
+const DEFAULT_MAX_ATTEMPTS: u32 = 8;
+const DEFAULT_BACKOFF_SECONDS: u64 = 5;
+const DEFAULT_MAX_BACKOFF_SECONDS: u64 = 15 * 60;
+pub const MAX_CONFLICT_REVIEW_NOTE_BYTES: usize = 4096;
+const SUPPORTED_OFFICIAL_EVENT_SCHEMA_VERSION: u32 = 1;
+const OFFICIAL_LOG_QSO_CORRECTED: &str = "official.log.qso.corrected";
+const OFFICIAL_LOG_QSO_DELETED: &str = "official.log.qso.deleted";
+const OFFICIAL_LOG_QSO_RESTORED: &str = "official.log.qso.restored";
+const PROPOSAL_QSO_CORRECT: &str = "proposal.qso.correct";
+const PROPOSAL_QSO_DELETE: &str = "proposal.qso.delete";
+const PROPOSAL_QSO_RESTORE: &str = "proposal.qso.restore";
+const PROPOSAL_QSO_NOTE_ADD: &str = "proposal.qso.note.add";
+
+#[derive(Debug, Error)]
+pub enum OfflineQueueError {
+    #[error("offline queue I/O error: {0}")]
+    Io(#[from] io::Error),
+    #[error("offline queue serialization error: {0}")]
+    Serde(#[from] serde_json::Error),
+    #[error("offline queue file version {0} is not supported")]
+    UnsupportedFileVersion(u32),
+    #[error("offline mutation {operation_id} uses unsupported schema version {schema_version}")]
+    UnsupportedMutationSchema {
+        operation_id: Uuid,
+        schema_version: u32,
+    },
+    #[error("offline mutation {operation_id} has invalid operation type")]
+    InvalidOperationType { operation_id: Uuid },
+    #[error("offline mutation {operation_id} has invalid idempotency key")]
+    InvalidIdempotencyKey { operation_id: Uuid },
+    #[error("offline mutation {operation_id} has invalid sequence {sequence}")]
+    InvalidSequence { operation_id: Uuid, sequence: u64 },
+    #[error(
+        "offline mutation {operation_id} depends on unsupported schema version {schema_version}"
+    )]
+    UnsupportedDependencySchema {
+        operation_id: Uuid,
+        schema_version: u32,
+    },
+    #[error("offline queue has duplicate sequence {sequence} for logbook {logbook_id}")]
+    DuplicateSequence { logbook_id: Uuid, sequence: u64 },
+    #[error("offline mutation {0} was not found")]
+    MutationNotFound(Uuid),
+    #[error("offline mutation {operation_id} has no accepted local official event")]
+    MissingLocalOfficialEvent { operation_id: Uuid },
+}
+
+#[derive(Debug, Error)]
+pub enum LocalSyncIdentityError {
+    #[error("local sync identity I/O error: {0}")]
+    Io(#[from] io::Error),
+    #[error("local sync identity serialization error: {0}")]
+    Serde(#[from] serde_json::Error),
+    #[error("local sync identity file version {0} is not supported")]
+    UnsupportedFileVersion(u32),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OfflineMutationStatus {
+    Pending,
+    Sending,
+    Retrying,
+    Blocked,
+    Failed,
+    Accepted,
+    UserActionRequired,
+}
+
+impl OfflineMutationStatus {
+    pub fn is_terminal(self) -> bool {
+        matches!(
+            self,
+            Self::Blocked | Self::Failed | Self::Accepted | Self::UserActionRequired
+        )
+    }
+
+    pub fn is_draining(self) -> bool {
+        matches!(self, Self::Pending | Self::Retrying)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct OfflineMutationDependency {
+    pub operation_id: Option<Uuid>,
+    pub event_hash: Option<String>,
+    pub minimum_schema_version: Option<u32>,
+}
+
+impl OfflineMutationDependency {
+    pub fn operation(operation_id: Uuid) -> Self {
+        Self {
+            operation_id: Some(operation_id),
+            event_hash: None,
+            minimum_schema_version: None,
+        }
+    }
+
+    pub fn event_hash(event_hash: impl Into<String>) -> Self {
+        Self {
+            operation_id: None,
+            event_hash: Some(event_hash.into()),
+            minimum_schema_version: None,
+        }
+    }
+
+    pub fn minimum_schema_version(schema_version: u32) -> Self {
+        Self {
+            operation_id: None,
+            event_hash: None,
+            minimum_schema_version: Some(schema_version),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct OfflineMutationEnvelope {
+    pub schema_version: u32,
+    pub operation_id: Uuid,
+    pub correlation_id: Uuid,
+    pub client_id: Uuid,
+    pub device_id: Uuid,
+    pub logbook_id: Uuid,
+    #[serde(default)]
+    pub entity_id: Option<Uuid>,
+    pub sequence: u64,
+    pub operation_type: String,
+    pub idempotency_key: String,
+    pub dependencies: Vec<OfflineMutationDependency>,
+    pub payload: JsonValue,
+    pub status: OfflineMutationStatus,
+    pub attempts: u32,
+    pub max_attempts: u32,
+    pub backoff_seconds: u64,
+    pub max_backoff_seconds: u64,
+    pub next_attempt_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub official_event_id: Option<Uuid>,
+    pub local_event_hash: Option<String>,
+    pub accepted_at: Option<DateTime<Utc>>,
+    pub failure_reason: Option<String>,
+    pub last_error_code: Option<String>,
+}
+
+impl OfflineMutationEnvelope {
+    pub fn new(input: OfflineMutationInput, sequence: u64, now: DateTime<Utc>) -> Self {
+        let operation_id = input.operation_id.unwrap_or_else(Uuid::new_v4);
+        let correlation_id = input.correlation_id.unwrap_or(operation_id);
+        let idempotency_key = input.idempotency_key.unwrap_or_else(|| {
+            format!(
+                "{}:{}:{}:{}",
+                input.logbook_id, input.device_id, sequence, operation_id
+            )
+        });
+        Self {
+            schema_version: OFFLINE_MUTATION_SCHEMA_VERSION,
+            operation_id,
+            correlation_id,
+            client_id: input.client_id,
+            device_id: input.device_id,
+            logbook_id: input.logbook_id,
+            entity_id: input.entity_id,
+            sequence,
+            operation_type: input.operation_type,
+            idempotency_key,
+            dependencies: input.dependencies,
+            payload: input.payload,
+            status: OfflineMutationStatus::Pending,
+            attempts: 0,
+            max_attempts: DEFAULT_MAX_ATTEMPTS,
+            backoff_seconds: DEFAULT_BACKOFF_SECONDS,
+            max_backoff_seconds: DEFAULT_MAX_BACKOFF_SECONDS,
+            next_attempt_at: None,
+            created_at: now,
+            updated_at: now,
+            official_event_id: None,
+            local_event_hash: None,
+            accepted_at: None,
+            failure_reason: None,
+            last_error_code: None,
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), OfflineQueueError> {
+        if self.schema_version != OFFLINE_MUTATION_SCHEMA_VERSION {
+            return Err(OfflineQueueError::UnsupportedMutationSchema {
+                operation_id: self.operation_id,
+                schema_version: self.schema_version,
+            });
+        }
+        if self.operation_type.trim().is_empty() {
+            return Err(OfflineQueueError::InvalidOperationType {
+                operation_id: self.operation_id,
+            });
+        }
+        if self.idempotency_key.trim().is_empty() {
+            return Err(OfflineQueueError::InvalidIdempotencyKey {
+                operation_id: self.operation_id,
+            });
+        }
+        if self.sequence == 0 {
+            return Err(OfflineQueueError::InvalidSequence {
+                operation_id: self.operation_id,
+                sequence: self.sequence,
+            });
+        }
+        for dependency in &self.dependencies {
+            if let Some(schema_version) = dependency.minimum_schema_version {
+                if schema_version > OFFLINE_MUTATION_SCHEMA_VERSION {
+                    return Err(OfflineQueueError::UnsupportedDependencySchema {
+                        operation_id: self.operation_id,
+                        schema_version,
+                    });
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub fn is_ready_at(&self, now: DateTime<Utc>) -> bool {
+        if !self.status.is_draining() {
+            return false;
+        }
+        self.next_attempt_at
+            .map(|next_attempt| next_attempt <= now)
+            .unwrap_or(true)
+    }
+
+    pub fn attach_local_event(&mut self, event: &CoreEventEnvelope, now: DateTime<Utc>) {
+        self.official_event_id = Some(event.event_id);
+        self.local_event_hash = Some(event.event_hash.clone());
+        if self.entity_id.is_none() {
+            self.entity_id = event.entity_id;
+        }
+        self.updated_at = now;
+        self.failure_reason = None;
+        self.last_error_code = None;
+        if matches!(
+            self.status,
+            OfflineMutationStatus::Blocked
+                | OfflineMutationStatus::Failed
+                | OfflineMutationStatus::UserActionRequired
+        ) {
+            self.status = OfflineMutationStatus::Pending;
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct OfflineMutationInput {
+    pub logbook_id: Uuid,
+    pub device_id: Uuid,
+    pub client_id: Uuid,
+    pub operation_type: String,
+    pub payload: JsonValue,
+    pub entity_id: Option<Uuid>,
+    pub idempotency_key: Option<String>,
+    pub operation_id: Option<Uuid>,
+    pub correlation_id: Option<Uuid>,
+    pub dependencies: Vec<OfflineMutationDependency>,
+}
+
+impl OfflineMutationInput {
+    pub fn new(
+        logbook_id: Uuid,
+        device_id: Uuid,
+        client_id: Uuid,
+        operation_type: impl Into<String>,
+        payload: JsonValue,
+    ) -> Self {
+        Self {
+            logbook_id,
+            device_id,
+            client_id,
+            operation_type: operation_type.into(),
+            payload,
+            entity_id: None,
+            idempotency_key: None,
+            operation_id: None,
+            correlation_id: None,
+            dependencies: Vec::new(),
+        }
+    }
+
+    pub fn with_operation_id(mut self, operation_id: Uuid) -> Self {
+        self.operation_id = Some(operation_id);
+        self
+    }
+
+    pub fn with_correlation_id(mut self, correlation_id: Uuid) -> Self {
+        self.correlation_id = Some(correlation_id);
+        self
+    }
+
+    pub fn with_idempotency_key(mut self, idempotency_key: impl Into<String>) -> Self {
+        self.idempotency_key = Some(idempotency_key.into());
+        self
+    }
+
+    pub fn with_entity_id(mut self, entity_id: Option<Uuid>) -> Self {
+        self.entity_id = entity_id;
+        self
+    }
+
+    pub fn with_dependencies(mut self, dependencies: Vec<OfflineMutationDependency>) -> Self {
+        self.dependencies = dependencies;
+        self
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct OfflineQueueFile {
+    version: u32,
+    next_sequence_by_logbook: BTreeMap<Uuid, u64>,
+    mutations: Vec<OfflineMutationEnvelope>,
+}
+
+impl Default for OfflineQueueFile {
+    fn default() -> Self {
+        Self {
+            version: OFFLINE_QUEUE_FILE_VERSION,
+            next_sequence_by_logbook: BTreeMap::new(),
+            mutations: Vec::new(),
+        }
+    }
+}
+
+impl OfflineQueueFile {
+    fn validate(&self) -> Result<(), OfflineQueueError> {
+        if self.version != OFFLINE_QUEUE_FILE_VERSION {
+            return Err(OfflineQueueError::UnsupportedFileVersion(self.version));
+        }
+        let mut seen_sequences = HashSet::new();
+        for mutation in &self.mutations {
+            mutation.validate()?;
+            let key = (mutation.logbook_id, mutation.sequence);
+            if !seen_sequences.insert(key) {
+                return Err(OfflineQueueError::DuplicateSequence {
+                    logbook_id: mutation.logbook_id,
+                    sequence: mutation.sequence,
+                });
+            }
+        }
+        Ok(())
+    }
+
+    fn sorted(mut self) -> Self {
+        self.mutations.sort_by(|left, right| {
+            (
+                left.logbook_id,
+                left.sequence,
+                left.created_at,
+                left.operation_id,
+            )
+                .cmp(&(
+                    right.logbook_id,
+                    right.sequence,
+                    right.created_at,
+                    right.operation_id,
+                ))
+        });
+        self
+    }
+
+    fn next_sequence(&self, logbook_id: Uuid) -> u64 {
+        let stored = self.next_sequence_by_logbook.get(&logbook_id).copied();
+        let derived = self
+            .mutations
+            .iter()
+            .filter(|mutation| mutation.logbook_id == logbook_id)
+            .map(|mutation| mutation.sequence.saturating_add(1))
+            .max();
+        stored.into_iter().chain(derived).max().unwrap_or(1)
+    }
+
+    fn mutation_mut(
+        &mut self,
+        operation_id: Uuid,
+    ) -> Result<&mut OfflineMutationEnvelope, OfflineQueueError> {
+        self.mutations
+            .iter_mut()
+            .find(|mutation| mutation.operation_id == operation_id)
+            .ok_or(OfflineQueueError::MutationNotFound(operation_id))
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct LegacyOfflineQueueFileV0 {
+    version: u32,
+    #[serde(default)]
+    pending_operations: Vec<LegacyOfflineMutationV0>,
+    #[serde(default)]
+    mutations: Vec<LegacyOfflineMutationV0>,
+}
+
+#[derive(Debug, Deserialize)]
+struct LegacyOfflineMutationV0 {
+    operation_id: Uuid,
+    #[serde(default)]
+    correlation_id: Option<Uuid>,
+    #[serde(default)]
+    client_id: Option<Uuid>,
+    device_id: Uuid,
+    logbook_id: Uuid,
+    #[serde(default)]
+    entity_id: Option<Uuid>,
+    #[serde(default)]
+    sequence: Option<u64>,
+    operation_type: String,
+    #[serde(default)]
+    idempotency_key: Option<String>,
+    #[serde(default)]
+    dependencies: Vec<OfflineMutationDependency>,
+    #[serde(default)]
+    payload: JsonValue,
+    #[serde(default)]
+    created_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    official_event_id: Option<Uuid>,
+    #[serde(default)]
+    local_event_hash: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct JsonOfflineMutationQueue {
+    path: PathBuf,
+}
+
+impl JsonOfflineMutationQueue {
+    pub fn new(path: impl Into<PathBuf>) -> Self {
+        Self { path: path.into() }
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub fn load_snapshot(
+        &self,
+        now: DateTime<Utc>,
+    ) -> Result<OfflineQueueSnapshot, OfflineQueueError> {
+        let file = self.load_file()?;
+        Ok(snapshot_from_file(file.mutations, now))
+    }
+
+    pub fn enqueue_input(
+        &self,
+        input: OfflineMutationInput,
+        now: DateTime<Utc>,
+    ) -> Result<OfflineMutationEnvelope, OfflineQueueError> {
+        let mut file = self.load_file()?;
+        if let Some(existing) = file.mutations.iter().find(|mutation| {
+            mutation.logbook_id == input.logbook_id
+                && input
+                    .operation_id
+                    .is_some_and(|operation_id| mutation.operation_id == operation_id)
+        }) {
+            return Ok(existing.clone());
+        }
+        if let Some(idempotency_key) = input.idempotency_key.as_deref() {
+            if let Some(existing) = file.mutations.iter().find(|mutation| {
+                mutation.logbook_id == input.logbook_id
+                    && mutation.idempotency_key == idempotency_key
+            }) {
+                return Ok(existing.clone());
+            }
+        }
+
+        let sequence = file.next_sequence(input.logbook_id);
+        let envelope = OfflineMutationEnvelope::new(input, sequence, now);
+        envelope.validate()?;
+        file.next_sequence_by_logbook
+            .insert(envelope.logbook_id, envelope.sequence.saturating_add(1));
+        file.mutations.push(envelope.clone());
+        self.save_file(&file.sorted())?;
+        Ok(envelope)
+    }
+
+    pub fn enqueue(
+        &self,
+        envelope: OfflineMutationEnvelope,
+    ) -> Result<OfflineMutationEnvelope, OfflineQueueError> {
+        envelope.validate()?;
+        let mut file = self.load_file()?;
+        if let Some(existing) = file
+            .mutations
+            .iter()
+            .find(|mutation| mutation.operation_id == envelope.operation_id)
+        {
+            return Ok(existing.clone());
+        }
+        if let Some(existing) = file.mutations.iter().find(|mutation| {
+            mutation.logbook_id == envelope.logbook_id
+                && mutation.idempotency_key == envelope.idempotency_key
+        }) {
+            return Ok(existing.clone());
+        }
+        if file.mutations.iter().any(|mutation| {
+            mutation.logbook_id == envelope.logbook_id && mutation.sequence == envelope.sequence
+        }) {
+            return Err(OfflineQueueError::DuplicateSequence {
+                logbook_id: envelope.logbook_id,
+                sequence: envelope.sequence,
+            });
+        }
+        file.next_sequence_by_logbook.insert(
+            envelope.logbook_id,
+            file.next_sequence(envelope.logbook_id)
+                .max(envelope.sequence.saturating_add(1)),
+        );
+        file.mutations.push(envelope.clone());
+        self.save_file(&file.sorted())?;
+        Ok(envelope)
+    }
+
+    pub fn record_local_event(
+        &self,
+        operation_id: Uuid,
+        event: &CoreEventEnvelope,
+        now: DateTime<Utc>,
+    ) -> Result<OfflineMutationEnvelope, OfflineQueueError> {
+        let mut file = self.load_file()?;
+        let mutation = file.mutation_mut(operation_id)?;
+        mutation.attach_local_event(event, now);
+        let mutation = mutation.clone();
+        self.save_file(&file.sorted())?;
+        Ok(mutation)
+    }
+
+    pub fn mark_sending(
+        &self,
+        operation_id: Uuid,
+        now: DateTime<Utc>,
+    ) -> Result<OfflineMutationEnvelope, OfflineQueueError> {
+        self.update_mutation(operation_id, now, |mutation| {
+            mutation.status = OfflineMutationStatus::Sending;
+            mutation.attempts = mutation.attempts.saturating_add(1);
+            mutation.next_attempt_at = None;
+            mutation.failure_reason = None;
+            mutation.last_error_code = None;
+        })
+    }
+
+    pub fn record_transient_failure(
+        &self,
+        operation_id: Uuid,
+        reason: impl Into<String>,
+        error_code: Option<String>,
+        now: DateTime<Utc>,
+    ) -> Result<OfflineMutationEnvelope, OfflineQueueError> {
+        let reason = reason.into();
+        self.update_mutation(operation_id, now, |mutation| {
+            if mutation.attempts >= mutation.max_attempts {
+                mutation.status = OfflineMutationStatus::Failed;
+                mutation.next_attempt_at = None;
+            } else {
+                mutation.status = OfflineMutationStatus::Retrying;
+                mutation.next_attempt_at = Some(now + retry_delay(mutation));
+            }
+            mutation.failure_reason = Some(reason.clone());
+            mutation.last_error_code = error_code.clone();
+        })
+    }
+
+    pub fn mark_blocked(
+        &self,
+        operation_id: Uuid,
+        reason: impl Into<String>,
+        now: DateTime<Utc>,
+    ) -> Result<OfflineMutationEnvelope, OfflineQueueError> {
+        let reason = reason.into();
+        self.update_mutation(operation_id, now, |mutation| {
+            mutation.status = OfflineMutationStatus::Blocked;
+            mutation.failure_reason = Some(reason.clone());
+            mutation.next_attempt_at = None;
+        })
+    }
+
+    pub fn mark_failed(
+        &self,
+        operation_id: Uuid,
+        reason: impl Into<String>,
+        error_code: Option<String>,
+        now: DateTime<Utc>,
+    ) -> Result<OfflineMutationEnvelope, OfflineQueueError> {
+        let reason = reason.into();
+        self.update_mutation(operation_id, now, |mutation| {
+            mutation.status = OfflineMutationStatus::Failed;
+            mutation.failure_reason = Some(reason.clone());
+            mutation.last_error_code = error_code.clone();
+            mutation.next_attempt_at = None;
+        })
+    }
+
+    pub fn mark_user_action_required(
+        &self,
+        operation_id: Uuid,
+        reason: impl Into<String>,
+        error_code: Option<String>,
+        now: DateTime<Utc>,
+    ) -> Result<OfflineMutationEnvelope, OfflineQueueError> {
+        let reason = reason.into();
+        self.update_mutation(operation_id, now, |mutation| {
+            mutation.status = OfflineMutationStatus::UserActionRequired;
+            mutation.failure_reason = Some(reason.clone());
+            mutation.last_error_code = error_code.clone();
+            mutation.next_attempt_at = None;
+        })
+    }
+
+    pub fn mark_accepted(
+        &self,
+        operation_id: Uuid,
+        now: DateTime<Utc>,
+    ) -> Result<OfflineMutationEnvelope, OfflineQueueError> {
+        self.update_mutation(operation_id, now, |mutation| {
+            mutation.status = OfflineMutationStatus::Accepted;
+            mutation.accepted_at = Some(now);
+            mutation.next_attempt_at = None;
+            mutation.failure_reason = None;
+            mutation.last_error_code = None;
+        })
+    }
+
+    pub fn mark_accepted_by_event_hashes(
+        &self,
+        accepted_hashes: &HashSet<String>,
+        now: DateTime<Utc>,
+    ) -> Result<usize, OfflineQueueError> {
+        let mut file = self.load_file()?;
+        let mut accepted = 0;
+        for mutation in &mut file.mutations {
+            if mutation
+                .local_event_hash
+                .as_ref()
+                .is_some_and(|event_hash| accepted_hashes.contains(event_hash))
+                && mutation.status != OfflineMutationStatus::Accepted
+            {
+                mutation.status = OfflineMutationStatus::Accepted;
+                mutation.accepted_at = Some(now);
+                mutation.updated_at = now;
+                mutation.next_attempt_at = None;
+                mutation.failure_reason = None;
+                mutation.last_error_code = None;
+                accepted += 1;
+            }
+        }
+        self.save_file(&file.sorted())?;
+        Ok(accepted)
+    }
+
+    pub fn recover_interrupted_writes(
+        &self,
+        now: DateTime<Utc>,
+    ) -> Result<usize, OfflineQueueError> {
+        let mut file = self.load_file()?;
+        let recovered = recover_interrupted_writes_in_file(&mut file, now);
+        self.save_file(&file.sorted())?;
+        Ok(recovered)
+    }
+
+    pub fn recover_or_initialize(
+        &self,
+        now: DateTime<Utc>,
+    ) -> Result<OfflineQueueRecoveryReport, OfflineQueueError> {
+        let mut report = OfflineQueueRecoveryReport::default();
+        if let Some(mut file) = self.recover_interrupted_atomic_write(now, &mut report)? {
+            report.recovered_interrupted_writes =
+                recover_interrupted_writes_in_file(&mut file, now);
+            self.save_file(&file.sorted())?;
+            return Ok(report);
+        }
+
+        if !self.path.exists() {
+            self.save_file(&OfflineQueueFile::default())?;
+            report.initialized_empty_queue = true;
+            report.migrated_v0_2_absent_queue = true;
+            return Ok(report);
+        }
+
+        let bytes = fs::read(&self.path)?;
+        if bytes.iter().all(u8::is_ascii_whitespace) {
+            self.save_file(&OfflineQueueFile::default())?;
+            report.initialized_empty_queue = true;
+            report.migrated_v0_2_absent_queue = true;
+            return Ok(report);
+        }
+
+        match migrate_legacy_v0_2_queue(&bytes, now) {
+            Ok(Some((mut file, migrated_count))) => {
+                report.migrated_legacy_mutations = migrated_count;
+                report.migrated_v0_2_file = true;
+                report.recovered_interrupted_writes =
+                    recover_interrupted_writes_in_file(&mut file, now);
+                self.save_file(&file.sorted())?;
+                return Ok(report);
+            }
+            Err(_) if is_legacy_v0_2_queue(&bytes).unwrap_or(false) => {
+                quarantine_file(&self.path, now)?;
+                self.save_file(&OfflineQueueFile::default())?;
+                report.quarantined_corrupt_file = true;
+                report.initialized_empty_queue = true;
+                return Ok(report);
+            }
+            Ok(None) | Err(_) => {}
+        }
+
+        match serde_json::from_slice::<OfflineQueueFile>(&bytes) {
+            Ok(mut file) => {
+                file.validate()?;
+                report.recovered_interrupted_writes =
+                    recover_interrupted_writes_in_file(&mut file, now);
+                self.save_file(&file.sorted())?;
+                Ok(report)
+            }
+            Err(_) => {
+                quarantine_file(&self.path, now)?;
+                self.save_file(&OfflineQueueFile::default())?;
+                report.quarantined_corrupt_file = true;
+                report.initialized_empty_queue = true;
+                Ok(report)
+            }
+        }
+    }
+
+    pub fn ready_to_send(
+        &self,
+        logbook_id: Uuid,
+        now: DateTime<Utc>,
+    ) -> Result<Vec<OfflineMutationEnvelope>, OfflineQueueError> {
+        let file = self.load_file()?;
+        Ok(ready_mutations(&file.mutations, logbook_id, now))
+    }
+
+    pub fn ready_event_batch(
+        &self,
+        logbook_id: Uuid,
+        local_events: &[CoreEventEnvelope],
+        now: DateTime<Utc>,
+    ) -> Result<OfflinePushBatch, OfflineQueueError> {
+        let file = self.load_file()?;
+        let events_by_hash = local_events
+            .iter()
+            .map(|event| (event.event_hash.clone(), event.clone()))
+            .collect::<HashMap<_, _>>();
+        let mut operations = Vec::new();
+        let mut events = Vec::new();
+        let mut missing_operation_ids = Vec::new();
+        for mutation in ready_mutations(&file.mutations, logbook_id, now) {
+            let Some(event_hash) = mutation.local_event_hash.clone() else {
+                missing_operation_ids.push(mutation.operation_id);
+                break;
+            };
+            let Some(event) = events_by_hash.get(&event_hash) else {
+                missing_operation_ids.push(mutation.operation_id);
+                break;
+            };
+            operations.push(mutation.operation_id);
+            events.push(event.clone());
+        }
+        Ok(OfflinePushBatch {
+            logbook_id,
+            operation_ids: operations,
+            events,
+            missing_local_event_operation_ids: missing_operation_ids,
+        })
+    }
+
+    fn update_mutation<F>(
+        &self,
+        operation_id: Uuid,
+        now: DateTime<Utc>,
+        mut update: F,
+    ) -> Result<OfflineMutationEnvelope, OfflineQueueError>
+    where
+        F: FnMut(&mut OfflineMutationEnvelope),
+    {
+        let mut file = self.load_file()?;
+        let mutation = file.mutation_mut(operation_id)?;
+        update(mutation);
+        mutation.updated_at = now;
+        let mutation = mutation.clone();
+        self.save_file(&file.sorted())?;
+        Ok(mutation)
+    }
+
+    fn load_file(&self) -> Result<OfflineQueueFile, OfflineQueueError> {
+        if !self.path.exists() {
+            return Ok(OfflineQueueFile::default());
+        }
+        let bytes = fs::read(&self.path)?;
+        if bytes.iter().all(u8::is_ascii_whitespace) {
+            return Ok(OfflineQueueFile::default());
+        }
+        let file: OfflineQueueFile = serde_json::from_slice(&bytes)?;
+        file.validate()?;
+        Ok(file.sorted())
+    }
+
+    fn save_file(&self, file: &OfflineQueueFile) -> Result<(), OfflineQueueError> {
+        file.validate()?;
+        write_json_atomically(&self.path, file)?;
+        Ok(())
+    }
+
+    fn recover_interrupted_atomic_write(
+        &self,
+        now: DateTime<Utc>,
+        report: &mut OfflineQueueRecoveryReport,
+    ) -> Result<Option<OfflineQueueFile>, OfflineQueueError> {
+        let temp_path = atomic_temp_path(&self.path);
+        if !temp_path.exists() {
+            return Ok(None);
+        }
+        if !self.path.exists() {
+            let bytes = fs::read(&temp_path)?;
+            if let Ok(file) = serde_json::from_slice::<OfflineQueueFile>(&bytes) {
+                file.validate()?;
+                fs::rename(&temp_path, &self.path)?;
+                report.promoted_interrupted_atomic_write = true;
+                return Ok(Some(file.sorted()));
+            }
+        }
+        quarantine_file(&temp_path, now)?;
+        report.removed_stale_temp_file = true;
+        Ok(None)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct OfflineQueueRecoveryReport {
+    pub recovered_interrupted_writes: usize,
+    pub initialized_empty_queue: bool,
+    pub migrated_v0_2_absent_queue: bool,
+    pub migrated_v0_2_file: bool,
+    pub migrated_legacy_mutations: usize,
+    pub promoted_interrupted_atomic_write: bool,
+    pub removed_stale_temp_file: bool,
+    pub quarantined_corrupt_file: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct OfflinePushBatch {
+    pub logbook_id: Uuid,
+    pub operation_ids: Vec<Uuid>,
+    pub events: Vec<CoreEventEnvelope>,
+    pub missing_local_event_operation_ids: Vec<Uuid>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct OfflineQueueHealth {
+    pub total: usize,
+    pub pending: usize,
+    pub sending: usize,
+    pub retrying: usize,
+    pub blocked: usize,
+    pub failed: usize,
+    pub accepted: usize,
+    pub user_action_required: usize,
+    pub ready_to_send: usize,
+    pub oldest_pending_at: Option<DateTime<Utc>>,
+    pub newest_update_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct OfflineQueueSnapshot {
+    pub queue_schema_version: u32,
+    pub mutation_schema_version: u32,
+    pub health: OfflineQueueHealth,
+    pub mutations: Vec<OfflineMutationEnvelope>,
+}
+
+fn snapshot_from_file(
+    mutations: Vec<OfflineMutationEnvelope>,
+    now: DateTime<Utc>,
+) -> OfflineQueueSnapshot {
+    let mut health = OfflineQueueHealth {
+        total: mutations.len(),
+        ready_to_send: ready_count(&mutations, now),
+        oldest_pending_at: mutations
+            .iter()
+            .filter(|mutation| mutation.status.is_draining())
+            .map(|mutation| mutation.created_at)
+            .min(),
+        newest_update_at: mutations.iter().map(|mutation| mutation.updated_at).max(),
+        ..OfflineQueueHealth::default()
+    };
+    for mutation in &mutations {
+        match mutation.status {
+            OfflineMutationStatus::Pending => health.pending += 1,
+            OfflineMutationStatus::Sending => health.sending += 1,
+            OfflineMutationStatus::Retrying => health.retrying += 1,
+            OfflineMutationStatus::Blocked => health.blocked += 1,
+            OfflineMutationStatus::Failed => health.failed += 1,
+            OfflineMutationStatus::Accepted => health.accepted += 1,
+            OfflineMutationStatus::UserActionRequired => health.user_action_required += 1,
+        }
+    }
+    OfflineQueueSnapshot {
+        queue_schema_version: OFFLINE_QUEUE_FILE_VERSION,
+        mutation_schema_version: OFFLINE_MUTATION_SCHEMA_VERSION,
+        health,
+        mutations,
+    }
+}
+
+fn ready_count(mutations: &[OfflineMutationEnvelope], now: DateTime<Utc>) -> usize {
+    let logbooks = mutations
+        .iter()
+        .map(|mutation| mutation.logbook_id)
+        .collect::<HashSet<_>>();
+    logbooks
+        .into_iter()
+        .map(|logbook_id| ready_mutations(mutations, logbook_id, now).len())
+        .sum()
+}
+
+fn ready_mutations(
+    mutations: &[OfflineMutationEnvelope],
+    logbook_id: Uuid,
+    now: DateTime<Utc>,
+) -> Vec<OfflineMutationEnvelope> {
+    let accepted_operations = mutations
+        .iter()
+        .filter(|mutation| mutation.status == OfflineMutationStatus::Accepted)
+        .map(|mutation| mutation.operation_id)
+        .collect::<HashSet<_>>();
+    let accepted_hashes = mutations
+        .iter()
+        .filter(|mutation| mutation.status == OfflineMutationStatus::Accepted)
+        .filter_map(|mutation| mutation.local_event_hash.clone())
+        .collect::<HashSet<_>>();
+
+    let mut ordered = mutations
+        .iter()
+        .filter(|mutation| mutation.logbook_id == logbook_id)
+        .cloned()
+        .collect::<Vec<_>>();
+    ordered.sort_by_key(|mutation| {
+        (
+            mutation.sequence,
+            mutation.created_at,
+            mutation.operation_id,
+        )
+    });
+
+    let mut ready = Vec::new();
+    for mutation in ordered {
+        if mutation.status == OfflineMutationStatus::Accepted {
+            continue;
+        }
+        if !mutation.is_ready_at(now) {
+            break;
+        }
+        if !dependencies_satisfied(&mutation, &accepted_operations, &accepted_hashes) {
+            break;
+        }
+        ready.push(mutation);
+    }
+    ready
+}
+
+fn dependencies_satisfied(
+    mutation: &OfflineMutationEnvelope,
+    accepted_operations: &HashSet<Uuid>,
+    accepted_hashes: &HashSet<String>,
+) -> bool {
+    mutation.dependencies.iter().all(|dependency| {
+        dependency
+            .operation_id
+            .map(|operation_id| accepted_operations.contains(&operation_id))
+            .unwrap_or(true)
+            && dependency
+                .event_hash
+                .as_ref()
+                .map(|event_hash| accepted_hashes.contains(event_hash))
+                .unwrap_or(true)
+            && dependency
+                .minimum_schema_version
+                .map(|schema_version| schema_version <= OFFLINE_MUTATION_SCHEMA_VERSION)
+                .unwrap_or(true)
+    })
+}
+
+fn retry_delay(mutation: &OfflineMutationEnvelope) -> ChronoDuration {
+    let exponent = mutation.attempts.saturating_sub(1).min(16);
+    let multiplier = 1_u64.checked_shl(exponent).unwrap_or(u64::MAX);
+    let seconds = mutation
+        .backoff_seconds
+        .saturating_mul(multiplier)
+        .min(mutation.max_backoff_seconds)
+        .max(1);
+    ChronoDuration::seconds(seconds as i64)
+}
+
+fn recover_interrupted_writes_in_file(file: &mut OfflineQueueFile, now: DateTime<Utc>) -> usize {
+    let mut recovered = 0;
+    for mutation in &mut file.mutations {
+        if mutation.status == OfflineMutationStatus::Sending {
+            mutation.status = OfflineMutationStatus::Retrying;
+            mutation.next_attempt_at = Some(now);
+            mutation.updated_at = now;
+            mutation.failure_reason = Some("recovered interrupted send attempt".to_owned());
+            recovered += 1;
+        }
+    }
+    recovered
+}
+
+fn entity_id_from_payload_for_operation(operation_type: &str, payload: &JsonValue) -> Option<Uuid> {
+    let fields: &[&str] = match operation_type {
+        OFFLINE_OP_QSO_CREATE
+        | OFFLINE_OP_QSO_CORRECT
+        | OFFLINE_OP_QSO_DELETE
+        | OFFLINE_OP_QSO_RESTORE
+        | OFFLINE_OP_QSO_NOTE_ADD
+        | PROPOSAL_QSO_CORRECT
+        | PROPOSAL_QSO_DELETE
+        | PROPOSAL_QSO_RESTORE
+        | PROPOSAL_QSO_NOTE_ADD
+        | OFFICIAL_LOG_QSO_CORRECTED
+        | OFFICIAL_LOG_QSO_DELETED
+        | OFFICIAL_LOG_QSO_RESTORED => &["entity_id", "qso_id"],
+        OFFLINE_OP_ACTIVATION_START | OFFLINE_OP_ACTIVATION_END => &["entity_id", "activation_id"],
+        OFFLINE_OP_NET_SESSION_START | OFFLINE_OP_NET_SESSION_END => {
+            &["entity_id", "net_session_id"]
+        }
+        OFFLINE_OP_NET_CHECKIN_CREATE | OFFLINE_OP_NET_CHECKIN_DELETE => {
+            &["entity_id", "checkin_id"]
+        }
+        OFFLINE_OP_NET_TRAFFIC_CREATE => &["entity_id", "traffic_id"],
+        OFFLINE_OP_STATION_PROFILE_CREATE | OFFLINE_OP_STATION_PROFILE_SELECT => {
+            &["entity_id", "station_profile_id"]
+        }
+        OFFLINE_OP_STATION_EQUIPMENT_CREATE => &["entity_id", "equipment_id"],
+        value if value.starts_with("proposal.activation.") => &["entity_id", "activation_id"],
+        value if value.starts_with("proposal.net.session.") => &["entity_id", "net_session_id"],
+        value if value.starts_with("proposal.net.checkin.") => &["entity_id", "checkin_id"],
+        value if value.starts_with("proposal.net.traffic.") => &["entity_id", "traffic_id"],
+        value if value.starts_with("station.profile.") => &["entity_id", "station_profile_id"],
+        value if value.starts_with("station.equipment.") => &["entity_id", "equipment_id"],
+        _ => &["entity_id"],
+    };
+    fields.iter().find_map(|field| {
+        payload
+            .get(*field)
+            .and_then(JsonValue::as_str)
+            .and_then(|value| Uuid::parse_str(value).ok())
+    })
+}
+
+fn migrate_legacy_v0_2_queue(
+    bytes: &[u8],
+    now: DateTime<Utc>,
+) -> Result<Option<(OfflineQueueFile, usize)>, OfflineQueueError> {
+    let value: JsonValue = serde_json::from_slice(bytes)?;
+    if !is_legacy_v0_2_value(&value) {
+        return Ok(None);
+    }
+
+    let legacy: LegacyOfflineQueueFileV0 = serde_json::from_value(value)?;
+    if legacy.version != OFFLINE_QUEUE_LEGACY_V0_2_FILE_VERSION {
+        return Ok(None);
+    }
+
+    let legacy_mutations = if legacy.pending_operations.is_empty() {
+        legacy.mutations
+    } else {
+        legacy.pending_operations
+    };
+    let mut next_sequence_by_logbook = BTreeMap::new();
+    let mut mutations = Vec::with_capacity(legacy_mutations.len());
+    for record in legacy_mutations {
+        let created_at = record.created_at.unwrap_or(now);
+        let sequence = match record.sequence {
+            Some(sequence) => sequence,
+            None => {
+                let next = next_sequence_by_logbook
+                    .entry(record.logbook_id)
+                    .or_insert(1_u64);
+                let sequence = *next;
+                *next = next.saturating_add(1);
+                sequence
+            }
+        };
+        if sequence == 0 {
+            return Err(OfflineQueueError::InvalidSequence {
+                operation_id: record.operation_id,
+                sequence,
+            });
+        }
+        next_sequence_by_logbook
+            .entry(record.logbook_id)
+            .and_modify(|next| *next = (*next).max(sequence.saturating_add(1)))
+            .or_insert(sequence.saturating_add(1));
+        let entity_id = record.entity_id.or_else(|| {
+            entity_id_from_payload_for_operation(&record.operation_type, &record.payload)
+        });
+        let mut envelope = OfflineMutationEnvelope {
+            schema_version: OFFLINE_MUTATION_SCHEMA_VERSION,
+            operation_id: record.operation_id,
+            correlation_id: record.correlation_id.unwrap_or(record.operation_id),
+            client_id: record.client_id.unwrap_or(record.device_id),
+            device_id: record.device_id,
+            logbook_id: record.logbook_id,
+            entity_id,
+            sequence,
+            operation_type: record.operation_type,
+            idempotency_key: record.idempotency_key.unwrap_or_else(|| {
+                format!(
+                    "legacy-v0.2:{}:{}:{}",
+                    record.logbook_id, record.device_id, record.operation_id
+                )
+            }),
+            dependencies: record.dependencies,
+            payload: record.payload,
+            status: OfflineMutationStatus::Pending,
+            attempts: 0,
+            max_attempts: DEFAULT_MAX_ATTEMPTS,
+            backoff_seconds: DEFAULT_BACKOFF_SECONDS,
+            max_backoff_seconds: DEFAULT_MAX_BACKOFF_SECONDS,
+            next_attempt_at: None,
+            created_at,
+            updated_at: now,
+            official_event_id: record.official_event_id,
+            local_event_hash: record.local_event_hash,
+            accepted_at: None,
+            failure_reason: Some("migrated from v0.2 offline queue state".to_owned()),
+            last_error_code: None,
+        };
+        if envelope.local_event_hash.is_some() {
+            envelope.status = OfflineMutationStatus::Retrying;
+            envelope.next_attempt_at = Some(now);
+        }
+        envelope.validate()?;
+        mutations.push(envelope);
+    }
+
+    let file = OfflineQueueFile {
+        version: OFFLINE_QUEUE_FILE_VERSION,
+        next_sequence_by_logbook,
+        mutations,
+    }
+    .sorted();
+    file.validate()?;
+    let migrated = file.mutations.len();
+    Ok(Some((file, migrated)))
+}
+
+fn is_legacy_v0_2_queue(bytes: &[u8]) -> Result<bool, serde_json::Error> {
+    serde_json::from_slice::<JsonValue>(bytes).map(|value| is_legacy_v0_2_value(&value))
+}
+
+fn is_legacy_v0_2_value(value: &JsonValue) -> bool {
+    value
+        .get("version")
+        .and_then(JsonValue::as_u64)
+        .map(|version| version as u32)
+        == Some(OFFLINE_QUEUE_LEGACY_V0_2_FILE_VERSION)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SyncConflictKind {
+    DivergentHeads,
+    MissingDependency,
+    UnsupportedSchema,
+    ConcurrentCorrection,
+    TombstoneRestore,
+    RevokedDevice,
+    ManualReviewRequired,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SyncConflict {
+    pub kind: SyncConflictKind,
+    pub message: String,
+    pub related_operation_ids: Vec<Uuid>,
+    pub related_event_hashes: Vec<String>,
+    pub safe_auto_merge: bool,
+    pub requires_user_action: bool,
+    pub resolution_options: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SyncConflictReport {
+    pub schema_version: u32,
+    pub created_at: DateTime<Utc>,
+    pub logbook_id: Uuid,
+    pub peer_id: String,
+    pub status: ReplicationStatus,
+    pub local_head_hash: Option<String>,
+    pub remote_head_hash: Option<String>,
+    pub missing_event_count: usize,
+    pub pending_operation_count: usize,
+    pub conflicts: Vec<SyncConflict>,
+    pub recommended_action: String,
+}
+
+#[derive(Debug, Error)]
+pub enum ConflictReviewError {
+    #[error("conflict review I/O error: {0}")]
+    Io(#[from] io::Error),
+    #[error("conflict review serialization error: {0}")]
+    Serde(#[from] serde_json::Error),
+    #[error("conflict review file version {0} is not supported")]
+    UnsupportedFileVersion(u32),
+    #[error("conflict review {0} was not found")]
+    ReviewNotFound(Uuid),
+    #[error("conflict review note exceeds {MAX_CONFLICT_REVIEW_NOTE_BYTES} bytes")]
+    OperatorNoteTooLarge,
+    #[error("corrective event hashes are required for corrective-event resolution")]
+    MissingCorrectiveEvents,
+    #[error("resolution {resolution:?} is unsafe for report status {status:?}")]
+    UnsafeResolution {
+        resolution: ManualConflictResolutionChoice,
+        status: ReplicationStatus,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConflictReviewStatus {
+    Open,
+    Resolved,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ManualConflictResolutionChoice {
+    KeepLocalHistory,
+    PullRemoteAfterReview,
+    CreateCorrectiveEvents,
+    RetryAfterDependencyArrives,
+    MarkUserActionRequired,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ManualConflictResolution {
+    pub choice: ManualConflictResolutionChoice,
+    pub operator_note: Option<String>,
+    #[serde(default)]
+    pub corrective_event_hashes: Vec<String>,
+    pub resolved_by_device_id: Option<Uuid>,
+}
+
+impl ManualConflictResolution {
+    pub fn new(choice: ManualConflictResolutionChoice) -> Self {
+        Self {
+            choice,
+            operator_note: None,
+            corrective_event_hashes: Vec::new(),
+            resolved_by_device_id: None,
+        }
+    }
+
+    pub fn with_note(mut self, note: impl Into<String>) -> Self {
+        self.operator_note = Some(note.into());
+        self
+    }
+
+    pub fn with_corrective_event_hashes(mut self, hashes: Vec<String>) -> Self {
+        self.corrective_event_hashes = hashes;
+        self
+    }
+
+    pub fn with_resolved_by_device_id(mut self, device_id: Uuid) -> Self {
+        self.resolved_by_device_id = Some(device_id);
+        self
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ManualConflictReview {
+    pub schema_version: u32,
+    pub review_id: Uuid,
+    pub report_fingerprint: String,
+    pub report: SyncConflictReport,
+    pub status: ConflictReviewStatus,
+    pub selected_resolution: Option<ManualConflictResolution>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub resolved_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ConflictReviewFile {
+    version: u32,
+    reviews: Vec<ManualConflictReview>,
+}
+
+impl Default for ConflictReviewFile {
+    fn default() -> Self {
+        Self {
+            version: CONFLICT_REVIEW_FILE_VERSION,
+            reviews: Vec::new(),
+        }
+    }
+}
+
+impl ConflictReviewFile {
+    fn validate(&self) -> Result<(), ConflictReviewError> {
+        if self.version != CONFLICT_REVIEW_FILE_VERSION {
+            return Err(ConflictReviewError::UnsupportedFileVersion(self.version));
+        }
+        Ok(())
+    }
+
+    fn sorted(mut self) -> Self {
+        self.reviews.sort_by_key(|review| {
+            (
+                review.report.logbook_id,
+                review.created_at,
+                review.review_id,
+            )
+        });
+        self
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct JsonConflictReviewStore {
+    path: PathBuf,
+}
+
+impl JsonConflictReviewStore {
+    pub fn new(path: impl Into<PathBuf>) -> Self {
+        Self { path: path.into() }
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub fn load_snapshot(&self) -> Result<ConflictReviewSnapshot, ConflictReviewError> {
+        let file = self.load_file()?;
+        Ok(snapshot_from_reviews(file.reviews))
+    }
+
+    pub fn create_review(
+        &self,
+        report: SyncConflictReport,
+        now: DateTime<Utc>,
+    ) -> Result<ManualConflictReview, ConflictReviewError> {
+        let mut file = self.load_file()?;
+        let fingerprint = conflict_report_fingerprint(&report)?;
+        if let Some(existing) = file.reviews.iter().find(|review| {
+            review.report.logbook_id == report.logbook_id
+                && review.report_fingerprint == fingerprint
+                && review.status == ConflictReviewStatus::Open
+        }) {
+            return Ok(existing.clone());
+        }
+        let review = ManualConflictReview {
+            schema_version: CONFLICT_REVIEW_SCHEMA_VERSION,
+            review_id: Uuid::new_v4(),
+            report_fingerprint: fingerprint,
+            report,
+            status: ConflictReviewStatus::Open,
+            selected_resolution: None,
+            created_at: now,
+            updated_at: now,
+            resolved_at: None,
+        };
+        file.reviews.push(review.clone());
+        self.save_file(&file.sorted())?;
+        Ok(review)
+    }
+
+    pub fn resolve_review(
+        &self,
+        review_id: Uuid,
+        resolution: ManualConflictResolution,
+        now: DateTime<Utc>,
+    ) -> Result<ManualConflictReview, ConflictReviewError> {
+        let mut file = self.load_file()?;
+        let review = file
+            .reviews
+            .iter_mut()
+            .find(|review| review.review_id == review_id)
+            .ok_or(ConflictReviewError::ReviewNotFound(review_id))?;
+        validate_resolution_for_report(&review.report, &resolution)?;
+        review.status = ConflictReviewStatus::Resolved;
+        review.selected_resolution = Some(resolution);
+        review.resolved_at = Some(now);
+        review.updated_at = now;
+        let review = review.clone();
+        self.save_file(&file.sorted())?;
+        Ok(review)
+    }
+
+    fn load_file(&self) -> Result<ConflictReviewFile, ConflictReviewError> {
+        if !self.path.exists() {
+            return Ok(ConflictReviewFile::default());
+        }
+        let bytes = fs::read(&self.path)?;
+        if bytes.iter().all(u8::is_ascii_whitespace) {
+            return Ok(ConflictReviewFile::default());
+        }
+        let file: ConflictReviewFile = serde_json::from_slice(&bytes)?;
+        file.validate()?;
+        Ok(file.sorted())
+    }
+
+    fn save_file(&self, file: &ConflictReviewFile) -> Result<(), ConflictReviewError> {
+        file.validate()?;
+        write_json_atomically(&self.path, file)?;
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct ConflictReviewHealth {
+    pub total: usize,
+    pub open: usize,
+    pub resolved: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ConflictReviewSnapshot {
+    pub file_version: u32,
+    pub review_schema_version: u32,
+    pub health: ConflictReviewHealth,
+    pub reviews: Vec<ManualConflictReview>,
+}
+
+fn snapshot_from_reviews(reviews: Vec<ManualConflictReview>) -> ConflictReviewSnapshot {
+    let mut health = ConflictReviewHealth {
+        total: reviews.len(),
+        ..ConflictReviewHealth::default()
+    };
+    for review in &reviews {
+        match review.status {
+            ConflictReviewStatus::Open => health.open += 1,
+            ConflictReviewStatus::Resolved => health.resolved += 1,
+        }
+    }
+    ConflictReviewSnapshot {
+        file_version: CONFLICT_REVIEW_FILE_VERSION,
+        review_schema_version: CONFLICT_REVIEW_SCHEMA_VERSION,
+        health,
+        reviews,
+    }
+}
+
+fn validate_resolution_for_report(
+    report: &SyncConflictReport,
+    resolution: &ManualConflictResolution,
+) -> Result<(), ConflictReviewError> {
+    if resolution
+        .operator_note
+        .as_ref()
+        .is_some_and(|note| note.len() > MAX_CONFLICT_REVIEW_NOTE_BYTES)
+    {
+        return Err(ConflictReviewError::OperatorNoteTooLarge);
+    }
+    if resolution.choice == ManualConflictResolutionChoice::CreateCorrectiveEvents
+        && resolution
+            .corrective_event_hashes
+            .iter()
+            .all(|hash| hash.trim().is_empty())
+    {
+        return Err(ConflictReviewError::MissingCorrectiveEvents);
+    }
+    if resolution.choice == ManualConflictResolutionChoice::PullRemoteAfterReview
+        && (report.status == ReplicationStatus::Diverged
+            || report
+                .conflicts
+                .iter()
+                .any(|conflict| !conflict.safe_auto_merge))
+    {
+        return Err(ConflictReviewError::UnsafeResolution {
+            resolution: resolution.choice,
+            status: report.status,
+        });
+    }
+    if resolution.choice == ManualConflictResolutionChoice::RetryAfterDependencyArrives
+        && !report
+            .conflicts
+            .iter()
+            .any(|conflict| conflict.kind == SyncConflictKind::MissingDependency)
+    {
+        return Err(ConflictReviewError::UnsafeResolution {
+            resolution: resolution.choice,
+            status: report.status,
+        });
+    }
+    Ok(())
+}
+
+#[derive(Serialize)]
+struct ConflictReportFingerprint<'a> {
+    logbook_id: Uuid,
+    peer_id: &'a str,
+    status: ReplicationStatus,
+    local_head_hash: &'a Option<String>,
+    remote_head_hash: &'a Option<String>,
+    missing_event_count: usize,
+    pending_operation_count: usize,
+    conflicts: &'a [SyncConflict],
+}
+
+fn conflict_report_fingerprint(report: &SyncConflictReport) -> Result<String, serde_json::Error> {
+    let input = ConflictReportFingerprint {
+        logbook_id: report.logbook_id,
+        peer_id: &report.peer_id,
+        status: report.status,
+        local_head_hash: &report.local_head_hash,
+        remote_head_hash: &report.remote_head_hash,
+        missing_event_count: report.missing_event_count,
+        pending_operation_count: report.pending_operation_count,
+        conflicts: &report.conflicts,
+    };
+    serde_json::to_vec(&input).map(|bytes| hex_sha256(&bytes))
+}
+
+fn mutation_entity_id(mutation: &OfflineMutationEnvelope) -> Option<Uuid> {
+    mutation.entity_id.or_else(|| {
+        entity_id_from_payload_for_operation(&mutation.operation_type, &mutation.payload)
+    })
+}
+
+fn is_qso_correction_operation(operation_type: &str) -> bool {
+    matches!(
+        operation_type,
+        OFFLINE_OP_QSO_CORRECT | PROPOSAL_QSO_CORRECT | OFFICIAL_LOG_QSO_CORRECTED
+    )
+}
+
+fn is_qso_entity_operation(operation_type: &str) -> bool {
+    matches!(
+        operation_type,
+        OFFLINE_OP_QSO_CORRECT
+            | OFFLINE_OP_QSO_DELETE
+            | OFFLINE_OP_QSO_RESTORE
+            | OFFLINE_OP_QSO_NOTE_ADD
+            | PROPOSAL_QSO_CORRECT
+            | PROPOSAL_QSO_DELETE
+            | PROPOSAL_QSO_RESTORE
+            | PROPOSAL_QSO_NOTE_ADD
+            | OFFICIAL_LOG_QSO_CORRECTED
+            | OFFICIAL_LOG_QSO_DELETED
+            | OFFICIAL_LOG_QSO_RESTORED
+    )
+}
+
+fn push_schema_conflict(conflicts: &mut Vec<SyncConflict>, events: &[&EventMetadata]) {
+    if events.is_empty() {
+        return;
+    }
+    conflicts.push(SyncConflict {
+        kind: SyncConflictKind::UnsupportedSchema,
+        message: format!(
+            "{} remote events use unsupported schema versions; upgrade or inspect before pulling",
+            events.len()
+        ),
+        related_operation_ids: Vec::new(),
+        related_event_hashes: events
+            .iter()
+            .map(|event| event.event_hash.clone())
+            .collect(),
+        safe_auto_merge: false,
+        requires_user_action: true,
+        resolution_options: vec![
+            "upgrade_client".to_owned(),
+            "export_divergence_report".to_owned(),
+            "mark_user_action_required".to_owned(),
+        ],
+    });
+}
+
+fn push_entity_conflict(
+    conflicts: &mut Vec<SyncConflict>,
+    kind: SyncConflictKind,
+    message: impl Into<String>,
+    events: &[&EventMetadata],
+    operations: &[Uuid],
+    resolution_options: Vec<String>,
+) {
+    if events.is_empty() || operations.is_empty() {
+        return;
+    }
+    conflicts.push(SyncConflict {
+        kind,
+        message: message.into(),
+        related_operation_ids: operations.to_vec(),
+        related_event_hashes: events
+            .iter()
+            .map(|event| event.event_hash.clone())
+            .collect(),
+        safe_auto_merge: false,
+        requires_user_action: true,
+        resolution_options,
+    });
+}
+
+pub fn conflict_report_from_preview(
+    preview: &PreviewPullResponse,
+    local_pending: &[OfflineMutationEnvelope],
+    now: DateTime<Utc>,
+) -> SyncConflictReport {
+    let pending = local_pending
+        .iter()
+        .filter(|mutation| {
+            mutation.logbook_id == preview.logbook_id
+                && mutation.status != OfflineMutationStatus::Accepted
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+
+    let mut conflicts = Vec::new();
+    if preview.status == ReplicationStatus::Diverged {
+        conflicts.push(SyncConflict {
+            kind: SyncConflictKind::DivergentHeads,
+            message: preview.message.clone(),
+            related_operation_ids: pending
+                .iter()
+                .map(|mutation| mutation.operation_id)
+                .collect(),
+            related_event_hashes: preview
+                .events
+                .iter()
+                .map(|event| event.event_hash.clone())
+                .collect(),
+            safe_auto_merge: false,
+            requires_user_action: true,
+            resolution_options: vec![
+                "review_remote_events".to_owned(),
+                "export_divergence_report".to_owned(),
+                "create_new_corrective_events".to_owned(),
+            ],
+        });
+    }
+
+    let unsupported_schema_events = preview
+        .events
+        .iter()
+        .filter(|event| event.schema_version != SUPPORTED_OFFICIAL_EVENT_SCHEMA_VERSION)
+        .collect::<Vec<_>>();
+    push_schema_conflict(&mut conflicts, &unsupported_schema_events);
+
+    let mut concurrent_correction_events = Vec::new();
+    let mut concurrent_correction_operations = Vec::new();
+    for event in preview
+        .events
+        .iter()
+        .filter(|event| event.event_type == OFFICIAL_LOG_QSO_CORRECTED)
+    {
+        let Some(entity_id) = event.entity_id else {
+            continue;
+        };
+        let related_operations = pending
+            .iter()
+            .filter(|mutation| {
+                mutation_entity_id(mutation) == Some(entity_id)
+                    && is_qso_correction_operation(&mutation.operation_type)
+            })
+            .map(|mutation| mutation.operation_id)
+            .collect::<Vec<_>>();
+        if !related_operations.is_empty() {
+            concurrent_correction_events.push(event);
+            for operation_id in related_operations {
+                if !concurrent_correction_operations.contains(&operation_id) {
+                    concurrent_correction_operations.push(operation_id);
+                }
+            }
+        }
+    }
+    push_entity_conflict(
+        &mut conflicts,
+        SyncConflictKind::ConcurrentCorrection,
+        "Remote and local queues both contain corrections for the same QSO; manual review is required before replay",
+        &concurrent_correction_events,
+        &concurrent_correction_operations,
+        vec![
+            "review_remote_events".to_owned(),
+            "create_new_corrective_events".to_owned(),
+            "mark_user_action_required".to_owned(),
+        ],
+    );
+
+    let mut tombstone_restore_events = Vec::new();
+    let mut tombstone_restore_operations = Vec::new();
+    for event in preview.events.iter().filter(|event| {
+        matches!(
+            event.event_type.as_str(),
+            OFFICIAL_LOG_QSO_DELETED | OFFICIAL_LOG_QSO_RESTORED
+        )
+    }) {
+        let Some(entity_id) = event.entity_id else {
+            continue;
+        };
+        let related_operations = pending
+            .iter()
+            .filter(|mutation| {
+                mutation_entity_id(mutation) == Some(entity_id)
+                    && is_qso_entity_operation(&mutation.operation_type)
+            })
+            .map(|mutation| mutation.operation_id)
+            .collect::<Vec<_>>();
+        if !related_operations.is_empty() {
+            tombstone_restore_events.push(event);
+            for operation_id in related_operations {
+                if !tombstone_restore_operations.contains(&operation_id) {
+                    tombstone_restore_operations.push(operation_id);
+                }
+            }
+        }
+    }
+    push_entity_conflict(
+        &mut conflicts,
+        SyncConflictKind::TombstoneRestore,
+        "Remote tombstone or restore events affect QSOs with local pending mutations; manual review is required before replay",
+        &tombstone_restore_events,
+        &tombstone_restore_operations,
+        vec![
+            "review_remote_events".to_owned(),
+            "create_new_corrective_events".to_owned(),
+            "mark_user_action_required".to_owned(),
+        ],
+    );
+
+    for mutation in &pending {
+        let missing_dependencies = mutation
+            .dependencies
+            .iter()
+            .filter(|dependency| {
+                dependency.operation_id.is_some()
+                    || dependency.event_hash.is_some()
+                    || dependency
+                        .minimum_schema_version
+                        .is_some_and(|schema| schema > OFFLINE_MUTATION_SCHEMA_VERSION)
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        if !missing_dependencies.is_empty()
+            && !dependencies_satisfied(mutation, &HashSet::new(), &HashSet::new())
+        {
+            conflicts.push(SyncConflict {
+                kind: SyncConflictKind::MissingDependency,
+                message: format!(
+                    "Offline mutation {} cannot drain until its dependencies are accepted",
+                    mutation.operation_id
+                ),
+                related_operation_ids: missing_dependencies
+                    .iter()
+                    .filter_map(|dependency| dependency.operation_id)
+                    .collect(),
+                related_event_hashes: missing_dependencies
+                    .iter()
+                    .filter_map(|dependency| dependency.event_hash.clone())
+                    .collect(),
+                safe_auto_merge: false,
+                requires_user_action: true,
+                resolution_options: vec![
+                    "retry_after_dependency_arrives".to_owned(),
+                    "mark_user_action_required".to_owned(),
+                ],
+            });
+        }
+    }
+
+    let recommended_action = if conflicts
+        .iter()
+        .any(|conflict| conflict.requires_user_action)
+    {
+        "Manual review is required before merging or replaying additional events.".to_owned()
+    } else if preview.status == ReplicationStatus::RemoteAhead {
+        "Preview can be pulled because the remote chain contains the local head.".to_owned()
+    } else {
+        "No sync conflict requires action.".to_owned()
+    };
+
+    SyncConflictReport {
+        schema_version: 1,
+        created_at: now,
+        logbook_id: preview.logbook_id,
+        peer_id: preview.peer_id.clone(),
+        status: preview.status,
+        local_head_hash: preview.local_head_hash.clone(),
+        remote_head_hash: preview.remote_head_hash.clone(),
+        missing_event_count: preview.missing_event_count,
+        pending_operation_count: pending.len(),
+        conflicts,
+        recommended_action,
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct LocalSyncIdentityFile {
+    version: u32,
+    device_id: Uuid,
+    display_name: String,
+    #[serde(default)]
+    user_hash: Option<String>,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+}
+
+impl LocalSyncIdentityFile {
+    fn validate(&self) -> Result<(), LocalSyncIdentityError> {
+        if self.version != LOCAL_SYNC_IDENTITY_FILE_VERSION {
+            return Err(LocalSyncIdentityError::UnsupportedFileVersion(self.version));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct JsonLocalSyncIdentityStore {
+    path: PathBuf,
+}
+
+impl JsonLocalSyncIdentityStore {
+    pub fn new(path: impl Into<PathBuf>) -> Self {
+        Self { path: path.into() }
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub fn load_or_create(
+        &self,
+        display_name: impl Into<String>,
+        local_api_port: Option<u16>,
+        now: DateTime<Utc>,
+    ) -> Result<LocalPeerIdentity, LocalSyncIdentityError> {
+        match self.load_file() {
+            Ok(file) => Ok(identity_from_local_sync_file(&file, local_api_port)),
+            Err(LocalSyncIdentityError::Io(error)) if error.kind() == ErrorKind::NotFound => {
+                let identity = LocalPeerIdentity::new(
+                    normalized_local_identity_display_name(display_name),
+                    local_api_port,
+                );
+                let file = LocalSyncIdentityFile {
+                    version: LOCAL_SYNC_IDENTITY_FILE_VERSION,
+                    device_id: identity.device_id,
+                    display_name: identity.display_name.clone(),
+                    user_hash: identity.user_hash.clone(),
+                    created_at: now,
+                    updated_at: now,
+                };
+                self.save_file(&file)?;
+                Ok(identity)
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    fn load_file(&self) -> Result<LocalSyncIdentityFile, LocalSyncIdentityError> {
+        let contents = fs::read_to_string(&self.path)?;
+        let file: LocalSyncIdentityFile = serde_json::from_str(&contents)?;
+        file.validate()?;
+        Ok(file)
+    }
+
+    fn save_file(&self, file: &LocalSyncIdentityFile) -> Result<(), LocalSyncIdentityError> {
+        write_json_atomically(&self.path, file)?;
+        Ok(())
+    }
+}
+
+fn identity_from_local_sync_file(
+    file: &LocalSyncIdentityFile,
+    local_api_port: Option<u16>,
+) -> LocalPeerIdentity {
+    let mut identity = LocalPeerIdentity::new(file.display_name.clone(), local_api_port);
+    identity.device_id = file.device_id;
+    identity.user_hash = file.user_hash.clone();
+    identity
+}
+
+fn normalized_local_identity_display_name(display_name: impl Into<String>) -> String {
+    let display_name = display_name.into();
+    let trimmed = display_name.trim();
+    if trimmed.is_empty() {
+        "KE8YGW Logger".to_owned()
+    } else {
+        trimmed.to_owned()
+    }
+}
+
+#[derive(Debug, Error)]
+pub enum LanTrustError {
+    #[error("LAN trust I/O error: {0}")]
+    Io(#[from] io::Error),
+    #[error("LAN trust serialization error: {0}")]
+    Serde(#[from] serde_json::Error),
+    #[error("LAN trust file version {0} is not supported")]
+    UnsupportedFileVersion(u32),
+    #[error("operator approval is required before issuing a pairing token")]
+    ApprovalRequired,
+    #[error("pairing token was not found")]
+    PairingTokenNotFound,
+    #[error("pairing token is expired")]
+    PairingTokenExpired,
+    #[error("pairing token was already consumed")]
+    PairingTokenConsumed,
+    #[error("pairing token does not match")]
+    PairingTokenMismatch,
+    #[error("trusted device {0} was not found")]
+    DeviceNotFound(Uuid),
+    #[error("trusted device {0} is revoked")]
+    DeviceRevoked(Uuid),
+    #[error("trusted device {device_id} is not authorized for logbook {logbook_id}")]
+    WrongLogbook { device_id: Uuid, logbook_id: Uuid },
+    #[error("replay nonce was already used for device {0}")]
+    ReplayDetected(Uuid),
+    #[error(
+        "replacement LAN auth credential for trusted device {0} matches the current credential"
+    )]
+    CredentialUnchanged(Uuid),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IssuedPairingToken {
+    pub token_id: Uuid,
+    pub pairing_code: String,
+    pub expires_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PairingTokenRecord {
+    pub token_id: Uuid,
+    pub issuer_device_id: Uuid,
+    pub logbook_id: Uuid,
+    pub issuer_display_name: String,
+    pub token_hash: String,
+    pub created_at: DateTime<Utc>,
+    pub expires_at: DateTime<Utc>,
+    pub consumed_at: Option<DateTime<Utc>>,
+    pub approved_by_operator: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TrustedPeerDevice {
+    pub device_id: Uuid,
+    pub display_name: String,
+    pub logbook_ids: Vec<Uuid>,
+    pub trusted_at: DateTime<Utc>,
+    pub revoked_at: Option<DateTime<Utc>>,
+    pub pairing_token_id: Option<Uuid>,
+    pub public_key_fingerprint: Option<String>,
+    #[serde(default)]
+    pub auth_credential_id: Option<Uuid>,
+    #[serde(default)]
+    pub auth_rotated_at: Option<DateTime<Utc>>,
+    pub last_seen_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct ReplayNonceRecord {
+    device_id: Uuid,
+    nonce_hash: String,
+    seen_at: DateTime<Utc>,
+    expires_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct LanTrustFile {
+    version: u32,
+    pairing_tokens: Vec<PairingTokenRecord>,
+    trusted_devices: Vec<TrustedPeerDevice>,
+    replay_nonces: Vec<ReplayNonceRecord>,
+}
+
+impl Default for LanTrustFile {
+    fn default() -> Self {
+        Self {
+            version: LAN_TRUST_FILE_VERSION,
+            pairing_tokens: Vec::new(),
+            trusted_devices: Vec::new(),
+            replay_nonces: Vec::new(),
+        }
+    }
+}
+
+impl LanTrustFile {
+    fn validate(&self) -> Result<(), LanTrustError> {
+        if self.version != LAN_TRUST_FILE_VERSION {
+            return Err(LanTrustError::UnsupportedFileVersion(self.version));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LanTrustSnapshot {
+    pub version: u32,
+    pub pairing_tokens: Vec<PairingTokenSummary>,
+    pub trusted_devices: Vec<TrustedPeerDevice>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PairingTokenSummary {
+    pub token_id: Uuid,
+    pub issuer_device_id: Uuid,
+    pub logbook_id: Uuid,
+    pub issuer_display_name: String,
+    pub created_at: DateTime<Utc>,
+    pub expires_at: DateTime<Utc>,
+    pub consumed_at: Option<DateTime<Utc>>,
+    pub approved_by_operator: bool,
+}
+
+impl From<&PairingTokenRecord> for PairingTokenSummary {
+    fn from(record: &PairingTokenRecord) -> Self {
+        Self {
+            token_id: record.token_id,
+            issuer_device_id: record.issuer_device_id,
+            logbook_id: record.logbook_id,
+            issuer_display_name: record.issuer_display_name.clone(),
+            created_at: record.created_at,
+            expires_at: record.expires_at,
+            consumed_at: record.consumed_at,
+            approved_by_operator: record.approved_by_operator,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LanPairingAcceptance {
+    pub token_id: Uuid,
+    pub pairing_code: String,
+    pub peer_device_id: Uuid,
+    pub peer_display_name: String,
+    pub requested_logbooks: Vec<Uuid>,
+    pub public_key_fingerprint: Option<String>,
+    #[serde(default)]
+    pub auth_credential_id: Option<Uuid>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LanPeerTrustUpdate {
+    pub peer_device_id: Uuid,
+    pub peer_display_name: String,
+    pub logbook_id: Uuid,
+    pub pairing_token_id: Option<Uuid>,
+    pub public_key_fingerprint: Option<String>,
+    pub auth_credential_id: Uuid,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LanAuthCredentialRotation {
+    pub trusted_device: TrustedPeerDevice,
+    pub previous_auth_credential_id: Option<Uuid>,
+}
+
+#[derive(Debug, Clone)]
+pub struct JsonLanTrustStore {
+    path: PathBuf,
+}
+
+impl JsonLanTrustStore {
+    pub fn new(path: impl Into<PathBuf>) -> Self {
+        Self { path: path.into() }
+    }
+
+    pub fn snapshot(&self) -> Result<LanTrustSnapshot, LanTrustError> {
+        let file = self.load_file()?;
+        Ok(LanTrustSnapshot {
+            version: file.version,
+            pairing_tokens: file
+                .pairing_tokens
+                .iter()
+                .map(PairingTokenSummary::from)
+                .collect(),
+            trusted_devices: file.trusted_devices,
+        })
+    }
+
+    pub fn issue_pairing_token(
+        &self,
+        issuer_device_id: Uuid,
+        logbook_id: Uuid,
+        issuer_display_name: impl Into<String>,
+        approved_by_operator: bool,
+        now: DateTime<Utc>,
+    ) -> Result<IssuedPairingToken, LanTrustError> {
+        if !approved_by_operator {
+            return Err(LanTrustError::ApprovalRequired);
+        }
+        let mut file = self.load_file()?;
+        let token_id = Uuid::new_v4();
+        let pairing_code = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
+        let expires_at = now + ChronoDuration::seconds(DEFAULT_PAIRING_TOKEN_TTL_SECONDS);
+        file.pairing_tokens.push(PairingTokenRecord {
+            token_id,
+            issuer_device_id,
+            logbook_id,
+            issuer_display_name: issuer_display_name.into(),
+            token_hash: pairing_token_hash(token_id, &pairing_code),
+            created_at: now,
+            expires_at,
+            consumed_at: None,
+            approved_by_operator,
+        });
+        self.save_file(&file)?;
+        Ok(IssuedPairingToken {
+            token_id,
+            pairing_code,
+            expires_at,
+        })
+    }
+
+    pub fn accept_pairing_token(
+        &self,
+        request: LanPairingAcceptance,
+        now: DateTime<Utc>,
+    ) -> Result<TrustedPeerDevice, LanTrustError> {
+        let mut file = self.load_file()?;
+        let token_index = file
+            .pairing_tokens
+            .iter()
+            .position(|token| token.token_id == request.token_id)
+            .ok_or(LanTrustError::PairingTokenNotFound)?;
+        let token = &file.pairing_tokens[token_index];
+        if token.consumed_at.is_some() {
+            return Err(LanTrustError::PairingTokenConsumed);
+        }
+        if token.expires_at < now {
+            return Err(LanTrustError::PairingTokenExpired);
+        }
+        if token.token_hash != pairing_token_hash(request.token_id, &request.pairing_code) {
+            return Err(LanTrustError::PairingTokenMismatch);
+        }
+        let logbook_ids = if request.requested_logbooks.contains(&token.logbook_id) {
+            vec![token.logbook_id]
+        } else {
+            return Err(LanTrustError::WrongLogbook {
+                device_id: request.peer_device_id,
+                logbook_id: token.logbook_id,
+            });
+        };
+        file.pairing_tokens[token_index].consumed_at = Some(now);
+        let device = TrustedPeerDevice {
+            device_id: request.peer_device_id,
+            display_name: request.peer_display_name,
+            logbook_ids,
+            trusted_at: now,
+            revoked_at: None,
+            pairing_token_id: Some(request.token_id),
+            public_key_fingerprint: request.public_key_fingerprint,
+            auth_credential_id: request.auth_credential_id,
+            auth_rotated_at: None,
+            last_seen_at: None,
+        };
+        upsert_trusted_device(&mut file, device.clone());
+        self.save_file(&file)?;
+        Ok(device)
+    }
+
+    pub fn trust_peer_with_auth_credential(
+        &self,
+        request: LanPeerTrustUpdate,
+        now: DateTime<Utc>,
+    ) -> Result<TrustedPeerDevice, LanTrustError> {
+        let mut file = self.load_file()?;
+        let device = TrustedPeerDevice {
+            device_id: request.peer_device_id,
+            display_name: request.peer_display_name,
+            logbook_ids: vec![request.logbook_id],
+            trusted_at: now,
+            revoked_at: None,
+            pairing_token_id: request.pairing_token_id,
+            public_key_fingerprint: request.public_key_fingerprint,
+            auth_credential_id: Some(request.auth_credential_id),
+            auth_rotated_at: None,
+            last_seen_at: None,
+        };
+        upsert_trusted_device(&mut file, device.clone());
+        self.save_file(&file)?;
+        Ok(device)
+    }
+
+    pub fn rotate_auth_credential(
+        &self,
+        device_id: Uuid,
+        logbook_id: Uuid,
+        new_auth_credential_id: Uuid,
+        now: DateTime<Utc>,
+    ) -> Result<LanAuthCredentialRotation, LanTrustError> {
+        let mut file = self.load_file()?;
+        let device = file
+            .trusted_devices
+            .iter_mut()
+            .find(|device| device.device_id == device_id)
+            .ok_or(LanTrustError::DeviceNotFound(device_id))?;
+        if device.revoked_at.is_some() {
+            return Err(LanTrustError::DeviceRevoked(device_id));
+        }
+        if !device.logbook_ids.contains(&logbook_id) {
+            return Err(LanTrustError::WrongLogbook {
+                device_id,
+                logbook_id,
+            });
+        }
+        if device.auth_credential_id == Some(new_auth_credential_id) {
+            return Err(LanTrustError::CredentialUnchanged(device_id));
+        }
+        let previous_auth_credential_id = device.auth_credential_id.replace(new_auth_credential_id);
+        device.auth_rotated_at = Some(now);
+        let trusted_device = device.clone();
+        self.save_file(&file)?;
+        Ok(LanAuthCredentialRotation {
+            trusted_device,
+            previous_auth_credential_id,
+        })
+    }
+
+    pub fn trusted_peer(
+        &self,
+        device_id: Uuid,
+        logbook_id: Uuid,
+    ) -> Result<TrustedPeerDevice, LanTrustError> {
+        let file = self.load_file()?;
+        let device = file
+            .trusted_devices
+            .iter()
+            .find(|device| device.device_id == device_id)
+            .ok_or(LanTrustError::DeviceNotFound(device_id))?;
+        if device.revoked_at.is_some() {
+            return Err(LanTrustError::DeviceRevoked(device_id));
+        }
+        if !device.logbook_ids.contains(&logbook_id) {
+            return Err(LanTrustError::WrongLogbook {
+                device_id,
+                logbook_id,
+            });
+        }
+        Ok(device.clone())
+    }
+
+    pub fn authorize_peer(
+        &self,
+        device_id: Uuid,
+        logbook_id: Uuid,
+        replay_nonce: &str,
+        now: DateTime<Utc>,
+    ) -> Result<TrustedPeerDevice, LanTrustError> {
+        let mut file = self.load_file()?;
+        prune_expired_nonces(&mut file, now);
+        let nonce_hash = replay_nonce_hash(device_id, replay_nonce);
+        if file
+            .replay_nonces
+            .iter()
+            .any(|nonce| nonce.device_id == device_id && nonce.nonce_hash == nonce_hash)
+        {
+            return Err(LanTrustError::ReplayDetected(device_id));
+        }
+
+        let device = file
+            .trusted_devices
+            .iter_mut()
+            .find(|device| device.device_id == device_id)
+            .ok_or(LanTrustError::DeviceNotFound(device_id))?;
+        if device.revoked_at.is_some() {
+            return Err(LanTrustError::DeviceRevoked(device_id));
+        }
+        if !device.logbook_ids.contains(&logbook_id) {
+            return Err(LanTrustError::WrongLogbook {
+                device_id,
+                logbook_id,
+            });
+        }
+        device.last_seen_at = Some(now);
+        let authorized = device.clone();
+        file.replay_nonces.push(ReplayNonceRecord {
+            device_id,
+            nonce_hash,
+            seen_at: now,
+            expires_at: now + ChronoDuration::seconds(DEFAULT_REPLAY_NONCE_TTL_SECONDS),
+        });
+        self.save_file(&file)?;
+        Ok(authorized)
+    }
+
+    pub fn revoke_device(
+        &self,
+        device_id: Uuid,
+        now: DateTime<Utc>,
+    ) -> Result<TrustedPeerDevice, LanTrustError> {
+        let mut file = self.load_file()?;
+        let device = file
+            .trusted_devices
+            .iter_mut()
+            .find(|device| device.device_id == device_id)
+            .ok_or(LanTrustError::DeviceNotFound(device_id))?;
+        device.revoked_at = Some(now);
+        let device = device.clone();
+        self.save_file(&file)?;
+        Ok(device)
+    }
+
+    fn load_file(&self) -> Result<LanTrustFile, LanTrustError> {
+        if !self.path.exists() {
+            return Ok(LanTrustFile::default());
+        }
+        let bytes = fs::read(&self.path)?;
+        if bytes.iter().all(u8::is_ascii_whitespace) {
+            return Ok(LanTrustFile::default());
+        }
+        let file: LanTrustFile = serde_json::from_slice(&bytes)?;
+        file.validate()?;
+        Ok(file)
+    }
+
+    fn save_file(&self, file: &LanTrustFile) -> Result<(), LanTrustError> {
+        file.validate()?;
+        write_json_atomically(&self.path, file)?;
+        Ok(())
+    }
+}
+
+fn upsert_trusted_device(file: &mut LanTrustFile, device: TrustedPeerDevice) {
+    if let Some(existing) = file
+        .trusted_devices
+        .iter_mut()
+        .find(|existing| existing.device_id == device.device_id)
+    {
+        *existing = device;
+    } else {
+        file.trusted_devices.push(device);
+    }
+}
+
+fn prune_expired_nonces(file: &mut LanTrustFile, now: DateTime<Utc>) {
+    file.replay_nonces.retain(|nonce| nonce.expires_at >= now);
+}
+
+fn pairing_token_hash(token_id: Uuid, pairing_code: &str) -> String {
+    hex_sha256(format!("{token_id}:{pairing_code}").as_bytes())
+}
+
+fn replay_nonce_hash(device_id: Uuid, replay_nonce: &str) -> String {
+    hex_sha256(format!("{device_id}:{replay_nonce}").as_bytes())
+}
+
+type HmacSha256 = Hmac<Sha256>;
+
+pub fn lan_auth_signature(
+    secret: &str,
+    device_id: Uuid,
+    logbook_id: Uuid,
+    method: &str,
+    target: &str,
+    replay_nonce: &str,
+) -> String {
+    let mut mac =
+        HmacSha256::new_from_slice(secret.as_bytes()).expect("HMAC accepts keys of any size");
+    mac.update(LAN_AUTH_SIGNATURE_VERSION.as_bytes());
+    mac.update(b"\n");
+    mac.update(device_id.to_string().as_bytes());
+    mac.update(b"\n");
+    mac.update(logbook_id.to_string().as_bytes());
+    mac.update(b"\n");
+    mac.update(method.to_ascii_uppercase().as_bytes());
+    mac.update(b"\n");
+    mac.update(target.as_bytes());
+    mac.update(b"\n");
+    mac.update(replay_nonce.as_bytes());
+    bytes_to_hex(&mac.finalize().into_bytes())
+}
+
+pub fn verify_lan_auth_signature(
+    secret: &str,
+    device_id: Uuid,
+    logbook_id: Uuid,
+    method: &str,
+    target: &str,
+    replay_nonce: &str,
+    signature: &str,
+) -> bool {
+    let expected = lan_auth_signature(secret, device_id, logbook_id, method, target, replay_nonce);
+    constant_time_eq(expected.as_bytes(), signature.as_bytes())
+}
+
+fn hex_sha256(bytes: &[u8]) -> String {
+    let digest = Sha256::digest(bytes);
+    bytes_to_hex(&digest)
+}
+
+fn bytes_to_hex(bytes: &[u8]) -> String {
+    let mut output = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        let _ = write!(&mut output, "{byte:02x}");
+    }
+    output
+}
+
+fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
+    if left.len() != right.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (left, right) in left.iter().zip(right) {
+        diff |= left ^ right;
+    }
+    diff == 0
+}
+
+fn atomic_temp_path(path: &Path) -> PathBuf {
+    path.with_extension(format!(
+        "{}.tmp",
+        path.extension()
+            .and_then(|extension| extension.to_str())
+            .unwrap_or("json")
+    ))
+}
+
+fn quarantine_file(path: &Path, now: DateTime<Utc>) -> Result<(), io::Error> {
+    if !path.exists() {
+        return Ok(());
+    }
+    let mut quarantine_path = path.with_extension(format!(
+        "{}.corrupt-{}",
+        path.extension()
+            .and_then(|extension| extension.to_str())
+            .unwrap_or("json"),
+        now.format("%Y%m%d%H%M%S")
+    ));
+    if quarantine_path.exists() {
+        quarantine_path = path.with_extension(format!(
+            "{}.corrupt-{}-{}",
+            path.extension()
+                .and_then(|extension| extension.to_str())
+                .unwrap_or("json"),
+            now.format("%Y%m%d%H%M%S"),
+            Uuid::new_v4()
+        ));
+    }
+    fs::rename(path, quarantine_path)?;
+    Ok(())
+}
+
+fn write_json_atomically<T>(path: &Path, value: &T) -> Result<(), io::Error>
+where
+    T: Serialize,
+{
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let temp_path = atomic_temp_path(path);
+    {
+        let mut file = fs::File::create(&temp_path)?;
+        serde_json::to_writer_pretty(&mut file, value).map_err(io::Error::other)?;
+        file.write_all(b"\n")?;
+        file.sync_all()?;
+    }
+    if path.exists() {
+        fs::remove_file(path)?;
+    }
+    fs::rename(temp_path, path)?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn queue() -> (JsonOfflineMutationQueue, PathBuf) {
+        let dir = std::env::temp_dir().join(format!("ham-sync-offline-{}", Uuid::new_v4()));
+        (
+            JsonOfflineMutationQueue::new(dir.join("offline-mutations.json")),
+            dir,
+        )
+    }
+
+    fn trust_store() -> (JsonLanTrustStore, PathBuf) {
+        let dir = std::env::temp_dir().join(format!("ham-sync-trust-{}", Uuid::new_v4()));
+        (JsonLanTrustStore::new(dir.join("lan-trust.json")), dir)
+    }
+
+    fn review_store() -> (JsonConflictReviewStore, PathBuf) {
+        let dir = std::env::temp_dir().join(format!("ham-sync-review-{}", Uuid::new_v4()));
+        (
+            JsonConflictReviewStore::new(dir.join("conflict-reviews.json")),
+            dir,
+        )
+    }
+
+    fn identity_store() -> (JsonLocalSyncIdentityStore, PathBuf) {
+        let dir = std::env::temp_dir().join(format!("ham-sync-identity-{}", Uuid::new_v4()));
+        (
+            JsonLocalSyncIdentityStore::new(dir.join("local-sync-identity.json")),
+            dir,
+        )
+    }
+
+    fn input(logbook_id: Uuid, device_id: Uuid, operation_type: &str) -> OfflineMutationInput {
+        OfflineMutationInput::new(
+            logbook_id,
+            device_id,
+            Uuid::new_v4(),
+            operation_type,
+            serde_json::json!({"field": "value"}),
+        )
+    }
+
+    fn event_for(mutation: &OfflineMutationEnvelope) -> CoreEventEnvelope {
+        let mut event = CoreEventEnvelope {
+            event_id: Uuid::new_v4(),
+            event_type: "log.qso.created".to_owned(),
+            logbook_id: mutation.logbook_id,
+            entity_id: None,
+            previous_hash: None,
+            event_hash: String::new(),
+            timestamp: Utc::now(),
+            author_operator_id: None,
+            station_callsign: "KE8YGW".to_owned(),
+            operator_callsign: Some("KE8YGW".to_owned()),
+            author_device_id: mutation.device_id,
+            source_device_id: mutation.device_id,
+            correlation_id: mutation.correlation_id,
+            source_plugin_id: Some("test".to_owned()),
+            schema_version: 1,
+            payload: serde_json::json!({}),
+        };
+        event.event_hash = event.calculate_hash();
+        event
+    }
+
+    fn event_metadata(
+        logbook_id: Uuid,
+        entity_id: Option<Uuid>,
+        event_type: &str,
+        schema_version: u32,
+        event_hash: &str,
+    ) -> EventMetadata {
+        EventMetadata {
+            event_id: Uuid::new_v4(),
+            logbook_id,
+            entity_id,
+            previous_hash: None,
+            event_hash: event_hash.to_owned(),
+            timestamp: Utc::now(),
+            event_type: event_type.to_owned(),
+            schema_version,
+        }
+    }
+
+    fn diverged_report(logbook_id: Uuid) -> SyncConflictReport {
+        let preview = PreviewPullResponse {
+            peer_id: "peer".to_owned(),
+            logbook_id,
+            status: ReplicationStatus::Diverged,
+            local_head_hash: Some("local".to_owned()),
+            remote_head_hash: Some("remote".to_owned()),
+            missing_event_count: 0,
+            remote_event_count: 2,
+            events: Vec::new(),
+            message: "Remote chain does not contain the local head".to_owned(),
+        };
+        conflict_report_from_preview(&preview, &[], Utc::now())
+    }
+
+    fn remote_ahead_report(logbook_id: Uuid) -> SyncConflictReport {
+        let preview = PreviewPullResponse {
+            peer_id: "peer".to_owned(),
+            logbook_id,
+            status: ReplicationStatus::RemoteAhead,
+            local_head_hash: Some("local".to_owned()),
+            remote_head_hash: Some("remote".to_owned()),
+            missing_event_count: 1,
+            remote_event_count: 3,
+            events: Vec::new(),
+            message: "1 remote event is available to pull".to_owned(),
+        };
+        conflict_report_from_preview(&preview, &[], Utc::now())
+    }
+
+    #[test]
+    fn enqueue_is_idempotent_and_ordered_per_logbook() {
+        let (queue, dir) = queue();
+        let now = Utc::now();
+        let logbook_id = Uuid::new_v4();
+        let device_id = Uuid::new_v4();
+        let operation_id = Uuid::new_v4();
+        let first = queue
+            .enqueue_input(
+                input(logbook_id, device_id, OFFLINE_OP_QSO_CREATE)
+                    .with_operation_id(operation_id)
+                    .with_idempotency_key("qso-create-1"),
+                now,
+            )
+            .unwrap();
+        let duplicate = queue
+            .enqueue_input(
+                input(logbook_id, device_id, OFFLINE_OP_QSO_CREATE)
+                    .with_operation_id(operation_id)
+                    .with_idempotency_key("qso-create-1"),
+                now,
+            )
+            .unwrap();
+        let second = queue
+            .enqueue_input(input(logbook_id, device_id, OFFLINE_OP_QSO_DELETE), now)
+            .unwrap();
+
+        assert_eq!(first.operation_id, duplicate.operation_id);
+        assert_eq!(first.sequence, 1);
+        assert_eq!(second.sequence, 2);
+        assert_eq!(queue.load_snapshot(now).unwrap().health.pending, 2);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn queued_mutation_entity_id_persists_and_backfills_from_local_event() {
+        let (queue, dir) = queue();
+        let now = Utc::now();
+        let logbook_id = Uuid::new_v4();
+        let device_id = Uuid::new_v4();
+        let qso_id = Uuid::new_v4();
+        let explicit = queue
+            .enqueue_input(
+                input(logbook_id, device_id, OFFLINE_OP_QSO_DELETE).with_entity_id(Some(qso_id)),
+                now,
+            )
+            .unwrap();
+        assert_eq!(explicit.entity_id, Some(qso_id));
+
+        let created_qso_id = Uuid::new_v4();
+        let created = queue
+            .enqueue_input(input(logbook_id, device_id, OFFLINE_OP_QSO_CREATE), now)
+            .unwrap();
+        let mut event = event_for(&created);
+        event.entity_id = Some(created_qso_id);
+        event.event_hash = event.calculate_hash();
+        let updated = queue
+            .record_local_event(created.operation_id, &event, now)
+            .unwrap();
+        assert_eq!(updated.entity_id, Some(created_qso_id));
+
+        let snapshot = queue.load_snapshot(now).unwrap();
+        assert_eq!(
+            snapshot
+                .mutations
+                .iter()
+                .find(|mutation| mutation.operation_id == explicit.operation_id)
+                .and_then(|mutation| mutation.entity_id),
+            Some(qso_id)
+        );
+        assert_eq!(
+            snapshot
+                .mutations
+                .iter()
+                .find(|mutation| mutation.operation_id == created.operation_id)
+                .and_then(|mutation| mutation.entity_id),
+            Some(created_qso_id)
+        );
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn unsupported_schema_and_duplicate_sequence_stop_safely() {
+        let (queue, dir) = queue();
+        fs::create_dir_all(&dir).unwrap();
+        let bad = serde_json::json!({
+            "version": OFFLINE_QUEUE_FILE_VERSION,
+            "next_sequence_by_logbook": {},
+            "mutations": [{
+                "schema_version": 999,
+                "operation_id": Uuid::new_v4(),
+                "correlation_id": Uuid::new_v4(),
+                "client_id": Uuid::new_v4(),
+                "device_id": Uuid::new_v4(),
+                "logbook_id": Uuid::new_v4(),
+                "sequence": 1,
+                "operation_type": OFFLINE_OP_QSO_CREATE,
+                "idempotency_key": "bad",
+                "dependencies": [],
+                "payload": {},
+                "status": "pending",
+                "attempts": 0,
+                "max_attempts": 8,
+                "backoff_seconds": 5,
+                "max_backoff_seconds": 900,
+                "next_attempt_at": null,
+                "created_at": Utc::now(),
+                "updated_at": Utc::now(),
+                "official_event_id": null,
+                "local_event_hash": null,
+                "accepted_at": null,
+                "failure_reason": null,
+                "last_error_code": null
+            }]
+        });
+        fs::write(queue.path(), serde_json::to_vec_pretty(&bad).unwrap()).unwrap();
+        assert!(matches!(
+            queue.load_snapshot(Utc::now()),
+            Err(OfflineQueueError::UnsupportedMutationSchema { .. })
+        ));
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn recover_or_initialize_migrates_absent_v0_2_queue_state() {
+        let (queue, dir) = queue();
+        let now = Utc::now();
+
+        let report = queue.recover_or_initialize(now).unwrap();
+
+        assert!(report.initialized_empty_queue);
+        assert!(report.migrated_v0_2_absent_queue);
+        assert_eq!(report.migrated_legacy_mutations, 0);
+        let snapshot = queue.load_snapshot(now).unwrap();
+        assert_eq!(snapshot.queue_schema_version, OFFLINE_QUEUE_FILE_VERSION);
+        assert_eq!(snapshot.health.total, 0);
+        assert!(queue.path().exists());
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn recover_or_initialize_migrates_legacy_v0_2_records() {
+        let (queue, dir) = queue();
+        fs::create_dir_all(&dir).unwrap();
+        let now = Utc::now();
+        let logbook_id = Uuid::new_v4();
+        let device_id = Uuid::new_v4();
+        let first_operation = Uuid::new_v4();
+        let second_operation = Uuid::new_v4();
+        let legacy = serde_json::json!({
+            "version": OFFLINE_QUEUE_LEGACY_V0_2_FILE_VERSION,
+            "pending_operations": [
+                {
+                    "operation_id": first_operation,
+                    "device_id": device_id,
+                    "logbook_id": logbook_id,
+                    "operation_type": OFFLINE_OP_QSO_CREATE,
+                    "payload": {"contacted_callsign": "K1LEGACY"},
+                    "local_event_hash": "legacy-event-hash"
+                },
+                {
+                    "operation_id": second_operation,
+                    "client_id": Uuid::new_v4(),
+                    "device_id": device_id,
+                    "logbook_id": logbook_id,
+                    "operation_type": OFFLINE_OP_QSO_DELETE,
+                    "idempotency_key": "legacy-delete"
+                }
+            ]
+        });
+        fs::write(queue.path(), serde_json::to_vec_pretty(&legacy).unwrap()).unwrap();
+
+        let report = queue.recover_or_initialize(now).unwrap();
+
+        assert!(report.migrated_v0_2_file);
+        assert_eq!(report.migrated_legacy_mutations, 2);
+        let snapshot = queue.load_snapshot(now).unwrap();
+        assert_eq!(snapshot.health.total, 2);
+        assert_eq!(snapshot.health.retrying, 1);
+        assert_eq!(snapshot.health.pending, 1);
+        assert_eq!(
+            snapshot
+                .mutations
+                .iter()
+                .map(|mutation| mutation.sequence)
+                .collect::<Vec<_>>(),
+            vec![1, 2]
+        );
+        assert!(snapshot
+            .mutations
+            .iter()
+            .all(|mutation| mutation.schema_version == OFFLINE_MUTATION_SCHEMA_VERSION));
+        let raw = fs::read_to_string(queue.path()).unwrap();
+        assert!(raw.contains("\"version\": 1"));
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn recover_or_initialize_quarantines_corrupt_queue_file() {
+        let (queue, dir) = queue();
+        fs::create_dir_all(&dir).unwrap();
+        let now = Utc::now();
+        fs::write(queue.path(), b"{\"version\": 1,").unwrap();
+
+        let report = queue.recover_or_initialize(now).unwrap();
+
+        assert!(report.quarantined_corrupt_file);
+        assert!(report.initialized_empty_queue);
+        assert_eq!(queue.load_snapshot(now).unwrap().health.total, 0);
+        let quarantined = fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(Result::ok)
+            .any(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with("offline-mutations.json.corrupt-")
+            });
+        assert!(quarantined);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn recover_or_initialize_quarantines_invalid_legacy_v0_2_records() {
+        let (queue, dir) = queue();
+        fs::create_dir_all(&dir).unwrap();
+        let now = Utc::now();
+        let legacy = serde_json::json!({
+            "version": OFFLINE_QUEUE_LEGACY_V0_2_FILE_VERSION,
+            "pending_operations": [{
+                "operation_id": Uuid::new_v4(),
+                "device_id": Uuid::new_v4(),
+                "logbook_id": Uuid::new_v4(),
+                "sequence": 0,
+                "operation_type": OFFLINE_OP_QSO_CREATE
+            }]
+        });
+        fs::write(queue.path(), serde_json::to_vec_pretty(&legacy).unwrap()).unwrap();
+
+        let report = queue.recover_or_initialize(now).unwrap();
+
+        assert!(report.quarantined_corrupt_file);
+        assert!(report.initialized_empty_queue);
+        assert_eq!(queue.load_snapshot(now).unwrap().health.total, 0);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn recover_or_initialize_promotes_interrupted_atomic_write() {
+        let (queue, dir) = queue();
+        fs::create_dir_all(&dir).unwrap();
+        let now = Utc::now();
+        let logbook_id = Uuid::new_v4();
+        let device_id = Uuid::new_v4();
+        let mut mutation = OfflineMutationEnvelope::new(
+            input(logbook_id, device_id, OFFLINE_OP_QSO_CREATE),
+            1,
+            now,
+        );
+        mutation.status = OfflineMutationStatus::Sending;
+        let file = OfflineQueueFile {
+            version: OFFLINE_QUEUE_FILE_VERSION,
+            next_sequence_by_logbook: BTreeMap::from([(logbook_id, 2)]),
+            mutations: vec![mutation],
+        };
+        fs::write(
+            atomic_temp_path(queue.path()),
+            serde_json::to_vec_pretty(&file).unwrap(),
+        )
+        .unwrap();
+
+        let report = queue.recover_or_initialize(now).unwrap();
+
+        assert!(report.promoted_interrupted_atomic_write);
+        assert_eq!(report.recovered_interrupted_writes, 1);
+        assert!(queue.path().exists());
+        assert!(!atomic_temp_path(queue.path()).exists());
+        let snapshot = queue.load_snapshot(now).unwrap();
+        assert_eq!(snapshot.health.retrying, 1);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn local_sync_identity_persists_device_id_and_rotates_session() {
+        let (store, dir) = identity_store();
+        let first = store
+            .load_or_create("Desktop", Some(9468), Utc::now())
+            .unwrap();
+        let second = store
+            .load_or_create("Ignored Rename", Some(9469), Utc::now())
+            .unwrap();
+
+        assert_eq!(first.device_id, second.device_id);
+        assert_ne!(first.session_id, second.session_id);
+        assert_eq!(second.display_name, "Desktop");
+        assert_eq!(second.local_api_port, Some(9469));
+        let raw = fs::read_to_string(store.path()).unwrap();
+        assert!(raw.contains(&first.device_id.to_string()));
+        assert!(!raw.contains(&first.session_id.to_string()));
+        assert!(!raw.contains(&second.session_id.to_string()));
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn local_sync_identity_rejects_unknown_version_without_regenerating() {
+        let (store, dir) = identity_store();
+        fs::create_dir_all(&dir).unwrap();
+        let device_id = Uuid::new_v4();
+        let now = Utc::now();
+        fs::write(
+            store.path(),
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "version": LOCAL_SYNC_IDENTITY_FILE_VERSION + 1,
+                "device_id": device_id,
+                "display_name": "Old Client",
+                "created_at": now,
+                "updated_at": now
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        assert!(matches!(
+            store.load_or_create("Desktop", Some(9468), Utc::now()),
+            Err(LocalSyncIdentityError::UnsupportedFileVersion(version))
+                if version == LOCAL_SYNC_IDENTITY_FILE_VERSION + 1
+        ));
+        let raw = fs::read_to_string(store.path()).unwrap();
+        assert!(raw.contains(&device_id.to_string()));
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn ready_batch_respects_local_event_and_queue_order() {
+        let (queue, dir) = queue();
+        let now = Utc::now();
+        let logbook_id = Uuid::new_v4();
+        let device_id = Uuid::new_v4();
+        let first = queue
+            .enqueue_input(input(logbook_id, device_id, OFFLINE_OP_QSO_CREATE), now)
+            .unwrap();
+        let second = queue
+            .enqueue_input(input(logbook_id, device_id, OFFLINE_OP_QSO_DELETE), now)
+            .unwrap();
+        let first_event = event_for(&first);
+        queue
+            .record_local_event(first.operation_id, &first_event, now)
+            .unwrap();
+
+        let batch = queue
+            .ready_event_batch(logbook_id, std::slice::from_ref(&first_event), now)
+            .unwrap();
+        assert_eq!(batch.operation_ids, vec![first.operation_id]);
+        assert_eq!(batch.events, vec![first_event]);
+        assert_eq!(
+            batch.missing_local_event_operation_ids,
+            vec![second.operation_id]
+        );
+
+        let second_event = event_for(&second);
+        queue
+            .record_local_event(second.operation_id, &second_event, now)
+            .unwrap();
+        queue.mark_accepted(first.operation_id, now).unwrap();
+        let next_batch = queue
+            .ready_event_batch(logbook_id, std::slice::from_ref(&second_event), now)
+            .unwrap();
+        assert_eq!(next_batch.operation_ids, vec![second.operation_id]);
+        assert_eq!(next_batch.events, vec![second_event]);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn interrupted_send_recovers_with_retry_backoff() {
+        let (queue, dir) = queue();
+        let now = Utc::now();
+        let logbook_id = Uuid::new_v4();
+        let device_id = Uuid::new_v4();
+        let mutation = queue
+            .enqueue_input(input(logbook_id, device_id, OFFLINE_OP_QSO_CREATE), now)
+            .unwrap();
+        queue.mark_sending(mutation.operation_id, now).unwrap();
+        assert_eq!(queue.recover_interrupted_writes(now).unwrap(), 1);
+        let snapshot = queue.load_snapshot(now).unwrap();
+        assert_eq!(snapshot.health.retrying, 1);
+        let retry = queue
+            .record_transient_failure(
+                mutation.operation_id,
+                "network unavailable",
+                Some("network_unavailable".to_owned()),
+                now,
+            )
+            .unwrap();
+        assert_eq!(retry.status, OfflineMutationStatus::Retrying);
+        assert!(retry.next_attempt_at.is_some());
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn accepted_hash_acknowledges_matching_mutations_only() {
+        let (queue, dir) = queue();
+        let now = Utc::now();
+        let logbook_id = Uuid::new_v4();
+        let device_id = Uuid::new_v4();
+        let mutation = queue
+            .enqueue_input(input(logbook_id, device_id, OFFLINE_OP_QSO_CREATE), now)
+            .unwrap();
+        let event = event_for(&mutation);
+        queue
+            .record_local_event(mutation.operation_id, &event, now)
+            .unwrap();
+        let accepted = HashSet::from([event.event_hash]);
+        assert_eq!(
+            queue.mark_accepted_by_event_hashes(&accepted, now).unwrap(),
+            1
+        );
+        assert_eq!(queue.load_snapshot(now).unwrap().health.accepted, 1);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn conflict_report_requires_manual_review_for_divergent_heads() {
+        let logbook_id = Uuid::new_v4();
+        let preview = PreviewPullResponse {
+            peer_id: "peer".to_owned(),
+            logbook_id,
+            status: ReplicationStatus::Diverged,
+            local_head_hash: Some("local".to_owned()),
+            remote_head_hash: Some("remote".to_owned()),
+            missing_event_count: 0,
+            remote_event_count: 2,
+            events: Vec::new(),
+            message: "Remote chain does not contain the local head".to_owned(),
+        };
+        let report = conflict_report_from_preview(&preview, &[], Utc::now());
+        assert_eq!(report.conflicts.len(), 1);
+        assert!(!report.conflicts[0].safe_auto_merge);
+        assert!(report.conflicts[0].requires_user_action);
+    }
+
+    #[test]
+    fn conflict_report_flags_unsupported_remote_schema() {
+        let logbook_id = Uuid::new_v4();
+        let preview = PreviewPullResponse {
+            peer_id: "peer".to_owned(),
+            logbook_id,
+            status: ReplicationStatus::RemoteAhead,
+            local_head_hash: Some("local".to_owned()),
+            remote_head_hash: Some("remote".to_owned()),
+            missing_event_count: 1,
+            remote_event_count: 2,
+            events: vec![event_metadata(
+                logbook_id,
+                Some(Uuid::new_v4()),
+                "official.log.qso.created",
+                2,
+                "future-schema-event",
+            )],
+            message: "1 remote event is available to pull".to_owned(),
+        };
+
+        let report = conflict_report_from_preview(&preview, &[], Utc::now());
+
+        assert_eq!(report.conflicts.len(), 1);
+        assert_eq!(
+            report.conflicts[0].kind,
+            SyncConflictKind::UnsupportedSchema
+        );
+        assert!(report.conflicts[0].requires_user_action);
+        assert_eq!(
+            report.conflicts[0].related_event_hashes,
+            vec!["future-schema-event".to_owned()]
+        );
+    }
+
+    #[test]
+    fn conflict_report_detects_concurrent_qso_corrections() {
+        let logbook_id = Uuid::new_v4();
+        let device_id = Uuid::new_v4();
+        let qso_id = Uuid::new_v4();
+        let now = Utc::now();
+        let local_pending = OfflineMutationEnvelope::new(
+            input(logbook_id, device_id, OFFLINE_OP_QSO_CORRECT).with_entity_id(Some(qso_id)),
+            1,
+            now,
+        );
+        let preview = PreviewPullResponse {
+            peer_id: "peer".to_owned(),
+            logbook_id,
+            status: ReplicationStatus::RemoteAhead,
+            local_head_hash: Some("local".to_owned()),
+            remote_head_hash: Some("remote".to_owned()),
+            missing_event_count: 1,
+            remote_event_count: 2,
+            events: vec![event_metadata(
+                logbook_id,
+                Some(qso_id),
+                OFFICIAL_LOG_QSO_CORRECTED,
+                1,
+                "remote-correction",
+            )],
+            message: "1 remote event is available to pull".to_owned(),
+        };
+
+        let report =
+            conflict_report_from_preview(&preview, std::slice::from_ref(&local_pending), now);
+
+        assert_eq!(report.conflicts.len(), 1);
+        assert_eq!(
+            report.conflicts[0].kind,
+            SyncConflictKind::ConcurrentCorrection
+        );
+        assert_eq!(
+            report.conflicts[0].related_operation_ids,
+            vec![local_pending.operation_id]
+        );
+        assert_eq!(
+            report.conflicts[0].related_event_hashes,
+            vec!["remote-correction".to_owned()]
+        );
+        assert!(!report.conflicts[0].safe_auto_merge);
+    }
+
+    #[test]
+    fn conflict_report_detects_tombstone_restore_against_pending_qso_mutation() {
+        let logbook_id = Uuid::new_v4();
+        let device_id = Uuid::new_v4();
+        let qso_id = Uuid::new_v4();
+        let now = Utc::now();
+        let local_pending = OfflineMutationEnvelope::new(
+            input(logbook_id, device_id, OFFLINE_OP_QSO_NOTE_ADD).with_entity_id(Some(qso_id)),
+            1,
+            now,
+        );
+        let preview = PreviewPullResponse {
+            peer_id: "peer".to_owned(),
+            logbook_id,
+            status: ReplicationStatus::RemoteAhead,
+            local_head_hash: Some("local".to_owned()),
+            remote_head_hash: Some("remote".to_owned()),
+            missing_event_count: 1,
+            remote_event_count: 2,
+            events: vec![event_metadata(
+                logbook_id,
+                Some(qso_id),
+                OFFICIAL_LOG_QSO_DELETED,
+                1,
+                "remote-delete",
+            )],
+            message: "1 remote event is available to pull".to_owned(),
+        };
+
+        let report =
+            conflict_report_from_preview(&preview, std::slice::from_ref(&local_pending), now);
+
+        assert_eq!(report.conflicts.len(), 1);
+        assert_eq!(report.conflicts[0].kind, SyncConflictKind::TombstoneRestore);
+        assert_eq!(
+            report.conflicts[0].related_operation_ids,
+            vec![local_pending.operation_id]
+        );
+        assert_eq!(
+            report.conflicts[0].related_event_hashes,
+            vec!["remote-delete".to_owned()]
+        );
+        assert!(report.conflicts[0].requires_user_action);
+    }
+
+    #[test]
+    fn conflict_review_is_idempotent_and_resolves_with_explicit_path() {
+        let (store, dir) = review_store();
+        let now = Utc::now();
+        let report = diverged_report(Uuid::new_v4());
+        let first = store.create_review(report.clone(), now).unwrap();
+        let duplicate = store.create_review(report, now).unwrap();
+        assert_eq!(first.review_id, duplicate.review_id);
+        assert_eq!(store.load_snapshot().unwrap().health.open, 1);
+
+        let resolved = store
+            .resolve_review(
+                first.review_id,
+                ManualConflictResolution::new(ManualConflictResolutionChoice::KeepLocalHistory)
+                    .with_note("Operator chose to keep local history and create a follow-up later")
+                    .with_resolved_by_device_id(Uuid::new_v4()),
+                now,
+            )
+            .unwrap();
+        assert_eq!(resolved.status, ConflictReviewStatus::Resolved);
+        assert_eq!(store.load_snapshot().unwrap().health.resolved, 1);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn conflict_review_rejects_silent_pull_for_divergent_report() {
+        let (store, dir) = review_store();
+        let now = Utc::now();
+        let review = store
+            .create_review(diverged_report(Uuid::new_v4()), now)
+            .unwrap();
+        assert!(matches!(
+            store.resolve_review(
+                review.review_id,
+                ManualConflictResolution::new(
+                    ManualConflictResolutionChoice::PullRemoteAfterReview
+                ),
+                now,
+            ),
+            Err(ConflictReviewError::UnsafeResolution { .. })
+        ));
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn conflict_review_requires_hashes_for_corrective_events() {
+        let (store, dir) = review_store();
+        let now = Utc::now();
+        let review = store
+            .create_review(diverged_report(Uuid::new_v4()), now)
+            .unwrap();
+        assert!(matches!(
+            store.resolve_review(
+                review.review_id,
+                ManualConflictResolution::new(
+                    ManualConflictResolutionChoice::CreateCorrectiveEvents
+                ),
+                now,
+            ),
+            Err(ConflictReviewError::MissingCorrectiveEvents)
+        ));
+        let resolved = store
+            .resolve_review(
+                review.review_id,
+                ManualConflictResolution::new(
+                    ManualConflictResolutionChoice::CreateCorrectiveEvents,
+                )
+                .with_corrective_event_hashes(vec!["corrective-hash".to_owned()]),
+                now,
+            )
+            .unwrap();
+        assert_eq!(
+            resolved
+                .selected_resolution
+                .as_ref()
+                .unwrap()
+                .corrective_event_hashes,
+            vec!["corrective-hash".to_owned()]
+        );
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn conflict_review_allows_safe_remote_pull_after_clean_preview() {
+        let (store, dir) = review_store();
+        let now = Utc::now();
+        let review = store
+            .create_review(remote_ahead_report(Uuid::new_v4()), now)
+            .unwrap();
+        let resolved = store
+            .resolve_review(
+                review.review_id,
+                ManualConflictResolution::new(
+                    ManualConflictResolutionChoice::PullRemoteAfterReview,
+                ),
+                now,
+            )
+            .unwrap();
+        assert_eq!(resolved.status, ConflictReviewStatus::Resolved);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn lan_pairing_is_single_use_and_revocation_is_immediate() {
+        let (store, dir) = trust_store();
+        let now = Utc::now();
+        let issuer = Uuid::new_v4();
+        let peer = Uuid::new_v4();
+        let logbook_id = Uuid::new_v4();
+        let credential_id = Uuid::new_v4();
+        let token = store
+            .issue_pairing_token(issuer, logbook_id, "desktop", true, now)
+            .unwrap();
+        let trusted = store
+            .accept_pairing_token(
+                LanPairingAcceptance {
+                    token_id: token.token_id,
+                    pairing_code: token.pairing_code.clone(),
+                    peer_device_id: peer,
+                    peer_display_name: "ios".to_owned(),
+                    requested_logbooks: vec![logbook_id],
+                    public_key_fingerprint: Some("fingerprint".to_owned()),
+                    auth_credential_id: Some(credential_id),
+                },
+                now,
+            )
+            .unwrap();
+        assert_eq!(trusted.device_id, peer);
+        assert_eq!(trusted.auth_credential_id, Some(credential_id));
+        assert_eq!(
+            store
+                .trusted_peer(peer, logbook_id)
+                .unwrap()
+                .auth_credential_id,
+            Some(credential_id)
+        );
+        assert!(matches!(
+            store.accept_pairing_token(
+                LanPairingAcceptance {
+                    token_id: token.token_id,
+                    pairing_code: token.pairing_code,
+                    peer_device_id: Uuid::new_v4(),
+                    peer_display_name: "other".to_owned(),
+                    requested_logbooks: vec![logbook_id],
+                    public_key_fingerprint: None,
+                    auth_credential_id: None,
+                },
+                now,
+            ),
+            Err(LanTrustError::PairingTokenConsumed)
+        ));
+
+        let first_auth = store
+            .authorize_peer(peer, logbook_id, "nonce-1", now)
+            .unwrap();
+        assert_eq!(first_auth.device_id, peer);
+        assert!(matches!(
+            store.authorize_peer(peer, logbook_id, "nonce-1", now),
+            Err(LanTrustError::ReplayDetected(device)) if device == peer
+        ));
+        store.revoke_device(peer, now).unwrap();
+        assert!(matches!(
+            store.authorize_peer(peer, logbook_id, "nonce-2", now),
+            Err(LanTrustError::DeviceRevoked(device)) if device == peer
+        ));
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn lan_pairing_rejects_expired_wrong_logbook_and_unapproved_tokens() {
+        let (store, dir) = trust_store();
+        let now = Utc::now();
+        let issuer = Uuid::new_v4();
+        let logbook_id = Uuid::new_v4();
+        assert!(matches!(
+            store.issue_pairing_token(issuer, logbook_id, "desktop", false, now),
+            Err(LanTrustError::ApprovalRequired)
+        ));
+        let token = store
+            .issue_pairing_token(issuer, logbook_id, "desktop", true, now)
+            .unwrap();
+        assert!(matches!(
+            store.accept_pairing_token(
+                LanPairingAcceptance {
+                    token_id: token.token_id,
+                    pairing_code: token.pairing_code,
+                    peer_device_id: Uuid::new_v4(),
+                    peer_display_name: "ios".to_owned(),
+                    requested_logbooks: vec![Uuid::new_v4()],
+                    public_key_fingerprint: None,
+                    auth_credential_id: None,
+                },
+                now,
+            ),
+            Err(LanTrustError::WrongLogbook { .. })
+        ));
+        let expired = store
+            .issue_pairing_token(issuer, logbook_id, "desktop", true, now)
+            .unwrap();
+        assert!(matches!(
+            store.accept_pairing_token(
+                LanPairingAcceptance {
+                    token_id: expired.token_id,
+                    pairing_code: expired.pairing_code,
+                    peer_device_id: Uuid::new_v4(),
+                    peer_display_name: "ios".to_owned(),
+                    requested_logbooks: vec![logbook_id],
+                    public_key_fingerprint: None,
+                    auth_credential_id: None,
+                },
+                now + ChronoDuration::seconds(DEFAULT_PAIRING_TOKEN_TTL_SECONDS + 1),
+            ),
+            Err(LanTrustError::PairingTokenExpired)
+        ));
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn lan_trust_can_record_peer_auth_credentials_without_raw_secret() {
+        let (store, dir) = trust_store();
+        let now = Utc::now();
+        let peer = Uuid::new_v4();
+        let logbook_id = Uuid::new_v4();
+        let credential_id = Uuid::new_v4();
+
+        let trusted = store
+            .trust_peer_with_auth_credential(
+                LanPeerTrustUpdate {
+                    peer_device_id: peer,
+                    peer_display_name: "desktop".to_owned(),
+                    logbook_id,
+                    pairing_token_id: Some(Uuid::new_v4()),
+                    public_key_fingerprint: None,
+                    auth_credential_id: credential_id,
+                },
+                now,
+            )
+            .unwrap();
+        assert_eq!(trusted.auth_credential_id, Some(credential_id));
+        assert_eq!(
+            store
+                .trusted_peer(peer, logbook_id)
+                .unwrap()
+                .auth_credential_id,
+            Some(credential_id)
+        );
+        let raw = fs::read_to_string(dir.join("lan-trust.json")).unwrap();
+        assert!(!raw.contains("TEST_SECRET_SHOULD_NOT_APPEAR"));
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn lan_trust_rotates_peer_auth_credential_without_reviving_revoked_devices() {
+        let (store, dir) = trust_store();
+        let now = Utc::now();
+        let peer = Uuid::new_v4();
+        let logbook_id = Uuid::new_v4();
+        let old_credential_id = Uuid::new_v4();
+        let new_credential_id = Uuid::new_v4();
+
+        store
+            .trust_peer_with_auth_credential(
+                LanPeerTrustUpdate {
+                    peer_device_id: peer,
+                    peer_display_name: "desktop".to_owned(),
+                    logbook_id,
+                    pairing_token_id: Some(Uuid::new_v4()),
+                    public_key_fingerprint: None,
+                    auth_credential_id: old_credential_id,
+                },
+                now,
+            )
+            .unwrap();
+
+        let rotation = store
+            .rotate_auth_credential(
+                peer,
+                logbook_id,
+                new_credential_id,
+                now + ChronoDuration::seconds(30),
+            )
+            .unwrap();
+        assert_eq!(
+            rotation.previous_auth_credential_id,
+            Some(old_credential_id)
+        );
+        assert_eq!(
+            rotation.trusted_device.auth_credential_id,
+            Some(new_credential_id)
+        );
+        assert_eq!(
+            rotation.trusted_device.auth_rotated_at,
+            Some(now + ChronoDuration::seconds(30))
+        );
+        assert_eq!(
+            store
+                .trusted_peer(peer, logbook_id)
+                .unwrap()
+                .auth_credential_id,
+            Some(new_credential_id)
+        );
+        assert!(matches!(
+            store.rotate_auth_credential(
+                peer,
+                logbook_id,
+                new_credential_id,
+                now + ChronoDuration::seconds(60)
+            ),
+            Err(LanTrustError::CredentialUnchanged(device)) if device == peer
+        ));
+        assert!(matches!(
+            store.rotate_auth_credential(
+                peer,
+                Uuid::new_v4(),
+                Uuid::new_v4(),
+                now + ChronoDuration::seconds(60)
+            ),
+            Err(LanTrustError::WrongLogbook { device_id, .. }) if device_id == peer
+        ));
+        store
+            .revoke_device(peer, now + ChronoDuration::seconds(90))
+            .unwrap();
+        assert!(matches!(
+            store.rotate_auth_credential(
+                peer,
+                logbook_id,
+                Uuid::new_v4(),
+                now + ChronoDuration::seconds(120)
+            ),
+            Err(LanTrustError::DeviceRevoked(device)) if device == peer
+        ));
+        let raw = fs::read_to_string(dir.join("lan-trust.json")).unwrap();
+        assert!(!raw.contains("TEST_SECRET_SHOULD_NOT_APPEAR"));
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn lan_auth_signature_covers_request_context() {
+        let device = Uuid::new_v4();
+        let logbook = Uuid::new_v4();
+        let signature = lan_auth_signature(
+            "TEST_SECRET_SHOULD_NOT_APPEAR",
+            device,
+            logbook,
+            "GET",
+            "/api/sync/events-since?logbook_id=abc",
+            "nonce",
+        );
+        assert!(verify_lan_auth_signature(
+            "TEST_SECRET_SHOULD_NOT_APPEAR",
+            device,
+            logbook,
+            "get",
+            "/api/sync/events-since?logbook_id=abc",
+            "nonce",
+            &signature,
+        ));
+        assert!(!verify_lan_auth_signature(
+            "TEST_SECRET_SHOULD_NOT_APPEAR",
+            device,
+            logbook,
+            "GET",
+            "/api/sync/get-head?logbook_id=abc",
+            "nonce",
+            &signature,
+        ));
+        assert!(!verify_lan_auth_signature(
+            "other-secret",
+            device,
+            logbook,
+            "GET",
+            "/api/sync/events-since?logbook_id=abc",
+            "nonce",
+            &signature,
+        ));
+    }
+}

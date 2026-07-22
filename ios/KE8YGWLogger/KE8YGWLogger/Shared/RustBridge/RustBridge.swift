@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 #if os(iOS)
@@ -166,7 +167,13 @@ final class RustBridgeStore: ObservableObject {
     }
 
     func refreshSync() async {
-        await assign(endpoint: .sync, to: \.sync, as: SyncSnapshot.self)
+        do {
+            let supportURL = try RustBridgePaths.applicationSupportDirectory()
+            sync = try await command("sync.snapshot", payload: AppSupportBridgeRequest(appSupportDir: supportURL.path), as: SyncSnapshot.self)
+            lastError = nil
+        } catch {
+            await assign(endpoint: .sync, to: \.sync, as: SyncSnapshot.self)
+        }
     }
 
     func refreshDiagnostics() async {
@@ -193,6 +200,19 @@ final class RustBridgeStore: ObservableObject {
 
     func deleteQSO(_ request: DeleteQSOBridgeRequest) async throws -> QSOBridgeMutationResult {
         try await command("qso.delete", payload: request, as: QSOBridgeMutationResult.self)
+    }
+
+    func listQSOs(
+        logbookId: String? = nil,
+        includeDeleted: Bool = true
+    ) async throws -> QSOListBridgeResult {
+        let supportURL = try RustBridgePaths.applicationSupportDirectory()
+        let request = QSOListBridgeRequest(
+            appSupportDir: supportURL.path,
+            logbookId: logbookId,
+            includeDeleted: includeDeleted
+        )
+        return try await command("qso.list", payload: request, as: QSOListBridgeResult.self)
     }
 
     func createStationProfile(_ request: StationProfileMutationRequest) async throws -> StationBookMutationResult {
@@ -249,6 +269,609 @@ final class RustBridgeStore: ObservableObject {
         let supportURL = try RustBridgePaths.applicationSupportDirectory()
         let request = ApplicationSettingsUpdateBridgeRequest(appSupportDir: supportURL.path, settings: settings)
         return try await command("settings.update", payload: request, as: ApplicationSettingsBridgeResult.self)
+    }
+
+    func recoverOfflineQueue() async throws -> SyncRecoveryBridgeResult {
+        let supportURL = try RustBridgePaths.applicationSupportDirectory()
+        let result = try await command(
+            "sync.offline_queue.recover",
+            payload: AppSupportBridgeRequest(appSupportDir: supportURL.path),
+            as: SyncRecoveryBridgeResult.self
+        )
+        sync = sync.replacingOfflineQueue(result.offlineQueue)
+        lastError = nil
+        return result
+    }
+
+    func planOfflineRetry(
+        maxMutations: Int = 25,
+        markSending: Bool = true,
+        networkAvailable: Bool = true,
+        backgroundTimeBudgetSeconds: Int = 25
+    ) async throws -> SyncRetryPlanBridgeResult {
+        let supportURL = try RustBridgePaths.applicationSupportDirectory()
+        let request = SyncRetryPlanBridgeRequest(
+            appSupportDir: supportURL.path,
+            logbookId: nil,
+            maxMutations: maxMutations,
+            markSending: markSending,
+            networkAvailable: networkAvailable,
+            backgroundTimeBudgetSeconds: backgroundTimeBudgetSeconds
+        )
+        let result = try await command("sync.offline_queue.retry_plan", payload: request, as: SyncRetryPlanBridgeResult.self)
+        sync = sync.replacingOfflineQueue(result.offlineQueue)
+        lastError = nil
+        return result
+    }
+
+    func recordOfflineRetryResult(
+        operationIds: [String],
+        acceptedEventHashes: [String] = [],
+        result: SyncRetryResultKind,
+        errorCode: String? = nil,
+        message: String? = nil
+    ) async throws -> SyncRetryResultBridgeResult {
+        let supportURL = try RustBridgePaths.applicationSupportDirectory()
+        let request = SyncRetryResultBridgeRequest(
+            appSupportDir: supportURL.path,
+            logbookId: nil,
+            operationIds: operationIds,
+            acceptedEventHashes: acceptedEventHashes,
+            result: result,
+            errorCode: errorCode,
+            message: message
+        )
+        let response = try await command("sync.offline_queue.retry_result", payload: request, as: SyncRetryResultBridgeResult.self)
+        sync = sync.replacingOfflineQueue(response.offlineQueue)
+        lastError = nil
+        return response
+    }
+
+    func applyRemoteEvents(
+        logbookId: String? = nil,
+        peerId: String? = nil,
+        events: [SyncOfficialEvent]
+    ) async throws -> SyncRemoteEventsApplyBridgeResult {
+        let supportURL = try RustBridgePaths.applicationSupportDirectory()
+        let request = SyncRemoteEventsApplyBridgeRequest(
+            appSupportDir: supportURL.path,
+            logbookId: logbookId,
+            peerId: peerId,
+            events: events
+        )
+        let result = try await command("sync.remote_events.apply", payload: request, as: SyncRemoteEventsApplyBridgeResult.self)
+        sync = result.sync
+        lastError = nil
+        return result
+    }
+
+    func executeRemotePull<T: SyncPullTransporting>(
+        serverURL: URL,
+        bearerToken: String? = nil,
+        syncToken: String? = nil,
+        endpointStyle: SyncPullEndpointStyle = .logbookScoped,
+        logbookId requestedLogbookId: String? = nil,
+        networkAvailable: Bool = true,
+        transport: T
+    ) async throws -> SyncPullExecutionResult {
+        guard networkAvailable else {
+            return SyncPullExecutionResult(
+                pullResponse: nil,
+                applyResult: nil,
+                status: .blockedByNetwork,
+                acceptedCount: 0,
+                rejectedCount: 0
+            )
+        }
+
+        let supportURL = try RustBridgePaths.applicationSupportDirectory()
+        let snapshot = try await command("sync.snapshot", payload: AppSupportBridgeRequest(appSupportDir: supportURL.path), as: SyncSnapshot.self)
+        sync = snapshot
+        let logbookId = [requestedLogbookId, snapshot.logbookId]
+            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .first { !$0.isEmpty } ?? SyncDefaults.defaultLogbookId
+        let pullResponse = try await transport.pull(
+            serverURL: serverURL,
+            bearerToken: bearerToken,
+            syncToken: syncToken,
+            endpointStyle: endpointStyle,
+            logbookId: logbookId,
+            localHeadHash: snapshot.localHeadHash
+        )
+        guard !pullResponse.events.isEmpty else {
+            let previewStatus = pullResponse.preview.status.lowercased()
+            let status: SyncPullExecutionStatus
+            if previewStatus == "diverged" {
+                status = .diverged
+            } else if previewStatus == "rejected" {
+                status = .rejected
+            } else {
+                status = .noRemoteEvents
+            }
+            return SyncPullExecutionResult(
+                pullResponse: pullResponse,
+                applyResult: nil,
+                status: status,
+                acceptedCount: 0,
+                rejectedCount: 0
+            )
+        }
+        let applyResult = try await applyRemoteEvents(
+            logbookId: logbookId,
+            peerId: pullResponse.preview.peerId,
+            events: pullResponse.events
+        )
+        let status = SyncPullExecutionStatus(status: applyResult.pull.status)
+        return SyncPullExecutionResult(
+            pullResponse: pullResponse,
+            applyResult: applyResult,
+            status: status,
+            acceptedCount: applyResult.pull.acceptedCount,
+            rejectedCount: applyResult.pull.rejectedCount
+        )
+    }
+
+    func executeLanPull<T: SyncLanPullTransporting>(
+        peerURL: URL,
+        trustedDevice: SyncTrustedPeerDevice,
+        authSecret: String,
+        logbookId requestedLogbookId: String? = nil,
+        networkAvailable: Bool = true,
+        transport: T
+    ) async throws -> SyncPullExecutionResult {
+        guard networkAvailable else {
+            return SyncPullExecutionResult(
+                pullResponse: nil,
+                applyResult: nil,
+                status: .blockedByNetwork,
+                acceptedCount: 0,
+                rejectedCount: 0
+            )
+        }
+        guard trustedDevice.revokedAt == nil else {
+            throw SyncLanHTTPTransportError.revokedTrustedPeer
+        }
+        guard trustedDevice.deviceId?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else {
+            throw SyncLanHTTPTransportError.untrustedPeer
+        }
+        guard trustedDevice.authCredentialId?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false,
+              !authSecret.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else {
+            throw SyncLanHTTPTransportError.missingLanAuthCredential
+        }
+
+        let supportURL = try RustBridgePaths.applicationSupportDirectory()
+        let snapshot = try await command("sync.snapshot", payload: AppSupportBridgeRequest(appSupportDir: supportURL.path), as: SyncSnapshot.self)
+        sync = snapshot
+        guard let identity = snapshot.identity else {
+            throw SyncLanHTTPTransportError.missingLocalIdentity
+        }
+        let logbookId = [requestedLogbookId, snapshot.logbookId]
+            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .first { !$0.isEmpty } ?? SyncDefaults.defaultLogbookId
+        if let allowedLogbooks = trustedDevice.logbookIds,
+           !allowedLogbooks.isEmpty,
+           !allowedLogbooks.contains(where: { sameUUID($0, logbookId) }) {
+            throw SyncLanHTTPTransportError.untrustedPeer
+        }
+
+        let pullResponse = try await transport.pull(
+            peerURL: peerURL,
+            localIdentity: identity,
+            trustedDevice: trustedDevice,
+            authSecret: authSecret,
+            logbookId: logbookId,
+            localHeadHash: snapshot.localHeadHash
+        )
+        guard !pullResponse.events.isEmpty else {
+            let previewStatus = pullResponse.preview.status.lowercased()
+            let status: SyncPullExecutionStatus
+            if previewStatus == "diverged" {
+                status = .diverged
+            } else if previewStatus == "rejected" {
+                status = .rejected
+            } else {
+                status = .noRemoteEvents
+            }
+            return SyncPullExecutionResult(
+                pullResponse: pullResponse,
+                applyResult: nil,
+                status: status,
+                acceptedCount: 0,
+                rejectedCount: 0
+            )
+        }
+
+        let peerId = trustedDevice.deviceId ?? pullResponse.preview.peerId
+        let applyResult = try await applyRemoteEvents(
+            logbookId: logbookId,
+            peerId: peerId,
+            events: pullResponse.events
+        )
+        let status = SyncPullExecutionStatus(status: applyResult.pull.status)
+        return SyncPullExecutionResult(
+            pullResponse: pullResponse,
+            applyResult: applyResult,
+            status: status,
+            acceptedCount: applyResult.pull.acceptedCount,
+            rejectedCount: applyResult.pull.rejectedCount
+        )
+    }
+
+    private func sameUUID(_ left: String, _ right: String) -> Bool {
+        guard let left = UUID(uuidString: left),
+              let right = UUID(uuidString: right)
+        else {
+            return false
+        }
+        return left.uuidString.lowercased() == right.uuidString.lowercased()
+    }
+
+    func executeOfflineRetryPush<T: SyncPushTransporting>(
+        serverURL: URL,
+        bearerToken: String? = nil,
+        syncToken: String? = nil,
+        endpointStyle: SyncPushEndpointStyle = .logbookScoped,
+        maxMutations: Int = 25,
+        networkAvailable: Bool = true,
+        backgroundTimeBudgetSeconds: Int = 25,
+        transport: T
+    ) async throws -> SyncRetryExecutionResult {
+        let planResult = try await planOfflineRetry(
+            maxMutations: maxMutations,
+            markSending: true,
+            networkAvailable: networkAvailable,
+            backgroundTimeBudgetSeconds: backgroundTimeBudgetSeconds
+        )
+        let plan = planResult.retryPlan
+        if plan.blockedByNetwork {
+            return SyncRetryExecutionResult(
+                plan: plan,
+                pushResponse: nil,
+                retryResults: [],
+                status: .blockedByNetwork,
+                acceptedOperationCount: 0,
+                failedOperationCount: 0
+            )
+        }
+        if plan.operationIds.isEmpty {
+            return SyncRetryExecutionResult(
+                plan: plan,
+                pushResponse: nil,
+                retryResults: [],
+                status: .noReadyEvents,
+                acceptedOperationCount: 0,
+                failedOperationCount: 0
+            )
+        }
+        let events = plan.transportableEvents
+        guard !events.isEmpty else {
+            let retryResult = try await recordOfflineRetryResult(
+                operationIds: plan.operationIds,
+                result: .missingLocalEvent,
+                errorCode: "missing_local_official_event",
+                message: "Rust retry planning did not return local official event envelopes."
+            )
+            return SyncRetryExecutionResult(
+                plan: plan,
+                pushResponse: nil,
+                retryResults: [retryResult],
+                status: .missingTransportEventsRecorded,
+                acceptedOperationCount: 0,
+                failedOperationCount: plan.operationIds.count
+            )
+        }
+        guard let logbookId = SyncRetryExecutionClassifier.logbookId(from: plan, events: events) else {
+            let retryResult = try await recordOfflineRetryResult(
+                operationIds: plan.operationIds,
+                result: .validationFailed,
+                errorCode: "missing_logbook_id",
+                message: "Rust retry planning did not return a logbook ID."
+            )
+            return SyncRetryExecutionResult(
+                plan: plan,
+                pushResponse: nil,
+                retryResults: [retryResult],
+                status: .userActionRequired,
+                acceptedOperationCount: 0,
+                failedOperationCount: plan.operationIds.count
+            )
+        }
+
+        do {
+            let response = try await transport.push(
+                serverURL: serverURL,
+                bearerToken: bearerToken,
+                syncToken: syncToken,
+                endpointStyle: endpointStyle,
+                logbookId: logbookId,
+                events: events
+            )
+            return try await recordRetryResponse(plan: plan, response: response)
+        } catch {
+            let classification = SyncRetryExecutionClassifier.classify(error: error)
+            let retryResult = try await recordOfflineRetryResult(
+                operationIds: plan.operationIds,
+                result: classification.result,
+                errorCode: classification.errorCode,
+                message: classification.message
+            )
+            return SyncRetryExecutionResult(
+                plan: plan,
+                pushResponse: nil,
+                retryResults: [retryResult],
+                status: SyncRetryExecutionClassifier.status(for: classification.result, acceptedPrefixCount: 0),
+                acceptedOperationCount: 0,
+                failedOperationCount: plan.operationIds.count
+            )
+        }
+    }
+
+    func executeBackgroundSync<P: SyncPushTransporting, Q: SyncPullTransporting>(
+        serverURL: URL,
+        bearerToken: String? = nil,
+        syncToken: String? = nil,
+        pushEndpointStyle: SyncPushEndpointStyle = .logbookScoped,
+        pullEndpointStyle: SyncPullEndpointStyle = .logbookScoped,
+        autoPullEnabled: Bool,
+        maxMutations: Int = 25,
+        networkAvailable: Bool = true,
+        backgroundTimeBudgetSeconds: Int = 25,
+        pushTransport: P,
+        pullTransport: Q
+    ) async throws -> SyncBackgroundSyncExecutionResult {
+        let retryResult = try await executeOfflineRetryPush(
+            serverURL: serverURL,
+            bearerToken: bearerToken,
+            syncToken: syncToken,
+            endpointStyle: pushEndpointStyle,
+            maxMutations: maxMutations,
+            networkAvailable: networkAvailable,
+            backgroundTimeBudgetSeconds: backgroundTimeBudgetSeconds,
+            transport: pushTransport
+        )
+        guard autoPullEnabled,
+              !Task.isCancelled,
+              SyncBackgroundSyncExecutionResult.shouldAttemptPull(after: retryResult.status)
+        else {
+            return SyncBackgroundSyncExecutionResult(retryResult: retryResult, pullResult: nil)
+        }
+
+        let pullResult = try await executeRemotePull(
+            serverURL: serverURL,
+            bearerToken: bearerToken,
+            syncToken: syncToken,
+            endpointStyle: pullEndpointStyle,
+            networkAvailable: networkAvailable,
+            transport: pullTransport
+        )
+        return SyncBackgroundSyncExecutionResult(retryResult: retryResult, pullResult: pullResult)
+    }
+
+    private func recordRetryResponse(
+        plan: SyncRetryPlan,
+        response: SyncPushResponse
+    ) async throws -> SyncRetryExecutionResult {
+        let classification = SyncRetryExecutionClassifier.classify(response: response, planCount: plan.operationIds.count)
+        var retryResults: [SyncRetryResultBridgeResult] = []
+        let acceptedPrefixCount = min(
+            classification.acceptedPrefixCount,
+            plan.operationIds.count,
+            plan.eventHashes.count
+        )
+        if acceptedPrefixCount > 0 {
+            let acceptedOperationIds = Array(plan.operationIds.prefix(acceptedPrefixCount))
+            let acceptedEventHashes = Array(plan.eventHashes.prefix(acceptedPrefixCount))
+            retryResults.append(try await recordOfflineRetryResult(
+                operationIds: acceptedOperationIds,
+                acceptedEventHashes: acceptedEventHashes,
+                result: .accepted
+            ))
+        }
+
+        if classification.result != .accepted {
+            let remainingOperationIds = Array(plan.operationIds.dropFirst(acceptedPrefixCount))
+            if !remainingOperationIds.isEmpty {
+                retryResults.append(try await recordOfflineRetryResult(
+                    operationIds: remainingOperationIds,
+                    result: classification.result,
+                    errorCode: classification.errorCode,
+                    message: classification.message
+                ))
+            }
+        }
+
+        return SyncRetryExecutionResult(
+            plan: plan,
+            pushResponse: response,
+            retryResults: retryResults,
+            status: SyncRetryExecutionClassifier.status(
+                for: classification.result,
+                acceptedPrefixCount: acceptedPrefixCount
+            ),
+            acceptedOperationCount: acceptedPrefixCount,
+            failedOperationCount: max(0, plan.operationIds.count - acceptedPrefixCount)
+        )
+    }
+
+    func resolveConflictReview(
+        reviewId: String,
+        resolution: SyncManualConflictResolution
+    ) async throws -> SyncConflictReviewMutationResult {
+        let supportURL = try RustBridgePaths.applicationSupportDirectory()
+        let request = SyncConflictReviewResolveBridgeRequest(
+            appSupportDir: supportURL.path,
+            reviewId: reviewId,
+            resolution: resolution
+        )
+        let result = try await command("sync.conflict_reviews.resolve", payload: request, as: SyncConflictReviewMutationResult.self)
+        sync = sync.replacingConflictReviews(result.conflictReviews)
+        lastError = nil
+        return result
+    }
+
+    func refreshLanTrust() async throws -> SyncLanTrustBridgeResult {
+        let supportURL = try RustBridgePaths.applicationSupportDirectory()
+        let result = try await command(
+            "sync.lan_trust.snapshot",
+            payload: AppSupportBridgeRequest(appSupportDir: supportURL.path),
+            as: SyncLanTrustBridgeResult.self
+        )
+        sync = sync.replacingLanTrust(result.lanTrust, error: nil)
+        lastError = nil
+        return result
+    }
+
+    func issueLanPairingToken(
+        issuerDeviceId: String? = nil,
+        logbookId: String? = nil,
+        issuerDisplayName: String? = nil,
+        approvedByOperator: Bool
+    ) async throws -> SyncLanPairingTokenBridgeResult {
+        let supportURL = try RustBridgePaths.applicationSupportDirectory()
+        let request = SyncLanPairingTokenIssueBridgeRequest(
+            appSupportDir: supportURL.path,
+            issuerDeviceId: issuerDeviceId,
+            logbookId: logbookId,
+            issuerDisplayName: issuerDisplayName,
+            approvedByOperator: approvedByOperator
+        )
+        let result = try await command("sync.lan_trust.issue_pairing_token", payload: request, as: SyncLanPairingTokenBridgeResult.self)
+        sync = sync.replacingLanTrust(result.lanTrust, error: nil)
+        lastError = nil
+        return result
+    }
+
+    func acceptLanPairingToken(
+        tokenId: String,
+        pairingCode: String,
+        peerDeviceId: String,
+        peerDisplayName: String,
+        requestedLogbooks: [String] = [],
+        publicKeyFingerprint: String? = nil,
+        authCredentialId: String
+    ) async throws -> SyncLanTrustedDeviceBridgeResult {
+        let supportURL = try RustBridgePaths.applicationSupportDirectory()
+        let request = SyncLanPairingAcceptBridgeRequest(
+            appSupportDir: supportURL.path,
+            tokenId: tokenId,
+            pairingCode: pairingCode,
+            peerDeviceId: peerDeviceId,
+            peerDisplayName: peerDisplayName,
+            requestedLogbooks: requestedLogbooks,
+            publicKeyFingerprint: publicKeyFingerprint,
+            authCredentialId: authCredentialId
+        )
+        let result = try await command("sync.lan_trust.accept_pairing_token", payload: request, as: SyncLanTrustedDeviceBridgeResult.self)
+        sync = sync.replacingLanTrust(result.lanTrust, error: nil)
+        lastError = nil
+        return result
+    }
+
+    func completeLanPairing<T: SyncLanPairingTransporting>(
+        peerURL: URL,
+        tokenId: String,
+        pairingCode: String,
+        authSecret: String,
+        authCredentialId: String,
+        publicKeyFingerprint: String? = nil,
+        logbookId requestedLogbookId: String? = nil,
+        networkAvailable: Bool = true,
+        transport: T
+    ) async throws -> SyncLanTrustedDeviceBridgeResult {
+        guard networkAvailable else {
+            throw SyncLanHTTPTransportError.networkUnavailable
+        }
+        guard !authCredentialId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              !authSecret.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else {
+            throw SyncLanHTTPTransportError.missingLanAuthCredential
+        }
+
+        let supportURL = try RustBridgePaths.applicationSupportDirectory()
+        let snapshot = try await command("sync.snapshot", payload: AppSupportBridgeRequest(appSupportDir: supportURL.path), as: SyncSnapshot.self)
+        sync = snapshot
+        guard let identity = snapshot.identity else {
+            throw SyncLanHTTPTransportError.missingLocalIdentity
+        }
+        let logbookId = [requestedLogbookId, snapshot.logbookId]
+            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .first { !$0.isEmpty } ?? SyncDefaults.defaultLogbookId
+
+        let remoteResult = try await transport.completePairing(
+            peerURL: peerURL,
+            tokenId: tokenId,
+            pairingCode: pairingCode,
+            authSecret: authSecret,
+            localIdentity: identity,
+            logbookId: logbookId,
+            publicKeyFingerprint: publicKeyFingerprint
+        )
+
+        let trusted = try await trustLanPeer(
+            peerDeviceId: remoteResult.peerIdentity.deviceId,
+            peerDisplayName: remoteResult.peerIdentity.displayName,
+            logbookId: logbookId,
+            pairingTokenId: tokenId,
+            publicKeyFingerprint: publicKeyFingerprint,
+            authCredentialId: authCredentialId
+        )
+        lastError = nil
+        return trusted
+    }
+
+    func trustLanPeer(
+        peerDeviceId: String,
+        peerDisplayName: String,
+        logbookId: String? = nil,
+        pairingTokenId: String? = nil,
+        publicKeyFingerprint: String? = nil,
+        authCredentialId: String
+    ) async throws -> SyncLanTrustedDeviceBridgeResult {
+        let supportURL = try RustBridgePaths.applicationSupportDirectory()
+        let request = SyncLanTrustPeerBridgeRequest(
+            appSupportDir: supportURL.path,
+            peerDeviceId: peerDeviceId,
+            peerDisplayName: peerDisplayName,
+            logbookId: logbookId,
+            pairingTokenId: pairingTokenId,
+            publicKeyFingerprint: publicKeyFingerprint,
+            authCredentialId: authCredentialId
+        )
+        let result = try await command("sync.lan_trust.trust_peer", payload: request, as: SyncLanTrustedDeviceBridgeResult.self)
+        sync = sync.replacingLanTrust(result.lanTrust, error: nil)
+        lastError = nil
+        return result
+    }
+
+    func rotateLanAuthCredential(
+        deviceId: String,
+        logbookId: String? = nil,
+        newAuthCredentialId: String
+    ) async throws -> SyncLanAuthRotateBridgeResult {
+        let supportURL = try RustBridgePaths.applicationSupportDirectory()
+        let request = SyncLanAuthRotateBridgeRequest(
+            appSupportDir: supportURL.path,
+            deviceId: deviceId,
+            logbookId: logbookId,
+            newAuthCredentialId: newAuthCredentialId
+        )
+        let result = try await command("sync.lan_trust.rotate_auth", payload: request, as: SyncLanAuthRotateBridgeResult.self)
+        sync = sync.replacingLanTrust(result.lanTrust, error: nil)
+        lastError = nil
+        return result
+    }
+
+    func revokeLanPeer(deviceId: String) async throws -> SyncLanTrustedDeviceBridgeResult {
+        let supportURL = try RustBridgePaths.applicationSupportDirectory()
+        let result = try await command(
+            "sync.lan_trust.revoke",
+            payload: SyncLanRevokeBridgeRequest(appSupportDir: supportURL.path, deviceId: deviceId),
+            as: SyncLanTrustedDeviceBridgeResult.self
+        )
+        sync = sync.replacingLanTrust(result.lanTrust, error: nil)
+        lastError = nil
+        return result
     }
 
     private func assign<T: Decodable>(
@@ -329,6 +952,10 @@ struct EmptyRustBridgePayload: Codable {}
 
 struct AppSupportBridgeRequest: Codable {
     var appSupportDir: String
+}
+
+private enum SyncDefaults {
+    static let defaultLogbookId = "00000000-0000-4000-8000-000000000001"
 }
 
 enum RustBridgeClientFactory {
@@ -423,7 +1050,7 @@ struct FallbackRustBridgeClient: RustBridgeClient {
         case .version:
             data = [
                 "app": "KE8YGW Logger",
-                "core_version": "0.2.0",
+                "core_version": "0.3.0",
                 "bridge_version": 1,
                 "rust_modules": ["ham-core", "ham-sync", "ham-plugin-sdk"],
                 "contract": "ffi_unavailable_in_this_build"
@@ -437,7 +1064,7 @@ struct FallbackRustBridgeClient: RustBridgeClient {
         case .map:
             data = FallbackBridgeData.map
         case .sync:
-            data = FallbackBridgeData.sync
+            data = FallbackBridgeData.sync()
         case .diagnostics:
             data = FallbackBridgeData.diagnostics
         case .lookupCallsign:
@@ -544,6 +1171,15 @@ struct FallbackRustBridgeClient: RustBridgeClient {
                     "pending_event_count": 1
                 ]
             ]
+        case "qso.list":
+            data = [
+                "records": [],
+                "projection": [
+                    "source": "fallback",
+                    "schema_version": 1,
+                    "pending_event_count": 0
+                ]
+            ]
         case "station.profile.create":
             let profileID = payload["station_profile_id"] as? String ?? UUID().uuidString
             let profile: [String: Any] = [
@@ -594,13 +1230,148 @@ struct FallbackRustBridgeClient: RustBridgeClient {
                 "station_book": FallbackBridgeData.stationBook,
                 "projection_source": "fallback"
             ]
+        case "sync.offline_queue.recover":
+            data = [
+                "recovered_count": 0,
+                "recovery": FallbackBridgeData.offlineQueueRecovery(),
+                "offline_queue": FallbackBridgeData.offlineQueue()
+            ]
+        case "sync.offline_queue.retry_plan":
+            let networkAvailable = payload["network_available"] as? Bool ?? true
+            let maxMutations = payload["max_mutations"] as? Int ?? 25
+            let backgroundBudget = payload["background_time_budget_seconds"] as? Int ?? 25
+            data = [
+                "retry_plan": [
+                    "schema_version": 1,
+                    "logbook_id": payload["logbook_id"] as? String ?? UUID().uuidString,
+                    "operation_ids": [],
+                    "event_hashes": [],
+                    "events": [],
+                    "missing_local_event_operation_ids": [],
+                    "network_required": true,
+                    "blocked_by_network": !networkAvailable,
+                    "max_mutations": maxMutations,
+                    "background_time_budget_seconds": backgroundBudget,
+                    "mark_sending": networkAvailable ? (payload["mark_sending"] as? Bool ?? true) : false,
+                    "permanent_failure_results": [
+                        "auth_failed",
+                        "validation_failed",
+                        "diverged",
+                        "missing_local_event",
+                        "permanent_failure"
+                    ]
+                ],
+                "offline_queue": FallbackBridgeData.offlineQueue(),
+                "recovery": FallbackBridgeData.offlineQueueRecovery()
+            ]
+        case "sync.offline_queue.retry_result":
+            let operationIDs = payload["operation_ids"] as? [String] ?? []
+            let result = payload["result"] as? String ?? "accepted"
+            let acceptedHashes = payload["accepted_event_hashes"] as? [String] ?? []
+            let status: String
+            switch result {
+            case "accepted":
+                status = "accepted"
+            case "transient_failure":
+                status = "retrying"
+            case "diverged":
+                status = "blocked"
+            default:
+                status = "user_action_required"
+            }
+            let errorCode = payload["error_code"] as? String ?? result
+            let mutations = operationIDs.map { operationID in
+                FallbackBridgeData.offlineMutation(
+                    operationId: operationID,
+                    status: status,
+                    operationType: "qso.create",
+                    lastErrorCode: result == "accepted" ? nil : errorCode
+                )
+            }
+            data = [
+                "retry_result": [
+                    "schema_version": 1,
+                    "logbook_id": payload["logbook_id"] as? String ?? UUID().uuidString,
+                    "result": result,
+                    "operation_ids": operationIDs,
+                    "accepted_count": result == "accepted" ? acceptedHashes.count : 0,
+                    "error_code": errorCode,
+                    "message": payload["message"] as? String ?? result
+                ],
+                "affected_mutations": mutations,
+                "offline_queue": FallbackBridgeData.offlineQueue(mutations: mutations)
+            ]
+        case "sync.remote_events.apply":
+            let events = payload["events"] as? [[String: Any]] ?? []
+            let logbookID = (payload["logbook_id"] as? String)
+                ?? (events.first?["logbook_id"] as? String)
+                ?? UUID().uuidString
+            let remoteHeadHash = events.last?["event_hash"] ?? NSNull()
+            data = [
+                "pull": [
+                    "peer_id": payload["peer_id"] as? String ?? "fallback-ios-peer",
+                    "logbook_id": logbookID,
+                    "status": events.isEmpty ? "in_sync" : "pulled",
+                    "accepted_count": events.count,
+                    "ignored_duplicate_count": 0,
+                    "rejected_count": 0,
+                    "local_head_hash": remoteHeadHash,
+                    "remote_head_hash": remoteHeadHash,
+                    "errors": []
+                ],
+                "sync": FallbackBridgeData.sync(),
+                "projection": [
+                    "source": "fallback",
+                    "schema_version": 1,
+                    "pending_event_count": events.count
+                ]
+            ]
+        case "sync.snapshot", "sync.conflict_reviews.snapshot":
+            let appSupportDir = payload["app_support_dir"] as? String ?? "fallback"
+            data = FallbackBridgeData.sync(
+                conflictReviews: FallbackConflictReviewMemory.snapshot(appSupportDir: appSupportDir),
+                lanTrust: FallbackLanTrustMemory.snapshot(appSupportDir: appSupportDir)
+            )
+        case "sync.lan_trust.snapshot":
+            let appSupportDir = payload["app_support_dir"] as? String ?? "fallback"
+            data = ["lan_trust": FallbackLanTrustMemory.snapshot(appSupportDir: appSupportDir)]
+        case "sync.lan_trust.issue_pairing_token":
+            let appSupportDir = payload["app_support_dir"] as? String ?? "fallback"
+            data = FallbackLanTrustMemory.issue(appSupportDir: appSupportDir, payload: payload)
+        case "sync.lan_trust.accept_pairing_token":
+            let appSupportDir = payload["app_support_dir"] as? String ?? "fallback"
+            data = FallbackLanTrustMemory.accept(appSupportDir: appSupportDir, payload: payload)
+        case "sync.lan_trust.trust_peer":
+            let appSupportDir = payload["app_support_dir"] as? String ?? "fallback"
+            data = FallbackLanTrustMemory.trustPeer(appSupportDir: appSupportDir, payload: payload)
+        case "sync.lan_trust.rotate_auth":
+            let appSupportDir = payload["app_support_dir"] as? String ?? "fallback"
+            data = FallbackLanTrustMemory.rotateAuth(appSupportDir: appSupportDir, payload: payload)
+        case "sync.lan_trust.revoke":
+            let appSupportDir = payload["app_support_dir"] as? String ?? "fallback"
+            data = FallbackLanTrustMemory.revoke(appSupportDir: appSupportDir, payload: payload)
+        case "sync.conflict_reviews.create":
+            let appSupportDir = payload["app_support_dir"] as? String ?? "fallback"
+            let report = payload["report"] as? [String: Any] ?? FallbackConflictReviewMemory.defaultReport()
+            data = FallbackConflictReviewMemory.create(appSupportDir: appSupportDir, report: report)
+        case "sync.conflict_reviews.resolve":
+            let appSupportDir = payload["app_support_dir"] as? String ?? "fallback"
+            let reviewID = payload["review_id"] as? String ?? ""
+            let resolution = payload["resolution"] as? [String: Any] ?? [
+                "choice": SyncManualConflictResolutionChoice.markUserActionRequired.rawValue
+            ]
+            data = FallbackConflictReviewMemory.resolve(
+                appSupportDir: appSupportDir,
+                reviewID: reviewID,
+                resolution: resolution
+            )
         case "bridge.self_test":
             data = [
                 "success": true,
                 "library_linked": false,
                 "abi_version": 1,
                 "bridge_schema_version": 1,
-                "core_version": "0.2.0",
+                "core_version": "0.3.0",
                 "sync_protocol_version": 1,
                 "backup_schema_version": 1,
                 "build_target": ["os": "fallback", "arch": "fallback"],
@@ -665,6 +1436,367 @@ struct FallbackRustBridgeClient: RustBridgeClient {
     }
 }
 
+private enum FallbackSyncIdentity {
+    static let deviceID = "00000000-0000-4000-8000-0000000000f1"
+    static let sessionID = "00000000-0000-4000-8000-0000000000f2"
+
+    static func payload(displayName: String = "KE8YGW Logger iOS") -> [String: Any] {
+        [
+            "device_id": deviceID,
+            "session_id": sessionID,
+            "user_hash": NSNull(),
+            "display_name": displayName,
+            "capabilities": ["discovery.v1", "handshake.v1", "head-compare.v1"],
+            "local_api_port": NSNull()
+        ]
+    }
+}
+
+private enum FallbackLanTrustMemory {
+    private static let lock = NSLock()
+    private static var pairingTokensByDirectory: [String: [[String: Any]]] = [:]
+    private static var trustedDevicesByDirectory: [String: [[String: Any]]] = [:]
+
+    static func snapshot(appSupportDir: String = "fallback") -> [String: Any] {
+        lock.lock()
+        defer { lock.unlock() }
+        return snapshotUnlocked(appSupportDir: appSupportDir)
+    }
+
+    static func issue(appSupportDir: String, payload: [String: Any]) -> [String: Any] {
+        lock.lock()
+        defer { lock.unlock() }
+        let now = timestamp()
+        let tokenID = UUID().uuidString
+        let pairingCode = UUID().uuidString.replacingOccurrences(of: "-", with: "")
+        let issuerDisplayName = payload["issuer_display_name"] as? String ?? "KE8YGW Logger iOS"
+        let token: [String: Any] = [
+            "token_id": tokenID,
+            "issuer_device_id": payload["issuer_device_id"] as? String ?? FallbackSyncIdentity.deviceID,
+            "logbook_id": payload["logbook_id"] as? String ?? SyncDefaults.defaultLogbookId,
+            "issuer_display_name": issuerDisplayName,
+            "created_at": now,
+            "expires_at": timestamp(daysFromNow: 1),
+            "consumed_at": NSNull(),
+            "approved_by_operator": payload["approved_by_operator"] as? Bool ?? true
+        ]
+        pairingTokensByDirectory[appSupportDir, default: []].append(token)
+        return [
+            "pairing": [
+                "token_id": tokenID,
+                "pairing_code": pairingCode,
+                "expires_at": token["expires_at"] ?? now
+            ],
+            "lan_trust": snapshotUnlocked(appSupportDir: appSupportDir)
+        ]
+    }
+
+    static func accept(appSupportDir: String, payload: [String: Any]) -> [String: Any] {
+        lock.lock()
+        defer { lock.unlock() }
+        let tokenID = payload["token_id"] as? String ?? UUID().uuidString
+        let now = timestamp()
+        if var tokens = pairingTokensByDirectory[appSupportDir],
+           let index = tokens.firstIndex(where: { ($0["token_id"] as? String) == tokenID }) {
+            var token = tokens[index]
+            token["consumed_at"] = now
+            tokens[index] = token
+            pairingTokensByDirectory[appSupportDir] = tokens
+        }
+        let device = devicePayload(
+            deviceID: payload["peer_device_id"] as? String ?? UUID().uuidString,
+            displayName: payload["peer_display_name"] as? String ?? "LAN Peer",
+            logbookIDs: payload["requested_logbooks"] as? [String] ?? [SyncDefaults.defaultLogbookId],
+            pairingTokenID: tokenID,
+            publicKeyFingerprint: payload["public_key_fingerprint"] as? String,
+            authCredentialID: payload["auth_credential_id"] as? String,
+            trustedAt: now
+        )
+        upsertDevice(device, appSupportDir: appSupportDir)
+        return [
+            "trusted_device": device,
+            "lan_trust": snapshotUnlocked(appSupportDir: appSupportDir)
+        ]
+    }
+
+    static func trustPeer(appSupportDir: String, payload: [String: Any]) -> [String: Any] {
+        lock.lock()
+        defer { lock.unlock() }
+        let device = devicePayload(
+            deviceID: payload["peer_device_id"] as? String ?? UUID().uuidString,
+            displayName: payload["peer_display_name"] as? String ?? "LAN Peer",
+            logbookIDs: [payload["logbook_id"] as? String ?? SyncDefaults.defaultLogbookId],
+            pairingTokenID: payload["pairing_token_id"] as? String,
+            publicKeyFingerprint: payload["public_key_fingerprint"] as? String,
+            authCredentialID: payload["auth_credential_id"] as? String,
+            trustedAt: timestamp()
+        )
+        upsertDevice(device, appSupportDir: appSupportDir)
+        return [
+            "trusted_device": device,
+            "lan_trust": snapshotUnlocked(appSupportDir: appSupportDir)
+        ]
+    }
+
+    static func rotateAuth(appSupportDir: String, payload: [String: Any]) -> [String: Any] {
+        lock.lock()
+        defer { lock.unlock() }
+        let deviceID = payload["device_id"] as? String ?? UUID().uuidString
+        let newCredentialID = payload["new_auth_credential_id"] as? String ?? UUID().uuidString
+        let now = timestamp()
+        var devices = trustedDevicesByDirectory[appSupportDir] ?? []
+        let trustedDevice: [String: Any]
+        let previousCredentialID: String?
+        if let index = devices.firstIndex(where: { ($0["device_id"] as? String) == deviceID }) {
+            var device = devices[index]
+            previousCredentialID = device["auth_credential_id"] as? String
+            device["auth_credential_id"] = newCredentialID
+            device["auth_rotated_at"] = now
+            devices[index] = device
+            trustedDevice = device
+        } else {
+            previousCredentialID = nil
+            trustedDevice = devicePayload(
+                deviceID: deviceID,
+                displayName: "LAN Peer",
+                logbookIDs: [payload["logbook_id"] as? String ?? SyncDefaults.defaultLogbookId],
+                pairingTokenID: nil,
+                publicKeyFingerprint: nil,
+                authCredentialID: newCredentialID,
+                trustedAt: now,
+                authRotatedAt: now
+            )
+            devices.append(trustedDevice)
+        }
+        trustedDevicesByDirectory[appSupportDir] = devices
+        return [
+            "rotation": [
+                "trusted_device": trustedDevice,
+                "previous_auth_credential_id": previousCredentialID as Any? ?? NSNull()
+            ],
+            "lan_trust": snapshotUnlocked(appSupportDir: appSupportDir)
+        ]
+    }
+
+    static func revoke(appSupportDir: String, payload: [String: Any]) -> [String: Any] {
+        lock.lock()
+        defer { lock.unlock() }
+        let deviceID = payload["device_id"] as? String ?? UUID().uuidString
+        let now = timestamp()
+        var devices = trustedDevicesByDirectory[appSupportDir] ?? []
+        let trustedDevice: [String: Any]
+        if let index = devices.firstIndex(where: { ($0["device_id"] as? String) == deviceID }) {
+            var device = devices[index]
+            device["revoked_at"] = now
+            devices[index] = device
+            trustedDevice = device
+        } else {
+            trustedDevice = devicePayload(
+                deviceID: deviceID,
+                displayName: "LAN Peer",
+                logbookIDs: [SyncDefaults.defaultLogbookId],
+                pairingTokenID: nil,
+                publicKeyFingerprint: nil,
+                authCredentialID: nil,
+                trustedAt: now,
+                revokedAt: now
+            )
+            devices.append(trustedDevice)
+        }
+        trustedDevicesByDirectory[appSupportDir] = devices
+        return [
+            "trusted_device": trustedDevice,
+            "lan_trust": snapshotUnlocked(appSupportDir: appSupportDir)
+        ]
+    }
+
+    private static func snapshotUnlocked(appSupportDir: String) -> [String: Any] {
+        [
+            "version": 1,
+            "pairing_tokens": pairingTokensByDirectory[appSupportDir] ?? [],
+            "trusted_devices": trustedDevicesByDirectory[appSupportDir] ?? []
+        ]
+    }
+
+    private static func upsertDevice(_ device: [String: Any], appSupportDir: String) {
+        var devices = trustedDevicesByDirectory[appSupportDir] ?? []
+        if let index = devices.firstIndex(where: { ($0["device_id"] as? String) == (device["device_id"] as? String) }) {
+            devices[index] = device
+        } else {
+            devices.append(device)
+        }
+        trustedDevicesByDirectory[appSupportDir] = devices
+    }
+
+    private static func devicePayload(
+        deviceID: String,
+        displayName: String,
+        logbookIDs: [String],
+        pairingTokenID: String?,
+        publicKeyFingerprint: String?,
+        authCredentialID: String?,
+        trustedAt: String,
+        revokedAt: String? = nil,
+        authRotatedAt: String? = nil
+    ) -> [String: Any] {
+        [
+            "device_id": deviceID,
+            "display_name": displayName,
+            "logbook_ids": logbookIDs,
+            "trusted_at": trustedAt,
+            "revoked_at": revokedAt as Any? ?? NSNull(),
+            "pairing_token_id": pairingTokenID as Any? ?? NSNull(),
+            "public_key_fingerprint": publicKeyFingerprint as Any? ?? NSNull(),
+            "auth_credential_id": authCredentialID as Any? ?? NSNull(),
+            "auth_rotated_at": authRotatedAt as Any? ?? NSNull(),
+            "last_seen_at": NSNull()
+        ]
+    }
+
+    private static func timestamp(daysFromNow: Int = 0) -> String {
+        let date = Calendar(identifier: .gregorian).date(byAdding: .day, value: daysFromNow, to: Date()) ?? Date()
+        return ISO8601DateFormatter().string(from: date)
+    }
+}
+
+private enum FallbackConflictReviewMemory {
+    private static let lock = NSLock()
+    private static var records: [String: [[String: Any]]] = [:]
+
+    static func snapshot(appSupportDir: String = "fallback") -> [String: Any] {
+        lock.lock()
+        defer { lock.unlock() }
+        return snapshotUnlocked(appSupportDir: appSupportDir)
+    }
+
+    static func create(appSupportDir: String, report: [String: Any]) -> [String: Any] {
+        lock.lock()
+        defer { lock.unlock() }
+        var reviews = records[appSupportDir] ?? []
+        let fingerprint = fingerprint(for: report)
+        if let existing = reviews.first(where: { review in
+            (review["report_fingerprint"] as? String) == fingerprint && (review["status"] as? String) == "open"
+        }) {
+            return [
+                "conflict_review": existing,
+                "conflict_reviews": snapshotUnlocked(appSupportDir: appSupportDir)
+            ]
+        }
+
+        let now = ISO8601DateFormatter().string(from: Date())
+        let review: [String: Any] = [
+            "schema_version": 1,
+            "review_id": UUID().uuidString,
+            "report_fingerprint": fingerprint,
+            "report": report,
+            "status": "open",
+            "selected_resolution": NSNull(),
+            "created_at": now,
+            "updated_at": now,
+            "resolved_at": NSNull()
+        ]
+        reviews.append(review)
+        records[appSupportDir] = reviews
+        return [
+            "conflict_review": review,
+            "conflict_reviews": snapshotUnlocked(appSupportDir: appSupportDir)
+        ]
+    }
+
+    static func resolve(
+        appSupportDir: String,
+        reviewID: String,
+        resolution: [String: Any]
+    ) -> [String: Any] {
+        lock.lock()
+        defer { lock.unlock() }
+        var reviews = records[appSupportDir] ?? []
+        let now = ISO8601DateFormatter().string(from: Date())
+        let resolvedReview: [String: Any]
+        if let index = reviews.firstIndex(where: { ($0["review_id"] as? String) == reviewID }) {
+            var review = reviews[index]
+            review["status"] = "resolved"
+            review["selected_resolution"] = resolution
+            review["updated_at"] = now
+            review["resolved_at"] = now
+            reviews[index] = review
+            records[appSupportDir] = reviews
+            resolvedReview = review
+        } else {
+            resolvedReview = [
+                "schema_version": 1,
+                "review_id": reviewID,
+                "report_fingerprint": "fallback-missing-review",
+                "report": defaultReport(),
+                "status": "resolved",
+                "selected_resolution": resolution,
+                "created_at": now,
+                "updated_at": now,
+                "resolved_at": now
+            ]
+        }
+        return [
+            "conflict_review": resolvedReview,
+            "conflict_reviews": snapshotUnlocked(appSupportDir: appSupportDir)
+        ]
+    }
+
+    static func defaultReport() -> [String: Any] {
+        [
+            "schema_version": 1,
+            "created_at": ISO8601DateFormatter().string(from: Date()),
+            "logbook_id": UUID().uuidString,
+            "peer_id": "fallback-peer",
+            "status": "diverged",
+            "local_head_hash": "fallback-local-head",
+            "remote_head_hash": "fallback-remote-head",
+            "missing_event_count": 1,
+            "pending_operation_count": 0,
+            "conflicts": [
+                [
+                    "kind": "divergent_heads",
+                    "message": "Local and remote sync heads require manual review.",
+                    "related_operation_ids": [],
+                    "related_event_hashes": ["fallback-local-head", "fallback-remote-head"],
+                    "safe_auto_merge": false,
+                    "requires_user_action": true,
+                    "resolution_options": [
+                        "keep_local_history",
+                        "create_corrective_events",
+                        "mark_user_action_required"
+                    ]
+                ]
+            ],
+            "recommended_action": "Manual review required before syncing."
+        ]
+    }
+
+    private static func snapshotUnlocked(appSupportDir: String) -> [String: Any] {
+        let reviews = records[appSupportDir] ?? []
+        let open = reviews.filter { ($0["status"] as? String) == "open" }.count
+        let resolved = reviews.filter { ($0["status"] as? String) == "resolved" }.count
+        return [
+            "file_version": 1,
+            "review_schema_version": 1,
+            "health": [
+                "total": reviews.count,
+                "open": open,
+                "resolved": resolved
+            ],
+            "reviews": reviews
+        ]
+    }
+
+    private static func fingerprint(for report: [String: Any]) -> String {
+        let logbookID = report["logbook_id"] as? String ?? "unknown-logbook"
+        let peerID = report["peer_id"] as? String ?? "unknown-peer"
+        let status = report["status"] as? String ?? "unknown-status"
+        let local = report["local_head_hash"] as? String ?? "none"
+        let remote = report["remote_head_hash"] as? String ?? "none"
+        return "\(logbookID):\(peerID):\(status):\(local):\(remote)"
+    }
+}
+
 private enum FallbackSettingsMemory {
     private static let lock = NSLock()
     private static var records: [String: [String: Any]] = [:]
@@ -723,6 +1855,7 @@ private enum FallbackSettingsMemory {
             "sync": [
                 "sync_server_url": "http://127.0.0.1:9740",
                 "device_name": "KE8YGW Logger iOS",
+                "sync_endpoint_style": "logbook_scoped",
                 "prefer_lan_sync": true,
                 "auto_push_enabled": false,
                 "auto_pull_enabled": false,
@@ -776,6 +1909,13 @@ private enum FallbackSettingsMemory {
         if var logging = normalized["logging"] as? [String: Any] {
             logging["default_mode"] = (logging["default_mode"] as? String ?? "SSB").trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
             normalized["logging"] = logging
+        }
+        if var sync = normalized["sync"] as? [String: Any] {
+            let endpointStyle = (sync["sync_endpoint_style"] as? String ?? "logbook_scoped")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .lowercased()
+            sync["sync_endpoint_style"] = endpointStyle == "hosted_sync" ? "hosted_sync" : "logbook_scoped"
+            normalized["sync"] = sync
         }
         if var net = normalized["net_control"] as? [String: Any] {
             net["default_mode"] = (net["default_mode"] as? String ?? "FM").trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
@@ -921,17 +2061,100 @@ enum FallbackBridgeData {
         ]
     ]
 
-    static let sync: [String: Any] = [
-        "cloud_connection_state": "disconnected",
-        "pending_changes": 0,
-        "offline_queue": [],
-        "conflicts": [],
-        "history": []
-    ]
+    static func sync(
+        conflictReviews: [String: Any]? = nil,
+        lanTrust: [String: Any]? = nil
+    ) -> [String: Any] {
+        [
+            "cloud_connection_state": "disconnected",
+            "identity": FallbackSyncIdentity.payload(),
+            "logbook_id": "00000000-0000-4000-8000-000000000001",
+            "local_head_hash": NSNull(),
+            "pending_events": 0,
+            "pending_changes": 0,
+            "offline_queue": offlineQueue(),
+            "conflict_reviews": conflictReviews ?? ["health": ["open": 0, "resolved": 0, "total": 0], "reviews": []],
+            "lan_trust": lanTrust ?? FallbackLanTrustMemory.snapshot(),
+            "lan_trust_error": NSNull(),
+            "conflicts": [],
+            "history": [],
+            "retry_policy": [
+                "network_required": true,
+                "background_retry_supported": true,
+                "permanent_user_action_states": ["blocked", "failed", "user_action_required"]
+            ]
+        ]
+    }
+
+    static func offlineQueue(mutations: [[String: Any]] = []) -> [String: Any] {
+        let statuses = mutations.compactMap { $0["status"] as? String }
+        let pending = statuses.filter { $0 == "pending" }.count
+        let sending = statuses.filter { $0 == "sending" }.count
+        let retrying = statuses.filter { $0 == "retrying" }.count
+        let blocked = statuses.filter { $0 == "blocked" }.count
+        let failed = statuses.filter { $0 == "failed" }.count
+        let accepted = statuses.filter { $0 == "accepted" }.count
+        let userAction = statuses.filter { $0 == "user_action_required" }.count
+        return [
+            "queue_schema_version": 1,
+            "mutation_schema_version": 1,
+            "health": [
+                "total": mutations.count,
+                "pending": pending,
+                "sending": sending,
+                "retrying": retrying,
+                "blocked": blocked,
+                "failed": failed,
+                "accepted": accepted,
+                "user_action_required": userAction,
+                "ready_to_send": pending + retrying,
+                "oldest_pending_at": NSNull(),
+                "newest_update_at": NSNull()
+            ],
+            "mutations": mutations
+        ]
+    }
+
+    static func offlineMutation(
+        operationId: String,
+        status: String,
+        operationType: String,
+        lastErrorCode: String? = nil
+    ) -> [String: Any] {
+        var mutation: [String: Any] = [
+            "operation_id": operationId,
+            "logbook_id": UUID().uuidString,
+            "sequence": 1,
+            "operation_type": operationType,
+            "status": status,
+            "attempts": status == "accepted" ? 1 : 0,
+            "next_attempt_at": NSNull(),
+            "failure_reason": NSNull(),
+            "last_error_code": NSNull(),
+            "local_event_hash": status == "accepted" ? "fallback-event-hash" : NSNull()
+        ]
+        if let lastErrorCode {
+            mutation["last_error_code"] = lastErrorCode
+            mutation["failure_reason"] = lastErrorCode
+        }
+        return mutation
+    }
+
+    static func offlineQueueRecovery() -> [String: Any] {
+        [
+            "initialized_empty_queue": false,
+            "migrated_v0_2_absent_queue": false,
+            "migrated_v0_2_file": false,
+            "migrated_legacy_mutations": 0,
+            "recovered_interrupted_writes": 0,
+            "promoted_interrupted_atomic_write": false,
+            "quarantined_corrupt_file": false
+        ]
+    }
 
     static let diagnostics: [String: Any] = [
-        "rust_version": "0.2.0",
-        "core_version": "0.2.0",
+        "rust_version": "0.3.0",
+        "core_version": "0.3.0",
         "bridge_loaded": false,
         "abi_version": 1,
         "bridge_schema_version": 1,
@@ -1164,18 +2387,1879 @@ struct MapMarkerSnapshot: Decodable, Identifiable {
 
 struct SyncSnapshot: Decodable {
     var cloudConnectionState: String?
+    var identity: SyncPeerIdentity?
+    var logbookId: String?
+    var localHeadHash: String?
+    var pendingEvents: Int?
     var pendingChanges: Int?
-    var offlineQueue: [String]?
+    var offlineQueue: SyncOfflineQueueSnapshot?
+    var conflictReviews: SyncConflictReviewSnapshot?
+    var lanTrust: SyncLanTrustSnapshot?
+    var lanTrustError: String?
     var conflicts: [String]?
     var history: [String]?
+    var retryPolicy: SyncRetryPolicy?
+
+    enum CodingKeys: String, CodingKey {
+        case cloudConnectionState
+        case identity
+        case logbookId
+        case localHeadHash
+        case pendingEvents
+        case pendingChanges
+        case offlineQueue
+        case conflictReviews
+        case lanTrust
+        case lanTrustError
+        case conflicts
+        case history
+        case retryPolicy
+    }
 
     static let placeholder = SyncSnapshot(
         cloudConnectionState: "disconnected",
+        identity: nil,
+        logbookId: nil,
+        localHeadHash: nil,
+        pendingEvents: 0,
         pendingChanges: 0,
-        offlineQueue: [],
+        offlineQueue: nil,
+        conflictReviews: nil,
+        lanTrust: nil,
+        lanTrustError: nil,
         conflicts: [],
-        history: []
+        history: [],
+        retryPolicy: nil
     )
+
+    init(
+        cloudConnectionState: String?,
+        identity: SyncPeerIdentity?,
+        logbookId: String?,
+        localHeadHash: String?,
+        pendingEvents: Int?,
+        pendingChanges: Int?,
+        offlineQueue: SyncOfflineQueueSnapshot?,
+        conflictReviews: SyncConflictReviewSnapshot?,
+        lanTrust: SyncLanTrustSnapshot?,
+        lanTrustError: String?,
+        conflicts: [String]?,
+        history: [String]?,
+        retryPolicy: SyncRetryPolicy?
+    ) {
+        self.cloudConnectionState = cloudConnectionState
+        self.identity = identity
+        self.logbookId = logbookId
+        self.localHeadHash = localHeadHash
+        self.pendingEvents = pendingEvents
+        self.pendingChanges = pendingChanges
+        self.offlineQueue = offlineQueue
+        self.conflictReviews = conflictReviews
+        self.lanTrust = lanTrust
+        self.lanTrustError = lanTrustError
+        self.conflicts = conflicts
+        self.history = history
+        self.retryPolicy = retryPolicy
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        cloudConnectionState = try container.decodeIfPresent(String.self, forKey: .cloudConnectionState)
+        identity = try? container.decodeIfPresent(SyncPeerIdentity.self, forKey: .identity)
+        logbookId = try container.decodeIfPresent(String.self, forKey: .logbookId)
+        localHeadHash = try container.decodeIfPresent(String.self, forKey: .localHeadHash)
+        pendingEvents = try container.decodeIfPresent(Int.self, forKey: .pendingEvents)
+        pendingChanges = try container.decodeIfPresent(Int.self, forKey: .pendingChanges)
+        offlineQueue = try? container.decodeIfPresent(SyncOfflineQueueSnapshot.self, forKey: .offlineQueue)
+        conflictReviews = try? container.decodeIfPresent(SyncConflictReviewSnapshot.self, forKey: .conflictReviews)
+        lanTrust = try? container.decodeIfPresent(SyncLanTrustSnapshot.self, forKey: .lanTrust)
+        lanTrustError = try container.decodeIfPresent(String.self, forKey: .lanTrustError)
+        conflicts = (try? container.decodeIfPresent([String].self, forKey: .conflicts)) ?? []
+        history = (try? container.decodeIfPresent([String].self, forKey: .history)) ?? []
+        retryPolicy = try? container.decodeIfPresent(SyncRetryPolicy.self, forKey: .retryPolicy)
+    }
+
+    func replacingOfflineQueue(_ queue: SyncOfflineQueueSnapshot) -> SyncSnapshot {
+        SyncSnapshot(
+            cloudConnectionState: cloudConnectionState,
+            identity: identity,
+            logbookId: logbookId,
+            localHeadHash: localHeadHash,
+            pendingEvents: pendingEvents,
+            pendingChanges: queue.health.pendingChangeCount,
+            offlineQueue: queue,
+            conflictReviews: conflictReviews,
+            lanTrust: lanTrust,
+            lanTrustError: lanTrustError,
+            conflicts: conflicts,
+            history: history,
+            retryPolicy: retryPolicy
+        )
+    }
+
+    func replacingConflictReviews(_ reviews: SyncConflictReviewSnapshot) -> SyncSnapshot {
+        SyncSnapshot(
+            cloudConnectionState: cloudConnectionState,
+            identity: identity,
+            logbookId: logbookId,
+            localHeadHash: localHeadHash,
+            pendingEvents: pendingEvents,
+            pendingChanges: pendingChanges,
+            offlineQueue: offlineQueue,
+            conflictReviews: reviews,
+            lanTrust: lanTrust,
+            lanTrustError: lanTrustError,
+            conflicts: conflicts,
+            history: history,
+            retryPolicy: retryPolicy
+        )
+    }
+
+    func replacingLanTrust(_ trust: SyncLanTrustSnapshot, error: String?) -> SyncSnapshot {
+        SyncSnapshot(
+            cloudConnectionState: cloudConnectionState,
+            identity: identity,
+            logbookId: logbookId,
+            localHeadHash: localHeadHash,
+            pendingEvents: pendingEvents,
+            pendingChanges: pendingChanges,
+            offlineQueue: offlineQueue,
+            conflictReviews: conflictReviews,
+            lanTrust: trust,
+            lanTrustError: error,
+            conflicts: conflicts,
+            history: history,
+            retryPolicy: retryPolicy
+        )
+    }
+}
+
+struct SyncPeerIdentity: Decodable, Equatable {
+    var deviceId: String
+    var sessionId: String
+    var userHash: String?
+    var displayName: String
+    var capabilities: [String]
+    var localApiPort: Int?
+}
+
+struct SyncOfflineQueueSnapshot: Decodable {
+    var queueSchemaVersion: Int?
+    var mutationSchemaVersion: Int?
+    var health: SyncOfflineQueueHealth
+    var mutations: [SyncOfflineMutation]
+}
+
+struct SyncOfflineQueueHealth: Decodable {
+    var total: Int?
+    var pending: Int?
+    var sending: Int?
+    var retrying: Int?
+    var blocked: Int?
+    var failed: Int?
+    var accepted: Int?
+    var userActionRequired: Int?
+    var readyToSend: Int?
+    var oldestPendingAt: String?
+    var newestUpdateAt: String?
+
+    var pendingChangeCount: Int {
+        (pending ?? 0) + (sending ?? 0) + (retrying ?? 0) + (blocked ?? 0) + (failed ?? 0) + (userActionRequired ?? 0)
+    }
+}
+
+struct SyncOfflineMutation: Decodable, Identifiable {
+    var id: String { operationId ?? "\(logbookId ?? "unknown")-\(sequence ?? 0)" }
+    var operationId: String?
+    var logbookId: String?
+    var entityId: String?
+    var sequence: Int?
+    var operationType: String?
+    var status: String?
+    var attempts: Int?
+    var nextAttemptAt: String?
+    var failureReason: String?
+    var lastErrorCode: String?
+    var localEventHash: String?
+}
+
+struct SyncLanTrustSnapshot: Decodable {
+    var version: Int?
+    var pairingTokens: [SyncPairingTokenSummary]
+    var trustedDevices: [SyncTrustedPeerDevice]
+
+    var activePairingTokens: [SyncPairingTokenSummary] {
+        pairingTokens.filter { $0.consumedAt == nil }
+    }
+
+    var activeTrustedDevices: [SyncTrustedPeerDevice] {
+        trustedDevices.filter { $0.revokedAt == nil }
+    }
+}
+
+struct SyncPairingTokenSummary: Decodable, Identifiable {
+    var id: String { tokenId ?? UUID().uuidString }
+    var tokenId: String?
+    var issuerDeviceId: String?
+    var logbookId: String?
+    var issuerDisplayName: String?
+    var createdAt: String?
+    var expiresAt: String?
+    var consumedAt: String?
+    var approvedByOperator: Bool?
+}
+
+struct SyncTrustedPeerDevice: Decodable, Identifiable {
+    var id: String { deviceId ?? UUID().uuidString }
+    var deviceId: String?
+    var displayName: String?
+    var logbookIds: [String]?
+    var trustedAt: String?
+    var revokedAt: String?
+    var pairingTokenId: String?
+    var publicKeyFingerprint: String?
+    var authCredentialId: String?
+    var authRotatedAt: String?
+    var lastSeenAt: String?
+
+    var statusLabel: String {
+        revokedAt == nil ? "Trusted" : "Revoked"
+    }
+}
+
+struct SyncLanTrustBridgeResult: Decodable {
+    var lanTrust: SyncLanTrustSnapshot
+}
+
+struct SyncLanPairingTokenBridgeResult: Decodable {
+    var pairing: SyncIssuedPairingToken
+    var lanTrust: SyncLanTrustSnapshot
+}
+
+struct SyncLanTrustedDeviceBridgeResult: Decodable {
+    var trustedDevice: SyncTrustedPeerDevice
+    var lanTrust: SyncLanTrustSnapshot
+}
+
+struct SyncLanAuthRotateBridgeResult: Decodable {
+    var rotation: SyncLanAuthCredentialRotation
+    var lanTrust: SyncLanTrustSnapshot
+}
+
+struct SyncIssuedPairingToken: Decodable {
+    var tokenId: String
+    var pairingCode: String
+    var expiresAt: String
+}
+
+struct SyncLanAuthCredentialRotation: Decodable {
+    var trustedDevice: SyncTrustedPeerDevice
+    var previousAuthCredentialId: String?
+}
+
+struct SyncLanPairingTokenIssueBridgeRequest: Encodable {
+    var appSupportDir: String
+    var issuerDeviceId: String?
+    var logbookId: String?
+    var issuerDisplayName: String?
+    var approvedByOperator: Bool
+}
+
+struct SyncLanPairingAcceptBridgeRequest: Encodable {
+    var appSupportDir: String
+    var tokenId: String
+    var pairingCode: String
+    var peerDeviceId: String
+    var peerDisplayName: String
+    var requestedLogbooks: [String]
+    var publicKeyFingerprint: String?
+    var authCredentialId: String
+}
+
+struct SyncLanTrustPeerBridgeRequest: Encodable {
+    var appSupportDir: String
+    var peerDeviceId: String
+    var peerDisplayName: String
+    var logbookId: String?
+    var pairingTokenId: String?
+    var publicKeyFingerprint: String?
+    var authCredentialId: String
+}
+
+struct SyncLanAuthRotateBridgeRequest: Encodable {
+    var appSupportDir: String
+    var deviceId: String
+    var logbookId: String?
+    var newAuthCredentialId: String
+}
+
+struct SyncLanRevokeBridgeRequest: Encodable {
+    var appSupportDir: String
+    var deviceId: String
+}
+
+struct SyncConflictReviewSnapshot: Decodable {
+    var fileVersion: Int?
+    var reviewSchemaVersion: Int?
+    var health: SyncConflictReviewHealth?
+    var reviews: [SyncManualConflictReview]?
+
+    var openReviews: [SyncManualConflictReview] {
+        (reviews ?? []).filter { $0.status == "open" }
+    }
+}
+
+struct SyncConflictReviewHealth: Decodable {
+    var open: Int?
+    var resolved: Int?
+    var total: Int?
+}
+
+struct SyncManualConflictReview: Decodable, Identifiable {
+    var id: String { reviewId ?? reportFingerprint ?? UUID().uuidString }
+    var schemaVersion: Int?
+    var reviewId: String?
+    var reportFingerprint: String?
+    var report: SyncConflictReportSnapshot?
+    var status: String?
+    var selectedResolution: SyncManualConflictResolution?
+    var createdAt: String?
+    var updatedAt: String?
+    var resolvedAt: String?
+
+    var statusLabel: String {
+        (status ?? "open").replacingOccurrences(of: "_", with: " ").capitalized
+    }
+}
+
+struct SyncConflictReportSnapshot: Decodable {
+    var schemaVersion: Int?
+    var createdAt: String?
+    var logbookId: String?
+    var peerId: String?
+    var status: String?
+    var localHeadHash: String?
+    var remoteHeadHash: String?
+    var missingEventCount: Int?
+    var pendingOperationCount: Int?
+    var conflicts: [SyncConflictSnapshot]?
+    var recommendedAction: String?
+
+    var statusLabel: String {
+        (status ?? "review").replacingOccurrences(of: "_", with: " ").capitalized
+    }
+}
+
+struct SyncConflictSnapshot: Decodable, Identifiable {
+    var id: String {
+        let hashes = relatedEventHashes?.joined(separator: "-") ?? ""
+        let operations = relatedOperationIds?.joined(separator: "-") ?? ""
+        return "\(kind ?? "conflict")-\(hashes)-\(operations)"
+    }
+    var kind: String?
+    var message: String?
+    var relatedOperationIds: [String]?
+    var relatedEventHashes: [String]?
+    var safeAutoMerge: Bool?
+    var requiresUserAction: Bool?
+    var resolutionOptions: [String]?
+
+    var kindLabel: String {
+        (kind ?? "conflict").replacingOccurrences(of: "_", with: " ").capitalized
+    }
+}
+
+enum SyncManualConflictResolutionChoice: String, Codable {
+    case keepLocalHistory = "keep_local_history"
+    case pullRemoteAfterReview = "pull_remote_after_review"
+    case createCorrectiveEvents = "create_corrective_events"
+    case retryAfterDependencyArrives = "retry_after_dependency_arrives"
+    case markUserActionRequired = "mark_user_action_required"
+}
+
+struct SyncManualConflictResolution: Codable {
+    var choice: SyncManualConflictResolutionChoice
+    var operatorNote: String?
+    var correctiveEventHashes: [String]
+    var resolvedByDeviceId: String?
+
+    init(
+        choice: SyncManualConflictResolutionChoice,
+        operatorNote: String? = nil,
+        correctiveEventHashes: [String] = [],
+        resolvedByDeviceId: String? = nil
+    ) {
+        self.choice = choice
+        self.operatorNote = operatorNote
+        self.correctiveEventHashes = correctiveEventHashes
+        self.resolvedByDeviceId = resolvedByDeviceId
+    }
+}
+
+struct SyncConflictReviewResolveBridgeRequest: Encodable {
+    var appSupportDir: String
+    var reviewId: String
+    var resolution: SyncManualConflictResolution
+}
+
+struct SyncConflictReviewMutationResult: Decodable {
+    var conflictReview: SyncManualConflictReview
+    var conflictReviews: SyncConflictReviewSnapshot
+}
+
+struct SyncRetryPolicy: Decodable {
+    var networkRequired: Bool?
+    var backgroundRetrySupported: Bool?
+    var permanentUserActionStates: [String]?
+}
+
+struct SyncRecoveryBridgeResult: Decodable {
+    var recoveredCount: Int?
+    var recovery: SyncOfflineQueueRecoveryReport?
+    var offlineQueue: SyncOfflineQueueSnapshot
+}
+
+struct SyncOfflineQueueRecoveryReport: Decodable {
+    var initializedEmptyQueue: Bool?
+    var migratedV02AbsentQueue: Bool?
+    var migratedV02File: Bool?
+    var migratedLegacyMutations: Int?
+    var recoveredInterruptedWrites: Int?
+    var promotedInterruptedAtomicWrite: Bool?
+    var quarantinedCorruptFile: Bool?
+}
+
+struct SyncRetryPlanBridgeRequest: Encodable {
+    var appSupportDir: String
+    var logbookId: String?
+    var maxMutations: Int?
+    var markSending: Bool
+    var networkAvailable: Bool
+    var backgroundTimeBudgetSeconds: Int?
+}
+
+struct SyncRetryPlanBridgeResult: Decodable {
+    var retryPlan: SyncRetryPlan
+    var offlineQueue: SyncOfflineQueueSnapshot
+    var recovery: SyncOfflineQueueRecoveryReport?
+}
+
+struct SyncRetryPlan: Decodable {
+    var schemaVersion: Int?
+    var logbookId: String?
+    var operationIds: [String]
+    var eventHashes: [String]
+    var events: [SyncOfficialEvent]?
+    var missingLocalEventOperationIds: [String]
+    var networkRequired: Bool
+    var blockedByNetwork: Bool
+    var maxMutations: Int?
+    var backgroundTimeBudgetSeconds: Int?
+    var markSending: Bool
+    var permanentFailureResults: [SyncRetryResultKind]?
+
+    var transportableEvents: [SyncOfficialEvent] {
+        events ?? []
+    }
+}
+
+enum SyncJSONValue: Codable, Equatable {
+    case string(String)
+    case number(Double)
+    case bool(Bool)
+    case object([String: SyncJSONValue])
+    case array([SyncJSONValue])
+    case null
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if container.decodeNil() {
+            self = .null
+        } else if let value = try? container.decode(Bool.self) {
+            self = .bool(value)
+        } else if let value = try? container.decode(Double.self) {
+            self = .number(value)
+        } else if let value = try? container.decode(String.self) {
+            self = .string(value)
+        } else if let value = try? container.decode([SyncJSONValue].self) {
+            self = .array(value)
+        } else {
+            self = .object(try container.decode([String: SyncJSONValue].self))
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        switch self {
+        case .string(let value):
+            try container.encode(value)
+        case .number(let value):
+            try container.encode(value)
+        case .bool(let value):
+            try container.encode(value)
+        case .object(let value):
+            try container.encode(value)
+        case .array(let value):
+            try container.encode(value)
+        case .null:
+            try container.encodeNil()
+        }
+    }
+}
+
+struct SyncOfficialEvent: Codable, Identifiable, Equatable {
+    var id: String { eventId }
+    var eventId: String
+    var eventType: String
+    var logbookId: String
+    var entityId: String?
+    var previousHash: String?
+    var eventHash: String
+    var timestamp: String
+    var authorOperatorId: String?
+    var stationCallsign: String
+    var operatorCallsign: String?
+    var authorDeviceId: String
+    var sourceDeviceId: String
+    var correlationId: String
+    var sourcePluginId: String?
+    var schemaVersion: Int
+    var payload: SyncJSONValue
+}
+
+struct SyncPushAuth: Encodable, Equatable {
+    var syncToken: String
+}
+
+struct SyncPushRequest: Encodable, Equatable {
+    var auth: SyncPushAuth?
+    var logbookId: String
+    var events: [SyncOfficialEvent]
+}
+
+struct SyncPullRequest: Encodable, Equatable {
+    var auth: SyncPushAuth?
+    var logbookId: String
+    var localHeadHash: String?
+}
+
+struct SyncPushResponse: Decodable, Equatable {
+    var status: String?
+    var acceptedCount: Int?
+    var ignoredDuplicateCount: Int?
+    var rejectedCount: Int?
+    var serverHeadHash: String?
+    var errors: [String]?
+}
+
+struct SyncPullResponse: Decodable, Equatable {
+    var preview: SyncPullPreview
+    var events: [SyncOfficialEvent]
+}
+
+struct SyncPullPreview: Decodable, Equatable {
+    var peerId: String
+    var logbookId: String
+    var status: String
+    var localHeadHash: String?
+    var remoteHeadHash: String?
+    var missingEventCount: Int
+    var remoteEventCount: Int
+    var events: [SyncEventMetadata]
+    var message: String
+}
+
+struct SyncEventMetadata: Decodable, Equatable {
+    var eventId: String
+    var logbookId: String
+    var entityId: String?
+    var previousHash: String?
+    var eventHash: String
+    var timestamp: String
+    var eventType: String
+    var schemaVersion: Int
+}
+
+extension SyncEventMetadata {
+    init(event: SyncOfficialEvent) {
+        self.eventId = event.eventId
+        self.logbookId = event.logbookId
+        self.entityId = event.entityId
+        self.previousHash = event.previousHash
+        self.eventHash = event.eventHash
+        self.timestamp = event.timestamp
+        self.eventType = event.eventType
+        self.schemaVersion = event.schemaVersion
+    }
+}
+
+struct SyncLogbookHeadSummary: Decodable, Equatable {
+    var logbookId: String
+    var headHash: String?
+    var eventCount: Int?
+}
+
+struct SyncLanPeerStateResponse: Decodable, Equatable {
+    var identity: SyncPeerIdentity?
+    var localHead: SyncLogbookHeadSummary?
+}
+
+struct SyncLanPairingAcceptRequestBody: Encodable, Equatable {
+    var tokenId: String
+    var pairingCode: String
+    var authCode: String
+    var peerDeviceId: String
+    var peerDisplayName: String
+    var logbookId: String
+    var publicKeyFingerprint: String?
+}
+
+struct SyncLanPairingAcceptResponse: Decodable {
+    var ok: Bool?
+    var trustedDevice: SyncTrustedPeerDevice?
+}
+
+struct SyncLanReciprocalPairingResult {
+    var peerIdentity: SyncPeerIdentity
+    var remoteTrustedDevice: SyncTrustedPeerDevice?
+}
+
+struct SyncLanEventRangeResponse: Decodable, Equatable {
+    var logbookId: String
+    var events: [SyncOfficialEvent]
+}
+
+enum SyncPushEndpointStyle: Equatable {
+    case logbookScoped
+    case hostedSync
+
+    init(setting: String?) {
+        switch setting?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "hosted_sync", "hosted":
+            self = .hostedSync
+        default:
+            self = .logbookScoped
+        }
+    }
+
+    func path(logbookId: String) -> String {
+        switch self {
+        case .logbookScoped:
+            return "api/v1/logbooks/\(logbookId)/push"
+        case .hostedSync:
+            return "api/v1/sync/push"
+        }
+    }
+}
+
+enum SyncPullEndpointStyle: Equatable {
+    case logbookScoped
+    case hostedSync
+
+    init(setting: String?) {
+        switch setting?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "hosted_sync", "hosted":
+            self = .hostedSync
+        default:
+            self = .logbookScoped
+        }
+    }
+
+    func path(logbookId: String) -> String {
+        switch self {
+        case .logbookScoped:
+            return "api/v1/logbooks/\(logbookId)/pull"
+        case .hostedSync:
+            return "api/v1/sync/pull"
+        }
+    }
+}
+
+protocol SyncPushTransporting {
+    func push(
+        serverURL: URL,
+        bearerToken: String?,
+        syncToken: String?,
+        endpointStyle: SyncPushEndpointStyle,
+        logbookId: String,
+        events: [SyncOfficialEvent]
+    ) async throws -> SyncPushResponse
+}
+
+protocol SyncPullTransporting {
+    func pull(
+        serverURL: URL,
+        bearerToken: String?,
+        syncToken: String?,
+        endpointStyle: SyncPullEndpointStyle,
+        logbookId: String,
+        localHeadHash: String?
+    ) async throws -> SyncPullResponse
+}
+
+protocol SyncLanPullTransporting {
+    func pull(
+        peerURL: URL,
+        localIdentity: SyncPeerIdentity,
+        trustedDevice: SyncTrustedPeerDevice,
+        authSecret: String,
+        logbookId: String,
+        localHeadHash: String?
+    ) async throws -> SyncPullResponse
+}
+
+protocol SyncLanPairingTransporting {
+    func completePairing(
+        peerURL: URL,
+        tokenId: String,
+        pairingCode: String,
+        authSecret: String,
+        localIdentity: SyncPeerIdentity,
+        logbookId: String,
+        publicKeyFingerprint: String?
+    ) async throws -> SyncLanReciprocalPairingResult
+}
+
+enum SyncRetryExecutionStatus: String, Equatable {
+    case blockedByNetwork = "blocked_by_network"
+    case noReadyEvents = "no_ready_events"
+    case missingTransportEventsRecorded = "missing_transport_events_recorded"
+    case accepted
+    case partialFailureRecorded = "partial_failure_recorded"
+    case transientFailureRecorded = "transient_failure_recorded"
+    case userActionRequired = "user_action_required"
+    case diverged
+}
+
+enum SyncBackgroundRetryTask {
+    static let identifier = "com.h2technologiesllc.ke8ygw-logger.sync.retry"
+    static let maxMutations = 25
+    static let backgroundTimeBudgetSeconds = 20
+    static let minimumDelaySeconds: TimeInterval = 15 * 60
+}
+
+enum SyncBackgroundRetrySkipReason: Equatable {
+    case disabled
+    case missingServerURL
+    case missingSyncToken
+    case noBackgroundWork
+}
+
+struct SyncBackgroundRetryScheduleDecision: Equatable {
+    var skipReason: SyncBackgroundRetrySkipReason?
+    var earliestBeginDate: Date?
+    var submissionError: String?
+
+    var shouldSchedule: Bool {
+        skipReason == nil && submissionError == nil
+    }
+
+    static func schedule(earliestBeginDate: Date) -> SyncBackgroundRetryScheduleDecision {
+        SyncBackgroundRetryScheduleDecision(
+            skipReason: nil,
+            earliestBeginDate: earliestBeginDate,
+            submissionError: nil
+        )
+    }
+
+    static func skip(_ reason: SyncBackgroundRetrySkipReason) -> SyncBackgroundRetryScheduleDecision {
+        SyncBackgroundRetryScheduleDecision(
+            skipReason: reason,
+            earliestBeginDate: nil,
+            submissionError: nil
+        )
+    }
+
+    func replacingSubmissionError(_ error: String) -> SyncBackgroundRetryScheduleDecision {
+        SyncBackgroundRetryScheduleDecision(
+            skipReason: skipReason,
+            earliestBeginDate: earliestBeginDate,
+            submissionError: error
+        )
+    }
+}
+
+struct SyncBackgroundRetryPolicy {
+    var minimumDelaySeconds: TimeInterval = SyncBackgroundRetryTask.minimumDelaySeconds
+
+    func decision(
+        syncSettings: RustSyncSettings?,
+        pendingChanges: Int?,
+        hasSyncToken: Bool,
+        now: Date = Date()
+    ) -> SyncBackgroundRetryScheduleDecision {
+        guard let syncSettings, syncSettings.backgroundSyncEnabled else {
+            return .skip(.disabled)
+        }
+        guard hasValidServerURL(syncSettings.syncServerUrl) else {
+            return .skip(.missingServerURL)
+        }
+        guard hasSyncToken else {
+            return .skip(.missingSyncToken)
+        }
+        let hasPendingChanges = pendingChanges.map { $0 > 0 } ?? true
+        guard hasPendingChanges || syncSettings.autoPullEnabled else {
+            return .skip(.noBackgroundWork)
+        }
+        return .schedule(earliestBeginDate: now.addingTimeInterval(minimumDelaySeconds))
+    }
+
+    func hasValidServerURL(_ rawValue: String) -> Bool {
+        let value = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let url = URL(string: value),
+              let scheme = url.scheme?.lowercased(),
+              (scheme == "http" || scheme == "https"),
+              url.host != nil
+        else {
+            return false
+        }
+        return true
+    }
+}
+
+struct SyncBackgroundRetryRunResult {
+    var taskCompleted: Bool
+    var syncSettings: RustSyncSettings?
+    var remainingPendingChanges: Int?
+}
+
+struct SyncBackgroundSyncExecutionResult {
+    var retryResult: SyncRetryExecutionResult
+    var pullResult: SyncPullExecutionResult?
+
+    var taskCompleted: Bool {
+        guard retryResult.status != .blockedByNetwork else {
+            return false
+        }
+        guard pullResult?.status != .blockedByNetwork else {
+            return false
+        }
+        return true
+    }
+
+    static func shouldAttemptPull(after status: SyncRetryExecutionStatus) -> Bool {
+        status == .accepted || status == .noReadyEvents
+    }
+}
+
+struct SyncRetryExecutionResult {
+    var plan: SyncRetryPlan
+    var pushResponse: SyncPushResponse?
+    var retryResults: [SyncRetryResultBridgeResult]
+    var status: SyncRetryExecutionStatus
+    var acceptedOperationCount: Int
+    var failedOperationCount: Int
+}
+
+enum SyncPullExecutionStatus: String, Equatable {
+    case blockedByNetwork = "blocked_by_network"
+    case noRemoteEvents = "no_remote_events"
+    case applied
+    case inSync = "in_sync"
+    case diverged
+    case rejected
+
+    init(status: String) {
+        switch status.lowercased() {
+        case "pulled":
+            self = .applied
+        case "in_sync":
+            self = .inSync
+        case "diverged":
+            self = .diverged
+        case "rejected":
+            self = .rejected
+        default:
+            self = .rejected
+        }
+    }
+}
+
+struct SyncPullExecutionResult {
+    var pullResponse: SyncPullResponse?
+    var applyResult: SyncRemoteEventsApplyBridgeResult?
+    var status: SyncPullExecutionStatus
+    var acceptedCount: Int
+    var rejectedCount: Int
+}
+
+enum SyncHTTPTransportError: LocalizedError, Equatable {
+    case emptyEventBatch
+    case invalidServerURL
+    case invalidHTTPResponse
+    case serverRejected(statusCode: Int, message: String)
+
+    var errorDescription: String? {
+        switch self {
+        case .emptyEventBatch:
+            return "The sync retry plan did not include any official events to push."
+        case .invalidServerURL:
+            return "The sync server URL is invalid."
+        case .invalidHTTPResponse:
+            return "The sync server returned an invalid HTTP response."
+        case .serverRejected(let statusCode, let message):
+            return "The sync server rejected the push with HTTP \(statusCode): \(message)"
+        }
+    }
+}
+
+enum SyncLanHTTPTransportError: LocalizedError, Equatable {
+    case networkUnavailable
+    case invalidPeerURL
+    case invalidLocalIdentity
+    case invalidLogbookID
+    case invalidReplayNonce
+    case missingLocalIdentity
+    case untrustedPeer
+    case revokedTrustedPeer
+    case missingLanAuthCredential
+    case missingPeerIdentity
+    case peerIdentityMismatch(expectedDeviceId: String, actualDeviceId: String)
+    case invalidPeerPayload
+    case invalidHTTPResponse
+    case peerRejected(statusCode: Int, message: String)
+
+    var errorDescription: String? {
+        switch self {
+        case .networkUnavailable:
+            return "Network unavailable; LAN pairing could not contact the peer."
+        case .invalidPeerURL:
+            return "The LAN peer URL is invalid."
+        case .invalidLocalIdentity:
+            return "The local LAN sync identity is invalid."
+        case .invalidLogbookID:
+            return "The LAN sync logbook ID is invalid."
+        case .invalidReplayNonce:
+            return "The LAN sync replay nonce is invalid."
+        case .missingLocalIdentity:
+            return "The local LAN sync identity is unavailable."
+        case .untrustedPeer:
+            return "Select a trusted LAN peer for this logbook before pulling."
+        case .revokedTrustedPeer:
+            return "The selected LAN peer has been revoked."
+        case .missingLanAuthCredential:
+            return "The selected LAN peer is missing its endpoint auth credential."
+        case .missingPeerIdentity:
+            return "The LAN peer did not publish a sync identity."
+        case .peerIdentityMismatch(let expectedDeviceId, let actualDeviceId):
+            return """
+            The LAN peer identity does not match the selected trusted peer. \
+            Expected \(expectedDeviceId), got \(actualDeviceId).
+            """
+        case .invalidPeerPayload:
+            return "The LAN peer returned an invalid sync payload."
+        case .invalidHTTPResponse:
+            return "The LAN peer returned an invalid HTTP response."
+        case .peerRejected(let statusCode, let message):
+            return "The LAN peer rejected the request with HTTP \(statusCode): \(message)"
+        }
+    }
+}
+
+private let syncLanAuthSignatureVersion = "hmac-sha256-v1"
+private let syncLanDeviceIDHeader = "x-ke8ygw-lan-device-id"
+private let syncLanReplayNonceHeader = "x-ke8ygw-lan-replay-nonce"
+private let syncLanSignatureVersionHeader = "x-ke8ygw-lan-signature-version"
+private let syncLanSignatureHeader = "x-ke8ygw-lan-signature"
+
+struct SyncLanHTTPTransport: SyncLanPullTransporting {
+    func makeStateRequest(peerURL: URL) throws -> URLRequest {
+        guard var components = URLComponents(url: peerURL, resolvingAgainstBaseURL: false),
+              let scheme = components.scheme?.lowercased(),
+              (scheme == "http" || scheme == "https"),
+              components.host != nil,
+              components.query == nil,
+              components.fragment == nil
+        else {
+            throw SyncLanHTTPTransportError.invalidPeerURL
+        }
+        let basePath = components.percentEncodedPath.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        guard basePath.isEmpty else {
+            throw SyncLanHTTPTransportError.invalidPeerURL
+        }
+
+        components.path = "/api/sync/state"
+        guard let url = components.url else {
+            throw SyncLanHTTPTransportError.invalidPeerURL
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.timeoutInterval = 8
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        return request
+    }
+
+    func makeHeadRequest(
+        peerURL: URL,
+        localDeviceId: String,
+        logbookId: String,
+        authSecret: String,
+        replayNonce: String = UUID().uuidString
+    ) throws -> URLRequest {
+        let canonicalLogbookId = try canonicalUUIDString(logbookId, error: .invalidLogbookID)
+        return try makeSignedGetRequest(
+            peerURL: peerURL,
+            path: "/api/sync/get-head",
+            queryItems: [URLQueryItem(name: "logbook_id", value: canonicalLogbookId)],
+            localDeviceId: localDeviceId,
+            logbookId: logbookId,
+            authSecret: authSecret,
+            replayNonce: replayNonce
+        )
+    }
+
+    func makeEventsSinceRequest(
+        peerURL: URL,
+        localDeviceId: String,
+        logbookId: String,
+        localHeadHash: String?,
+        authSecret: String,
+        replayNonce: String = UUID().uuidString
+    ) throws -> URLRequest {
+        let canonicalLogbookId = try canonicalUUIDString(logbookId, error: .invalidLogbookID)
+        var queryItems = [URLQueryItem(name: "logbook_id", value: canonicalLogbookId)]
+        if let localHeadHash = localHeadHash?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !localHeadHash.isEmpty {
+            queryItems.append(URLQueryItem(name: "after_hash", value: localHeadHash))
+        }
+        return try makeSignedGetRequest(
+            peerURL: peerURL,
+            path: "/api/sync/events-since",
+            queryItems: queryItems,
+            localDeviceId: localDeviceId,
+            logbookId: logbookId,
+            authSecret: authSecret,
+            replayNonce: replayNonce
+        )
+    }
+
+    func makeSignedGetRequest(
+        peerURL: URL,
+        path: String,
+        queryItems: [URLQueryItem],
+        localDeviceId: String,
+        logbookId: String,
+        authSecret: String,
+        replayNonce: String = UUID().uuidString
+    ) throws -> URLRequest {
+        let canonicalDeviceId = try canonicalUUIDString(localDeviceId, error: .invalidLocalIdentity)
+        let canonicalLogbookId = try canonicalUUIDString(logbookId, error: .invalidLogbookID)
+        let trimmedSecret = authSecret.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedSecret.isEmpty else {
+            throw SyncLanHTTPTransportError.missingLanAuthCredential
+        }
+        let trimmedReplayNonce = replayNonce.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedReplayNonce.isEmpty && trimmedReplayNonce.count <= 128 else {
+            throw SyncLanHTTPTransportError.invalidReplayNonce
+        }
+        guard var components = URLComponents(url: peerURL, resolvingAgainstBaseURL: false),
+              let scheme = components.scheme?.lowercased(),
+              (scheme == "http" || scheme == "https"),
+              components.host != nil,
+              components.query == nil,
+              components.fragment == nil
+        else {
+            throw SyncLanHTTPTransportError.invalidPeerURL
+        }
+        let basePath = components.percentEncodedPath.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        guard basePath.isEmpty else {
+            throw SyncLanHTTPTransportError.invalidPeerURL
+        }
+
+        components.path = path.hasPrefix("/") ? path : "/\(path)"
+        components.queryItems = queryItems
+        guard let url = components.url else {
+            throw SyncLanHTTPTransportError.invalidPeerURL
+        }
+
+        let target = components.percentEncodedPath
+            + (components.percentEncodedQuery.map { "?\($0)" } ?? "")
+        let signature = lanAuthSignature(
+            secret: trimmedSecret,
+            deviceId: canonicalDeviceId,
+            logbookId: canonicalLogbookId,
+            method: "GET",
+            target: target,
+            replayNonce: trimmedReplayNonce
+        )
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.timeoutInterval = 8
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.setValue(canonicalDeviceId, forHTTPHeaderField: syncLanDeviceIDHeader)
+        request.setValue(trimmedReplayNonce, forHTTPHeaderField: syncLanReplayNonceHeader)
+        request.setValue(syncLanAuthSignatureVersion, forHTTPHeaderField: syncLanSignatureVersionHeader)
+        request.setValue(signature, forHTTPHeaderField: syncLanSignatureHeader)
+        return request
+    }
+
+    func validatePeerState(
+        _ state: SyncLanPeerStateResponse,
+        trustedDevice: SyncTrustedPeerDevice
+    ) throws {
+        let expectedDeviceId = try canonicalUUIDString(
+            trustedDevice.deviceId ?? "",
+            error: .untrustedPeer
+        )
+        guard let publishedDeviceId = state.identity?.deviceId else {
+            throw SyncLanHTTPTransportError.missingPeerIdentity
+        }
+        let actualDeviceId = try canonicalUUIDString(
+            publishedDeviceId,
+            error: .invalidPeerPayload
+        )
+        guard expectedDeviceId == actualDeviceId else {
+            throw SyncLanHTTPTransportError.peerIdentityMismatch(
+                expectedDeviceId: expectedDeviceId,
+                actualDeviceId: actualDeviceId
+            )
+        }
+    }
+
+    func pull(
+        peerURL: URL,
+        localIdentity: SyncPeerIdentity,
+        trustedDevice: SyncTrustedPeerDevice,
+        authSecret: String,
+        logbookId: String,
+        localHeadHash: String?
+    ) async throws -> SyncPullResponse {
+        let localDeviceId = localIdentity.deviceId
+        _ = try canonicalUUIDString(localDeviceId, error: .invalidLocalIdentity)
+        _ = try canonicalUUIDString(logbookId, error: .invalidLogbookID)
+        guard !authSecret.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw SyncLanHTTPTransportError.missingLanAuthCredential
+        }
+
+        let stateRequest = try makeStateRequest(peerURL: peerURL)
+        let peerState: SyncLanPeerStateResponse = try await fetchJSON(stateRequest)
+        try validatePeerState(peerState, trustedDevice: trustedDevice)
+
+        let headRequest = try makeHeadRequest(
+            peerURL: peerURL,
+            localDeviceId: localDeviceId,
+            logbookId: logbookId,
+            authSecret: authSecret
+        )
+        let remoteHead: SyncLogbookHeadSummary = try await fetchJSON(headRequest)
+        guard equivalentUUID(remoteHead.logbookId, logbookId) else {
+            throw SyncLanHTTPTransportError.invalidPeerPayload
+        }
+
+        let eventsRequest = try makeEventsSinceRequest(
+            peerURL: peerURL,
+            localDeviceId: localDeviceId,
+            logbookId: logbookId,
+            localHeadHash: localHeadHash,
+            authSecret: authSecret
+        )
+        let range: SyncLanEventRangeResponse = try await fetchJSON(eventsRequest)
+        guard equivalentUUID(range.logbookId, logbookId) else {
+            throw SyncLanHTTPTransportError.invalidPeerPayload
+        }
+        guard range.events.allSatisfy({ equivalentUUID($0.logbookId, logbookId) }) else {
+            throw SyncLanHTTPTransportError.invalidPeerPayload
+        }
+
+        let normalizedLocalHead = localHeadHash?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+        let remoteHeadHash = remoteHead.headHash ?? range.events.last?.eventHash
+        let peerId = trustedDevice.deviceId?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty ?? "lan-peer"
+        let remoteEventCount = remoteHead.eventCount ?? range.events.count
+
+        if normalizedLocalHead == remoteHeadHash {
+            return SyncPullResponse(
+                preview: SyncPullPreview(
+                    peerId: peerId,
+                    logbookId: logbookId,
+                    status: "in_sync",
+                    localHeadHash: normalizedLocalHead,
+                    remoteHeadHash: remoteHeadHash,
+                    missingEventCount: 0,
+                    remoteEventCount: remoteEventCount,
+                    events: [],
+                    message: "Local and LAN peer heads match"
+                ),
+                events: []
+            )
+        }
+
+        guard batchCanFollowLocalHead(range.events, localHeadHash: normalizedLocalHead) else {
+            return SyncPullResponse(
+                preview: SyncPullPreview(
+                    peerId: peerId,
+                    logbookId: logbookId,
+                    status: "diverged",
+                    localHeadHash: normalizedLocalHead,
+                    remoteHeadHash: remoteHeadHash,
+                    missingEventCount: 0,
+                    remoteEventCount: remoteEventCount,
+                    events: [],
+                    message: "LAN peer history does not contain the local head"
+                ),
+                events: []
+            )
+        }
+
+        return SyncPullResponse(
+            preview: SyncPullPreview(
+                peerId: peerId,
+                logbookId: logbookId,
+                status: "remote_ahead",
+                localHeadHash: normalizedLocalHead,
+                remoteHeadHash: remoteHeadHash,
+                missingEventCount: range.events.count,
+                remoteEventCount: remoteEventCount,
+                events: range.events.map(SyncEventMetadata.init(event:)),
+                message: "\(range.events.count) LAN peer events are available to pull"
+            ),
+            events: range.events
+        )
+    }
+
+    private func fetchJSON<T: Decodable>(_ request: URLRequest) async throws -> T {
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw SyncLanHTTPTransportError.invalidHTTPResponse
+        }
+        guard (200..<300).contains(http.statusCode) else {
+            let message = String(data: data, encoding: .utf8) ?? "LAN sync pull failed"
+            throw SyncLanHTTPTransportError.peerRejected(statusCode: http.statusCode, message: message)
+        }
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        return try decoder.decode(T.self, from: data)
+    }
+
+    private func batchCanFollowLocalHead(_ events: [SyncOfficialEvent], localHeadHash: String?) -> Bool {
+        guard let first = events.first else {
+            return false
+        }
+        if let localHeadHash {
+            return first.previousHash == localHeadHash
+        }
+        return first.previousHash == nil
+    }
+
+    private func equivalentUUID(_ left: String, _ right: String) -> Bool {
+        guard let left = UUID(uuidString: left),
+              let right = UUID(uuidString: right)
+        else {
+            return false
+        }
+        return left.uuidString.lowercased() == right.uuidString.lowercased()
+    }
+
+    private func canonicalUUIDString(_ value: String, error: SyncLanHTTPTransportError) throws -> String {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let uuid = UUID(uuidString: trimmed) else {
+            throw error
+        }
+        return uuid.uuidString.lowercased()
+    }
+
+    private func lanAuthSignature(
+        secret: String,
+        deviceId: String,
+        logbookId: String,
+        method: String,
+        target: String,
+        replayNonce: String
+    ) -> String {
+        let message = [
+            syncLanAuthSignatureVersion,
+            deviceId,
+            logbookId,
+            method.uppercased(),
+            target,
+            replayNonce
+        ].joined(separator: "\n")
+        let key = SymmetricKey(data: Data(secret.utf8))
+        let authenticationCode = HMAC<SHA256>.authenticationCode(
+            for: Data(message.utf8),
+            using: key
+        )
+        return authenticationCode.map { String(format: "%02x", $0) }.joined()
+    }
+}
+
+struct SyncLanHTTPPairingTransport: SyncLanPairingTransporting {
+    func makePairingAcceptRequest(
+        peerURL: URL,
+        tokenId: String,
+        pairingCode: String,
+        authSecret: String,
+        localIdentity: SyncPeerIdentity,
+        logbookId: String,
+        publicKeyFingerprint: String? = nil
+    ) throws -> URLRequest {
+        let canonicalTokenId = try canonicalUUIDString(tokenId, error: .invalidPeerPayload)
+        let canonicalDeviceId = try canonicalUUIDString(localIdentity.deviceId, error: .invalidLocalIdentity)
+        let canonicalLogbookId = try canonicalUUIDString(logbookId, error: .invalidLogbookID)
+        let trimmedPairingCode = pairingCode.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedPairingCode.isEmpty else {
+            throw SyncLanHTTPTransportError.invalidPeerPayload
+        }
+        let trimmedAuthSecret = authSecret.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedAuthSecret.isEmpty else {
+            throw SyncLanHTTPTransportError.missingLanAuthCredential
+        }
+        let displayName = localIdentity.displayName
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .nilIfEmpty ?? "KE8YGW Logger iOS"
+
+        guard var components = URLComponents(url: peerURL, resolvingAgainstBaseURL: false),
+              let scheme = components.scheme?.lowercased(),
+              (scheme == "http" || scheme == "https"),
+              components.host != nil,
+              components.query == nil,
+              components.fragment == nil
+        else {
+            throw SyncLanHTTPTransportError.invalidPeerURL
+        }
+        let basePath = components.percentEncodedPath.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        guard basePath.isEmpty else {
+            throw SyncLanHTTPTransportError.invalidPeerURL
+        }
+        components.path = "/api/sync/lan/pairing-accept"
+        guard let url = components.url else {
+            throw SyncLanHTTPTransportError.invalidPeerURL
+        }
+
+        let body = SyncLanPairingAcceptRequestBody(
+            tokenId: canonicalTokenId,
+            pairingCode: trimmedPairingCode,
+            authCode: trimmedAuthSecret,
+            peerDeviceId: canonicalDeviceId,
+            peerDisplayName: displayName,
+            logbookId: canonicalLogbookId,
+            publicKeyFingerprint: publicKeyFingerprint?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .nilIfEmpty
+        )
+        let encoder = JSONEncoder()
+        encoder.keyEncodingStrategy = .convertToSnakeCase
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 8
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try encoder.encode(body)
+        return request
+    }
+
+    func completePairing(
+        peerURL: URL,
+        tokenId: String,
+        pairingCode: String,
+        authSecret: String,
+        localIdentity: SyncPeerIdentity,
+        logbookId: String,
+        publicKeyFingerprint: String?
+    ) async throws -> SyncLanReciprocalPairingResult {
+        let stateRequest = try SyncLanHTTPTransport().makeStateRequest(peerURL: peerURL)
+        let state: SyncLanPeerStateResponse = try await fetchJSON(stateRequest)
+        guard let peerIdentity = state.identity else {
+            throw SyncLanHTTPTransportError.missingPeerIdentity
+        }
+
+        let request = try makePairingAcceptRequest(
+            peerURL: peerURL,
+            tokenId: tokenId,
+            pairingCode: pairingCode,
+            authSecret: authSecret,
+            localIdentity: localIdentity,
+            logbookId: logbookId,
+            publicKeyFingerprint: publicKeyFingerprint
+        )
+        let response: SyncLanPairingAcceptResponse = try await fetchJSON(request)
+        let trustedDevice = try validateRemotePairingResponse(
+            response,
+            localIdentity: localIdentity,
+            logbookId: logbookId
+        )
+
+        return SyncLanReciprocalPairingResult(
+            peerIdentity: peerIdentity,
+            remoteTrustedDevice: trustedDevice
+        )
+    }
+
+    func validateRemotePairingResponse(
+        _ response: SyncLanPairingAcceptResponse,
+        localIdentity: SyncPeerIdentity,
+        logbookId: String
+    ) throws -> SyncTrustedPeerDevice {
+        guard response.ok != false else {
+            throw SyncLanHTTPTransportError.invalidPeerPayload
+        }
+        guard let trustedDevice = response.trustedDevice else {
+            throw SyncLanHTTPTransportError.invalidPeerPayload
+        }
+        guard equivalentUUID(trustedDevice.deviceId ?? "", localIdentity.deviceId) else {
+            throw SyncLanHTTPTransportError.invalidPeerPayload
+        }
+        if let allowedLogbooks = trustedDevice.logbookIds,
+           !allowedLogbooks.isEmpty,
+           !allowedLogbooks.contains(where: { equivalentUUID($0, logbookId) }) {
+            throw SyncLanHTTPTransportError.invalidPeerPayload
+        }
+        return trustedDevice
+    }
+
+    private func fetchJSON<T: Decodable>(_ request: URLRequest) async throws -> T {
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw SyncLanHTTPTransportError.invalidHTTPResponse
+        }
+        guard (200..<300).contains(http.statusCode) else {
+            let message = String(data: data, encoding: .utf8) ?? "LAN pairing failed"
+            throw SyncLanHTTPTransportError.peerRejected(statusCode: http.statusCode, message: message)
+        }
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        return try decoder.decode(T.self, from: data)
+    }
+
+    private func equivalentUUID(_ left: String, _ right: String) -> Bool {
+        guard let left = UUID(uuidString: left),
+              let right = UUID(uuidString: right)
+        else {
+            return false
+        }
+        return left.uuidString.lowercased() == right.uuidString.lowercased()
+    }
+
+    private func canonicalUUIDString(_ value: String, error: SyncLanHTTPTransportError) throws -> String {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let uuid = UUID(uuidString: trimmed) else {
+            throw error
+        }
+        return uuid.uuidString.lowercased()
+    }
+}
+
+struct SyncHTTPTransport: SyncPushTransporting, SyncPullTransporting {
+    func makePushRequest(
+        serverURL: URL,
+        bearerToken: String?,
+        syncToken: String?,
+        endpointStyle: SyncPushEndpointStyle = .logbookScoped,
+        logbookId: String,
+        events: [SyncOfficialEvent]
+    ) throws -> URLRequest {
+        guard !events.isEmpty else {
+            throw SyncHTTPTransportError.emptyEventBatch
+        }
+        guard var components = URLComponents(url: serverURL, resolvingAgainstBaseURL: false),
+              components.scheme != nil,
+              components.host != nil
+        else {
+            throw SyncHTTPTransportError.invalidServerURL
+        }
+
+        let basePath = components.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        let pushPath = endpointStyle.path(logbookId: logbookId)
+        components.path = "/" + ([basePath, pushPath].filter { !$0.isEmpty }.joined(separator: "/"))
+        guard let url = components.url else {
+            throw SyncHTTPTransportError.invalidServerURL
+        }
+
+        let body = SyncPushRequest(
+            auth: syncToken.map { SyncPushAuth(syncToken: $0) },
+            logbookId: logbookId,
+            events: events
+        )
+        let encoder = JSONEncoder()
+        encoder.keyEncodingStrategy = .convertToSnakeCase
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        if let bearerToken, !bearerToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            request.setValue("Bearer \(bearerToken)", forHTTPHeaderField: "Authorization")
+        }
+        request.httpBody = try encoder.encode(body)
+        return request
+    }
+
+    func makePullRequest(
+        serverURL: URL,
+        bearerToken: String?,
+        syncToken: String?,
+        endpointStyle: SyncPullEndpointStyle = .logbookScoped,
+        logbookId: String,
+        localHeadHash: String?
+    ) throws -> URLRequest {
+        guard var components = URLComponents(url: serverURL, resolvingAgainstBaseURL: false),
+              components.scheme != nil,
+              components.host != nil
+        else {
+            throw SyncHTTPTransportError.invalidServerURL
+        }
+
+        let basePath = components.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        let pullPath = endpointStyle.path(logbookId: logbookId)
+        components.path = "/" + ([basePath, pullPath].filter { !$0.isEmpty }.joined(separator: "/"))
+        guard let url = components.url else {
+            throw SyncHTTPTransportError.invalidServerURL
+        }
+
+        let body = SyncPullRequest(
+            auth: syncToken.map { SyncPushAuth(syncToken: $0) },
+            logbookId: logbookId,
+            localHeadHash: localHeadHash
+        )
+        let encoder = JSONEncoder()
+        encoder.keyEncodingStrategy = .convertToSnakeCase
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        if let bearerToken, !bearerToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            request.setValue("Bearer \(bearerToken)", forHTTPHeaderField: "Authorization")
+        }
+        request.httpBody = try encoder.encode(body)
+        return request
+    }
+
+    func push(
+        serverURL: URL,
+        bearerToken: String?,
+        syncToken: String?,
+        endpointStyle: SyncPushEndpointStyle = .logbookScoped,
+        logbookId: String,
+        events: [SyncOfficialEvent]
+    ) async throws -> SyncPushResponse {
+        let request = try makePushRequest(
+            serverURL: serverURL,
+            bearerToken: bearerToken,
+            syncToken: syncToken,
+            endpointStyle: endpointStyle,
+            logbookId: logbookId,
+            events: events
+        )
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw SyncHTTPTransportError.invalidHTTPResponse
+        }
+        guard (200..<300).contains(http.statusCode) else {
+            let message = String(data: data, encoding: .utf8) ?? "sync push failed"
+            throw SyncHTTPTransportError.serverRejected(statusCode: http.statusCode, message: message)
+        }
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        return try decoder.decode(SyncPushResponse.self, from: data)
+    }
+
+    func pull(
+        serverURL: URL,
+        bearerToken: String?,
+        syncToken: String?,
+        endpointStyle: SyncPullEndpointStyle = .logbookScoped,
+        logbookId: String,
+        localHeadHash: String?
+    ) async throws -> SyncPullResponse {
+        let request = try makePullRequest(
+            serverURL: serverURL,
+            bearerToken: bearerToken,
+            syncToken: syncToken,
+            endpointStyle: endpointStyle,
+            logbookId: logbookId,
+            localHeadHash: localHeadHash
+        )
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw SyncHTTPTransportError.invalidHTTPResponse
+        }
+        guard (200..<300).contains(http.statusCode) else {
+            let message = String(data: data, encoding: .utf8) ?? "sync pull failed"
+            throw SyncHTTPTransportError.serverRejected(statusCode: http.statusCode, message: message)
+        }
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        return try decoder.decode(SyncPullResponse.self, from: data)
+    }
+}
+
+private extension String {
+    var nilIfEmpty: String? {
+        isEmpty ? nil : self
+    }
+}
+
+private struct SyncRetryExecutionClassification {
+    var result: SyncRetryResultKind
+    var errorCode: String?
+    var message: String?
+    var acceptedPrefixCount: Int
+}
+
+private enum SyncRetryExecutionClassifier {
+    static func logbookId(from plan: SyncRetryPlan, events: [SyncOfficialEvent]) -> String? {
+        [plan.logbookId, events.first?.logbookId]
+            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .first { !$0.isEmpty }
+    }
+
+    static func classify(response: SyncPushResponse, planCount: Int) -> SyncRetryExecutionClassification {
+        let status = response.status?.lowercased()
+        let rejectedCount = response.rejectedCount ?? 0
+        let errors = response.errors?.filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty } ?? []
+        let success = rejectedCount == 0
+            && errors.isEmpty
+            && status != "rejected"
+            && status != "diverged"
+        if success {
+            return SyncRetryExecutionClassification(
+                result: .accepted,
+                errorCode: nil,
+                message: nil,
+                acceptedPrefixCount: planCount
+            )
+        }
+
+        let acceptedPrefixCount = min(
+            planCount,
+            max(0, (response.acceptedCount ?? 0) + (response.ignoredDuplicateCount ?? 0))
+        )
+        let message = sanitizedMessage(errors.first) ?? "Sync server rejected queued official events."
+        let result = classifyFailure(statusCode: nil, status: status, message: message)
+        return SyncRetryExecutionClassification(
+            result: result,
+            errorCode: defaultErrorCode(for: result),
+            message: messageFor(result: result, fallback: message),
+            acceptedPrefixCount: acceptedPrefixCount
+        )
+    }
+
+    static func classify(error: Error) -> SyncRetryExecutionClassification {
+        if let transportError = error as? SyncHTTPTransportError {
+            switch transportError {
+            case .emptyEventBatch:
+                return SyncRetryExecutionClassification(
+                    result: .missingLocalEvent,
+                    errorCode: "missing_local_official_event",
+                    message: "Rust retry planning did not return local official event envelopes.",
+                    acceptedPrefixCount: 0
+                )
+            case .invalidServerURL:
+                return SyncRetryExecutionClassification(
+                    result: .validationFailed,
+                    errorCode: "invalid_sync_server_url",
+                    message: "Sync server URL is invalid.",
+                    acceptedPrefixCount: 0
+                )
+            case .invalidHTTPResponse:
+                return SyncRetryExecutionClassification(
+                    result: .transientFailure,
+                    errorCode: "invalid_sync_http_response",
+                    message: "Sync server returned an invalid HTTP response.",
+                    acceptedPrefixCount: 0
+                )
+            case .serverRejected(let statusCode, let message):
+                let result = classifyFailure(
+                    statusCode: statusCode,
+                    status: nil,
+                    message: message
+                )
+                return SyncRetryExecutionClassification(
+                    result: result,
+                    errorCode: defaultErrorCode(for: result, statusCode: statusCode),
+                    message: messageFor(
+                        result: result,
+                        fallback: "Sync server rejected the push with HTTP \(statusCode)."
+                    ),
+                    acceptedPrefixCount: 0
+                )
+            }
+        }
+        return SyncRetryExecutionClassification(
+            result: .transientFailure,
+            errorCode: "sync_transport_unavailable",
+            message: "Sync push could not reach the server.",
+            acceptedPrefixCount: 0
+        )
+    }
+
+    static func status(for result: SyncRetryResultKind, acceptedPrefixCount: Int) -> SyncRetryExecutionStatus {
+        if result == .accepted {
+            return .accepted
+        }
+        if acceptedPrefixCount > 0 {
+            return .partialFailureRecorded
+        }
+        switch result {
+        case .transientFailure:
+            return .transientFailureRecorded
+        case .diverged:
+            return .diverged
+        case .missingLocalEvent:
+            return .missingTransportEventsRecorded
+        case .accepted:
+            return .accepted
+        case .authFailed, .validationFailed, .permanentFailure:
+            return .userActionRequired
+        }
+    }
+
+    private static func classifyFailure(statusCode: Int?, status: String?, message: String) -> SyncRetryResultKind {
+        if statusCode == 401 || statusCode == 403 {
+            return .authFailed
+        }
+        if statusCode == 409 || status == "diverged" {
+            return .diverged
+        }
+        if statusCode == 400 || statusCode == 422 {
+            return .validationFailed
+        }
+        if let statusCode, statusCode >= 500 {
+            return .transientFailure
+        }
+
+        let lowercased = message.lowercased()
+        if lowercased.contains("unauthorized")
+            || lowercased.contains("forbidden")
+            || lowercased.contains("auth")
+            || lowercased.contains("revoked")
+            || lowercased.contains("token") {
+            return .authFailed
+        }
+        if lowercased.contains("diverg")
+            || lowercased.contains("previous hash")
+            || lowercased.contains("remote chain")
+            || lowercased.contains("local head") {
+            return .diverged
+        }
+        if lowercased.contains("invalid")
+            || lowercased.contains("hash")
+            || lowercased.contains("schema")
+            || lowercased.contains("unsupported")
+            || lowercased.contains("logbook")
+            || lowercased.contains("event id") {
+            return .validationFailed
+        }
+        return .permanentFailure
+    }
+
+    private static func defaultErrorCode(for result: SyncRetryResultKind, statusCode: Int? = nil) -> String {
+        if let statusCode {
+            return "sync_http_\(statusCode)"
+        }
+        switch result {
+        case .accepted:
+            return "accepted"
+        case .transientFailure:
+            return "sync_transport_unavailable"
+        case .authFailed:
+            return "auth_failed"
+        case .validationFailed:
+            return "validation_failed"
+        case .diverged:
+            return "diverged"
+        case .missingLocalEvent:
+            return "missing_local_official_event"
+        case .permanentFailure:
+            return "permanent_failure"
+        }
+    }
+
+    private static func messageFor(result: SyncRetryResultKind, fallback: String) -> String {
+        switch result {
+        case .authFailed:
+            return "Sync authorization failed."
+        case .diverged:
+            return "Sync peer history diverged; manual review is required."
+        case .validationFailed:
+            return "Sync peer rejected queued official events during validation."
+        case .transientFailure:
+            return "Sync push could not be completed; retry will be scheduled."
+        case .missingLocalEvent:
+            return "Rust retry planning did not return local official event envelopes."
+        case .permanentFailure:
+            return sanitizedMessage(fallback) ?? "Sync peer permanently rejected queued official events."
+        case .accepted:
+            return "Sync peer accepted queued official events."
+        }
+    }
+
+    private static func sanitizedMessage(_ message: String?) -> String? {
+        guard let message else { return nil }
+        var trimmed = message
+            .replacingOccurrences(of: "\r", with: " ")
+            .replacingOccurrences(of: "\n", with: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        if trimmed.count > 240 {
+            trimmed = String(trimmed.prefix(240)) + "..."
+        }
+        return trimmed
+    }
+}
+
+struct SyncRetryResultBridgeRequest: Encodable {
+    var appSupportDir: String
+    var logbookId: String?
+    var operationIds: [String]
+    var acceptedEventHashes: [String]
+    var result: SyncRetryResultKind
+    var errorCode: String?
+    var message: String?
+}
+
+struct SyncRetryResultBridgeResult: Decodable {
+    var retryResult: SyncRetryResultSummary
+    var affectedMutations: [SyncOfflineMutation]
+    var offlineQueue: SyncOfflineQueueSnapshot
+}
+
+struct SyncRemoteEventsApplyBridgeRequest: Encodable {
+    var appSupportDir: String
+    var logbookId: String?
+    var peerId: String?
+    var events: [SyncOfficialEvent]
+}
+
+struct SyncRemoteEventsApplyBridgeResult: Decodable {
+    var pull: SyncPullApplyResponse
+    var sync: SyncSnapshot
+    var projection: RustProjectionStatus?
+}
+
+struct SyncPullApplyResponse: Decodable, Equatable {
+    var peerId: String
+    var logbookId: String
+    var status: String
+    var acceptedCount: Int
+    var ignoredDuplicateCount: Int
+    var rejectedCount: Int
+    var localHeadHash: String?
+    var remoteHeadHash: String?
+    var errors: [String]
+}
+
+struct SyncRetryResultSummary: Decodable {
+    var schemaVersion: Int?
+    var logbookId: String?
+    var result: SyncRetryResultKind
+    var operationIds: [String]
+    var acceptedCount: Int
+    var errorCode: String?
+    var message: String?
+}
+
+enum SyncRetryResultKind: String, Codable {
+    case accepted
+    case transientFailure = "transient_failure"
+    case authFailed = "auth_failed"
+    case validationFailed = "validation_failed"
+    case diverged
+    case missingLocalEvent = "missing_local_event"
+    case permanentFailure = "permanent_failure"
 }
 
 struct DiagnosticsSnapshot: Decodable {
@@ -1274,6 +4358,17 @@ struct QSOBridgeMutationResult: Decodable {
     var sync: RustSyncMutationStatus?
 }
 
+struct QSOListBridgeRequest: Codable {
+    var appSupportDir: String
+    var logbookId: String?
+    var includeDeleted: Bool
+}
+
+struct QSOListBridgeResult: Decodable {
+    var records: [RustQSORecord]
+    var projection: RustProjectionStatus?
+}
+
 struct RustOfficialEvent: Decodable {
     var eventId: String
     var eventType: String
@@ -1294,33 +4389,33 @@ struct RustQSORecord: Decodable {
 }
 
 struct RustQSOPayload: Decodable {
-    var contactedCallsign: String?
-    var stationCallsign: String?
-    var operatorCallsign: String?
-    var startedAt: String?
-    var mode: String?
-    var band: String?
-    var submode: String?
-    var frequencyHz: UInt64?
-    var frequencyMhz: Double?
-    var rstSent: String?
-    var rstReceived: String?
-    var powerWatts: Double?
-    var stationProfileId: String?
-    var equipmentSummary: String?
-    var grid: String?
-    var county: String?
-    var name: String?
-    var qth: String?
-    var state: String?
-    var country: String?
-    var qsoKind: String?
-    var contestExchange: String?
-    var satelliteName: String?
-    var potaReferences: String?
-    var sotaReferences: String?
-    var notes: String?
-    var clientOperationId: String?
+    var contactedCallsign: String? = nil
+    var stationCallsign: String? = nil
+    var operatorCallsign: String? = nil
+    var startedAt: String? = nil
+    var mode: String? = nil
+    var band: String? = nil
+    var submode: String? = nil
+    var frequencyHz: UInt64? = nil
+    var frequencyMhz: Double? = nil
+    var rstSent: String? = nil
+    var rstReceived: String? = nil
+    var powerWatts: Double? = nil
+    var stationProfileId: String? = nil
+    var equipmentSummary: String? = nil
+    var grid: String? = nil
+    var county: String? = nil
+    var name: String? = nil
+    var qth: String? = nil
+    var state: String? = nil
+    var country: String? = nil
+    var qsoKind: String? = nil
+    var contestExchange: String? = nil
+    var satelliteName: String? = nil
+    var potaReferences: String? = nil
+    var sotaReferences: String? = nil
+    var notes: String? = nil
+    var clientOperationId: String? = nil
 }
 
 struct RustProjectionStatus: Decodable {
@@ -1461,6 +4556,7 @@ struct RustProviderValidationSettings: Codable, Equatable {
 struct RustSyncSettings: Codable, Equatable {
     var syncServerUrl: String
     var deviceName: String
+    var syncEndpointStyle: String?
     var preferLanSync: Bool
     var autoPushEnabled: Bool
     var autoPullEnabled: Bool

@@ -39,6 +39,7 @@
 		20000000000000000000010E /* Features/Diagnostics/DiagnosticsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 20000000000000000000000E /* Features/Diagnostics/DiagnosticsView.swift */; };
 		200000000000000000000201 /* RustBridgeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000021 /* RustBridgeTests.swift */; };
 		300000000000000000000102 /* Shared/Services/ProjectionRefreshService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 300000000000000000000002 /* Shared/Services/ProjectionRefreshService.swift */; };
+		400000000000000000000201 /* ProjectionRefreshServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 400000000000000000000021 /* ProjectionRefreshServiceTests.swift */; };
 		FAAEDEAD2FFCAE2E007249F1 /* appicon.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = FAAEDEAC2FFCAE2E007249F1 /* appicon.xcassets */; };
 /* End PBXBuildFile section */
 
@@ -88,6 +89,7 @@
 		20000000000000000000000E /* Features/Diagnostics/DiagnosticsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Features/Diagnostics/DiagnosticsView.swift; sourceTree = "<group>"; };
 		200000000000000000000021 /* RustBridgeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RustBridgeTests.swift; sourceTree = "<group>"; };
 		300000000000000000000002 /* Shared/Services/ProjectionRefreshService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Shared/Services/ProjectionRefreshService.swift; sourceTree = "<group>"; };
+		400000000000000000000021 /* ProjectionRefreshServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectionRefreshServiceTests.swift; sourceTree = "<group>"; };
 		FAAEDEAC2FFCAE2E007249F1 /* appicon.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = appicon.xcassets; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -153,6 +155,7 @@
 				100000000000000000000021 /* HamRadioUtilitiesTests.swift */,
 				100000000000000000000022 /* ExportServiceTests.swift */,
 				200000000000000000000021 /* RustBridgeTests.swift */,
+				400000000000000000000021 /* ProjectionRefreshServiceTests.swift */,
 			);
 			path = KE8YGWLoggerTests;
 			sourceTree = "<group>";
@@ -346,6 +349,7 @@
 				100000000000000000000201 /* HamRadioUtilitiesTests.swift in Sources */,
 				100000000000000000000202 /* ExportServiceTests.swift in Sources */,
 				200000000000000000000201 /* RustBridgeTests.swift in Sources */,
+				400000000000000000000201 /* ProjectionRefreshServiceTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -487,7 +491,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 2;
 				DEVELOPMENT_TEAM = R4B2HA4TUA;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = NO;
@@ -501,7 +505,7 @@
 					"$(inherited)",
 					"$(SRCROOT)/../../artifacts/ios/link/$(CONFIGURATION)$(EFFECTIVE_PLATFORM_NAME)",
 				);
-				MARKETING_VERSION = 0.2.0;
+				MARKETING_VERSION = 0.3.0;
 				OTHER_LDFLAGS = (
 					"$(inherited)",
 					"-lham_ios_ffi",
@@ -521,7 +525,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 2;
 				DEVELOPMENT_TEAM = R4B2HA4TUA;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = NO;
@@ -535,7 +539,7 @@
 					"$(inherited)",
 					"$(SRCROOT)/../../artifacts/ios/link/$(CONFIGURATION)$(EFFECTIVE_PLATFORM_NAME)",
 				);
-				MARKETING_VERSION = 0.2.0;
+				MARKETING_VERSION = 0.3.0;
 				OTHER_LDFLAGS = (
 					"$(inherited)",
 					"-lham_ios_ffi",

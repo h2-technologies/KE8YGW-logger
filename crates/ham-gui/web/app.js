@@ -33,6 +33,9 @@ const state = {
   importSummary: null,
   backupState: { lastBackup: null, dryRun: null, importResult: null },
   divergenceReview: null,
+  conflictReview: null,
+  selectedConflictReviewId: null,
+  lanPairingIssued: null,
   reportPreview: null,
   lastReport: null,
   syncState: null,
@@ -1076,12 +1079,16 @@ function renderDivergencePanel() {
 }
 
 function renderDivergenceReviewScreen() {
+  const selectedReview = selectedConflictReview();
   return `<div class="stack">
     <div class="monitor-actions">
       <button id="divergence-refresh" class="toolbar-button" type="button">Refresh Review</button>
+      <button id="divergence-save-review" class="toolbar-button" type="button">Save Manual Review</button>
       <button id="divergence-export" class="toolbar-button" type="button">Export Report</button>
     </div>
     ${state.divergenceReview ? renderDivergenceReview(state.divergenceReview) : `<p class="muted">Refresh to inspect current sync head state.</p>`}
+    ${renderConflictReviewList()}
+    ${selectedReview ? renderConflictReviewRecord(selectedReview) : ""}
   </div>`;
 }
 
@@ -1096,12 +1103,201 @@ function renderDivergenceReview(review) {
     <p>Revoked device state: ${review.revoked_device_state || "unknown"}</p>
     <p><strong>Recommended action:</strong> ${escapeHtml(review.recommended_action || "No action available.")}</p>
     ${review.divergence_detected ? `<p class="event-error">Automatic merge is intentionally unavailable. Export this report for manual review.</p>` : ""}
+    ${review.conflict_report ? renderConflictReport(review.conflict_report) : ""}
+  </div>`;
+}
+
+function conflictReviewSnapshot() {
+  return state.syncState?.conflict_reviews || { health: { total: 0, open: 0, resolved: 0 }, reviews: [] };
+}
+
+function conflictReviewList() {
+  return [...(conflictReviewSnapshot().reviews || [])].sort((left, right) => {
+    if (reviewStatus(left) !== reviewStatus(right)) return isOpenReview(left) ? -1 : 1;
+    return String(right.updated_at || right.created_at || "").localeCompare(String(left.updated_at || left.created_at || ""));
+  });
+}
+
+function findConflictReview(reviewId) {
+  return conflictReviewList().find((review) => review.review_id === reviewId) || null;
+}
+
+function reviewStatus(review) {
+  return String(review?.status || "").toLowerCase();
+}
+
+function isOpenReview(review) {
+  return reviewStatus(review) === "open";
+}
+
+function selectedConflictReview() {
+  const selected = state.selectedConflictReviewId ? findConflictReview(state.selectedConflictReviewId) : null;
+  if (selected) return selected;
+  const current = state.conflictReview?.review_id ? findConflictReview(state.conflictReview.review_id) || state.conflictReview : null;
+  if (current) return current;
+  return conflictReviewList().find(isOpenReview) || conflictReviewList()[0] || null;
+}
+
+function conflictKindLabel(kind) {
+  return String(kind || "manual_review_required")
+    .replace(/_/g, " ")
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function resolutionLabel(choice) {
+  const labels = {
+    keep_local_history: "Keep Local History",
+    pull_remote_after_review: "Record Pull Approval",
+    retry_after_dependency_arrives: "Retry After Dependency",
+    mark_user_action_required: "Mark User Action",
+  };
+  return labels[choice] || conflictKindLabel(choice);
+}
+
+function reportAllowsPullAfterReview(report) {
+  return Boolean(
+    report?.logbook_id &&
+      report.status !== "diverged" &&
+      (report.conflicts || []).every((conflict) => conflict.safe_auto_merge),
+  );
+}
+
+function reportHasMissingDependency(report) {
+  return Boolean(report && (report.conflicts || []).some((conflict) => conflict.kind === "missing_dependency"));
+}
+
+function renderConflictReviewList() {
+  const snapshot = conflictReviewSnapshot();
+  const reviews = conflictReviewList();
+  return `<div class="sync-summary">
+    <p><strong>Saved reviews:</strong> open ${snapshot.health?.open || 0} / resolved ${snapshot.health?.resolved || 0} / total ${snapshot.health?.total || 0}</p>
+    ${
+      reviews.length
+        ? `<div class="conflict-review-list">
+            ${reviews
+              .map((review) => {
+                const selected = selectedConflictReview()?.review_id === review.review_id ? " is-selected" : "";
+                const conflictCount = review.report?.conflicts?.length || 0;
+                return `<button class="event-row${selected}" type="button" data-conflict-review-id="${escapeHtml(review.review_id)}">
+                  <span class="event-main">
+                    <strong>${escapeHtml(review.report?.status || "unknown")}</strong>
+                    <span>${conflictCount} conflicts / ${escapeHtml(review.report?.peer_id || "unknown peer")}</span>
+                  </span>
+                  <span class="event-meta">
+                    <span class="severity severity-${isOpenReview(review) ? "warn" : "info"}">${escapeHtml(review.status)}</span>
+                    <small>${escapeHtml(review.updated_at || review.created_at || "unknown")}</small>
+                  </span>
+                </button>`;
+              })
+              .join("")}
+          </div>`
+        : `<p class="muted">No saved conflict reviews.</p>`
+    }
+  </div>`;
+}
+
+function renderConflictReviewRecord(review) {
+  const report = review.report || {};
+  const selectedResolution = review.selected_resolution?.choice || "not selected";
+  const pullAllowed = reportAllowsPullAfterReview(report);
+  const dependencyRetryAllowed = reportHasMissingDependency(report);
+  return `<div class="sync-summary">
+    <p><strong>Saved review:</strong> ${escapeHtml(review.status)} / <small>${escapeHtml(review.review_id)}</small></p>
+    <p>Resolution: ${escapeHtml(review.selected_resolution?.choice || "not selected")}</p>
+    <p>Created: ${escapeHtml(review.created_at || "unknown")} / resolved: ${escapeHtml(review.resolved_at || "open")}</p>
+    ${renderConflictReport(report)}
+    ${
+      isOpenReview(review)
+        ? `<div class="conflict-resolution-panel">
+            <label>Operator Note
+              <textarea id="conflict-resolution-note" class="placeholder-control conflict-note" maxlength="4096">${escapeHtml(
+                review.selected_resolution?.operator_note || "",
+              )}</textarea>
+            </label>
+            <div class="monitor-actions">
+              <button id="divergence-keep-local" class="toolbar-button" type="button">${resolutionLabel("keep_local_history")}</button>
+              <button id="divergence-pull-reviewed" class="toolbar-button" type="button" ${pullAllowed ? "" : "disabled"}>${resolutionLabel("pull_remote_after_review")}</button>
+              <button id="divergence-retry-dependency" class="toolbar-button" type="button" ${dependencyRetryAllowed ? "" : "disabled"}>${resolutionLabel("retry_after_dependency_arrives")}</button>
+              <button id="divergence-mark-action" class="toolbar-button" type="button">${resolutionLabel("mark_user_action_required")}</button>
+            </div>
+            <form id="conflict-corrective-form" class="qso-form">
+              <label>Corrective QSO
+                <input id="conflict-corrective-qso-id" class="placeholder-control" list="conflict-qso-options" />
+              </label>
+              <datalist id="conflict-qso-options">
+                ${(state.qsos || [])
+                  .map((qso) => `<option value="${escapeHtml(qso.qso_id)}">${escapeHtml(qso.payload?.contacted_callsign || qso.qso_id)}</option>`)
+                  .join("")}
+              </datalist>
+              <label>Corrective Note
+                <textarea id="conflict-corrective-note" class="placeholder-control conflict-note"></textarea>
+              </label>
+              <label>Review Note
+                <textarea id="conflict-corrective-review-note" class="placeholder-control conflict-note">Resolved with a corrective QSO note event.</textarea>
+              </label>
+              <button class="toolbar-button" type="submit">Create Corrective Note Event</button>
+            </form>
+          </div>`
+        : `<p><strong>Selected recovery:</strong> ${escapeHtml(selectedResolution)}</p>`
+    }
+  </div>`;
+}
+
+function renderConflictReport(report) {
+  if (!report) return "";
+  const conflicts = report.conflicts || [];
+  return `<div class="conflict-report">
+    <p><strong>Peer:</strong> ${escapeHtml(report.peer_id || "unknown")} / <strong>Status:</strong> ${escapeHtml(report.status || "unknown")}</p>
+    <p><strong>Logbook:</strong> <small>${escapeHtml(report.logbook_id || "unknown")}</small></p>
+    <p><strong>Local head:</strong> <small>${escapeHtml(report.local_head_hash || "genesis")}</small></p>
+    <p><strong>Remote head:</strong> <small>${escapeHtml(report.remote_head_hash || "unknown")}</small></p>
+    <p><strong>Missing events:</strong> ${report.missing_event_count || 0} / <strong>Pending operations:</strong> ${report.pending_operation_count || 0}</p>
+    <p><strong>Recommended action:</strong> ${escapeHtml(report.recommended_action || "Review required.")}</p>
+    <div class="conflict-list">
+      ${
+        conflicts.length
+          ? conflicts
+              .map(
+                (conflict) => `<div class="conflict-item">
+                  <p><strong>${escapeHtml(conflictKindLabel(conflict.kind))}</strong> <span class="severity severity-${conflict.requires_user_action ? "warn" : "info"}">${conflict.requires_user_action ? "action" : "review"}</span></p>
+                  <p>${escapeHtml(conflict.message || "")}</p>
+                  <p>Safe automatic merge: ${conflict.safe_auto_merge ? "yes" : "no"}</p>
+                  <p>Options: ${(conflict.resolution_options || []).map((option) => `<span class="pill">${escapeHtml(option)}</span>`).join("") || "none"}</p>
+                  ${
+                    conflict.related_operation_ids?.length
+                      ? `<p>Operations: ${conflict.related_operation_ids.map((id) => `<small>${escapeHtml(id)}</small>`).join(" ")}</p>`
+                      : ""
+                  }
+                  ${
+                    conflict.related_event_hashes?.length
+                      ? `<p>Events: ${conflict.related_event_hashes.map((hash) => `<small>${escapeHtml(hash)}</small>`).join(" ")}</p>`
+                      : ""
+                  }
+                </div>`,
+              )
+              .join("")
+          : `<p class="muted">No structured conflicts.</p>`
+      }
+    </div>
   </div>`;
 }
 
 function bindDivergenceControls() {
   byId("divergence-refresh")?.addEventListener("click", refreshDivergenceReview);
+  byId("divergence-save-review")?.addEventListener("click", saveConflictReview);
+  byId("conflict-corrective-form")?.addEventListener("submit", createCorrectiveConflictNote);
+  byId("divergence-mark-action")?.addEventListener("click", () => resolveConflictReview("mark_user_action_required"));
+  byId("divergence-keep-local")?.addEventListener("click", () => resolveConflictReview("keep_local_history"));
+  byId("divergence-pull-reviewed")?.addEventListener("click", () => resolveConflictReview("pull_remote_after_review"));
+  byId("divergence-retry-dependency")?.addEventListener("click", () => resolveConflictReview("retry_after_dependency_arrives"));
   byId("divergence-export")?.addEventListener("click", exportDivergenceReportFromScreen);
+  document.querySelectorAll("[data-conflict-review-id]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.selectedConflictReviewId = button.dataset.conflictReviewId;
+      state.conflictReview = findConflictReview(state.selectedConflictReviewId);
+      openScreen("divergence-review");
+    });
+  });
 }
 
 function redactionSummaryText(summary) {
@@ -1260,9 +1456,16 @@ function bindPanelControls() {
     start.addEventListener("click", startDiscovery);
     byId("sync-stop-discovery").addEventListener("click", stopDiscovery);
     byId("sync-refresh-peers").addEventListener("click", refreshPeers);
+    byId("sync-add-peer").addEventListener("click", addManualPeer);
     byId("sync-handshake").addEventListener("click", handshakeSelectedPeer);
     byId("sync-preview-pull").addEventListener("click", previewPullSelectedPeer);
     byId("sync-pull-events").addEventListener("click", pullSelectedPeer);
+    byId("sync-issue-pairing").addEventListener("click", issueLanPairingCode);
+    byId("sync-trust-peer").addEventListener("click", trustSelectedPeer);
+    byId("sync-generate-auth-code")?.addEventListener("click", generateSelectedPeerAuthCode);
+    byId("sync-rotate-auth").addEventListener("click", rotateSelectedPeerAuth);
+    byId("sync-revoke-peer").addEventListener("click", revokeSelectedPeer);
+    byId("sync-recover-queue").addEventListener("click", recoverOfflineQueue);
     byId("sync-copy-identity").addEventListener("click", copyLocalSyncIdentity);
     byId("cloud-connect").addEventListener("click", connectCloudSyncFromPrompt);
     byId("cloud-push").addEventListener("click", pushCloudEvents);
@@ -2942,9 +3145,22 @@ async function importBackupFromScreen() {
 }
 
 async function refreshDivergenceReview() {
-  state.divergenceReview = await fetch("/api/sync/divergence/review").then((response) => response.json());
+  const [divergenceReview, conflictReviews] = await Promise.all([
+    fetch("/api/sync/divergence/review").then((response) => response.json()),
+    fetch("/api/sync/conflict-reviews").then((response) => response.json()),
+  ]);
+  state.divergenceReview = divergenceReview;
+  if (!state.syncState) await refreshSyncState();
+  if (conflictReviews.ok && state.syncState) {
+    state.syncState.conflict_reviews = conflictReviews.conflict_reviews;
+    state.syncState.conflict_reviews_error = null;
+  } else if (state.syncState) {
+    state.syncState.conflict_reviews_error = conflictReviews.error || "conflict review state unavailable";
+  }
+  const selected = selectedConflictReview();
+  state.selectedConflictReviewId = selected?.review_id || state.selectedConflictReviewId;
+  state.conflictReview = selected || state.conflictReview;
   openScreen("divergence-review");
-  render();
 }
 
 async function openDivergenceReview() {
@@ -2964,6 +3180,93 @@ async function exportDivergenceReportFromScreen() {
   openScreen("divergence-review");
 }
 
+async function saveConflictReview() {
+  const result = await syncPost("/api/sync/conflict-reviews/create");
+  if (result.ok === false) {
+    state.importSummary = result;
+    openScreen("divergence-review");
+    return;
+  }
+  state.conflictReview = result.conflict_review || state.conflictReview;
+  state.selectedConflictReviewId = state.conflictReview?.review_id || state.selectedConflictReviewId;
+  state.importSummary = state.conflictReview || result;
+  openScreen("divergence-review");
+}
+
+async function resolveConflictReview(choice) {
+  const review = await ensureOpenConflictReview();
+  if (!review) return;
+  const note = byId("conflict-resolution-note")?.value || "";
+  const result = await syncPost("/api/sync/conflict-reviews/resolve", {
+    review_id: review.review_id,
+    resolution: {
+      choice,
+      operator_note: note || "",
+      corrective_event_hashes: [],
+      resolved_by_device_id: state.syncState?.identity?.device_id || null,
+    },
+  });
+  if (result.ok === false) {
+    state.importSummary = result;
+    openScreen("divergence-review");
+    return;
+  }
+  state.conflictReview = result.conflict_review || state.conflictReview;
+  state.selectedConflictReviewId = state.conflictReview?.review_id || state.selectedConflictReviewId;
+  state.importSummary = state.conflictReview || result;
+  openScreen("divergence-review");
+}
+
+async function createCorrectiveConflictNote(event) {
+  event?.preventDefault();
+  const review = await ensureOpenConflictReview();
+  if (!review) return;
+  const qsoId = byId("conflict-corrective-qso-id")?.value?.trim();
+  const note = byId("conflict-corrective-note")?.value?.trim();
+  const reviewNote = byId("conflict-corrective-review-note")?.value || "";
+  if (!qsoId || !note) {
+    state.importSummary = { ok: false, error: "corrective QSO ID and note are required" };
+    openScreen("divergence-review");
+    return;
+  }
+  const result = await syncPost("/api/sync/conflict-reviews/corrective-events", {
+    review_id: review.review_id,
+    operator_note: reviewNote || "",
+    proposals: [
+      {
+        proposal_type: "proposal.qso.note.add",
+        entity_id: qsoId.trim(),
+        payload: {
+          note: note.trim(),
+        },
+      },
+    ],
+  });
+  if (result.ok === false) {
+    state.importSummary = result;
+    openScreen("divergence-review");
+    return;
+  }
+  state.conflictReview = result.conflict_review || state.conflictReview;
+  state.selectedConflictReviewId = state.conflictReview?.review_id || state.selectedConflictReviewId;
+  state.importSummary = result.conflict_review || result;
+  await refreshQsos();
+  openScreen("divergence-review");
+}
+
+async function ensureOpenConflictReview() {
+  const selected = selectedConflictReview();
+  if (isOpenReview(selected)) return selected;
+  const openReview = (state.syncState?.conflict_reviews?.reviews || []).find(isOpenReview);
+  if (openReview) {
+    state.conflictReview = openReview;
+    state.selectedConflictReviewId = openReview.review_id;
+    return openReview;
+  }
+  await saveConflictReview();
+  return isOpenReview(state.conflictReview) ? state.conflictReview : null;
+}
+
 async function verifyLogChain() {
   state.importSummary = await fetch("/api/log/verify").then((response) => response.json());
   openScreen("import-summary");
@@ -2978,9 +3281,19 @@ async function rebuildProjections() {
 function renderSyncStatus() {
   const sync = state.syncState;
   if (!sync) return `<p class="muted">Sync state loading.</p>`;
+  const queue = sync.offline_queue?.health || {};
+  const reviews = sync.conflict_reviews?.health || {};
+  const trustedDevices = sync.lan_trust?.trusted_devices || [];
+  const trustedCount = trustedDevices.filter((device) => !device.revoked_at).length;
   return `<div class="sync-panel">
     <p><strong>LAN discovery:</strong> ${sync.discovery_running ? "running" : "stopped"}</p>
     <p><strong>Local identity:</strong> ${sync.identity.display_name}<br /><small>${sync.identity.device_id}</small></p>
+    <div class="qso-form">
+      <label>Peer HTTP URL
+        <input id="sync-peer-address" class="placeholder-control" placeholder="http://127.0.0.1:9468" />
+      </label>
+      <button id="sync-add-peer" class="toolbar-button" type="button">Add Peer</button>
+    </div>
     <div class="monitor-actions">
       <button id="sync-start-discovery" class="toolbar-button" type="button">Start</button>
       <button id="sync-stop-discovery" class="toolbar-button" type="button">Stop</button>
@@ -2989,6 +3302,31 @@ function renderSyncStatus() {
       <button id="sync-preview-pull" class="toolbar-button" type="button">Preview Pull</button>
       <button id="sync-pull-events" class="toolbar-button" type="button">Pull Missing</button>
       <button id="sync-copy-identity" class="toolbar-button" type="button">Copy Identity</button>
+    </div>
+    <div class="sync-summary">
+      <p><strong>Offline queue:</strong> total ${queue.total || 0} / pending ${queue.pending || 0} / retrying ${queue.retrying || 0} / blocked ${queue.blocked || 0} / failed ${queue.failed || 0} / action ${queue.user_action_required || 0}</p>
+      <p><strong>Ready:</strong> ${queue.ready_to_send || 0} / accepted ${queue.accepted || 0}</p>
+      ${sync.offline_queue_error ? `<p class="event-error">${sync.offline_queue_error}</p>` : ""}
+      <div class="monitor-actions">
+        <button id="sync-recover-queue" class="toolbar-button" type="button">Recover Queue</button>
+      </div>
+    </div>
+    <div class="sync-summary">
+      <p><strong>Conflict reviews:</strong> open ${reviews.open || 0} / resolved ${reviews.resolved || 0} / total ${reviews.total || 0}</p>
+      ${sync.conflict_reviews_error ? `<p class="event-error">${sync.conflict_reviews_error}</p>` : ""}
+      <div class="monitor-actions">
+        <button class="toolbar-button" type="button" onclick="openDivergenceReview()">Open Review</button>
+      </div>
+    </div>
+    ${renderLanPairingPanel(sync)}
+    <div class="sync-summary">
+      <p><strong>LAN trust:</strong> ${trustedCount} trusted / ${(sync.lan_trust?.trusted_devices || []).length} known devices</p>
+      ${sync.lan_trust_error ? `<p class="event-error">${sync.lan_trust_error}</p>` : ""}
+      ${
+        trustedDevices.length
+          ? `<pre class="path-block">${JSON.stringify(trustedDevices, null, 2)}</pre>`
+          : `<p class="muted">No trusted LAN peers yet.</p>`
+      }
     </div>
     <div class="sync-summary">
       <p><strong>Cloud:</strong> ${sync.cloud_connection_state} / ${sync.cloud_config?.sync_server_url || "not configured"}</p>
@@ -3049,6 +3387,49 @@ function renderSyncStatus() {
   </div>`;
 }
 
+function renderLanPairingPanel(sync) {
+  const peer = selectedPeer();
+  const trustedDevice = selectedTrustedDevice();
+  const issued = state.lanPairingIssued;
+  const activeTokens = (sync.lan_trust?.pairing_tokens || []).filter((token) => !token.consumed_at);
+  return `<div class="sync-summary">
+    <p><strong>LAN pairing:</strong> ${peer ? escapeHtml(peer.display_name) : "select or add a peer first"}</p>
+    <p><strong>Active local tokens:</strong> ${activeTokens.length}</p>
+    ${
+      issued
+        ? `<div class="lan-pairing-issued">
+            <p><strong>Give this one-time code to the other device.</strong></p>
+            <p>Token ID: <small>${escapeHtml(issued.token_id)}</small></p>
+            <p>Pairing code: <code>${escapeHtml(issued.pairing_code)}</code></p>
+            <p>Expires: ${escapeHtml(issued.expires_at || "unknown")}</p>
+          </div>`
+        : `<p class="muted">Issue a local token here, or enter a peer token and code to complete reciprocal trust.</p>`
+    }
+    <div class="qso-form lan-pairing-grid">
+      <button id="sync-issue-pairing" class="toolbar-button" type="button">Issue Local Code</button>
+      <label>Peer Token ID
+        <input id="sync-pairing-token-id" class="placeholder-control" autocomplete="off" />
+      </label>
+      <label>Peer Pairing Code
+        <input id="sync-pairing-code" class="placeholder-control" autocomplete="off" spellcheck="false" />
+      </label>
+      <label>Peer Public-Key Fingerprint
+        <input id="sync-pairing-fingerprint" class="placeholder-control" autocomplete="off" />
+      </label>
+      <button id="sync-trust-peer" class="toolbar-button" type="button" ${peer ? "" : "disabled"}>Complete Pairing</button>
+    </div>
+    <div class="qso-form lan-pairing-grid">
+      <p><strong>Selected trusted peer:</strong> ${trustedDevice ? `${escapeHtml(trustedDevice.display_name)} / <small>${escapeHtml(trustedDevice.device_id)}</small>` : "none"}</p>
+      <label>Replacement LAN Auth Code
+        <input id="sync-rotate-auth-code" class="placeholder-control" autocomplete="off" spellcheck="false" />
+      </label>
+      <button id="sync-generate-auth-code" class="toolbar-button" type="button" ${trustedDevice ? "" : "disabled"}>Generate Code</button>
+      <button id="sync-rotate-auth" class="toolbar-button" type="button" ${trustedDevice ? "" : "disabled"}>Rotate Auth</button>
+      <button id="sync-revoke-peer" class="toolbar-button" type="button" ${trustedDevice ? "" : "disabled"}>Revoke Selected</button>
+    </div>
+  </div>`;
+}
+
 async function refreshSyncState() {
   state.syncState = await fetch("/api/sync/state").then((response) => response.json());
 }
@@ -3078,6 +3459,19 @@ function refreshPeers() {
   syncPost("/api/sync/peers/refresh");
 }
 
+async function addManualPeer() {
+  const address = byId("sync-peer-address")?.value?.trim();
+  if (!address) return;
+  const result = await syncPost("/api/sync/peers/add", { address });
+  state.importSummary = result.peer_identity || result;
+  if (result.peer_identity) {
+    await refreshSyncState();
+    const peer = (state.syncState?.peers || []).find((candidate) => candidate.device_id === result.peer_identity.device_id);
+    if (peer) state.selectedPeerId = peer.peer_id;
+  }
+  render();
+}
+
 function handshakeSelectedPeer() {
   syncPost("/api/sync/handshake", { peer_id: state.selectedPeerId });
 }
@@ -3088,10 +3482,104 @@ async function previewPullSelectedPeer() {
 }
 
 async function pullSelectedPeer() {
-  const result = await syncPost("/api/sync/pull-events", { peer_id: state.selectedPeerId });
+  const result = await syncPost("/api/sync/pull-events", { peer_id: state.selectedPeerId, replay_nonce: randomNonce() });
   state.importSummary = result.pull || result;
   await refreshQsos();
   render();
+}
+
+async function issueLanPairingCode() {
+  const pairing = await syncPost("/api/sync/lan/pairing-token", {
+    approved_by_operator: true,
+    display_name: state.syncState?.identity?.display_name || "KE8YGW Logger Local",
+  });
+  state.lanPairingIssued = pairing.pairing || null;
+  state.importSummary = pairing.pairing || pairing;
+  render();
+}
+
+async function trustSelectedPeer() {
+  const peer = selectedPeer();
+  if (!peer) return;
+  const tokenId = byId("sync-pairing-token-id")?.value?.trim();
+  const pairingCode = byId("sync-pairing-code")?.value?.trim();
+  const publicKeyFingerprint = byId("sync-pairing-fingerprint")?.value?.trim() || null;
+  if (!tokenId || !pairingCode) {
+    state.importSummary = { ok: false, error: "peer token ID and pairing code are required" };
+    render();
+    return;
+  }
+  const authCode = strongLocalAuthCode();
+  const trusted = await syncPost("/api/sync/lan/pairing-complete", {
+    peer_id: peer.peer_id,
+    token_id: tokenId,
+    pairing_code: pairingCode,
+    auth_code: authCode,
+    public_key_fingerprint: publicKeyFingerprint,
+  });
+  state.importSummary = trusted.trusted_device || trusted;
+  render();
+}
+
+async function revokeSelectedPeer() {
+  const peer = selectedPeer();
+  if (!peer) return;
+  const result = await syncPost("/api/sync/lan/revoke", { device_id: peer.device_id });
+  state.importSummary = result.trusted_device || result;
+  render();
+}
+
+async function rotateSelectedPeerAuth() {
+  const trustedDevice = selectedTrustedDevice();
+  if (!trustedDevice) return;
+  const pairingCode = byId("sync-rotate-auth-code")?.value?.trim();
+  if (!pairingCode) {
+    state.importSummary = { ok: false, error: "replacement LAN auth code is required" };
+    render();
+    return;
+  }
+  const result = await syncPost("/api/sync/lan/rotate-auth", {
+    device_id: trustedDevice.device_id,
+    pairing_code: pairingCode,
+  });
+  state.importSummary = result.rotation || result.trusted_device || result;
+  render();
+}
+
+function generateSelectedPeerAuthCode() {
+  const input = byId("sync-rotate-auth-code");
+  if (!input) return;
+  input.value = strongLocalAuthCode();
+  input.focus();
+  input.select?.();
+}
+
+async function recoverOfflineQueue() {
+  const result = await syncPost("/api/sync/offline-queue/recover");
+  state.importSummary = result.offline_queue || result;
+}
+
+function selectedPeer() {
+  const peers = state.syncState?.peers || [];
+  return peers.find((peer) => peer.peer_id === state.selectedPeerId) || peers[0] || null;
+}
+
+function selectedTrustedDevice() {
+  const trustedDevices = (state.syncState?.lan_trust?.trusted_devices || []).filter((device) => !device.revoked_at);
+  const peer = selectedPeer();
+  return trustedDevices.find((device) => device.device_id === peer?.device_id) || trustedDevices[0] || null;
+}
+
+function randomNonce() {
+  if (window.crypto?.randomUUID) return window.crypto.randomUUID();
+  return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function strongLocalAuthCode() {
+  if (window.crypto?.randomUUID) {
+    return `${window.crypto.randomUUID().replace(/-/g, "")}${window.crypto.randomUUID().replace(/-/g, "")}`;
+  }
+  return `${Date.now().toString(36)}${Math.random().toString(36).slice(2)}${Math.random().toString(36).slice(2)}`;
 }
 
 function copyLocalSyncIdentity() {

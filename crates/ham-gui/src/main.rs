@@ -2,11 +2,11 @@ use std::{
     collections::HashMap,
     env, fs,
     io::{BufRead, BufReader, Read, Write},
-    net::{TcpListener, TcpStream},
+    net::{IpAddr, SocketAddr, TcpListener, TcpStream},
     process,
     sync::{Arc, Mutex},
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use ham_core::{
@@ -24,39 +24,60 @@ use ham_core::{
     MapLayerStack, MockRigProvider, NetControlProjection, NewLogbookEvent, NotificationSeverity,
     OnlineAutomationTask, OnlineNotification, OnlineProviderStatus, OperatorRole,
     PermissionGrantSet, PermissionGrantStatus, PermissionRegistry, PermissionSettings,
-    PotaSpotRecord, Projection, ProposalContext, RigConnectionStatus, RigDevice, RigProvider,
-    RigProviderStatus, RigState, RuntimeEventFilter, RuntimeEventSeverity, RuntimeLogConfig,
-    ServiceCache, ServiceCacheEntry, ServiceRegistry, ServiceRegistrySnapshot, StationBook,
-    StationConfiguration, StationProfile, UploadQueue, UploadTarget,
+    PotaSpotRecord, Projection, ProposalContext, ProposalOutcome, RigConnectionStatus, RigDevice,
+    RigProvider, RigProviderStatus, RigState, RuntimeEventFilter, RuntimeEventSeverity,
+    RuntimeLogConfig, ServiceCache, ServiceCacheEntry, ServiceRegistry, ServiceRegistrySnapshot,
+    StationBook, StationConfiguration, StationProfile, UploadQueue, UploadTarget,
 };
 use ham_gui::{
     mock::{capability_labels, mock_plugins},
     CommandRegistry, GuiRuntimeBridge, GuiShellState, RuntimeBridgeStatus, RuntimeEventInput,
 };
 use ham_plugin_sdk::{
-    PluginCapability, PluginManifest, ProposalEnvelope, ServiceType, PROPOSAL_ACTIVATION_END,
-    PROPOSAL_ACTIVATION_START, PROPOSAL_NET_CHECKIN_CREATE, PROPOSAL_NET_CHECKIN_DELETE,
-    PROPOSAL_NET_REPORT_EXPORT, PROPOSAL_NET_SESSION_END, PROPOSAL_NET_SESSION_START,
-    PROPOSAL_NET_TRAFFIC_CREATE, PROPOSAL_QSO_ACTIVATION_LINK, PROPOSAL_QSO_CREATE,
-    PROPOSAL_QSO_DELETE, PROPOSAL_QSO_NOTE_ADD, PROPOSAL_QSO_RESTORE,
+    PluginCapability, PluginManifest, ProposalEnvelope, ServiceType, PROPOSAL_ACTIVATION_CANCEL,
+    PROPOSAL_ACTIVATION_CREATE, PROPOSAL_ACTIVATION_END, PROPOSAL_ACTIVATION_NOTE_ADD,
+    PROPOSAL_ACTIVATION_START, PROPOSAL_ACTIVATION_UPDATE, PROPOSAL_NET_CHECKIN_CREATE,
+    PROPOSAL_NET_CHECKIN_DELETE, PROPOSAL_NET_CHECKIN_UPDATE, PROPOSAL_NET_REPORT_EXPORT,
+    PROPOSAL_NET_SESSION_CANCEL, PROPOSAL_NET_SESSION_END, PROPOSAL_NET_SESSION_START,
+    PROPOSAL_NET_TEMPLATE_CREATE, PROPOSAL_NET_TEMPLATE_UPDATE, PROPOSAL_NET_TRAFFIC_CREATE,
+    PROPOSAL_NET_TRAFFIC_UPDATE, PROPOSAL_QSO_ACTIVATION_LINK, PROPOSAL_QSO_ACTIVATION_UNLINK,
+    PROPOSAL_QSO_CORRECT, PROPOSAL_QSO_CREATE, PROPOSAL_QSO_DELETE, PROPOSAL_QSO_NOTE_ADD,
+    PROPOSAL_QSO_RESTORE,
 };
 use ham_sync::{
-    build_handshake_response, metadata_for_event, preview_pull_from_events, pull_missing_events,
-    CloudAuth, CloudConnectionState, CloudPreviewPullRequest, CloudPullEventsRequest,
-    CloudPullEventsResponse, CloudPushEventsRequest, CloudPushEventsResponse, CloudServerConfig,
-    CloudSyncConfig, CloudSyncStatusResponse, DiagnosticReportUploadRequest,
-    DiagnosticReportUploadResponse, DiagnosticReportUploadType, DiscoveryPacket,
-    GetEventMetadataResponse, GetEventRangeResponse, HandshakeRequest, InMemoryCloudSyncServer,
-    ListLogbooksResponse, LocalPeerIdentity, LogbookHeadSummary, PairDeviceRequest,
-    PeerObservation, PeerRecord, PeerRegistry, PreviewPullRequest, PreviewPullResponse,
-    PullEventsRequest, PullEventsResponse, ReplicationStatus, SyncConfig, PROTOCOL_VERSION,
+    build_handshake_response, conflict_report_from_preview, lan_auth_signature, metadata_for_event,
+    preview_pull_from_events, pull_missing_events, verify_lan_auth_signature, CloudAuth,
+    CloudConnectionState, CloudPreviewPullRequest, CloudPullEventsRequest, CloudPullEventsResponse,
+    CloudPushEventsRequest, CloudPushEventsResponse, CloudServerConfig, CloudSyncConfig,
+    CloudSyncStatusResponse, ConflictReviewSnapshot, ConflictReviewStatus,
+    DiagnosticReportUploadRequest, DiagnosticReportUploadResponse, DiagnosticReportUploadType,
+    DiscoveryPacket, GetEventMetadataResponse, GetEventRangeResponse, HandshakeRequest,
+    InMemoryCloudSyncServer, JsonConflictReviewStore, JsonLanTrustStore,
+    JsonLocalSyncIdentityStore, JsonOfflineMutationQueue, LanDiscoveryService,
+    LanPairingAcceptance, LanPeerTrustUpdate, LanTrustSnapshot, ListLogbooksResponse,
+    LocalPeerIdentity, LogbookHeadSummary, ManualConflictResolution,
+    ManualConflictResolutionChoice, OfflineMutationEnvelope, OfflineMutationInput,
+    OfflineQueueSnapshot, PairDeviceRequest, PeerObservation, PeerRecord, PeerRegistry,
+    PreviewPullRequest, PreviewPullResponse, PullEventsRequest, PullEventsResponse,
+    ReplicationStatus, SyncConfig, SyncConflictReport, LAN_AUTH_SIGNATURE_VERSION,
+    MAX_CONFLICT_REVIEW_NOTE_BYTES, OFFLINE_OP_ACTIVATION_END, OFFLINE_OP_ACTIVATION_START,
+    OFFLINE_OP_NET_CHECKIN_CREATE, OFFLINE_OP_NET_CHECKIN_DELETE, OFFLINE_OP_NET_SESSION_END,
+    OFFLINE_OP_NET_SESSION_START, OFFLINE_OP_NET_TRAFFIC_CREATE, OFFLINE_OP_QSO_CORRECT,
+    OFFLINE_OP_QSO_CREATE, OFFLINE_OP_QSO_DELETE, OFFLINE_OP_QSO_NOTE_ADD, OFFLINE_OP_QSO_RESTORE,
+    OFFLINE_OP_STATION_PROFILE_SELECT, PROTOCOL_NAME, PROTOCOL_VERSION,
 };
-use serde::{Deserialize, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Value};
 
 const INDEX_HTML: &str = include_str!("../web/index.html");
 const APP_CSS: &str = include_str!("../web/styles.css");
 const APP_JS: &str = include_str!("../web/app.js");
+const LAN_DISCOVERY_LISTEN_WINDOW: Duration = Duration::from_millis(750);
+const LAN_DISCOVERY_SLEEP_SLICE: Duration = Duration::from_millis(250);
+const LAN_AUTH_DEVICE_ID_HEADER: &str = "x-ke8ygw-lan-device-id";
+const LAN_AUTH_REPLAY_NONCE_HEADER: &str = "x-ke8ygw-lan-replay-nonce";
+const LAN_AUTH_SIGNATURE_VERSION_HEADER: &str = "x-ke8ygw-lan-signature-version";
+const LAN_AUTH_SIGNATURE_HEADER: &str = "x-ke8ygw-lan-signature";
 
 fn main() {
     let addr = env::args()
@@ -109,6 +130,35 @@ fn main() {
         JsonSupportStore::<RigUiConfig>::new(support_dir.join("rig-config.json"));
     let online_support_store =
         JsonSupportStore::<OnlineSupportState>::new(support_dir.join("online-support.json"));
+    let offline_queue = JsonOfflineMutationQueue::new(support_dir.join("offline-mutations.json"));
+    let conflict_review_store =
+        JsonConflictReviewStore::new(support_dir.join("conflict-reviews.json"));
+    let lan_trust_store = JsonLanTrustStore::new(support_dir.join("lan-trust.json"));
+    let local_sync_identity_store =
+        JsonLocalSyncIdentityStore::new(support_dir.join("local-sync-identity.json"));
+    let local_api_port = local_api_port_from_bound_addr(&bound_addr);
+    let sync_identity = match local_sync_identity_store.load_or_create(
+        "KE8YGW Logger Local",
+        local_api_port,
+        chrono::Utc::now(),
+    ) {
+        Ok(identity) => identity,
+        Err(error) => {
+            let _ = bridge.publish(RuntimeEventInput {
+                event_type: "sync.local_identity.load_failed".to_owned(),
+                severity: RuntimeEventSeverity::Warn,
+                source: "ham-sync".to_owned(),
+                source_plugin_id: None,
+                workspace_id: Some("dashboard".to_owned()),
+                payload_summary:
+                    "Local sync identity could not be loaded; using an ephemeral identity"
+                        .to_owned(),
+                redacted_payload: None,
+                error: Some(error.to_string()),
+            });
+            LocalPeerIdentity::new("KE8YGW Logger Local", local_api_port)
+        }
+    };
     let mut station_book = station_store.load().unwrap_or_default();
     if station_book.profiles.is_empty() {
         seed_default_station_book(&mut station_book);
@@ -295,13 +345,46 @@ fn main() {
         OnlineSupportState::default(),
         "online support",
     );
+    match offline_queue.recover_or_initialize(chrono::Utc::now()) {
+        Ok(recovery) if recovery != Default::default() => {
+            let _ = bridge.publish(RuntimeEventInput {
+                event_type: "sync.offline_queue.recovered".to_owned(),
+                severity: RuntimeEventSeverity::Info,
+                source: "ham-sync".to_owned(),
+                source_plugin_id: None,
+                workspace_id: Some("dashboard".to_owned()),
+                payload_summary: format!(
+                    "Recovered offline sync queue state: {} interrupted attempts, {} migrated legacy entries",
+                    recovery.recovered_interrupted_writes, recovery.migrated_legacy_mutations
+                ),
+                redacted_payload: Some(json!({"recovery": recovery})),
+                error: None,
+            });
+        }
+        Ok(_) => {}
+        Err(error) => {
+            let _ = bridge.publish(RuntimeEventInput {
+                event_type: "sync.offline_queue.recovery_failed".to_owned(),
+                severity: RuntimeEventSeverity::Warn,
+                source: "ham-sync".to_owned(),
+                source_plugin_id: None,
+                workspace_id: Some("dashboard".to_owned()),
+                payload_summary: "Offline queue recovery failed".to_owned(),
+                redacted_payload: None,
+                error: Some(error.to_string()),
+            });
+        }
+    }
 
     let state = Arc::new(AppState {
         bridge,
         store,
         logbook_id,
         proposal_runtime,
-        sync: Mutex::new(SyncUiState::new(bound_addr.clone())),
+        sync: Mutex::new(SyncUiState::new(sync_identity)),
+        offline_queue,
+        conflict_review_store,
+        lan_trust_store,
         cloud_server: InMemoryCloudSyncServer::new(CloudServerConfig::default()),
         lookup_cache: LookupCache::new(),
         lookup_config: Mutex::new(lookup_config),
@@ -342,6 +425,9 @@ struct AppState {
     logbook_id: uuid::Uuid,
     proposal_runtime: tokio::runtime::Runtime,
     sync: Mutex<SyncUiState>,
+    offline_queue: JsonOfflineMutationQueue,
+    conflict_review_store: JsonConflictReviewStore,
+    lan_trust_store: JsonLanTrustStore,
     cloud_server: InMemoryCloudSyncServer,
     lookup_cache: LookupCache,
     lookup_config: Mutex<LookupUiConfig>,
@@ -433,6 +519,7 @@ struct SyncUiState {
     identity: LocalPeerIdentity,
     registry: PeerRegistry,
     discovery_running: bool,
+    discovery_generation: u64,
     latest_handshake: Option<ham_sync::HandshakeResponse>,
     latest_preview: Option<PreviewPullResponse>,
     latest_pull: Option<PullEventsResponse>,
@@ -453,15 +540,13 @@ struct SyncUiState {
 }
 
 impl SyncUiState {
-    fn new(bound_addr: String) -> Self {
-        let port = bound_addr
-            .rsplit_once(':')
-            .and_then(|(_, port)| port.parse::<u16>().ok());
+    fn new(identity: LocalPeerIdentity) -> Self {
         Self {
             config: SyncConfig::default(),
-            identity: LocalPeerIdentity::new("KE8YGW Logger Local", port),
+            identity,
             registry: PeerRegistry::default(),
             discovery_running: false,
+            discovery_generation: 0,
             latest_handshake: None,
             latest_preview: None,
             latest_pull: None,
@@ -485,6 +570,12 @@ impl SyncUiState {
             warning_count: 0,
         }
     }
+}
+
+fn local_api_port_from_bound_addr(bound_addr: &str) -> Option<u16> {
+    bound_addr
+        .rsplit_once(':')
+        .and_then(|(_, port)| port.parse::<u16>().ok())
 }
 
 fn seed_default_station_book(book: &mut StationBook) {
@@ -642,18 +733,37 @@ fn handle_client(state: Arc<AppState>, mut stream: TcpStream) {
                 .clone(),
         ),
         ("GET", "/api/sync/state") => json_response(&sync_state_payload(&state)),
-        ("GET", "/api/sync/list-logbooks") => json_response(&ListLogbooksResponse {
-            logbooks: vec![logbook_head_summary(&state)],
-        }),
-        ("GET", "/api/sync/get-head") => json_response(&logbook_head_summary(&state)),
-        ("GET", "/api/sync/events-since") => handle_sync_events_since(&state, query),
-        ("GET", "/api/sync/event-metadata") => handle_sync_event_metadata(&state, query),
+        ("GET", "/api/sync/list-logbooks") => handle_sync_list_logbooks(&state, &request),
+        ("GET", "/api/sync/get-head") => handle_sync_get_head(&state, query, &request),
+        ("GET", "/api/sync/events-since") => handle_sync_events_since(&state, query, &request),
+        ("GET", "/api/sync/event-metadata") => handle_sync_event_metadata(&state, query, &request),
         ("POST", "/api/sync/discovery/start") => handle_sync_discovery(&state, true),
         ("POST", "/api/sync/discovery/stop") => handle_sync_discovery(&state, false),
         ("POST", "/api/sync/peers/refresh") => handle_sync_refresh(&state),
+        ("POST", "/api/sync/peers/add") => handle_sync_add_peer(&state, &request.body),
         ("POST", "/api/sync/handshake") => handle_sync_handshake(&state, &request.body),
         ("POST", "/api/sync/preview-pull") => handle_sync_preview_pull(&state, &request.body),
         ("POST", "/api/sync/pull-events") => handle_sync_pull_events(&state, &request.body),
+        ("GET", "/api/sync/offline-queue") => handle_offline_queue_state(&state),
+        ("POST", "/api/sync/offline-queue/recover") => handle_offline_queue_recover(&state),
+        ("GET", "/api/sync/conflict-reviews") => handle_conflict_reviews_state(&state),
+        ("POST", "/api/sync/conflict-reviews/create") => handle_conflict_review_create(&state),
+        ("POST", "/api/sync/conflict-reviews/resolve") => {
+            handle_conflict_review_resolve(&state, &request.body)
+        }
+        ("POST", "/api/sync/conflict-reviews/corrective-events") => {
+            handle_conflict_review_corrective_events(&state, &request.body)
+        }
+        ("GET", "/api/sync/lan/trust") => handle_lan_trust_state(&state),
+        ("POST", "/api/sync/lan/pairing-token") => handle_lan_pairing_token(&state, &request.body),
+        ("POST", "/api/sync/lan/pairing-accept") => {
+            handle_lan_pairing_accept(&state, &request.body)
+        }
+        ("POST", "/api/sync/lan/pairing-complete") => {
+            handle_lan_pairing_complete(&state, &request.body)
+        }
+        ("POST", "/api/sync/lan/rotate-auth") => handle_lan_auth_rotate(&state, &request.body),
+        ("POST", "/api/sync/lan/revoke") => handle_lan_trust_revoke(&state, &request.body),
         ("POST", "/api/sync/cloud/connect") => handle_cloud_connect(&state, &request.body),
         ("POST", "/api/sync/cloud/push") => handle_cloud_push(&state),
         ("POST", "/api/sync/cloud/preview-pull") => handle_cloud_preview_pull(&state),
@@ -688,6 +798,7 @@ fn handle_client(state: Arc<AppState>, mut stream: TcpStream) {
 struct HttpRequest {
     method: String,
     target: String,
+    headers: HashMap<String, String>,
     body: Vec<u8>,
 }
 
@@ -699,6 +810,7 @@ fn read_http_request(reader: &mut BufReader<&mut TcpStream>) -> std::io::Result<
     let target = parts.next().unwrap_or("/").to_owned();
 
     let mut content_length = 0usize;
+    let mut headers = HashMap::new();
     loop {
         let mut header = String::new();
         reader.read_line(&mut header)?;
@@ -707,9 +819,12 @@ fn read_http_request(reader: &mut BufReader<&mut TcpStream>) -> std::io::Result<
             break;
         }
         if let Some((name, value)) = header.split_once(':') {
+            let name = name.trim().to_ascii_lowercase();
+            let value = value.trim().to_owned();
             if name.eq_ignore_ascii_case("content-length") {
-                content_length = value.trim().parse().unwrap_or(0);
+                content_length = value.parse().unwrap_or(0);
             }
+            headers.insert(name, value);
         }
     }
 
@@ -721,6 +836,7 @@ fn read_http_request(reader: &mut BufReader<&mut TcpStream>) -> std::io::Result<
     Ok(HttpRequest {
         method,
         target,
+        headers,
         body,
     })
 }
@@ -1002,6 +1118,80 @@ struct MapLayerToggleRequest {
 #[derive(Debug, Deserialize)]
 struct HandshakePeerRequest {
     peer_id: Option<String>,
+    replay_nonce: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ManualLanPeerRequest {
+    address: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct LanPairingTokenRequest {
+    approved_by_operator: bool,
+    display_name: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct LanPairingAcceptRequest {
+    token_id: uuid::Uuid,
+    pairing_code: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    auth_code: Option<String>,
+    peer_device_id: uuid::Uuid,
+    peer_display_name: String,
+    logbook_id: Option<uuid::Uuid>,
+    public_key_fingerprint: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct LanPairingCompleteRequest {
+    peer_id: Option<String>,
+    token_id: uuid::Uuid,
+    pairing_code: String,
+    #[serde(default)]
+    auth_code: Option<String>,
+    public_key_fingerprint: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct LanTrustRevokeRequest {
+    device_id: uuid::Uuid,
+}
+
+#[derive(Debug, Deserialize)]
+struct LanAuthRotateRequest {
+    device_id: uuid::Uuid,
+    pairing_code: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LanEndpointAuth {
+    device_id: uuid::Uuid,
+    replay_nonce: String,
+    signature: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct ConflictReviewResolveRequest {
+    review_id: uuid::Uuid,
+    resolution: ManualConflictResolution,
+}
+
+#[derive(Debug, Deserialize)]
+struct ConflictReviewCorrectiveEventsRequest {
+    review_id: uuid::Uuid,
+    operator_note: Option<String>,
+    #[serde(default)]
+    proposals: Vec<CorrectiveProposalRequest>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CorrectiveProposalRequest {
+    proposal_type: String,
+    entity_id: Option<uuid::Uuid>,
+    #[serde(default)]
+    payload: Value,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1031,6 +1221,12 @@ struct SyncStatePayload {
     local_head: LogbookHeadSummary,
     remote_head: Option<LogbookHeadSummary>,
     divergence: Option<String>,
+    offline_queue: Option<OfflineQueueSnapshot>,
+    offline_queue_error: Option<String>,
+    conflict_reviews: Option<ConflictReviewSnapshot>,
+    conflict_reviews_error: Option<String>,
+    lan_trust: Option<LanTrustSnapshot>,
+    lan_trust_error: Option<String>,
     cloud_config: CloudSyncConfig,
     cloud_connection_state: CloudConnectionState,
     cloud_account_id: Option<String>,
@@ -1042,6 +1238,39 @@ struct SyncStatePayload {
     last_cloud_pull_time: Option<String>,
     cloud_divergence: Option<String>,
     warning_count: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CloudPushMode {
+    Manual,
+    AutoDrainQueueOnly,
+}
+
+impl CloudPushMode {
+    fn queue_only(self) -> bool {
+        matches!(self, Self::AutoDrainQueueOnly)
+    }
+
+    fn started_event_type(self) -> &'static str {
+        match self {
+            Self::Manual => "sync.cloud.push.started",
+            Self::AutoDrainQueueOnly => "sync.cloud.auto_push.started",
+        }
+    }
+
+    fn completed_event_type(self) -> &'static str {
+        match self {
+            Self::Manual => "sync.cloud.push.completed",
+            Self::AutoDrainQueueOnly => "sync.cloud.auto_push.completed",
+        }
+    }
+
+    fn failed_event_type(self) -> &'static str {
+        match self {
+            Self::Manual => "sync.cloud.push.failed",
+            Self::AutoDrainQueueOnly => "sync.cloud.auto_push.failed",
+        }
+    }
 }
 
 fn json_response<T: Serialize>(payload: &T) -> Vec<u8> {
@@ -1072,6 +1301,9 @@ fn response_with_headers(
         200 => "OK",
         404 => "Not Found",
         400 => "Bad Request",
+        403 => "Forbidden",
+        409 => "Conflict",
+        502 => "Bad Gateway",
         500 => "Internal Server Error",
         _ => "OK",
     };
@@ -1277,6 +1509,7 @@ fn pota_sota_manifest() -> PluginManifest {
             PluginCapability::ActivationCreate,
             PluginCapability::ActivationUpdate,
             PluginCapability::ActivationEnd,
+            PluginCapability::ActivationCancel,
             PluginCapability::QsoCreate,
             PluginCapability::QsoCorrect,
             PluginCapability::QsoNoteAdd,
@@ -2748,14 +2981,60 @@ fn handle_station_select_profile(state: &AppState, body: &[u8]) -> Vec<u8> {
     let Ok(request) = serde_json::from_slice::<StationProfileSelectRequest>(body) else {
         return json_error(400, "invalid station profile selection JSON");
     };
+    let now = chrono::Utc::now();
+    let device_id = state.bridge.status().device_id;
+    let offline_mutation = match state.offline_queue.enqueue_input(
+        OfflineMutationInput::new(
+            state.logbook_id,
+            device_id,
+            device_id,
+            OFFLINE_OP_STATION_PROFILE_SELECT,
+            json!({"station_profile_id": request.station_profile_id}),
+        )
+        .with_idempotency_key(format!(
+            "station.profile.select:{}:{}",
+            request.station_profile_id,
+            uuid::Uuid::new_v4()
+        )),
+        now,
+    ) {
+        Ok(mutation) => mutation,
+        Err(error) => {
+            return json_response_with_status(
+                500,
+                &json!({"ok": false, "error": format!("failed to persist offline mutation before station update: {error}")}),
+            )
+        }
+    };
     let mut book = state
         .station_book
         .lock()
         .expect("station book mutex should not be poisoned");
     if let Err(error) = book.select_profile(request.station_profile_id) {
+        let _ = state.offline_queue.mark_user_action_required(
+            offline_mutation.operation_id,
+            error.to_string(),
+            Some("station_profile_invalid".to_owned()),
+            chrono::Utc::now(),
+        );
         return json_error(400, error.to_string());
     }
-    let _ = state.station_store.save(&book);
+    if let Err(error) = state.station_store.save(&book) {
+        let _ = state.offline_queue.mark_user_action_required(
+            offline_mutation.operation_id,
+            error.to_string(),
+            Some("station_support_save_failed".to_owned()),
+            chrono::Utc::now(),
+        );
+        return json_response_with_status(
+            500,
+            &json!({"ok": false, "error": format!("failed to save station support state: {error}")}),
+        );
+    }
+    let accepted_mutation = state
+        .offline_queue
+        .mark_accepted(offline_mutation.operation_id, chrono::Utc::now())
+        .unwrap_or(offline_mutation);
     let _ = publish_gui_runtime(
         state,
         "station.profile.selected",
@@ -2764,7 +3043,7 @@ fn handle_station_select_profile(state: &AppState, body: &[u8]) -> Vec<u8> {
         Some(json!({"station_profile_id": request.station_profile_id})),
         None,
     );
-    json_response(&json!({"ok": true, "station": &*book}))
+    json_response(&json!({"ok": true, "station": &*book, "offline_mutation": accepted_mutation}))
 }
 
 fn handle_awards(state: &AppState) -> Vec<u8> {
@@ -3427,24 +3706,17 @@ fn submit_net_proposal(
     entity_id: Option<uuid::Uuid>,
     payload: Value,
 ) -> Vec<u8> {
-    let proposal = ProposalEnvelope::new(
+    let result = submit_offline_tracked_proposal(
+        state,
         proposal_type,
-        state.logbook_id,
         entity_id,
         Some(uuid::Uuid::new_v4()),
-        state.bridge.status().device_id,
         "plugin.net-control",
-        1,
+        net_control_context(state),
         payload,
     );
-    let result = state.proposal_runtime.block_on(submit_proposal(
-        state.store.as_ref(),
-        &state.bridge,
-        &net_control_context(state),
-        proposal,
-    ));
     match result {
-        Ok(outcome) => {
+        Ok((outcome, offline_mutation, offline_queue_warning)) => {
             let event_name = match proposal_type {
                 PROPOSAL_NET_SESSION_START => "net.session.started",
                 PROPOSAL_NET_SESSION_END => "net.session.ended",
@@ -3464,9 +3736,13 @@ fn submit_net_proposal(
                 })),
                 None,
             );
-            json_response(
-                &json!({"ok": true, "event": outcome.official_event, "net": net_control_payload(state)}),
-            )
+            json_response(&json!({
+                "ok": true,
+                "event": outcome.official_event,
+                "offline_mutation": offline_mutation,
+                "offline_queue_warning": offline_queue_warning,
+                "net": net_control_payload(state)
+            }))
         }
         Err(error) => {
             let _ = publish_gui_runtime(
@@ -3477,7 +3753,7 @@ fn submit_net_proposal(
                 None,
                 Some(error.to_string()),
             );
-            json_response_with_status(400, &json!({"ok": false, "error": error.to_string()}))
+            json_response_with_status(400, &json!({"ok": false, "error": error}))
         }
     }
 }
@@ -3609,54 +3885,43 @@ fn handle_qso_create_with_activation(state: &AppState, body: &[u8]) -> Vec<u8> {
             payload["grid"] = json!(grid);
         }
     }
-    let proposal = ProposalEnvelope::new(
+    let (qso, offline_mutation, offline_queue_warning) = match submit_offline_tracked_proposal(
+        state,
         PROPOSAL_QSO_CREATE,
-        state.logbook_id,
         None,
         None,
-        state.bridge.status().device_id,
         "plugin.pota-sota",
-        1,
+        pota_sota_context(state),
         payload,
-    );
-    let qso = match state.proposal_runtime.block_on(submit_proposal(
-        state.store.as_ref(),
-        &state.bridge,
-        &pota_sota_context(state),
-        proposal,
-    )) {
-        Ok(outcome) => outcome,
-        Err(error) => {
-            return json_response_with_status(
-                400,
-                &json!({"ok": false, "error": error.to_string()}),
-            )
+    ) {
+        Ok((outcome, offline_mutation, offline_queue_warning)) => {
+            (outcome, offline_mutation, offline_queue_warning)
         }
+        Err(error) => return json_response_with_status(400, &json!({"ok": false, "error": error})),
     };
     if let (Some(active), Some(qso_id)) = (
         activation_projection_payload(state).active_activation,
         qso.official_event.entity_id,
     ) {
-        let link = ProposalEnvelope::new(
+        let link_payload = json!({"activation_id": active.activation_id});
+        let _ = submit_offline_tracked_proposal(
+            state,
             PROPOSAL_QSO_ACTIVATION_LINK,
-            state.logbook_id,
             Some(qso_id),
             None,
-            state.bridge.status().device_id,
             "plugin.pota-sota",
-            1,
-            json!({"activation_id": active.activation_id}),
+            pota_sota_context(state),
+            link_payload,
         );
-        let _ = state.proposal_runtime.block_on(submit_proposal(
-            state.store.as_ref(),
-            &state.bridge,
-            &pota_sota_context(state),
-            link,
-        ));
     }
-    json_response(
-        &json!({"ok": true, "event": qso.official_event, "projection": qso_projection_payload(state, "include_deleted=true"), "activations": activation_projection_payload(state)}),
-    )
+    json_response(&json!({
+        "ok": true,
+        "event": qso.official_event,
+        "offline_mutation": offline_mutation,
+        "offline_queue_warning": offline_queue_warning,
+        "projection": qso_projection_payload(state, "include_deleted=true"),
+        "activations": activation_projection_payload(state)
+    }))
 }
 
 fn apply_accepted_lookup_fields(payload: &mut Value, request: &CreateQsoRequest) {
@@ -3744,6 +4009,142 @@ fn apply_active_station_defaults(state: &AppState, payload: &mut Value) {
     book.apply_defaults_to_qso_payload(payload);
 }
 
+fn offline_operation_type_for_proposal(proposal_type: &str) -> String {
+    match proposal_type {
+        PROPOSAL_QSO_CREATE => OFFLINE_OP_QSO_CREATE,
+        PROPOSAL_QSO_CORRECT => OFFLINE_OP_QSO_CORRECT,
+        PROPOSAL_QSO_DELETE => OFFLINE_OP_QSO_DELETE,
+        PROPOSAL_QSO_RESTORE => OFFLINE_OP_QSO_RESTORE,
+        PROPOSAL_QSO_NOTE_ADD => OFFLINE_OP_QSO_NOTE_ADD,
+        PROPOSAL_ACTIVATION_START => OFFLINE_OP_ACTIVATION_START,
+        PROPOSAL_ACTIVATION_END => OFFLINE_OP_ACTIVATION_END,
+        PROPOSAL_NET_SESSION_START => OFFLINE_OP_NET_SESSION_START,
+        PROPOSAL_NET_SESSION_END => OFFLINE_OP_NET_SESSION_END,
+        PROPOSAL_NET_CHECKIN_CREATE => OFFLINE_OP_NET_CHECKIN_CREATE,
+        PROPOSAL_NET_CHECKIN_DELETE => OFFLINE_OP_NET_CHECKIN_DELETE,
+        PROPOSAL_NET_TRAFFIC_CREATE => OFFLINE_OP_NET_TRAFFIC_CREATE,
+        _ => proposal_type,
+    }
+    .to_owned()
+}
+
+fn corrective_context_for_proposal(
+    state: &AppState,
+    proposal_type: &str,
+) -> Result<(&'static str, ProposalContext), String> {
+    match proposal_type {
+        PROPOSAL_QSO_CREATE
+        | PROPOSAL_QSO_CORRECT
+        | PROPOSAL_QSO_DELETE
+        | PROPOSAL_QSO_RESTORE
+        | PROPOSAL_QSO_NOTE_ADD => Ok(("core.gui", proposal_context(state))),
+        PROPOSAL_ACTIVATION_CREATE
+        | PROPOSAL_ACTIVATION_UPDATE
+        | PROPOSAL_ACTIVATION_START
+        | PROPOSAL_ACTIVATION_END
+        | PROPOSAL_ACTIVATION_CANCEL
+        | PROPOSAL_ACTIVATION_NOTE_ADD
+        | PROPOSAL_QSO_ACTIVATION_LINK
+        | PROPOSAL_QSO_ACTIVATION_UNLINK => Ok(("plugin.pota-sota", pota_sota_context(state))),
+        PROPOSAL_NET_TEMPLATE_CREATE
+        | PROPOSAL_NET_TEMPLATE_UPDATE
+        | PROPOSAL_NET_SESSION_START
+        | PROPOSAL_NET_SESSION_END
+        | PROPOSAL_NET_SESSION_CANCEL
+        | PROPOSAL_NET_CHECKIN_CREATE
+        | PROPOSAL_NET_CHECKIN_UPDATE
+        | PROPOSAL_NET_CHECKIN_DELETE
+        | PROPOSAL_NET_TRAFFIC_CREATE
+        | PROPOSAL_NET_TRAFFIC_UPDATE
+        | PROPOSAL_NET_REPORT_EXPORT => Ok(("plugin.net-control", net_control_context(state))),
+        other => Err(format!("unsupported corrective proposal type `{other}`")),
+    }
+}
+
+fn corrective_proposal_requires_entity_id(proposal_type: &str) -> bool {
+    !matches!(
+        proposal_type,
+        PROPOSAL_QSO_CREATE
+            | PROPOSAL_ACTIVATION_CREATE
+            | PROPOSAL_ACTIVATION_START
+            | PROPOSAL_NET_TEMPLATE_CREATE
+            | PROPOSAL_NET_SESSION_START
+            | PROPOSAL_NET_CHECKIN_CREATE
+            | PROPOSAL_NET_TRAFFIC_CREATE
+    )
+}
+
+fn submit_offline_tracked_proposal(
+    state: &AppState,
+    proposal_type: &str,
+    entity_id: Option<uuid::Uuid>,
+    author_operator_id: Option<uuid::Uuid>,
+    source_plugin_id: &str,
+    context: ProposalContext,
+    payload: Value,
+) -> Result<(ProposalOutcome, OfflineMutationEnvelope, Option<String>), String> {
+    let now = chrono::Utc::now();
+    let device_id = state.bridge.status().device_id;
+    let operation_id = uuid::Uuid::new_v4();
+    let queued = state
+        .offline_queue
+        .enqueue_input(
+            OfflineMutationInput::new(
+                state.logbook_id,
+                device_id,
+                device_id,
+                offline_operation_type_for_proposal(proposal_type),
+                payload.clone(),
+            )
+            .with_operation_id(operation_id)
+            .with_correlation_id(operation_id)
+            .with_entity_id(entity_id)
+            .with_idempotency_key(format!("{proposal_type}:{operation_id}")),
+            now,
+        )
+        .map_err(|error| format!("failed to persist offline mutation before submit: {error}"))?;
+
+    let proposal = ProposalEnvelope::new(
+        proposal_type,
+        state.logbook_id,
+        entity_id,
+        author_operator_id,
+        device_id,
+        source_plugin_id,
+        1,
+        payload,
+    );
+    let result = state.proposal_runtime.block_on(submit_proposal(
+        state.store.as_ref(),
+        &state.bridge,
+        &context,
+        proposal,
+    ));
+    match result {
+        Ok(outcome) => {
+            let queue_warning = state
+                .offline_queue
+                .record_local_event(
+                    queued.operation_id,
+                    &outcome.official_event,
+                    chrono::Utc::now(),
+                )
+                .err()
+                .map(|error| error.to_string());
+            Ok((outcome, queued, queue_warning))
+        }
+        Err(error) => {
+            let _ = state.offline_queue.mark_user_action_required(
+                queued.operation_id,
+                error.to_string(),
+                Some("domain_validation_failed".to_owned()),
+                chrono::Utc::now(),
+            );
+            Err(error.to_string())
+        }
+    }
+}
+
 fn handle_qso_simple_action(state: &AppState, body: &[u8], proposal_type: &str) -> Vec<u8> {
     let Ok(request) = serde_json::from_slice::<QsoIdRequest>(body) else {
         return json_error(400, "invalid QSO action JSON");
@@ -3769,32 +4170,27 @@ fn submit_gui_proposal(
     qso_id: Option<uuid::Uuid>,
     payload: Value,
 ) -> Vec<u8> {
-    let proposal = ProposalEnvelope::new(
+    match submit_offline_tracked_proposal(
+        state,
         proposal_type,
-        state.logbook_id,
         qso_id,
         None,
-        state.bridge.status().device_id,
         "core.gui",
-        1,
+        proposal_context(state),
         payload,
-    );
-    match state.proposal_runtime.block_on(submit_proposal(
-        state.store.as_ref(),
-        &state.bridge,
-        &proposal_context(state),
-        proposal,
-    )) {
-        Ok(outcome) => json_response(&json!({
+    ) {
+        Ok((outcome, offline_mutation, offline_queue_warning)) => json_response(&json!({
             "ok": true,
             "event": outcome.official_event,
+            "offline_mutation": offline_mutation,
+            "offline_queue_warning": offline_queue_warning,
             "projection": qso_projection_payload(state, "include_deleted=true")
         })),
         Err(error) => json_response_with_status(
             400,
             &json!({
                 "ok": false,
-                "error": error.to_string()
+                "error": error
             }),
         ),
     }
@@ -4235,7 +4631,26 @@ fn handle_local_divergence_export(state: &AppState, body: &[u8]) -> Vec<u8> {
     json_response(&json!({"ok": true, "path": request.path, "report": report}))
 }
 
+fn current_conflict_report(state: &AppState) -> Option<SyncConflictReport> {
+    let offline_mutations = state
+        .offline_queue
+        .load_snapshot(chrono::Utc::now())
+        .map(|snapshot| snapshot.mutations)
+        .unwrap_or_default();
+    let sync = state
+        .sync
+        .lock()
+        .expect("sync mutex should not be poisoned");
+    sync.latest_preview
+        .as_ref()
+        .or(sync.latest_cloud_preview.as_ref())
+        .map(|preview| {
+            conflict_report_from_preview(preview, &offline_mutations, chrono::Utc::now())
+        })
+}
+
 fn local_divergence_review_payload(state: &AppState) -> Value {
+    let conflict_report = current_conflict_report(state);
     let local_head = state
         .proposal_runtime
         .block_on(state.store.get_head(state.logbook_id))
@@ -4266,6 +4681,7 @@ fn local_divergence_review_payload(state: &AppState) -> Value {
         "can_safely_push": sync.cloud_divergence.is_none(),
         "divergence_detected": divergence.is_some(),
         "revoked_device_state": "unknown in local GUI mode",
+        "conflict_report": conflict_report,
         "recommended_action": divergence.unwrap_or_else(|| "No divergence detected; use normal preview/push/pull controls.".to_owned())
     })
 }
@@ -4301,23 +4717,16 @@ fn handle_activation_start(state: &AppState, body: &[u8]) -> Vec<u8> {
     if let Some(notes) = request.notes.filter(|value| !value.trim().is_empty()) {
         payload["notes"] = json!(notes);
     }
-    let proposal = ProposalEnvelope::new(
+    match submit_offline_tracked_proposal(
+        state,
         PROPOSAL_ACTIVATION_START,
-        state.logbook_id,
         None,
         None,
-        state.bridge.status().device_id,
         "plugin.pota-sota",
-        1,
+        pota_sota_context(state),
         payload,
-    );
-    match state.proposal_runtime.block_on(submit_proposal(
-        state.store.as_ref(),
-        &state.bridge,
-        &pota_sota_context(state),
-        proposal,
-    )) {
-        Ok(outcome) => {
+    ) {
+        Ok((outcome, offline_mutation, offline_queue_warning)) => {
             let _ = publish_gui_runtime(
                 state,
                 "activation.started",
@@ -4326,13 +4735,15 @@ fn handle_activation_start(state: &AppState, body: &[u8]) -> Vec<u8> {
                 Some(json!(&outcome.official_event)),
                 None,
             );
-            json_response(
-                &json!({"ok": true, "event": outcome.official_event, "activations": activation_projection_payload(state)}),
-            )
+            json_response(&json!({
+                "ok": true,
+                "event": outcome.official_event,
+                "offline_mutation": offline_mutation,
+                "offline_queue_warning": offline_queue_warning,
+                "activations": activation_projection_payload(state)
+            }))
         }
-        Err(error) => {
-            json_response_with_status(400, &json!({"ok": false, "error": error.to_string()}))
-        }
+        Err(error) => json_response_with_status(400, &json!({"ok": false, "error": error})),
     }
 }
 
@@ -4353,23 +4764,16 @@ fn handle_activation_end(state: &AppState, body: &[u8]) -> Vec<u8> {
                 .map(str::to_owned)
         })
         .unwrap_or_else(|| chrono::Utc::now().to_rfc3339());
-    let proposal = ProposalEnvelope::new(
+    match submit_offline_tracked_proposal(
+        state,
         PROPOSAL_ACTIVATION_END,
-        state.logbook_id,
         Some(request.activation_id),
         None,
-        state.bridge.status().device_id,
         "plugin.pota-sota",
-        1,
+        pota_sota_context(state),
         json!({"started_at": started_at, "ended_at": chrono::Utc::now().to_rfc3339()}),
-    );
-    match state.proposal_runtime.block_on(submit_proposal(
-        state.store.as_ref(),
-        &state.bridge,
-        &pota_sota_context(state),
-        proposal,
-    )) {
-        Ok(outcome) => {
+    ) {
+        Ok((outcome, offline_mutation, offline_queue_warning)) => {
             let _ = publish_gui_runtime(
                 state,
                 "activation.ended",
@@ -4378,13 +4782,15 @@ fn handle_activation_end(state: &AppState, body: &[u8]) -> Vec<u8> {
                 Some(json!(&outcome.official_event)),
                 None,
             );
-            json_response(
-                &json!({"ok": true, "event": outcome.official_event, "activations": activation_projection_payload(state)}),
-            )
+            json_response(&json!({
+                "ok": true,
+                "event": outcome.official_event,
+                "offline_mutation": offline_mutation,
+                "offline_queue_warning": offline_queue_warning,
+                "activations": activation_projection_payload(state)
+            }))
         }
-        Err(error) => {
-            json_response_with_status(400, &json!({"ok": false, "error": error.to_string()}))
-        }
+        Err(error) => json_response_with_status(400, &json!({"ok": false, "error": error})),
     }
 }
 
@@ -4445,6 +4851,20 @@ fn sync_state_payload(state: &AppState) -> SyncStatePayload {
         .sync
         .lock()
         .expect("sync state mutex should not be poisoned");
+    let now = chrono::Utc::now();
+    let (offline_queue, offline_queue_error) = match state.offline_queue.load_snapshot(now) {
+        Ok(snapshot) => (Some(snapshot), None),
+        Err(error) => (None, Some(error.to_string())),
+    };
+    let (conflict_reviews, conflict_reviews_error) =
+        match state.conflict_review_store.load_snapshot() {
+            Ok(snapshot) => (Some(snapshot), None),
+            Err(error) => (None, Some(error.to_string())),
+        };
+    let (lan_trust, lan_trust_error) = match state.lan_trust_store.snapshot() {
+        Ok(snapshot) => (Some(snapshot), None),
+        Err(error) => (None, Some(error.to_string())),
+    };
     let local_head = logbook_head_summary(state);
     let remote_head = sync
         .demo_remote_events
@@ -4466,6 +4886,12 @@ fn sync_state_payload(state: &AppState) -> SyncStatePayload {
         local_head,
         remote_head,
         divergence: sync.divergence.clone(),
+        offline_queue,
+        offline_queue_error,
+        conflict_reviews,
+        conflict_reviews_error,
+        lan_trust,
+        lan_trust_error,
         cloud_config: sync.cloud_config.clone(),
         cloud_connection_state: if sync.cloud_auth.is_some() {
             CloudConnectionState::Connected
@@ -4484,7 +4910,704 @@ fn sync_state_payload(state: &AppState) -> SyncStatePayload {
     }
 }
 
-fn handle_sync_discovery(state: &AppState, running: bool) -> Vec<u8> {
+fn handle_offline_queue_state(state: &AppState) -> Vec<u8> {
+    match state.offline_queue.load_snapshot(chrono::Utc::now()) {
+        Ok(snapshot) => json_response(&json!({"ok": true, "offline_queue": snapshot})),
+        Err(error) => {
+            json_response_with_status(400, &json!({"ok": false, "error": error.to_string()}))
+        }
+    }
+}
+
+fn handle_offline_queue_recover(state: &AppState) -> Vec<u8> {
+    let now = chrono::Utc::now();
+    match state.offline_queue.recover_or_initialize(now) {
+        Ok(recovery) => {
+            let snapshot = state.offline_queue.load_snapshot(now).ok();
+            let _ = publish_gui_runtime(
+                state,
+                "sync.offline_queue.recovered",
+                RuntimeEventSeverity::Info,
+                &format!(
+                    "Recovered offline sync queue state: {} interrupted attempts, {} migrated legacy entries",
+                    recovery.recovered_interrupted_writes, recovery.migrated_legacy_mutations
+                ),
+                Some(json!({"recovery": recovery})),
+                None,
+            );
+            json_response(&json!({
+                "ok": true,
+                "recovered_count": recovery.recovered_interrupted_writes,
+                "recovery": recovery,
+                "offline_queue": snapshot
+            }))
+        }
+        Err(error) => {
+            json_response_with_status(400, &json!({"ok": false, "error": error.to_string()}))
+        }
+    }
+}
+
+fn handle_conflict_reviews_state(state: &AppState) -> Vec<u8> {
+    match state.conflict_review_store.load_snapshot() {
+        Ok(snapshot) => json_response(&json!({"ok": true, "conflict_reviews": snapshot})),
+        Err(error) => {
+            json_response_with_status(400, &json!({"ok": false, "error": error.to_string()}))
+        }
+    }
+}
+
+fn handle_conflict_review_create(state: &AppState) -> Vec<u8> {
+    let Some(report) = current_conflict_report(state) else {
+        return json_response_with_status(
+            409,
+            &json!({"ok": false, "error": "no sync conflict report is available; run preview first"}),
+        );
+    };
+    let now = chrono::Utc::now();
+    match state.conflict_review_store.create_review(report, now) {
+        Ok(review) => {
+            let snapshot = state.conflict_review_store.load_snapshot().ok();
+            let _ = publish_gui_runtime(
+                state,
+                "sync.conflict_review.created",
+                RuntimeEventSeverity::Warn,
+                "Manual sync conflict review recorded",
+                Some(json!({
+                    "review_id": review.review_id,
+                    "logbook_id": review.report.logbook_id,
+                    "status": review.report.status,
+                    "conflict_count": review.report.conflicts.len()
+                })),
+                None,
+            );
+            json_response(&json!({
+                "ok": true,
+                "conflict_review": review,
+                "conflict_reviews": snapshot
+            }))
+        }
+        Err(error) => {
+            json_response_with_status(400, &json!({"ok": false, "error": error.to_string()}))
+        }
+    }
+}
+
+fn handle_conflict_review_resolve(state: &AppState, body: &[u8]) -> Vec<u8> {
+    let Ok(request) = serde_json::from_slice::<ConflictReviewResolveRequest>(body) else {
+        return json_error(400, "invalid conflict review resolution JSON");
+    };
+    let now = chrono::Utc::now();
+    match state
+        .conflict_review_store
+        .resolve_review(request.review_id, request.resolution, now)
+    {
+        Ok(review) => {
+            let marked_user_action = mark_conflict_review_user_action(state, &review, now);
+            let snapshot = state.conflict_review_store.load_snapshot().ok();
+            let choice = review
+                .selected_resolution
+                .as_ref()
+                .map(|resolution| resolution.choice);
+            let _ = publish_gui_runtime(
+                state,
+                "sync.conflict_review.resolved",
+                RuntimeEventSeverity::Info,
+                "Manual sync conflict review resolved",
+                Some(json!({
+                    "review_id": review.review_id,
+                    "choice": choice,
+                    "marked_user_action_count": marked_user_action
+                })),
+                None,
+            );
+            json_response(&json!({
+                "ok": true,
+                "conflict_review": review,
+                "marked_user_action_count": marked_user_action,
+                "conflict_reviews": snapshot
+            }))
+        }
+        Err(error) => {
+            json_response_with_status(400, &json!({"ok": false, "error": error.to_string()}))
+        }
+    }
+}
+
+fn handle_conflict_review_corrective_events(state: &AppState, body: &[u8]) -> Vec<u8> {
+    let Ok(request) = serde_json::from_slice::<ConflictReviewCorrectiveEventsRequest>(body) else {
+        return json_error(400, "invalid conflict review corrective-events JSON");
+    };
+    if request.proposals.is_empty() {
+        return json_error(400, "at least one corrective proposal is required");
+    }
+    if request
+        .operator_note
+        .as_ref()
+        .is_some_and(|note| note.len() > MAX_CONFLICT_REVIEW_NOTE_BYTES)
+    {
+        return json_error(400, "conflict review note is too large");
+    }
+    for proposal in &request.proposals {
+        let proposal_type = proposal.proposal_type.trim();
+        if proposal_type.is_empty() {
+            return json_error(400, "corrective proposal_type is required");
+        }
+        if !proposal.payload.is_object() {
+            return json_error(400, "corrective proposal payload must be a JSON object");
+        }
+        if corrective_proposal_requires_entity_id(proposal_type) && proposal.entity_id.is_none() {
+            return json_error(
+                400,
+                "corrective proposal entity_id is required for this proposal type",
+            );
+        }
+        if let Err(error) = corrective_context_for_proposal(state, proposal_type) {
+            return json_response_with_status(400, &json!({"ok": false, "error": error}));
+        }
+    }
+
+    let review_snapshot = match state.conflict_review_store.load_snapshot() {
+        Ok(snapshot) => snapshot,
+        Err(error) => {
+            return json_response_with_status(
+                400,
+                &json!({"ok": false, "error": error.to_string()}),
+            )
+        }
+    };
+    if !review_snapshot.reviews.iter().any(|review| {
+        review.review_id == request.review_id && review.status == ConflictReviewStatus::Open
+    }) {
+        return json_response_with_status(
+            404,
+            &json!({"ok": false, "error": "open conflict review was not found"}),
+        );
+    }
+
+    let mut corrective_events = Vec::new();
+    let mut corrective_event_hashes = Vec::new();
+    let mut offline_mutations = Vec::new();
+    let mut offline_queue_warnings = Vec::new();
+    for proposal in request.proposals {
+        let proposal_type = proposal.proposal_type.trim().to_owned();
+        if proposal_type.is_empty() {
+            return json_error(400, "corrective proposal_type is required");
+        }
+        let (source_plugin_id, context) =
+            match corrective_context_for_proposal(state, &proposal_type) {
+                Ok(value) => value,
+                Err(error) => {
+                    return json_response_with_status(400, &json!({"ok": false, "error": error}))
+                }
+            };
+        match submit_offline_tracked_proposal(
+            state,
+            &proposal_type,
+            proposal.entity_id,
+            None,
+            source_plugin_id,
+            context,
+            proposal.payload,
+        ) {
+            Ok((outcome, offline_mutation, offline_queue_warning)) => {
+                corrective_event_hashes.push(outcome.official_event.event_hash.clone());
+                corrective_events.push(outcome.official_event);
+                offline_mutations.push(offline_mutation);
+                if let Some(warning) = offline_queue_warning {
+                    offline_queue_warnings.push(warning);
+                }
+            }
+            Err(error) => {
+                return json_response_with_status(400, &json!({"ok": false, "error": error}))
+            }
+        }
+    }
+
+    let mut resolution =
+        ManualConflictResolution::new(ManualConflictResolutionChoice::CreateCorrectiveEvents)
+            .with_corrective_event_hashes(corrective_event_hashes.clone())
+            .with_resolved_by_device_id(state.bridge.status().device_id);
+    if let Some(note) = request.operator_note.filter(|note| !note.trim().is_empty()) {
+        resolution = resolution.with_note(note);
+    }
+
+    let now = chrono::Utc::now();
+    match state
+        .conflict_review_store
+        .resolve_review(request.review_id, resolution, now)
+    {
+        Ok(review) => {
+            let snapshot = state.conflict_review_store.load_snapshot().ok();
+            let _ = publish_gui_runtime(
+                state,
+                "sync.conflict_review.corrective_events_created",
+                RuntimeEventSeverity::Info,
+                "Manual conflict review resolved with corrective events",
+                Some(json!({
+                    "review_id": review.review_id,
+                    "corrective_event_count": corrective_event_hashes.len()
+                })),
+                None,
+            );
+            json_response(&json!({
+                "ok": true,
+                "conflict_review": review,
+                "corrective_events": corrective_events,
+                "corrective_event_hashes": corrective_event_hashes,
+                "offline_mutations": offline_mutations,
+                "offline_queue_warnings": offline_queue_warnings,
+                "conflict_reviews": snapshot
+            }))
+        }
+        Err(error) => {
+            json_response_with_status(400, &json!({"ok": false, "error": error.to_string()}))
+        }
+    }
+}
+
+fn mark_conflict_review_user_action(
+    state: &AppState,
+    review: &ham_sync::ManualConflictReview,
+    now: chrono::DateTime<chrono::Utc>,
+) -> usize {
+    if !review
+        .selected_resolution
+        .as_ref()
+        .is_some_and(|resolution| {
+            resolution.choice == ManualConflictResolutionChoice::MarkUserActionRequired
+        })
+    {
+        return 0;
+    }
+    let mut marked = 0;
+    for operation_id in review
+        .report
+        .conflicts
+        .iter()
+        .flat_map(|conflict| conflict.related_operation_ids.iter().copied())
+    {
+        if state
+            .offline_queue
+            .mark_user_action_required(
+                operation_id,
+                format!("manual conflict review {}", review.review_id),
+                Some("manual_conflict_review".to_owned()),
+                now,
+            )
+            .is_ok()
+        {
+            marked += 1;
+        }
+    }
+    marked
+}
+
+fn handle_lan_trust_state(state: &AppState) -> Vec<u8> {
+    match state.lan_trust_store.snapshot() {
+        Ok(snapshot) => json_response(&json!({"ok": true, "lan_trust": snapshot})),
+        Err(error) => {
+            json_response_with_status(400, &json!({"ok": false, "error": error.to_string()}))
+        }
+    }
+}
+
+fn handle_lan_pairing_token(state: &AppState, body: &[u8]) -> Vec<u8> {
+    if let Err(response) = ensure_gui_permission(
+        state,
+        &core_gui_manifest(),
+        PluginCapability::SyncLanDiscovery,
+        "LAN pairing token permission check",
+    ) {
+        return response;
+    }
+    let Ok(request) = serde_json::from_slice::<LanPairingTokenRequest>(body) else {
+        return json_error(400, "invalid LAN pairing token JSON");
+    };
+    let display_name = request
+        .display_name
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "KE8YGW Logger Local".to_owned());
+    let device_id = local_sync_identity(state).device_id;
+    match state.lan_trust_store.issue_pairing_token(
+        device_id,
+        state.logbook_id,
+        display_name,
+        request.approved_by_operator,
+        chrono::Utc::now(),
+    ) {
+        Ok(token) => {
+            let _ = publish_gui_runtime(
+                state,
+                "sync.lan.pairing_token.issued",
+                RuntimeEventSeverity::Info,
+                "LAN pairing token issued after operator approval",
+                Some(json!({"token_id": token.token_id, "expires_at": token.expires_at})),
+                None,
+            );
+            json_response(&json!({"ok": true, "pairing": token}))
+        }
+        Err(error) => {
+            json_response_with_status(400, &json!({"ok": false, "error": error.to_string()}))
+        }
+    }
+}
+
+fn handle_lan_pairing_accept(state: &AppState, body: &[u8]) -> Vec<u8> {
+    if let Err(response) = ensure_gui_permission(
+        state,
+        &core_gui_manifest(),
+        PluginCapability::SyncLanDiscovery,
+        "LAN pairing accept permission check",
+    ) {
+        return response;
+    }
+    let Ok(request) = serde_json::from_slice::<LanPairingAcceptRequest>(body) else {
+        return json_error(400, "invalid LAN pairing accept JSON");
+    };
+    let logbook_id = request.logbook_id.unwrap_or(state.logbook_id);
+    let pairing_code = request.pairing_code.trim().to_owned();
+    if pairing_code.is_empty() {
+        return json_error(400, "pairing code is required");
+    }
+    let auth_code = match lan_endpoint_auth_code(request.auth_code.as_deref(), &pairing_code) {
+        Ok(auth_code) => auth_code,
+        Err(error) => return json_response_with_status(400, &json!({"ok": false, "error": error})),
+    };
+    let auth_credential_id = match store_lan_auth_credential(
+        state,
+        request.peer_device_id,
+        &request.peer_display_name,
+        &auth_code,
+    ) {
+        Ok(credential_id) => credential_id,
+        Err(error) => return json_response_with_status(500, &json!({"ok": false, "error": error})),
+    };
+    match state.lan_trust_store.accept_pairing_token(
+        LanPairingAcceptance {
+            token_id: request.token_id,
+            pairing_code,
+            peer_device_id: request.peer_device_id,
+            peer_display_name: request.peer_display_name,
+            requested_logbooks: vec![logbook_id],
+            public_key_fingerprint: request.public_key_fingerprint,
+            auth_credential_id: Some(auth_credential_id),
+        },
+        chrono::Utc::now(),
+    ) {
+        Ok(device) => {
+            let _ = publish_gui_runtime(
+                state,
+                "sync.lan.device.trusted",
+                RuntimeEventSeverity::Info,
+                "LAN peer device trusted",
+                Some(json!({"device_id": device.device_id, "logbook_ids": device.logbook_ids})),
+                None,
+            );
+            json_response(&json!({"ok": true, "trusted_device": device}))
+        }
+        Err(error) => {
+            delete_lan_auth_credential(state, auth_credential_id);
+            json_response_with_status(400, &json!({"ok": false, "error": error.to_string()}))
+        }
+    }
+}
+
+fn handle_lan_pairing_complete(state: &AppState, body: &[u8]) -> Vec<u8> {
+    if let Err(response) = ensure_gui_permission(
+        state,
+        &core_gui_manifest(),
+        PluginCapability::SyncLanDiscovery,
+        "LAN reciprocal pairing permission check",
+    ) {
+        return response;
+    }
+    let Ok(request) = serde_json::from_slice::<LanPairingCompleteRequest>(body) else {
+        return json_error(400, "invalid LAN pairing complete JSON");
+    };
+    let Some(peer) = selected_peer_record(state, request.peer_id) else {
+        return sync_no_peer_error(state, "sync.lan.pairing_complete.failed");
+    };
+    let pairing_code = request.pairing_code.trim().to_owned();
+    if pairing_code.is_empty() {
+        return json_error(400, "pairing code is required");
+    }
+    let auth_code =
+        match lan_endpoint_auth_code_or_generate(request.auth_code.as_deref(), &pairing_code) {
+            Ok(auth_code) => auth_code,
+            Err(error) => {
+                return json_response_with_status(400, &json!({"ok": false, "error": error}))
+            }
+        };
+    let local_identity = local_sync_identity(state);
+    let remote_accept = LanPairingAcceptRequest {
+        token_id: request.token_id,
+        pairing_code: pairing_code.clone(),
+        auth_code: Some(auth_code.clone()),
+        peer_device_id: local_identity.device_id,
+        peer_display_name: local_identity.display_name,
+        logbook_id: Some(state.logbook_id),
+        public_key_fingerprint: request.public_key_fingerprint.clone(),
+    };
+
+    let mut last_error = None;
+    let mut remote_response = None;
+    for address in sorted_peer_api_addresses(&peer) {
+        match post_lan_peer_pairing_accept(address, &remote_accept) {
+            Ok(response) => {
+                remote_response = Some(response);
+                break;
+            }
+            Err(error) => last_error = Some(error),
+        }
+    }
+    let Some(remote_response) = remote_response else {
+        return sync_lan_transport_error(
+            state,
+            "sync.lan.pairing_complete.failed",
+            last_error.unwrap_or_else(|| "LAN peer has no usable API addresses".to_owned()),
+        );
+    };
+
+    let auth_credential_id =
+        match store_lan_auth_credential(state, peer.device_id, &peer.display_name, &auth_code) {
+            Ok(credential_id) => credential_id,
+            Err(error) => {
+                return json_response_with_status(500, &json!({"ok": false, "error": error}));
+            }
+        };
+    match state.lan_trust_store.trust_peer_with_auth_credential(
+        LanPeerTrustUpdate {
+            peer_device_id: peer.device_id,
+            peer_display_name: peer.display_name.clone(),
+            logbook_id: state.logbook_id,
+            pairing_token_id: Some(request.token_id),
+            public_key_fingerprint: request.public_key_fingerprint,
+            auth_credential_id,
+        },
+        chrono::Utc::now(),
+    ) {
+        Ok(device) => {
+            let _ = publish_gui_runtime(
+                state,
+                "sync.lan.device.trusted",
+                RuntimeEventSeverity::Info,
+                "LAN peer device paired with endpoint authentication",
+                Some(json!({
+                    "device_id": device.device_id,
+                    "logbook_ids": device.logbook_ids,
+                    "auth_credential_id": device.auth_credential_id
+                })),
+                None,
+            );
+            json_response(&json!({
+                "ok": true,
+                "trusted_device": device,
+                "remote": remote_response
+            }))
+        }
+        Err(error) => {
+            delete_lan_auth_credential(state, auth_credential_id);
+            json_response_with_status(400, &json!({"ok": false, "error": error.to_string()}))
+        }
+    }
+}
+
+fn handle_lan_auth_rotate(state: &AppState, body: &[u8]) -> Vec<u8> {
+    if let Err(response) = ensure_gui_permission(
+        state,
+        &core_gui_manifest(),
+        PluginCapability::SyncLanDiscovery,
+        "LAN auth credential rotation permission check",
+    ) {
+        return response;
+    }
+    let Ok(request) = serde_json::from_slice::<LanAuthRotateRequest>(body) else {
+        return json_error(400, "invalid LAN auth rotation JSON");
+    };
+    let pairing_code = request.pairing_code.trim().to_owned();
+    if pairing_code.is_empty() {
+        return json_error(400, "replacement LAN auth code is required");
+    }
+    let trusted = match state
+        .lan_trust_store
+        .trusted_peer(request.device_id, state.logbook_id)
+    {
+        Ok(trusted) => trusted,
+        Err(error) => {
+            return json_response_with_status(
+                400,
+                &json!({"ok": false, "error": error.to_string()}),
+            );
+        }
+    };
+    let new_auth_credential_id = match store_lan_auth_credential(
+        state,
+        trusted.device_id,
+        &trusted.display_name,
+        &pairing_code,
+    ) {
+        Ok(credential_id) => credential_id,
+        Err(error) => return json_response_with_status(500, &json!({"ok": false, "error": error})),
+    };
+    match state.lan_trust_store.rotate_auth_credential(
+        trusted.device_id,
+        state.logbook_id,
+        new_auth_credential_id,
+        chrono::Utc::now(),
+    ) {
+        Ok(rotation) => {
+            if let Some(previous_auth_credential_id) = rotation.previous_auth_credential_id {
+                delete_lan_auth_credential(state, previous_auth_credential_id);
+            }
+            let trusted_device = rotation.trusted_device.clone();
+            let snapshot = state.lan_trust_store.snapshot().ok();
+            let _ = publish_gui_runtime(
+                state,
+                "sync.lan.auth_credential.rotated",
+                RuntimeEventSeverity::Info,
+                "LAN peer endpoint auth credential rotated",
+                Some(json!({
+                    "device_id": rotation.trusted_device.device_id,
+                    "logbook_ids": rotation.trusted_device.logbook_ids,
+                    "auth_credential_id": rotation.trusted_device.auth_credential_id,
+                    "previous_auth_credential_replaced": rotation.previous_auth_credential_id.is_some()
+                })),
+                None,
+            );
+            json_response(&json!({
+                "ok": true,
+                "rotation": rotation,
+                "trusted_device": trusted_device,
+                "lan_trust": snapshot
+            }))
+        }
+        Err(error) => {
+            delete_lan_auth_credential(state, new_auth_credential_id);
+            json_response_with_status(400, &json!({"ok": false, "error": error.to_string()}))
+        }
+    }
+}
+
+fn handle_lan_trust_revoke(state: &AppState, body: &[u8]) -> Vec<u8> {
+    if let Err(response) = ensure_gui_permission(
+        state,
+        &core_gui_manifest(),
+        PluginCapability::SyncLanDiscovery,
+        "LAN trust revoke permission check",
+    ) {
+        return response;
+    }
+    let Ok(request) = serde_json::from_slice::<LanTrustRevokeRequest>(body) else {
+        return json_error(400, "invalid LAN trust revoke JSON");
+    };
+    match state
+        .lan_trust_store
+        .revoke_device(request.device_id, chrono::Utc::now())
+    {
+        Ok(device) => {
+            if let Some(credential_id) = device.auth_credential_id {
+                delete_lan_auth_credential(state, credential_id);
+            }
+            let _ = publish_gui_runtime(
+                state,
+                "sync.lan.device.revoked",
+                RuntimeEventSeverity::Warn,
+                "LAN peer device revoked",
+                Some(json!({"device_id": device.device_id})),
+                None,
+            );
+            json_response(&json!({"ok": true, "trusted_device": device}))
+        }
+        Err(error) => {
+            json_response_with_status(400, &json!({"ok": false, "error": error.to_string()}))
+        }
+    }
+}
+
+fn lan_endpoint_auth_code(
+    provided_auth_code: Option<&str>,
+    pairing_code: &str,
+) -> Result<String, String> {
+    let pairing_code = pairing_code.trim();
+    let auth_code = provided_auth_code
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "LAN endpoint auth code is required".to_owned())?;
+    if auth_code == pairing_code {
+        return Err("LAN endpoint auth code must be distinct from the pairing code".to_owned());
+    }
+    if auth_code.len() < 32 {
+        return Err("LAN auth code is too short for endpoint authentication".to_owned());
+    }
+    Ok(auth_code.to_owned())
+}
+
+fn lan_endpoint_auth_code_or_generate(
+    provided_auth_code: Option<&str>,
+    pairing_code: &str,
+) -> Result<String, String> {
+    match provided_auth_code {
+        Some(_) => lan_endpoint_auth_code(provided_auth_code, pairing_code),
+        None => Ok(generated_lan_endpoint_auth_code()),
+    }
+}
+
+fn generated_lan_endpoint_auth_code() -> String {
+    format!(
+        "{}{}",
+        uuid::Uuid::new_v4().simple(),
+        uuid::Uuid::new_v4().simple()
+    )
+}
+
+fn store_lan_auth_credential(
+    state: &AppState,
+    peer_device_id: uuid::Uuid,
+    peer_display_name: &str,
+    secret: &str,
+) -> Result<uuid::Uuid, String> {
+    let secret = secret.trim();
+    if secret.len() < 32 {
+        return Err("LAN auth code is too short for endpoint authentication".to_owned());
+    }
+    let mut metadata = CredentialMetadata::new(
+        "lan-sync-peer",
+        peer_device_id.to_string(),
+        ServiceType::Authentication,
+        format!("LAN sync auth for {peer_display_name}"),
+    );
+    metadata.metadata = json!({
+        "purpose": "lan_sync_endpoint_auth",
+        "peer_device_id": peer_device_id,
+    });
+    let stored = state
+        .credential_store
+        .lock()
+        .expect("credential store mutex should not be poisoned")
+        .store_credential(metadata, secret)
+        .map_err(|error| format!("failed to store LAN endpoint auth credential: {error}"))?;
+    Ok(stored.credential_id)
+}
+
+fn retrieve_lan_auth_secret(state: &AppState, credential_id: uuid::Uuid) -> Result<String, String> {
+    state
+        .credential_store
+        .lock()
+        .expect("credential store mutex should not be poisoned")
+        .retrieve_secret(credential_id)
+        .map_err(|error| format!("failed to retrieve LAN endpoint auth credential: {error}"))
+}
+
+fn delete_lan_auth_credential(state: &AppState, credential_id: uuid::Uuid) {
+    let _ = state
+        .credential_store
+        .lock()
+        .expect("credential store mutex should not be poisoned")
+        .delete_credential(credential_id);
+}
+
+fn handle_sync_discovery(state: &Arc<AppState>, running: bool) -> Vec<u8> {
     if let Err(response) = ensure_gui_permission(
         state,
         &core_gui_manifest(),
@@ -4493,39 +5616,84 @@ fn handle_sync_discovery(state: &AppState, running: bool) -> Vec<u8> {
     ) {
         return response;
     }
-    {
+    let worker_generation = {
         let mut sync = state
             .sync
             .lock()
             .expect("sync state mutex should not be poisoned");
-        sync.discovery_running = running;
-    }
+        if running {
+            if sync.discovery_running {
+                None
+            } else {
+                sync.discovery_generation = sync.discovery_generation.wrapping_add(1);
+                sync.discovery_running = true;
+                Some(sync.discovery_generation)
+            }
+        } else {
+            if sync.discovery_running {
+                sync.discovery_generation = sync.discovery_generation.wrapping_add(1);
+            }
+            sync.discovery_running = false;
+            None
+        }
+    };
     let event_type = if running {
         "network.discovery.started"
     } else {
         "network.discovery.stopped"
     };
-    let _ = state.bridge.publish(RuntimeEventInput {
-        event_type: event_type.to_owned(),
-        severity: RuntimeEventSeverity::Info,
-        source: "ham-sync".to_owned(),
-        source_plugin_id: None,
-        workspace_id: Some("dashboard".to_owned()),
-        payload_summary: event_type.to_owned(),
-        redacted_payload: Some(json!({"transport": "ipv4/ipv6 multicast", "mvp": true})),
-        error: None,
-    });
+    let _ = publish_gui_runtime(
+        state,
+        event_type,
+        RuntimeEventSeverity::Info,
+        event_type,
+        Some(json!({"transport": "ipv4/ipv6 multicast", "mvp": false})),
+        None,
+    );
+    if let Some(generation) = worker_generation {
+        start_lan_discovery_worker(state.clone(), generation);
+    }
     json_response(&sync_state_payload(state))
 }
 
 fn handle_sync_refresh(state: &AppState) -> Vec<u8> {
+    let discovery_snapshot = {
+        let sync = state
+            .sync
+            .lock()
+            .expect("sync state mutex should not be poisoned");
+        if sync.discovery_running {
+            Some((sync.config.clone(), sync.identity.clone()))
+        } else {
+            None
+        }
+    };
+    if let Some((config, identity)) = discovery_snapshot {
+        match run_lan_discovery_cycle(state, config, identity) {
+            Ok(observed_count) => {
+                let _ = publish_gui_runtime(
+                    state,
+                    "network.discovery.refreshed",
+                    RuntimeEventSeverity::Info,
+                    "LAN discovery refreshed",
+                    Some(json!({"observed_count": observed_count})),
+                    None,
+                );
+            }
+            Err(error) => {
+                record_lan_discovery_error(state, "network.discovery.refresh_failed", error);
+            }
+        }
+        return json_response(&sync_state_payload(state));
+    }
+
     let demo_remote_events = build_demo_remote_events(state);
     let mut sync = state
         .sync
         .lock()
         .expect("sync state mutex should not be poisoned");
     let mut peer = LocalPeerIdentity::new("Demo LAN Peer", Some(sync.config.local_sync_port));
-    peer.device_id = uuid::Uuid::parse_str("00000000-0000-4000-8000-0000000000aa").unwrap();
+    peer.device_id = demo_peer_device_id();
     let packet = DiscoveryPacket::from_identity(&peer);
     let identity = sync.identity.clone();
     let observation = sync
@@ -4552,12 +5720,383 @@ fn handle_sync_refresh(state: &AppState) -> Vec<u8> {
     json_response(&sync_state_payload(state))
 }
 
-fn handle_sync_events_since(state: &AppState, query: &str) -> Vec<u8> {
+fn start_lan_discovery_worker(state: Arc<AppState>, generation: u64) {
+    thread::spawn(move || {
+        let _ = publish_gui_runtime(
+            &state,
+            "network.discovery.worker_started",
+            RuntimeEventSeverity::Info,
+            "LAN discovery worker started",
+            None,
+            None,
+        );
+        loop {
+            let snapshot = {
+                let sync = state
+                    .sync
+                    .lock()
+                    .expect("sync state mutex should not be poisoned");
+                if !sync.discovery_running || sync.discovery_generation != generation {
+                    None
+                } else {
+                    Some((sync.config.clone(), sync.identity.clone()))
+                }
+            };
+            let Some((config, identity)) = snapshot else {
+                break;
+            };
+            if let Err(error) = run_lan_discovery_cycle(&state, config.clone(), identity) {
+                record_lan_discovery_error(&state, "network.discovery.failed", error);
+            }
+            if !wait_for_next_discovery_cycle(
+                &state,
+                generation,
+                Duration::from_secs(config.discovery_interval_seconds.max(1)),
+            ) {
+                break;
+            }
+        }
+        let _ = publish_gui_runtime(
+            &state,
+            "network.discovery.worker_stopped",
+            RuntimeEventSeverity::Info,
+            "LAN discovery worker stopped",
+            None,
+            None,
+        );
+    });
+}
+
+fn wait_for_next_discovery_cycle(state: &AppState, generation: u64, interval: Duration) -> bool {
+    let deadline = Instant::now() + interval;
+    loop {
+        if !lan_discovery_is_running(state, generation) {
+            return false;
+        }
+        let now = Instant::now();
+        if now >= deadline {
+            return true;
+        }
+        thread::sleep((deadline - now).min(LAN_DISCOVERY_SLEEP_SLICE));
+    }
+}
+
+fn lan_discovery_is_running(state: &AppState, generation: u64) -> bool {
+    let sync = state
+        .sync
+        .lock()
+        .expect("sync state mutex should not be poisoned");
+    sync.discovery_running && sync.discovery_generation == generation
+}
+
+fn run_lan_discovery_cycle(
+    state: &AppState,
+    config: SyncConfig,
+    identity: LocalPeerIdentity,
+) -> Result<usize, String> {
+    let service = LanDiscoveryService { config, identity };
+    let observations = service
+        .discover_once(LAN_DISCOVERY_LISTEN_WINDOW)
+        .map_err(|error| error.to_string())?;
+    let mut observed_count = 0usize;
+    for observation in observations {
+        if observe_discovery_packet(state, observation.packet, observation.source) {
+            observed_count += 1;
+        }
+    }
+    expire_stale_discovery_peers(state);
+    Ok(observed_count)
+}
+
+fn observe_discovery_packet(state: &AppState, packet: DiscoveryPacket, source: SocketAddr) -> bool {
+    if !is_supported_discovery_packet(&packet) {
+        publish_discovery_observation(state, &PeerObservation::IgnoredIncompatible, source);
+        return false;
+    }
+    if is_local_discovery_packet(state, &packet) {
+        return false;
+    }
+    let api_address = discovery_api_address(&packet, source);
+    if !is_usable_discovery_source(api_address) {
+        let _ = publish_gui_runtime(
+            state,
+            "network.peer.ignored_unroutable",
+            RuntimeEventSeverity::Debug,
+            "LAN discovery source is not directly routable",
+            Some(json!({"source": source.to_string(), "api_address": api_address.to_string()})),
+            None,
+        );
+        return false;
+    }
+    let identity = match fetch_lan_peer_identity(api_address) {
+        Ok(identity) => identity,
+        Err(error) => {
+            let _ = publish_gui_runtime(
+                state,
+                "network.peer.unreachable",
+                RuntimeEventSeverity::Debug,
+                "LAN discovery peer API was unreachable",
+                Some(json!({"api_address": api_address.to_string()})),
+                Some(error),
+            );
+            return false;
+        }
+    };
+    if identity.device_id != packet.device_id || identity.session_id != packet.session_id {
+        let _ = publish_gui_runtime(
+            state,
+            "network.peer.ignored_spoofed",
+            RuntimeEventSeverity::Warn,
+            "LAN discovery identity probe did not match packet",
+            Some(json!({
+                "api_address": api_address.to_string(),
+                "packet_device_id": packet.device_id,
+                "probed_device_id": identity.device_id
+            })),
+            None,
+        );
+        return false;
+    }
+    let packet = DiscoveryPacket::from_identity(&identity);
+    let observation = {
+        let mut sync = state
+            .sync
+            .lock()
+            .expect("sync state mutex should not be poisoned");
+        let local = sync.identity.clone();
+        sync.registry.observe(&local, packet, api_address)
+    };
+    publish_discovery_observation(state, &observation, api_address);
+    matches!(
+        observation,
+        PeerObservation::Discovered(_) | PeerObservation::Updated(_)
+    )
+}
+
+fn is_local_discovery_packet(state: &AppState, packet: &DiscoveryPacket) -> bool {
+    let sync = state
+        .sync
+        .lock()
+        .expect("sync state mutex should not be poisoned");
+    packet.device_id == sync.identity.device_id && packet.session_id == sync.identity.session_id
+}
+
+fn is_supported_discovery_packet(packet: &DiscoveryPacket) -> bool {
+    packet.protocol_name == PROTOCOL_NAME && packet.protocol_version == PROTOCOL_VERSION
+}
+
+fn discovery_api_address(packet: &DiscoveryPacket, source: SocketAddr) -> SocketAddr {
+    packet
+        .local_api_port
+        .map(|port| SocketAddr::new(source.ip(), port))
+        .unwrap_or(source)
+}
+
+fn is_usable_discovery_source(source: SocketAddr) -> bool {
+    match source {
+        SocketAddr::V4(_) => true,
+        SocketAddr::V6(address) => !address.ip().is_unicast_link_local() || address.scope_id() != 0,
+    }
+}
+
+fn publish_discovery_observation(
+    state: &AppState,
+    observation: &PeerObservation,
+    source: SocketAddr,
+) {
+    let (event_type, severity, summary) = match observation {
+        PeerObservation::Discovered(_) => (
+            "network.peer.discovered",
+            RuntimeEventSeverity::Info,
+            "LAN peer discovered",
+        ),
+        PeerObservation::Updated(_) => (
+            "network.peer.updated",
+            RuntimeEventSeverity::Debug,
+            "LAN peer refreshed",
+        ),
+        PeerObservation::IgnoredIncompatible => (
+            "network.peer.ignored_incompatible",
+            RuntimeEventSeverity::Warn,
+            "Incompatible LAN discovery packet ignored",
+        ),
+        PeerObservation::IgnoredSelf => return,
+    };
+    let _ = publish_gui_runtime(
+        state,
+        event_type,
+        severity,
+        summary,
+        Some(json!({
+            "source": source.to_string(),
+            "observation": format!("{observation:?}")
+        })),
+        None,
+    );
+}
+
+fn expire_stale_discovery_peers(state: &AppState) {
+    let expired = {
+        let mut sync = state
+            .sync
+            .lock()
+            .expect("sync state mutex should not be poisoned");
+        let timeout = Duration::from_secs(sync.config.peer_timeout_seconds);
+        sync.registry.expire_stale(chrono::Utc::now(), timeout)
+    };
+    for peer_id in expired {
+        let _ = publish_gui_runtime(
+            state,
+            "network.peer.expired",
+            RuntimeEventSeverity::Warn,
+            "LAN peer expired",
+            Some(json!({"peer_id": peer_id})),
+            None,
+        );
+    }
+}
+
+fn record_lan_discovery_error(state: &AppState, event_type: &str, error: String) {
+    {
+        let mut sync = state
+            .sync
+            .lock()
+            .expect("sync state mutex should not be poisoned");
+        sync.warning_count += 1;
+    }
+    let _ = publish_gui_runtime(
+        state,
+        event_type,
+        RuntimeEventSeverity::Warn,
+        "LAN discovery transport failed",
+        None,
+        Some(error),
+    );
+}
+
+fn handle_sync_add_peer(state: &AppState, body: &[u8]) -> Vec<u8> {
+    if let Err(response) = ensure_gui_permission(
+        state,
+        &core_gui_manifest(),
+        PluginCapability::SyncLanDiscovery,
+        "Manual LAN peer add permission check",
+    ) {
+        return response;
+    }
+    let Ok(request) = serde_json::from_slice::<ManualLanPeerRequest>(body) else {
+        return json_error(400, "invalid manual LAN peer JSON");
+    };
+    let address = match parse_lan_peer_address(&request.address) {
+        Ok(address) => address,
+        Err(error) => return json_response_with_status(400, &json!({"ok": false, "error": error})),
+    };
+    let identity = match fetch_lan_peer_identity(address) {
+        Ok(identity) => identity,
+        Err(error) => {
+            {
+                let mut sync = state
+                    .sync
+                    .lock()
+                    .expect("sync state mutex should not be poisoned");
+                sync.warning_count += 1;
+            }
+            let _ = publish_gui_runtime(
+                state,
+                "network.peer.unreachable",
+                RuntimeEventSeverity::Warn,
+                "Manual LAN peer probe failed",
+                Some(json!({"address": address.to_string()})),
+                Some(error.clone()),
+            );
+            return json_response_with_status(400, &json!({"ok": false, "error": error}));
+        }
+    };
+    let packet = DiscoveryPacket::from_identity(&identity);
+    let observation = {
+        let mut sync = state
+            .sync
+            .lock()
+            .expect("sync state mutex should not be poisoned");
+        let local = sync.identity.clone();
+        sync.registry.observe(&local, packet, address)
+    };
+    let event_type = match &observation {
+        PeerObservation::Discovered(_) => "network.peer.discovered",
+        PeerObservation::Updated(_) => "network.peer.updated",
+        PeerObservation::IgnoredSelf => "network.peer.ignored_self",
+        PeerObservation::IgnoredIncompatible => "network.peer.ignored_incompatible",
+    };
+    let ok = matches!(
+        observation,
+        PeerObservation::Discovered(_) | PeerObservation::Updated(_)
+    );
+    let _ = publish_gui_runtime(
+        state,
+        event_type,
+        if ok {
+            RuntimeEventSeverity::Info
+        } else {
+            RuntimeEventSeverity::Warn
+        },
+        "Manual LAN peer probe completed",
+        Some(json!({
+            "address": address.to_string(),
+            "peer_device_id": identity.device_id,
+            "peer_display_name": identity.display_name,
+            "observation": format!("{observation:?}")
+        })),
+        None,
+    );
+    if ok {
+        json_response(
+            &json!({"ok": true, "peer_identity": identity, "sync": sync_state_payload(state)}),
+        )
+    } else {
+        json_response_with_status(
+            400,
+            &json!({"ok": false, "error": format!("{observation:?}")}),
+        )
+    }
+}
+
+fn handle_sync_list_logbooks(state: &AppState, request: &HttpRequest) -> Vec<u8> {
+    if let Err(response) = require_lan_endpoint_auth(
+        state,
+        request,
+        state.logbook_id,
+        "sync.lan.list_logbooks.rejected",
+    ) {
+        return response;
+    }
+    json_response(&ListLogbooksResponse {
+        logbooks: vec![logbook_head_summary(state)],
+    })
+}
+
+fn handle_sync_get_head(state: &AppState, query: &str, request: &HttpRequest) -> Vec<u8> {
+    let logbook_id = match requested_sync_logbook_id(state, query) {
+        Ok(logbook_id) => logbook_id,
+        Err(response) => return response,
+    };
+    if let Err(response) =
+        require_lan_endpoint_auth(state, request, logbook_id, "sync.lan.get_head.rejected")
+    {
+        return response;
+    }
+    json_response(&logbook_head_summary(state))
+}
+
+fn handle_sync_events_since(state: &AppState, query: &str, request: &HttpRequest) -> Vec<u8> {
+    let logbook_id = match requested_sync_logbook_id(state, query) {
+        Ok(logbook_id) => logbook_id,
+        Err(response) => return response,
+    };
+    if let Err(response) =
+        require_lan_endpoint_auth(state, request, logbook_id, "sync.lan.events_since.rejected")
+    {
+        return response;
+    }
     let params = parse_query(query);
-    let logbook_id = params
-        .get("logbook_id")
-        .and_then(|value| uuid::Uuid::parse_str(value).ok())
-        .unwrap_or(state.logbook_id);
     let after_hash = params
         .get("after_hash")
         .filter(|value| !value.is_empty())
@@ -4573,12 +6112,20 @@ fn handle_sync_events_since(state: &AppState, query: &str) -> Vec<u8> {
     }
 }
 
-fn handle_sync_event_metadata(state: &AppState, query: &str) -> Vec<u8> {
+fn handle_sync_event_metadata(state: &AppState, query: &str, request: &HttpRequest) -> Vec<u8> {
+    let logbook_id = match requested_sync_logbook_id(state, query) {
+        Ok(logbook_id) => logbook_id,
+        Err(response) => return response,
+    };
+    if let Err(response) = require_lan_endpoint_auth(
+        state,
+        request,
+        logbook_id,
+        "sync.lan.event_metadata.rejected",
+    ) {
+        return response;
+    }
     let params = parse_query(query);
-    let logbook_id = params
-        .get("logbook_id")
-        .and_then(|value| uuid::Uuid::parse_str(value).ok())
-        .unwrap_or(state.logbook_id);
     let after_hash = params
         .get("after_hash")
         .filter(|value| !value.is_empty())
@@ -4597,41 +6144,199 @@ fn handle_sync_event_metadata(state: &AppState, query: &str) -> Vec<u8> {
     }
 }
 
-fn handle_sync_handshake(state: &AppState, body: &[u8]) -> Vec<u8> {
-    let request = serde_json::from_slice::<HandshakePeerRequest>(body)
-        .unwrap_or(HandshakePeerRequest { peer_id: None });
-    let local_head = logbook_head_summary(state);
-    let mut sync = state
-        .sync
-        .lock()
-        .expect("sync state mutex should not be poisoned");
-    let Some(peer) = request
-        .peer_id
-        .as_ref()
-        .and_then(|peer_id| {
-            sync.registry
-                .list()
-                .into_iter()
-                .find(|peer| &peer.peer_id == peer_id)
-        })
-        .or_else(|| sync.registry.list().into_iter().next())
-    else {
-        sync.warning_count += 1;
-        drop(sync);
-        let _ = state.bridge.publish(RuntimeEventInput {
-            event_type: "sync.handshake.error".to_owned(),
-            severity: RuntimeEventSeverity::Warn,
-            source: "ham-sync".to_owned(),
-            source_plugin_id: None,
-            workspace_id: Some("dashboard".to_owned()),
-            payload_summary: "No peer selected for handshake".to_owned(),
-            redacted_payload: None,
-            error: Some("no discovered peers".to_owned()),
-        });
-        return json_response_with_status(
+fn requested_sync_logbook_id(state: &AppState, query: &str) -> Result<uuid::Uuid, Vec<u8>> {
+    let params = parse_query(query);
+    let Some(value) = params.get("logbook_id").filter(|value| !value.is_empty()) else {
+        return Ok(state.logbook_id);
+    };
+    let Ok(logbook_id) = uuid::Uuid::parse_str(value) else {
+        return Err(json_response_with_status(
             400,
-            &json!({"ok": false, "error": "no discovered peers"}),
-        );
+            &json!({"ok": false, "error": "invalid logbook_id"}),
+        ));
+    };
+    if logbook_id != state.logbook_id {
+        return Err(json_response_with_status(
+            403,
+            &json!({"ok": false, "error": "requested logbook is not served by this peer"}),
+        ));
+    }
+    Ok(logbook_id)
+}
+
+fn require_lan_endpoint_auth(
+    state: &AppState,
+    request: &HttpRequest,
+    logbook_id: uuid::Uuid,
+    event_type: &str,
+) -> Result<(), Vec<u8>> {
+    let auth = match lan_endpoint_auth_from_headers(&request.headers) {
+        Ok(auth) => auth,
+        Err(error) => {
+            record_lan_endpoint_auth_failure(state, event_type, None, error.clone());
+            return Err(json_response_with_status(
+                403,
+                &json!({"ok": false, "error": error}),
+            ));
+        }
+    };
+    let trusted = match state
+        .lan_trust_store
+        .trusted_peer(auth.device_id, logbook_id)
+    {
+        Ok(trusted) => trusted,
+        Err(error) => {
+            let message = error.to_string();
+            record_lan_endpoint_auth_failure(
+                state,
+                event_type,
+                Some(auth.device_id),
+                message.clone(),
+            );
+            return Err(json_response_with_status(
+                403,
+                &json!({"ok": false, "error": message}),
+            ));
+        }
+    };
+    let Some(credential_id) = trusted.auth_credential_id else {
+        let message = "trusted LAN device is missing endpoint auth credential".to_owned();
+        record_lan_endpoint_auth_failure(state, event_type, Some(auth.device_id), message.clone());
+        return Err(json_response_with_status(
+            403,
+            &json!({"ok": false, "error": message}),
+        ));
+    };
+    let secret = match retrieve_lan_auth_secret(state, credential_id) {
+        Ok(secret) => secret,
+        Err(error) => {
+            record_lan_endpoint_auth_failure(
+                state,
+                event_type,
+                Some(auth.device_id),
+                error.clone(),
+            );
+            return Err(json_response_with_status(
+                403,
+                &json!({"ok": false, "error": error}),
+            ));
+        }
+    };
+    if !verify_lan_auth_signature(
+        &secret,
+        auth.device_id,
+        logbook_id,
+        &request.method,
+        &request.target,
+        &auth.replay_nonce,
+        &auth.signature,
+    ) {
+        let message = "trusted LAN request signature is invalid".to_owned();
+        record_lan_endpoint_auth_failure(state, event_type, Some(auth.device_id), message.clone());
+        return Err(json_response_with_status(
+            403,
+            &json!({"ok": false, "error": message}),
+        ));
+    }
+    match state.lan_trust_store.authorize_peer(
+        auth.device_id,
+        logbook_id,
+        &auth.replay_nonce,
+        chrono::Utc::now(),
+    ) {
+        Ok(_) => Ok(()),
+        Err(error) => {
+            let message = error.to_string();
+            record_lan_endpoint_auth_failure(
+                state,
+                event_type,
+                Some(auth.device_id),
+                message.clone(),
+            );
+            Err(json_response_with_status(
+                403,
+                &json!({"ok": false, "error": message}),
+            ))
+        }
+    }
+}
+
+fn lan_endpoint_auth_from_headers(
+    headers: &HashMap<String, String>,
+) -> Result<LanEndpointAuth, String> {
+    let device_id = headers
+        .get(LAN_AUTH_DEVICE_ID_HEADER)
+        .ok_or_else(|| "trusted LAN request is missing device id".to_owned())
+        .and_then(|value| {
+            uuid::Uuid::parse_str(value)
+                .map_err(|_| "trusted LAN request device id is invalid".to_owned())
+        })?;
+    let replay_nonce = headers
+        .get(LAN_AUTH_REPLAY_NONCE_HEADER)
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "trusted LAN request is missing replay nonce".to_owned())?;
+    if replay_nonce.len() > 128 {
+        return Err("trusted LAN request replay nonce is too long".to_owned());
+    }
+    let signature_version = headers
+        .get(LAN_AUTH_SIGNATURE_VERSION_HEADER)
+        .map(|value| value.trim())
+        .ok_or_else(|| "trusted LAN request is missing signature version".to_owned())?;
+    if signature_version != LAN_AUTH_SIGNATURE_VERSION {
+        return Err("trusted LAN request signature version is unsupported".to_owned());
+    }
+    let signature = headers
+        .get(LAN_AUTH_SIGNATURE_HEADER)
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "trusted LAN request is missing signature".to_owned())?;
+    if signature.len() != 64 || !signature.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err("trusted LAN request signature is malformed".to_owned());
+    }
+    Ok(LanEndpointAuth {
+        device_id,
+        replay_nonce: replay_nonce.to_owned(),
+        signature: signature.to_ascii_lowercase(),
+    })
+}
+
+fn record_lan_endpoint_auth_failure(
+    state: &AppState,
+    event_type: &str,
+    device_id: Option<uuid::Uuid>,
+    error: String,
+) {
+    {
+        let mut sync = state
+            .sync
+            .lock()
+            .expect("sync state mutex should not be poisoned");
+        sync.warning_count += 1;
+    }
+    let _ = publish_gui_runtime(
+        state,
+        event_type,
+        RuntimeEventSeverity::Warn,
+        "LAN sync endpoint rejected an unauthorized peer",
+        Some(json!({"device_id": device_id})),
+        Some(error),
+    );
+}
+
+fn handle_sync_handshake(state: &AppState, body: &[u8]) -> Vec<u8> {
+    let request =
+        serde_json::from_slice::<HandshakePeerRequest>(body).unwrap_or(HandshakePeerRequest {
+            peer_id: None,
+            replay_nonce: None,
+        });
+    let local_head = logbook_head_summary(state);
+    let Some(peer) = selected_peer_record(state, request.peer_id) else {
+        return sync_no_peer_error(state, "sync.handshake.error");
+    };
+    let remote_head = match remote_head_for_peer(state, &peer) {
+        Ok(remote_head) => remote_head,
+        Err(error) => return sync_lan_transport_error(state, "sync.handshake.error", error),
     };
 
     let remote_request = HandshakeRequest {
@@ -4639,12 +6344,12 @@ fn handle_sync_handshake(state: &AppState, body: &[u8]) -> Vec<u8> {
         device_id: peer.device_id,
         session_id: peer.session_id,
         supported_capabilities: peer.capabilities.clone(),
-        logbooks: vec![LogbookHeadSummary {
-            logbook_id: state.logbook_id,
-            head_hash: None,
-            event_count: Some(0),
-        }],
+        logbooks: vec![remote_head],
     };
+    let mut sync = state
+        .sync
+        .lock()
+        .expect("sync state mutex should not be poisoned");
     let response = build_handshake_response(&sync.identity, &[local_head], &remote_request);
     sync.latest_handshake = Some(response.clone());
     drop(sync);
@@ -4675,11 +6380,15 @@ fn handle_sync_preview_pull(state: &AppState, body: &[u8]) -> Vec<u8> {
     ) {
         return response;
     }
-    let request = serde_json::from_slice::<HandshakePeerRequest>(body)
-        .unwrap_or(HandshakePeerRequest { peer_id: None });
-    let Some(peer_id) = selected_peer_id(state, request.peer_id) else {
+    let request =
+        serde_json::from_slice::<HandshakePeerRequest>(body).unwrap_or(HandshakePeerRequest {
+            peer_id: None,
+            replay_nonce: None,
+        });
+    let Some(peer) = selected_peer_record(state, request.peer_id) else {
         return sync_no_peer_error(state, "sync.preview_pull.failed");
     };
+    let peer_id = peer.peer_id.clone();
 
     let _ = publish_gui_runtime(
         state,
@@ -4694,12 +6403,11 @@ fn handle_sync_preview_pull(state: &AppState, body: &[u8]) -> Vec<u8> {
         .proposal_runtime
         .block_on(state.store.get_head(state.logbook_id))
         .unwrap_or(None);
-    let remote_events = {
-        let sync = state
-            .sync
-            .lock()
-            .expect("sync state mutex should not be poisoned");
-        sync.demo_remote_events.clone()
+    let remote_events = match remote_events_for_peer(state, &peer) {
+        Ok(events) => events,
+        Err(error) => {
+            return sync_lan_transport_error(state, "sync.preview_pull.failed", error);
+        }
     };
     let preview = preview_pull_from_events(
         PreviewPullRequest {
@@ -4749,11 +6457,34 @@ fn handle_sync_pull_events(state: &AppState, body: &[u8]) -> Vec<u8> {
     ) {
         return response;
     }
-    let request = serde_json::from_slice::<HandshakePeerRequest>(body)
-        .unwrap_or(HandshakePeerRequest { peer_id: None });
-    let Some(peer_id) = selected_peer_id(state, request.peer_id) else {
+    let request =
+        serde_json::from_slice::<HandshakePeerRequest>(body).unwrap_or(HandshakePeerRequest {
+            peer_id: None,
+            replay_nonce: None,
+        });
+    let Some(peer) = selected_peer_record(state, request.peer_id) else {
         return sync_no_peer_error(state, "sync.pull.failed");
     };
+    let peer_id = peer.peer_id.clone();
+    let Some(replay_nonce) = request
+        .replay_nonce
+        .as_deref()
+        .filter(|value| !value.is_empty())
+    else {
+        return sync_lan_trust_error(
+            state,
+            "sync.pull.failed",
+            "trusted LAN pull requires a replay nonce",
+        );
+    };
+    if let Err(error) = state.lan_trust_store.authorize_peer(
+        peer.device_id,
+        state.logbook_id,
+        replay_nonce,
+        chrono::Utc::now(),
+    ) {
+        return sync_lan_trust_error(state, "sync.pull.failed", error.to_string());
+    }
 
     let _ = publish_gui_runtime(
         state,
@@ -4767,12 +6498,11 @@ fn handle_sync_pull_events(state: &AppState, body: &[u8]) -> Vec<u8> {
         .proposal_runtime
         .block_on(state.store.get_head(state.logbook_id))
         .unwrap_or(None);
-    let remote_events = {
-        let sync = state
-            .sync
-            .lock()
-            .expect("sync state mutex should not be poisoned");
-        sync.demo_remote_events.clone()
+    let remote_events = match remote_events_for_peer(state, &peer) {
+        Ok(events) => events,
+        Err(error) => {
+            return sync_lan_transport_error(state, "sync.pull.failed", error);
+        }
     };
     for event in &remote_events {
         let _ = publish_gui_runtime(
@@ -4988,7 +6718,8 @@ fn handle_cloud_connect(state: &AppState, body: &[u8]) -> Vec<u8> {
             ),
             None,
         );
-        json_response(&json!({"ok": true, "session": session}))
+        let auto_push = maybe_auto_drain_cloud_queue_after_connect(state);
+        json_response(&json!({"ok": true, "session": session, "auto_push": auto_push}))
     } else {
         {
             let mut sync = state
@@ -5021,21 +6752,170 @@ fn handle_cloud_push(state: &AppState) -> Vec<u8> {
     ) {
         return response;
     }
+    match run_cloud_push(state, CloudPushMode::Manual) {
+        Ok(payload) => json_response(&payload),
+        Err((status, payload)) => json_response_with_status(status, &payload),
+    }
+}
+
+fn maybe_auto_drain_cloud_queue_after_connect(state: &AppState) -> Option<Value> {
+    let auto_push_enabled = state
+        .sync
+        .lock()
+        .expect("sync state mutex should not be poisoned")
+        .cloud_config
+        .auto_push_enabled;
+    if !auto_push_enabled {
+        return None;
+    }
+    if ensure_gui_permission(
+        state,
+        &core_gui_manifest(),
+        PluginCapability::SyncCloudPush,
+        "Cloud sync auto-push permission check",
+    )
+    .is_err()
+    {
+        let _ = publish_cloud_runtime(
+            state,
+            "sync.cloud.auto_push.failed",
+            RuntimeEventSeverity::Warn,
+            "Cloud auto-push is not permitted",
+            None,
+            Some("sync.cloud.push permission is required for automatic queue drain".to_owned()),
+        );
+        return Some(json!({
+            "ok": false,
+            "skipped": false,
+            "error": "sync.cloud.push permission is required for automatic queue drain"
+        }));
+    }
+    match run_cloud_push(state, CloudPushMode::AutoDrainQueueOnly) {
+        Ok(payload) => Some(payload),
+        Err((status, mut payload)) => {
+            if let Some(object) = payload.as_object_mut() {
+                object.insert("status_code".to_owned(), json!(status));
+            }
+            Some(payload)
+        }
+    }
+}
+
+fn run_cloud_push(state: &AppState, mode: CloudPushMode) -> Result<Value, (u16, Value)> {
     let Some(auth) = cloud_auth(state) else {
-        return cloud_auth_error(state, "sync.cloud.push.failed");
+        let _ = publish_cloud_runtime(
+            state,
+            mode.failed_event_type(),
+            RuntimeEventSeverity::Warn,
+            "Cloud sync is not connected",
+            None,
+            Some("cloud sync is not connected".to_owned()),
+        );
+        return Err((
+            400,
+            json!({"ok": false, "error": "cloud sync is not connected"}),
+        ));
     };
     let _ = publish_cloud_runtime(
         state,
-        "sync.cloud.push.started",
+        mode.started_event_type(),
         RuntimeEventSeverity::Info,
-        "Pushing local official events to cloud",
+        if mode.queue_only() {
+            "Draining ready offline mutations to cloud"
+        } else {
+            "Pushing local official events to cloud"
+        },
         None,
         None,
     );
-    let events = state
+    let all_events = state
         .proposal_runtime
         .block_on(state.store.list_events(state.logbook_id))
         .unwrap_or_default();
+    let offline_batch = match state.offline_queue.ready_event_batch(
+        state.logbook_id,
+        &all_events,
+        chrono::Utc::now(),
+    ) {
+        Ok(batch) => batch,
+        Err(error) => {
+            let error_message = format!("offline queue is not readable: {error}");
+            let _ = publish_cloud_runtime(
+                state,
+                mode.failed_event_type(),
+                RuntimeEventSeverity::Warn,
+                "Cloud push could not read the offline queue",
+                None,
+                Some(error_message.clone()),
+            );
+            return Err((400, json!({"ok": false, "error": error_message})));
+        }
+    };
+    for operation_id in &offline_batch.missing_local_event_operation_ids {
+        let _ = state.offline_queue.mark_user_action_required(
+            *operation_id,
+            "offline mutation has no matching local official event",
+            Some("missing_local_official_event".to_owned()),
+            chrono::Utc::now(),
+        );
+    }
+    let offline_batch_summary = json!({
+        "operation_ids": offline_batch.operation_ids.clone(),
+        "event_count": offline_batch.events.len(),
+        "missing_local_event_operation_ids": offline_batch.missing_local_event_operation_ids.clone()
+    });
+    if mode.queue_only()
+        && offline_batch.events.is_empty()
+        && offline_batch.missing_local_event_operation_ids.is_empty()
+    {
+        let _ = publish_cloud_runtime(
+            state,
+            "sync.cloud.auto_push.skipped",
+            RuntimeEventSeverity::Info,
+            "No ready offline mutations to drain",
+            Some(json!({"offline_push_batch": offline_batch_summary.clone()})),
+            None,
+        );
+        return Ok(json!({
+            "ok": true,
+            "skipped": true,
+            "skip_reason": "no_ready_offline_mutations",
+            "offline_push_batch": offline_batch_summary
+        }));
+    }
+    if mode.queue_only() && offline_batch.events.is_empty() {
+        let error = "offline queue has a ready mutation without a matching local official event";
+        let _ = publish_cloud_runtime(
+            state,
+            mode.failed_event_type(),
+            RuntimeEventSeverity::Warn,
+            "Cloud auto-push requires operator review",
+            Some(json!({"offline_push_batch": offline_batch_summary.clone()})),
+            Some(error.to_owned()),
+        );
+        return Ok(json!({
+            "ok": false,
+            "skipped": false,
+            "error": error,
+            "offline_push_batch": offline_batch_summary
+        }));
+    }
+    for operation_id in &offline_batch.operation_ids {
+        let _ = state
+            .offline_queue
+            .mark_sending(*operation_id, chrono::Utc::now());
+    }
+    let queued_hashes = offline_batch
+        .events
+        .iter()
+        .map(|event| event.event_hash.clone())
+        .collect::<std::collections::HashSet<_>>();
+    let events = if offline_batch.events.is_empty() {
+        all_events
+    } else {
+        offline_batch.events.clone()
+    };
+    let pushed_event_count = events.len();
     let response = state
         .proposal_runtime
         .block_on(state.cloud_server.push_events(CloudPushEventsRequest {
@@ -5049,11 +6929,11 @@ fn handle_cloud_push(state: &AppState) -> Vec<u8> {
                 push.status,
                 ReplicationStatus::Pulled | ReplicationStatus::InSync
             ) {
-                "sync.cloud.push.completed"
+                mode.completed_event_type()
             } else if push.status == ReplicationStatus::Diverged {
                 "sync.cloud.divergence.detected"
             } else {
-                "sync.cloud.push.failed"
+                mode.failed_event_type()
             };
             {
                 let mut sync = state
@@ -5065,6 +6945,34 @@ fn handle_cloud_push(state: &AppState) -> Vec<u8> {
                 if push.status == ReplicationStatus::Diverged {
                     sync.cloud_divergence = push.errors.first().cloned();
                     sync.warning_count += 1;
+                }
+            }
+            if push.errors.is_empty() {
+                let _ = state
+                    .offline_queue
+                    .mark_accepted_by_event_hashes(&queued_hashes, chrono::Utc::now());
+            } else if push.status == ReplicationStatus::Diverged {
+                for operation_id in &offline_batch.operation_ids {
+                    let _ = state.offline_queue.mark_blocked(
+                        *operation_id,
+                        push.errors
+                            .first()
+                            .cloned()
+                            .unwrap_or_else(|| "cloud divergence detected".to_owned()),
+                        chrono::Utc::now(),
+                    );
+                }
+            } else {
+                for operation_id in &offline_batch.operation_ids {
+                    let _ = state.offline_queue.mark_user_action_required(
+                        *operation_id,
+                        push.errors
+                            .first()
+                            .cloned()
+                            .unwrap_or_else(|| "cloud push rejected".to_owned()),
+                        Some("cloud_push_rejected".to_owned()),
+                        chrono::Utc::now(),
+                    );
                 }
             }
             let _ = publish_cloud_runtime(
@@ -5087,18 +6995,35 @@ fn handle_cloud_push(state: &AppState) -> Vec<u8> {
                 Some(json!(&push)),
                 push.errors.first().cloned(),
             );
-            json_response(&json!({"ok": push.errors.is_empty(), "push": push}))
+            Ok(json!({
+                "ok": push.errors.is_empty(),
+                "skipped": false,
+                "push": push,
+                "offline_push_batch": {
+                    "operation_ids": offline_batch.operation_ids,
+                    "event_count": pushed_event_count,
+                    "missing_local_event_operation_ids": offline_batch.missing_local_event_operation_ids
+                }
+            }))
         }
         Err(error) => {
+            for operation_id in &offline_batch.operation_ids {
+                let _ = state.offline_queue.record_transient_failure(
+                    *operation_id,
+                    error.to_string(),
+                    Some("cloud_push_failed".to_owned()),
+                    chrono::Utc::now(),
+                );
+            }
             let _ = publish_cloud_runtime(
                 state,
-                "sync.cloud.push.failed",
+                mode.failed_event_type(),
                 RuntimeEventSeverity::Warn,
                 "Cloud push failed",
                 None,
                 Some(error.to_string()),
             );
-            json_response_with_status(400, &json!({"ok": false, "error": error.to_string()}))
+            Err((400, json!({"ok": false, "error": error.to_string()})))
         }
     }
 }
@@ -5295,18 +7220,357 @@ fn logbook_head_summary(state: &AppState) -> LogbookHeadSummary {
     }
 }
 
-fn selected_peer_id(state: &AppState, requested: Option<String>) -> Option<String> {
+fn selected_peer_record(state: &AppState, requested: Option<String>) -> Option<PeerRecord> {
     let sync = state
         .sync
         .lock()
         .expect("sync state mutex should not be poisoned");
-    requested.or_else(|| {
-        sync.registry
-            .list()
-            .into_iter()
-            .next()
-            .map(|peer| peer.peer_id)
-    })
+    let peers = sync.registry.list();
+    requested
+        .and_then(|requested| peers.iter().find(|peer| peer.peer_id == requested).cloned())
+        .or_else(|| peers.into_iter().next())
+}
+
+fn remote_events_for_peer(
+    state: &AppState,
+    peer: &PeerRecord,
+) -> Result<Vec<CoreEventEnvelope>, String> {
+    let mut last_error = None;
+    for address in sorted_peer_api_addresses(peer) {
+        match fetch_lan_peer_events(state, address, peer.device_id, state.logbook_id) {
+            Ok(events) => {
+                let _ = publish_gui_runtime(
+                    state,
+                    "sync.lan.transport.succeeded",
+                    RuntimeEventSeverity::Info,
+                    "Fetched remote official events over LAN HTTP",
+                    Some(json!({
+                        "peer_id": peer.peer_id,
+                        "address": address.to_string(),
+                        "event_count": events.len()
+                    })),
+                    None,
+                );
+                return Ok(events);
+            }
+            Err(error) => {
+                last_error = Some(error);
+            }
+        }
+    }
+
+    if is_demo_peer(peer) {
+        let sync = state
+            .sync
+            .lock()
+            .expect("sync state mutex should not be poisoned");
+        return Ok(sync.demo_remote_events.clone());
+    }
+
+    Err(last_error.unwrap_or_else(|| "LAN peer has no usable API addresses".to_owned()))
+}
+
+fn remote_head_for_peer(state: &AppState, peer: &PeerRecord) -> Result<LogbookHeadSummary, String> {
+    let mut last_error = None;
+    for address in sorted_peer_api_addresses(peer) {
+        match fetch_lan_peer_head(state, address, peer.device_id, state.logbook_id) {
+            Ok(head) => return Ok(head),
+            Err(error) => last_error = Some(error),
+        }
+    }
+
+    if is_demo_peer(peer) {
+        let sync = state
+            .sync
+            .lock()
+            .expect("sync state mutex should not be poisoned");
+        return Ok(LogbookHeadSummary {
+            logbook_id: state.logbook_id,
+            head_hash: sync
+                .demo_remote_events
+                .last()
+                .map(|event| event.event_hash.clone()),
+            event_count: Some(sync.demo_remote_events.len() as u64),
+        });
+    }
+
+    Err(last_error.unwrap_or_else(|| "LAN peer has no usable API addresses".to_owned()))
+}
+
+fn sorted_peer_api_addresses(peer: &PeerRecord) -> Vec<SocketAddr> {
+    let mut addresses = peer.addresses.clone();
+    addresses.sort_by_key(|address| lan_api_address_rank(*address));
+    addresses
+}
+
+fn lan_api_address_rank(address: SocketAddr) -> u8 {
+    match address {
+        SocketAddr::V4(address) if address.ip().is_loopback() => 0,
+        SocketAddr::V4(address) if address.ip().is_private() => 1,
+        SocketAddr::V4(address) if address.ip().is_link_local() => 2,
+        SocketAddr::V6(address) if is_ipv6_unique_local(address.ip()) => 3,
+        SocketAddr::V6(address)
+            if address.ip().is_unicast_link_local() && address.scope_id() != 0 =>
+        {
+            4
+        }
+        SocketAddr::V6(address) if address.ip().is_loopback() => 5,
+        SocketAddr::V6(_) => 8,
+        SocketAddr::V4(_) => 9,
+    }
+}
+
+fn fetch_lan_peer_identity(address: SocketAddr) -> Result<LocalPeerIdentity, String> {
+    let state: Value = lan_http_get_json(address, "/api/sync/state", &[])?;
+    serde_json::from_value(
+        state
+            .get("identity")
+            .cloned()
+            .ok_or_else(|| "LAN peer state did not include identity".to_owned())?,
+    )
+    .map_err(|error| format!("LAN peer identity JSON was invalid: {error}"))
+}
+
+fn fetch_lan_peer_head(
+    state: &AppState,
+    address: SocketAddr,
+    peer_device_id: uuid::Uuid,
+    logbook_id: uuid::Uuid,
+) -> Result<LogbookHeadSummary, String> {
+    let path = format!("/api/sync/get-head?logbook_id={logbook_id}");
+    let headers = trusted_lan_request_headers(state, peer_device_id, logbook_id, "GET", &path)?;
+    let response: LogbookHeadSummary = lan_http_get_json(address, &path, &headers)?;
+    if response.logbook_id != logbook_id {
+        return Err(format!(
+            "LAN peer returned head for logbook {}, expected {logbook_id}",
+            response.logbook_id
+        ));
+    }
+    Ok(response)
+}
+
+fn fetch_lan_peer_events(
+    state: &AppState,
+    address: SocketAddr,
+    peer_device_id: uuid::Uuid,
+    logbook_id: uuid::Uuid,
+) -> Result<Vec<CoreEventEnvelope>, String> {
+    let path = format!("/api/sync/events-since?logbook_id={logbook_id}");
+    let headers = trusted_lan_request_headers(state, peer_device_id, logbook_id, "GET", &path)?;
+    let response: GetEventRangeResponse = lan_http_get_json(address, &path, &headers)?;
+    if response.logbook_id != logbook_id {
+        return Err(format!(
+            "LAN peer returned events for logbook {}, expected {logbook_id}",
+            response.logbook_id
+        ));
+    }
+    Ok(response.events)
+}
+
+fn post_lan_peer_pairing_accept(
+    address: SocketAddr,
+    request: &LanPairingAcceptRequest,
+) -> Result<Value, String> {
+    lan_http_post_json(address, "/api/sync/lan/pairing-accept", request, &[])
+}
+
+fn local_sync_device_id(state: &AppState) -> uuid::Uuid {
+    local_sync_identity(state).device_id
+}
+
+fn local_sync_identity(state: &AppState) -> LocalPeerIdentity {
+    state
+        .sync
+        .lock()
+        .expect("sync state mutex should not be poisoned")
+        .identity
+        .clone()
+}
+
+fn trusted_lan_request_headers(
+    state: &AppState,
+    peer_device_id: uuid::Uuid,
+    logbook_id: uuid::Uuid,
+    method: &str,
+    target: &str,
+) -> Result<Vec<(String, String)>, String> {
+    let trusted = state
+        .lan_trust_store
+        .trusted_peer(peer_device_id, logbook_id)
+        .map_err(|error| error.to_string())?;
+    let credential_id = trusted
+        .auth_credential_id
+        .ok_or_else(|| "trusted LAN peer is missing endpoint auth credential".to_owned())?;
+    let secret = retrieve_lan_auth_secret(state, credential_id)?;
+    let requester_device_id = local_sync_device_id(state);
+    let replay_nonce = uuid::Uuid::new_v4().to_string();
+    let signature = lan_auth_signature(
+        &secret,
+        requester_device_id,
+        logbook_id,
+        method,
+        target,
+        &replay_nonce,
+    );
+    Ok(vec![
+        (
+            LAN_AUTH_DEVICE_ID_HEADER.to_owned(),
+            requester_device_id.to_string(),
+        ),
+        (LAN_AUTH_REPLAY_NONCE_HEADER.to_owned(), replay_nonce),
+        (
+            LAN_AUTH_SIGNATURE_VERSION_HEADER.to_owned(),
+            LAN_AUTH_SIGNATURE_VERSION.to_owned(),
+        ),
+        (LAN_AUTH_SIGNATURE_HEADER.to_owned(), signature),
+    ])
+}
+
+fn lan_http_get_json<T>(
+    address: SocketAddr,
+    path: &str,
+    extra_headers: &[(String, String)],
+) -> Result<T, String>
+where
+    T: DeserializeOwned,
+{
+    let mut stream = TcpStream::connect_timeout(&address, Duration::from_secs(2))
+        .map_err(|error| format!("failed to connect to LAN peer {address}: {error}"))?;
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .map_err(|error| format!("failed to set LAN peer read timeout: {error}"))?;
+    stream
+        .set_write_timeout(Some(Duration::from_secs(5)))
+        .map_err(|error| format!("failed to set LAN peer write timeout: {error}"))?;
+    let request = format!(
+        "GET {path} HTTP/1.1\r\nHost: {}\r\nAccept: application/json\r\nConnection: close\r\n{}\r\n",
+        lan_host_header(address),
+        lan_http_extra_headers(extra_headers)
+    );
+    stream
+        .write_all(request.as_bytes())
+        .map_err(|error| format!("failed to write LAN peer request: {error}"))?;
+    let mut response = Vec::new();
+    stream
+        .read_to_end(&mut response)
+        .map_err(|error| format!("failed to read LAN peer response: {error}"))?;
+    let body = http_response_body(&response)?;
+    serde_json::from_slice(body).map_err(|error| format!("LAN peer JSON was invalid: {error}"))
+}
+
+fn lan_http_post_json<T, B>(
+    address: SocketAddr,
+    path: &str,
+    body: &B,
+    extra_headers: &[(String, String)],
+) -> Result<T, String>
+where
+    T: DeserializeOwned,
+    B: Serialize,
+{
+    let mut stream = TcpStream::connect_timeout(&address, Duration::from_secs(2))
+        .map_err(|error| format!("failed to connect to LAN peer {address}: {error}"))?;
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .map_err(|error| format!("failed to set LAN peer read timeout: {error}"))?;
+    stream
+        .set_write_timeout(Some(Duration::from_secs(5)))
+        .map_err(|error| format!("failed to set LAN peer write timeout: {error}"))?;
+    let body = serde_json::to_vec(body)
+        .map_err(|error| format!("LAN peer request JSON failed: {error}"))?;
+    let request = format!(
+        "POST {path} HTTP/1.1\r\nHost: {}\r\nAccept: application/json\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n{}\r\n",
+        lan_host_header(address),
+        body.len(),
+        lan_http_extra_headers(extra_headers)
+    );
+    stream
+        .write_all(request.as_bytes())
+        .and_then(|_| stream.write_all(&body))
+        .map_err(|error| format!("failed to write LAN peer request: {error}"))?;
+    let mut response = Vec::new();
+    stream
+        .read_to_end(&mut response)
+        .map_err(|error| format!("failed to read LAN peer response: {error}"))?;
+    let body = http_response_body(&response)?;
+    serde_json::from_slice(body).map_err(|error| format!("LAN peer JSON was invalid: {error}"))
+}
+
+fn lan_http_extra_headers(extra_headers: &[(String, String)]) -> String {
+    let mut headers = String::new();
+    for (name, value) in extra_headers {
+        headers.push_str(name);
+        headers.push_str(": ");
+        headers.push_str(value);
+        headers.push_str("\r\n");
+    }
+    headers
+}
+
+fn http_response_body(response: &[u8]) -> Result<&[u8], String> {
+    let Some(header_end) = response.windows(4).position(|window| window == b"\r\n\r\n") else {
+        return Err("LAN peer response did not include HTTP headers".to_owned());
+    };
+    let headers = String::from_utf8_lossy(&response[..header_end]);
+    let status_line = headers.lines().next().unwrap_or_default();
+    if !status_line.contains(" 200 ") {
+        return Err(format!("LAN peer returned {status_line}"));
+    }
+    Ok(&response[header_end + 4..])
+}
+
+fn parse_lan_peer_address(input: &str) -> Result<SocketAddr, String> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return Err("LAN peer address is required".to_owned());
+    }
+    if trimmed.starts_with("https://") {
+        return Err("LAN peer transport currently supports http:// only".to_owned());
+    }
+    let without_scheme = trimmed.strip_prefix("http://").unwrap_or(trimmed);
+    let host_port = without_scheme
+        .split_once('/')
+        .map_or(without_scheme, |(host_port, _)| host_port);
+    let address = host_port
+        .parse::<SocketAddr>()
+        .map_err(|error| format!("invalid LAN peer address {host_port:?}: {error}"))?;
+    if address.port() == 0 {
+        return Err("LAN peer address must include a nonzero port".to_owned());
+    }
+    if !is_allowed_lan_peer_ip(address.ip()) {
+        return Err("LAN peer address must use a loopback, private, or link-local IP".to_owned());
+    }
+    Ok(address)
+}
+
+fn is_allowed_lan_peer_ip(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(ip) => ip.is_loopback() || ip.is_private() || ip.is_link_local(),
+        IpAddr::V6(ip) => {
+            ip.is_loopback() || ip.is_unicast_link_local() || is_ipv6_unique_local(&ip)
+        }
+    }
+}
+
+fn is_ipv6_unique_local(ip: &std::net::Ipv6Addr) -> bool {
+    (ip.segments()[0] & 0xfe00) == 0xfc00
+}
+
+fn lan_host_header(address: SocketAddr) -> String {
+    if address.is_ipv6() {
+        format!("[{}]:{}", address.ip(), address.port())
+    } else {
+        address.to_string()
+    }
+}
+
+fn is_demo_peer(peer: &PeerRecord) -> bool {
+    peer.device_id == demo_peer_device_id()
+}
+
+fn demo_peer_device_id() -> uuid::Uuid {
+    uuid::Uuid::parse_str("00000000-0000-4000-8000-0000000000aa")
+        .expect("demo peer device id is valid")
 }
 
 fn sync_no_peer_error(state: &AppState, event_type: &str) -> Vec<u8> {
@@ -5326,6 +7590,50 @@ fn sync_no_peer_error(state: &AppState, event_type: &str) -> Vec<u8> {
         Some("no discovered peers".to_owned()),
     );
     json_response_with_status(400, &json!({"ok": false, "error": "no discovered peers"}))
+}
+
+fn sync_lan_trust_error(state: &AppState, event_type: &str, error: impl Into<String>) -> Vec<u8> {
+    let error = error.into();
+    {
+        let mut sync = state
+            .sync
+            .lock()
+            .expect("sync state mutex should not be poisoned");
+        sync.warning_count += 1;
+    }
+    let _ = publish_gui_runtime(
+        state,
+        event_type,
+        RuntimeEventSeverity::Warn,
+        "LAN peer trust check failed",
+        None,
+        Some(error.clone()),
+    );
+    json_response_with_status(403, &json!({"ok": false, "error": error}))
+}
+
+fn sync_lan_transport_error(
+    state: &AppState,
+    event_type: &str,
+    error: impl Into<String>,
+) -> Vec<u8> {
+    let error = error.into();
+    {
+        let mut sync = state
+            .sync
+            .lock()
+            .expect("sync state mutex should not be poisoned");
+        sync.warning_count += 1;
+    }
+    let _ = publish_gui_runtime(
+        state,
+        event_type,
+        RuntimeEventSeverity::Warn,
+        "LAN peer transport failed",
+        None,
+        Some(error.clone()),
+    );
+    json_response_with_status(502, &json!({"ok": false, "error": error}))
 }
 
 fn cloud_auth(state: &AppState) -> Option<CloudAuth> {
@@ -5373,10 +7681,8 @@ fn build_demo_remote_events(state: &AppState) -> Vec<CoreEventEnvelope> {
             author_operator_id: None,
             station_callsign: "KE8YGW".to_owned(),
             operator_callsign: Some("KE8YGW".to_owned()),
-            author_device_id: uuid::Uuid::parse_str("00000000-0000-4000-8000-0000000000aa")
-                .expect("demo device id is valid"),
-            source_device_id: uuid::Uuid::parse_str("00000000-0000-4000-8000-0000000000aa")
-                .expect("demo device id is valid"),
+            author_device_id: demo_peer_device_id(),
+            source_device_id: demo_peer_device_id(),
             correlation_id: uuid::Uuid::new_v4(),
             source_plugin_id: Some("sync.demo.peer".to_owned()),
             schema_version: 1,
@@ -5536,4 +7842,552 @@ fn start_demo_runtime_publisher(bridge: GuiRuntimeBridge) {
             index += 1;
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ham_core::InsecureDevCredentialStore;
+
+    fn test_root(prefix: &str) -> std::path::PathBuf {
+        let root = std::env::temp_dir().join(format!("{prefix}-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        root
+    }
+
+    fn test_state(prefix: &str) -> AppState {
+        let root = test_root(prefix);
+        let support_dir = root.join("support");
+        std::fs::create_dir_all(&support_dir).unwrap();
+        let bridge = GuiRuntimeBridge::new(RuntimeLogConfig {
+            directory: root.join("logs"),
+            max_bytes: 1024 * 1024,
+            retained_files: 1,
+        })
+        .unwrap();
+        let store = Arc::new(JsonlLogbookEventStore::open(root.join("official.jsonl")).unwrap());
+        let permission_store =
+            JsonPermissionGrantStore::new(support_dir.join("plugin-permissions.json"));
+        let station_store = JsonStationBookStore::new(support_dir.join("station-book.json"));
+        let service_registry_store =
+            JsonSupportStore::<ServiceRegistry>::new(support_dir.join("service-registry.json"));
+        let service_cache_store =
+            JsonSupportStore::<Vec<ServiceCacheEntry>>::new(support_dir.join("service-cache.json"));
+        let map_layer_store =
+            JsonSupportStore::<MapLayerStack>::new(support_dir.join("map-layers.json"));
+        let upload_queue_store =
+            JsonSupportStore::<UploadQueue>::new(support_dir.join("upload-queue.json"));
+        let mut permission_grants = PermissionGrantSet::grants_for_manifest(&core_gui_manifest());
+        let permission_registry = PermissionRegistry::mvp_default();
+        let permission_settings = PermissionSettings::default();
+        ham_core::grant_builtin_defaults(
+            &[core_gui_manifest()],
+            &permission_registry,
+            &permission_settings,
+            &mut permission_grants,
+        );
+        AppState {
+            bridge,
+            store,
+            logbook_id: uuid::Uuid::new_v4(),
+            proposal_runtime: tokio::runtime::Runtime::new().unwrap(),
+            sync: Mutex::new(SyncUiState::new(LocalPeerIdentity::new(
+                "KE8YGW Logger Test",
+                Some(0),
+            ))),
+            offline_queue: JsonOfflineMutationQueue::new(
+                support_dir.join("offline-mutations.json"),
+            ),
+            conflict_review_store: JsonConflictReviewStore::new(
+                support_dir.join("conflict-reviews.json"),
+            ),
+            lan_trust_store: JsonLanTrustStore::new(support_dir.join("lan-trust.json")),
+            cloud_server: InMemoryCloudSyncServer::new(CloudServerConfig::default()),
+            lookup_cache: LookupCache::new(),
+            lookup_config: Mutex::new(LookupUiConfig::default()),
+            service_registry: Mutex::new(default_service_registry()),
+            service_cache: ServiceCache::new(),
+            map_layers: Mutex::new(MapLayerStack::default_layers()),
+            rig_provider: MockRigProvider::default(),
+            rig_config: Mutex::new(RigUiConfig::default()),
+            station_store,
+            station_book: Mutex::new(StationBook::default()),
+            credential_store: Mutex::new(Box::new(
+                InsecureDevCredentialStore::open(support_dir.join("dev-credentials.json"), true)
+                    .unwrap(),
+            )),
+            upload_queue: Mutex::new(default_upload_queue()),
+            online_support: Mutex::new(OnlineSupportState::default()),
+            last_report: Mutex::new(None),
+            permission_registry,
+            permission_store,
+            service_registry_store,
+            service_cache_store,
+            map_layer_store,
+            upload_queue_store,
+            permission_grants: Mutex::new(permission_grants),
+            permission_settings: Mutex::new(permission_settings),
+        }
+    }
+
+    fn response_json(response: Vec<u8>) -> Value {
+        serde_json::from_slice(http_response_body(&response).unwrap()).unwrap()
+    }
+
+    fn response_json_any_status(response: Vec<u8>) -> Value {
+        let header_end = response
+            .windows(4)
+            .position(|window| window == b"\r\n\r\n")
+            .expect("test HTTP response should include headers");
+        serde_json::from_slice(&response[header_end + 4..]).unwrap()
+    }
+
+    fn create_test_qso(state: &AppState, callsign: &str) -> Value {
+        response_json(handle_qso_create(
+            state,
+            serde_json::to_vec(&json!({
+                "contacted_callsign": callsign,
+                "mode": "SSB"
+            }))
+            .unwrap()
+            .as_slice(),
+        ))
+    }
+
+    #[test]
+    fn cloud_connect_auto_push_drains_recovered_desktop_queue() {
+        let state = test_state("ke8ygw-ham-gui-auto-drain");
+        let created = create_test_qso(&state, "K1AUTO");
+        assert_eq!(created["ok"], true);
+        let operation_id: uuid::Uuid =
+            serde_json::from_value(created["offline_mutation"]["operation_id"].clone()).unwrap();
+        state
+            .offline_queue
+            .mark_sending(operation_id, chrono::Utc::now())
+            .unwrap();
+        assert_eq!(
+            state
+                .offline_queue
+                .recover_interrupted_writes(chrono::Utc::now())
+                .unwrap(),
+            1
+        );
+
+        let connected = response_json(handle_cloud_connect(
+            &state,
+            serde_json::to_vec(&json!({
+                "enable_cloud_sync": true,
+                "auto_push_enabled": true
+            }))
+            .unwrap()
+            .as_slice(),
+        ));
+
+        assert_eq!(connected["ok"], true);
+        assert_eq!(connected["auto_push"]["ok"], true);
+        assert_eq!(connected["auto_push"]["skipped"], false);
+        assert_eq!(connected["auto_push"]["push"]["accepted_count"], 1);
+        assert_eq!(
+            connected["auto_push"]["offline_push_batch"]["event_count"],
+            1
+        );
+
+        let snapshot = state
+            .offline_queue
+            .load_snapshot(chrono::Utc::now())
+            .unwrap();
+        assert_eq!(snapshot.health.accepted, 1);
+        assert_eq!(snapshot.health.ready_to_send, 0);
+        assert_eq!(
+            state
+                .proposal_runtime
+                .block_on(state.store.list_events(state.logbook_id))
+                .unwrap()
+                .len(),
+            1,
+            "desktop auto-drain must not duplicate local official history"
+        );
+        assert_eq!(
+            state
+                .sync
+                .lock()
+                .expect("sync state mutex should not be poisoned")
+                .latest_cloud_push
+                .as_ref()
+                .map(|push| push.accepted_count),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn cloud_connect_auto_push_skips_unqueued_local_history() {
+        let state = test_state("ke8ygw-ham-gui-auto-drain-skip");
+        let created = create_test_qso(&state, "K1LOCAL");
+        let operation_id: uuid::Uuid =
+            serde_json::from_value(created["offline_mutation"]["operation_id"].clone()).unwrap();
+        state
+            .offline_queue
+            .mark_accepted(operation_id, chrono::Utc::now())
+            .unwrap();
+
+        let connected = response_json(handle_cloud_connect(
+            &state,
+            serde_json::to_vec(&json!({
+                "enable_cloud_sync": true,
+                "auto_push_enabled": true
+            }))
+            .unwrap()
+            .as_slice(),
+        ));
+
+        assert_eq!(connected["ok"], true);
+        assert_eq!(connected["auto_push"]["ok"], true);
+        assert_eq!(connected["auto_push"]["skipped"], true);
+        assert_eq!(
+            connected["auto_push"]["skip_reason"],
+            "no_ready_offline_mutations"
+        );
+        assert!(
+            state
+                .sync
+                .lock()
+                .expect("sync state mutex should not be poisoned")
+                .latest_cloud_push
+                .is_none(),
+            "auto-drain must not push unrelated local history when the offline queue is empty"
+        );
+    }
+
+    #[test]
+    fn lan_peer_address_accepts_http_ipv4_and_ipv6_socket_addresses() {
+        assert_eq!(
+            parse_lan_peer_address("http://127.0.0.1:9468/api/sync/state").unwrap(),
+            "127.0.0.1:9468".parse::<SocketAddr>().unwrap()
+        );
+        assert_eq!(
+            parse_lan_peer_address("192.168.1.25:9468").unwrap(),
+            "192.168.1.25:9468".parse::<SocketAddr>().unwrap()
+        );
+        assert_eq!(
+            parse_lan_peer_address("[::1]:9469").unwrap(),
+            "[::1]:9469".parse::<SocketAddr>().unwrap()
+        );
+        assert_eq!(
+            parse_lan_peer_address("[fd00::1]:9469").unwrap(),
+            "[fd00::1]:9469".parse::<SocketAddr>().unwrap()
+        );
+        assert!(parse_lan_peer_address("https://127.0.0.1:9468").is_err());
+        assert!(parse_lan_peer_address("localhost:9468").is_err());
+        assert!(parse_lan_peer_address("8.8.8.8:9468").is_err());
+        assert!(parse_lan_peer_address("[2001:4860:4860::8888]:9468").is_err());
+        assert!(parse_lan_peer_address("127.0.0.1:0").is_err());
+    }
+
+    #[test]
+    fn http_response_body_requires_successful_status_and_headers() {
+        let response = b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}";
+        assert_eq!(http_response_body(response).unwrap(), b"{}");
+        let rejected = b"HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\n\r\n";
+        assert!(http_response_body(rejected).is_err());
+        assert!(http_response_body(b"not http").is_err());
+    }
+
+    #[test]
+    fn lan_endpoint_auth_from_headers_requires_device_and_nonce() {
+        let device_id = uuid::Uuid::new_v4();
+        let mut headers = HashMap::new();
+        headers.insert(LAN_AUTH_DEVICE_ID_HEADER.to_owned(), device_id.to_string());
+        headers.insert(
+            LAN_AUTH_REPLAY_NONCE_HEADER.to_owned(),
+            "request-nonce".to_owned(),
+        );
+        headers.insert(
+            LAN_AUTH_SIGNATURE_VERSION_HEADER.to_owned(),
+            LAN_AUTH_SIGNATURE_VERSION.to_owned(),
+        );
+        headers.insert(LAN_AUTH_SIGNATURE_HEADER.to_owned(), "a".repeat(64));
+
+        let auth = lan_endpoint_auth_from_headers(&headers).unwrap();
+        assert_eq!(auth.device_id, device_id);
+        assert_eq!(auth.replay_nonce, "request-nonce");
+        assert_eq!(auth.signature, "a".repeat(64));
+
+        headers.remove(LAN_AUTH_REPLAY_NONCE_HEADER);
+        assert!(lan_endpoint_auth_from_headers(&headers)
+            .unwrap_err()
+            .contains("replay nonce"));
+
+        headers.insert(LAN_AUTH_REPLAY_NONCE_HEADER.to_owned(), "x".repeat(129));
+        assert!(lan_endpoint_auth_from_headers(&headers)
+            .unwrap_err()
+            .contains("too long"));
+
+        headers.insert(
+            LAN_AUTH_DEVICE_ID_HEADER.to_owned(),
+            "not-a-uuid".to_owned(),
+        );
+        assert!(lan_endpoint_auth_from_headers(&headers)
+            .unwrap_err()
+            .contains("device id"));
+
+        headers.insert(LAN_AUTH_DEVICE_ID_HEADER.to_owned(), device_id.to_string());
+        headers.insert(
+            LAN_AUTH_REPLAY_NONCE_HEADER.to_owned(),
+            "request-nonce".to_owned(),
+        );
+        headers.insert(LAN_AUTH_SIGNATURE_HEADER.to_owned(), "not-hex".to_owned());
+        assert!(lan_endpoint_auth_from_headers(&headers)
+            .unwrap_err()
+            .contains("signature"));
+    }
+
+    #[test]
+    fn lan_pairing_accept_stores_separate_endpoint_auth_code() {
+        let state = test_state("ke8ygw-ham-gui-lan-pairing-auth-code");
+        let issuer = local_sync_device_id(&state);
+        let peer_device_id = uuid::Uuid::new_v4();
+        let token = state
+            .lan_trust_store
+            .issue_pairing_token(
+                issuer,
+                state.logbook_id,
+                "Desktop LAN Peer",
+                true,
+                chrono::Utc::now(),
+            )
+            .unwrap();
+        let auth_code = format!(
+            "{}{}",
+            uuid::Uuid::new_v4().simple(),
+            uuid::Uuid::new_v4().simple()
+        );
+        let response = response_json(handle_lan_pairing_accept(
+            &state,
+            serde_json::to_vec(&json!({
+                "token_id": token.token_id,
+                "pairing_code": token.pairing_code,
+                "auth_code": auth_code,
+                "peer_device_id": peer_device_id,
+                "peer_display_name": "iOS Field Phone",
+                "logbook_id": state.logbook_id,
+                "public_key_fingerprint": "sha256:test"
+            }))
+            .unwrap()
+            .as_slice(),
+        ));
+        assert_eq!(response["ok"], true);
+        let credential_id: uuid::Uuid =
+            serde_json::from_value(response["trusted_device"]["auth_credential_id"].clone())
+                .unwrap();
+        let stored_secret = retrieve_lan_auth_secret(&state, credential_id).unwrap();
+        assert_eq!(stored_secret, auth_code);
+        assert_ne!(stored_secret, token.pairing_code);
+
+        let target = format!("/api/sync/events-since?logbook_id={}", state.logbook_id);
+        let signature = lan_auth_signature(
+            &stored_secret,
+            peer_device_id,
+            state.logbook_id,
+            "GET",
+            &target,
+            "pairing-accept-test-nonce",
+        );
+        assert!(verify_lan_auth_signature(
+            &auth_code,
+            peer_device_id,
+            state.logbook_id,
+            "GET",
+            &target,
+            "pairing-accept-test-nonce",
+            &signature,
+        ));
+        assert!(!verify_lan_auth_signature(
+            &token.pairing_code,
+            peer_device_id,
+            state.logbook_id,
+            "GET",
+            &target,
+            "pairing-accept-test-nonce",
+            &signature,
+        ));
+
+        let snapshot_json =
+            serde_json::to_string(&state.lan_trust_store.snapshot().unwrap()).unwrap();
+        assert!(!snapshot_json.contains(&token.pairing_code));
+        assert!(!snapshot_json.contains(&auth_code));
+    }
+
+    #[test]
+    fn lan_pairing_accept_rejects_missing_or_reused_endpoint_auth_code() {
+        let state = test_state("ke8ygw-ham-gui-lan-pairing-auth-code-required");
+        let issuer = local_sync_device_id(&state);
+        let peer_device_id = uuid::Uuid::new_v4();
+        let token = state
+            .lan_trust_store
+            .issue_pairing_token(
+                issuer,
+                state.logbook_id,
+                "Desktop LAN Peer",
+                true,
+                chrono::Utc::now(),
+            )
+            .unwrap();
+
+        let missing_response = response_json_any_status(handle_lan_pairing_accept(
+            &state,
+            serde_json::to_vec(&json!({
+                "token_id": token.token_id,
+                "pairing_code": token.pairing_code,
+                "peer_device_id": peer_device_id,
+                "peer_display_name": "iOS Field Phone",
+                "logbook_id": state.logbook_id
+            }))
+            .unwrap()
+            .as_slice(),
+        ));
+        assert_eq!(missing_response["ok"], false);
+        assert!(missing_response["error"]
+            .as_str()
+            .unwrap()
+            .contains("endpoint auth code is required"));
+
+        let reused_response = response_json_any_status(handle_lan_pairing_accept(
+            &state,
+            serde_json::to_vec(&json!({
+                "token_id": token.token_id,
+                "pairing_code": token.pairing_code,
+                "auth_code": token.pairing_code,
+                "peer_device_id": peer_device_id,
+                "peer_display_name": "iOS Field Phone",
+                "logbook_id": state.logbook_id
+            }))
+            .unwrap()
+            .as_slice(),
+        ));
+        assert_eq!(reused_response["ok"], false);
+        assert!(reused_response["error"]
+            .as_str()
+            .unwrap()
+            .contains("must be distinct"));
+
+        let short_response = response_json_any_status(handle_lan_pairing_accept(
+            &state,
+            serde_json::to_vec(&json!({
+                "token_id": token.token_id,
+                "pairing_code": token.pairing_code,
+                "auth_code": "short",
+                "peer_device_id": peer_device_id,
+                "peer_display_name": "iOS Field Phone",
+                "logbook_id": state.logbook_id
+            }))
+            .unwrap()
+            .as_slice(),
+        ));
+        assert_eq!(short_response["ok"], false);
+        assert!(short_response["error"]
+            .as_str()
+            .unwrap()
+            .contains("too short"));
+
+        let snapshot = state.lan_trust_store.snapshot().unwrap();
+        assert_eq!(snapshot.trusted_devices.len(), 0);
+        assert_eq!(snapshot.pairing_tokens.len(), 1);
+        assert!(snapshot.pairing_tokens[0].consumed_at.is_none());
+    }
+
+    #[test]
+    fn lan_http_extra_headers_renders_http_header_lines() {
+        let headers = vec![
+            (LAN_AUTH_DEVICE_ID_HEADER.to_owned(), "device".to_owned()),
+            (LAN_AUTH_REPLAY_NONCE_HEADER.to_owned(), "nonce".to_owned()),
+            (
+                LAN_AUTH_SIGNATURE_VERSION_HEADER.to_owned(),
+                LAN_AUTH_SIGNATURE_VERSION.to_owned(),
+            ),
+            (LAN_AUTH_SIGNATURE_HEADER.to_owned(), "signature".to_owned()),
+        ];
+        let rendered = lan_http_extra_headers(&headers);
+        assert!(rendered.contains("x-ke8ygw-lan-device-id: device\r\n"));
+        assert!(rendered.contains("x-ke8ygw-lan-replay-nonce: nonce\r\n"));
+        assert!(rendered.contains("x-ke8ygw-lan-signature-version: hmac-sha256-v1\r\n"));
+        assert!(rendered.contains("x-ke8ygw-lan-signature: signature\r\n"));
+    }
+
+    #[test]
+    fn discovery_source_requires_scoped_ipv6_link_local_addresses() {
+        assert!(is_usable_discovery_source(
+            "192.168.1.10:9737".parse().unwrap()
+        ));
+        assert!(is_usable_discovery_source(
+            "[fd00::1]:9737".parse().unwrap()
+        ));
+        assert!(!is_usable_discovery_source(
+            "[fe80::272f:463d:a6b2:5af7]:9737".parse().unwrap()
+        ));
+        assert!(is_usable_discovery_source(
+            std::net::SocketAddrV6::new("fe80::272f:463d:a6b2:5af7".parse().unwrap(), 9737, 0, 12)
+                .into()
+        ));
+    }
+
+    #[test]
+    fn discovery_api_address_uses_advertised_port() {
+        let identity = LocalPeerIdentity::new("Peer", Some(9468));
+        let packet = DiscoveryPacket::from_identity(&identity);
+        assert_eq!(
+            discovery_api_address(&packet, "192.168.1.10:50300".parse().unwrap()),
+            "192.168.1.10:9468".parse::<SocketAddr>().unwrap()
+        );
+        let mut packet_without_port = packet;
+        packet_without_port.local_api_port = None;
+        assert_eq!(
+            discovery_api_address(&packet_without_port, "192.168.1.10:50300".parse().unwrap()),
+            "192.168.1.10:50300".parse::<SocketAddr>().unwrap()
+        );
+    }
+
+    #[test]
+    fn unsupported_discovery_packets_are_detected_before_recording() {
+        let mut packet =
+            DiscoveryPacket::from_identity(&LocalPeerIdentity::new("Peer", Some(9468)));
+        assert!(is_supported_discovery_packet(&packet));
+        packet.protocol_version = PROTOCOL_VERSION + 1;
+        assert!(!is_supported_discovery_packet(&packet));
+        packet.protocol_version = PROTOCOL_VERSION;
+        packet.protocol_name = "other-sync".to_owned();
+        assert!(!is_supported_discovery_packet(&packet));
+    }
+
+    #[test]
+    fn lan_api_address_rank_prefers_ipv4_private_before_ipv6_link_local() {
+        let mut peer = PeerRecord {
+            peer_id: "peer".to_owned(),
+            device_id: uuid::Uuid::new_v4(),
+            session_id: uuid::Uuid::new_v4(),
+            display_name: "Peer".to_owned(),
+            addresses: vec![
+                std::net::SocketAddrV6::new(
+                    "fe80::272f:463d:a6b2:5af7".parse().unwrap(),
+                    9738,
+                    0,
+                    12,
+                )
+                .into(),
+                "169.254.38.39:9738".parse().unwrap(),
+                "192.168.1.25:9738".parse().unwrap(),
+            ],
+            protocol_version: PROTOCOL_VERSION,
+            capabilities: Vec::new(),
+            first_seen: chrono::Utc::now(),
+            last_seen: chrono::Utc::now(),
+            connection_state: ham_sync::PeerConnectionState::Discovered,
+            sync_state: ham_sync::PeerSyncState::Unknown,
+        };
+        let sorted = sorted_peer_api_addresses(&peer);
+        assert_eq!(sorted[0], "192.168.1.25:9738".parse().unwrap());
+        assert_eq!(sorted[1], "169.254.38.39:9738".parse().unwrap());
+        peer.addresses.push("127.0.0.1:9738".parse().unwrap());
+        let sorted = sorted_peer_api_addresses(&peer);
+        assert_eq!(sorted[0], "127.0.0.1:9738".parse().unwrap());
+    }
 }

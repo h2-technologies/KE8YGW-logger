@@ -197,6 +197,8 @@ impl Default for ProviderValidationSettings {
 pub struct SyncSettings {
     pub sync_server_url: String,
     pub device_name: String,
+    #[serde(default)]
+    pub sync_endpoint_style: SyncEndpointStyle,
     pub prefer_lan_sync: bool,
     pub auto_push_enabled: bool,
     pub auto_pull_enabled: bool,
@@ -210,6 +212,7 @@ impl Default for SyncSettings {
         Self {
             sync_server_url: "http://127.0.0.1:9740".to_owned(),
             device_name: "KE8YGW Logger iOS".to_owned(),
+            sync_endpoint_style: SyncEndpointStyle::default(),
             prefer_lan_sync: true,
             auto_push_enabled: false,
             auto_pull_enabled: false,
@@ -218,6 +221,14 @@ impl Default for SyncSettings {
             account_label: None,
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum SyncEndpointStyle {
+    #[default]
+    LogbookScoped,
+    HostedSync,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -398,6 +409,10 @@ mod tests {
         assert_eq!(settings.operator.primary_callsign, "KE8YGW");
         assert_eq!(settings.sync.sync_server_url, "http://127.0.0.1:9740");
         assert_eq!(
+            settings.sync.sync_endpoint_style,
+            SyncEndpointStyle::LogbookScoped
+        );
+        assert_eq!(
             settings.location.manual_maidenhead_grid.as_deref(),
             Some("EN91")
         );
@@ -411,6 +426,21 @@ mod tests {
             settings.normalized(),
             Err(ApplicationSettingsError::InvalidCallsign { .. })
         ));
+    }
+
+    #[test]
+    fn sync_endpoint_style_defaults_for_legacy_settings() {
+        let mut value = serde_json::to_value(ApplicationSettings::default()).unwrap();
+        value["sync"]
+            .as_object_mut()
+            .unwrap()
+            .remove("sync_endpoint_style");
+        let settings: ApplicationSettings = serde_json::from_value(value).unwrap();
+
+        assert_eq!(
+            settings.sync.sync_endpoint_style,
+            SyncEndpointStyle::LogbookScoped
+        );
     }
 
     #[test]

@@ -1,6 +1,6 @@
 # v1 Native iOS Plan
 
-Last audited: 2026-07-21
+Last audited: 2026-07-22
 
 Native iOS is part of the locked v1 release on November 24, 2026. It must be a
 real SwiftUI iPhone/iPad app, not a PWA, pinned hosted website, or thin web
@@ -41,8 +41,29 @@ wrapper.
 - iOS ADIF export prefers the Rust bridge and falls back to Swift export when
   the bridge is unavailable; import/restore still need broader Rust-backed
   native flows.
-- Sync views consume Rust snapshots, but full push/pull/merge/conflict commands
-  are not exposed end-to-end to iOS.
+- Sync views consume Rust snapshots; Rust-owned offline queue records include
+  optional target entity metadata, and durable conflict-review create/resolve
+  commands are exposed through the bridge. The native Swift bridge also exposes
+  typed queue snapshots, recovery reports, retry plans, retry results, affected
+  mutations, queue health, Rust-planned official event envelopes,
+  self-hosted/logbook-scoped and hosted `/api/v1/sync/*` execution routing,
+  accepted-prefix/rejected-tail retry
+  result recording with shared Rust golden coverage for accepted-prefix
+  queue acknowledgment, rejected-tail user-action stops, and revoked/expired
+  cloud-auth re-pair recovery, Rust-owned pulled-event apply through
+  `sync.remote_events.apply`,
+  self-hosted/logbook-scoped and hosted pull request
+  construction, native pull fetch -> Rust apply coordination, saved
+  conflict-review records, selected recovery paths, and structured conflict
+  messages, plus Rust-owned LAN trust snapshots, local one-time pairing-code
+  issue and acceptance, direct peer trust, Keychain-backed LAN auth credential
+  rotation, and revocation controls. The Sync workspace can ask Rust for no-network/user-action
+  retry decisions using native network state, apply pulled official envelopes
+  through shared verification, surface open review actions, and manage LAN trust
+  without storing raw LAN auth secrets in Rust support state. Full real endpoint
+  qualification, Apple multicast entitlement/provisioning, release-device
+  scheduling, and broader reconciliation workflows are not complete end-to-end
+  on iOS.
 - MapKit surfaces exist, but cached/offline map regions and production map
   provider integration are not complete.
 - Keychain plumbing exists, but production provider credential setup and App
@@ -60,10 +81,15 @@ wrapper.
 
 ## Required Remaining Work
 
-- Complete offline queue and reconciliation behavior through shared Rust/API
-  validation.
-- Expose sync push, pull, divergence review, and user-directed conflict
-  handling through the Rust bridge/API contract.
+- Complete release-device offline queue and reconciliation qualification through
+  shared Rust/API validation.
+- Finish real native sync endpoint qualification, release-device divergence
+  review/corrective-event workflow qualification, Apple multicast
+  entitlement/provisioning for LAN discovery, release-device BGTask execution
+  beyond the current background retry registration/scheduling policy and
+  simulator-covered Auto Pull sequencing,
+  hosted/self-hosted qualification for native push/pull paths, and physical
+  poor-network validation through the Rust bridge/API contract.
 - Finish native ADIF import/restore, backup inspect/dry-run/apply, and
   diagnostic export flows without storing secrets.
 - Add cached/offline map region selection and validation against an approved
