@@ -24,8 +24,6 @@ wrapper.
 
 - Xcode project, shared scheme, Info.plist, app icons, SwiftUI app shell, and
   feature workspaces under `ios/KE8YGWLogger`.
-- App-target entitlements file declaring Apple multicast networking for native
-  LAN discovery.
 - Rust FFI crate, public header/module map, and Apple build/link scripts under
   `crates/ham-ios-ffi` and `scripts/ios`.
 - Byte-buffer JSON command ABI, version/self-test payloads, panic containment,
@@ -63,9 +61,9 @@ wrapper.
   retry decisions using native network state, apply pulled official envelopes
   through shared verification, surface open review actions, and manage LAN trust
   without storing raw LAN auth secrets in Rust support state. Full real endpoint
-  qualification, Apple Developer multicast entitlement approval/provisioning,
-  release-device scheduling, and broader reconciliation workflows are not
-  complete end-to-end on iOS.
+  qualification, Apple multicast entitlement/provisioning, release-device
+  scheduling, and broader reconciliation workflows are not complete end-to-end
+  on iOS.
 - MapKit surfaces exist, but cached/offline map regions and production map
   provider integration are not complete.
 - Keychain plumbing exists, but production provider credential setup and App
@@ -86,9 +84,9 @@ wrapper.
 - Complete release-device offline queue and reconciliation qualification through
   shared Rust/API validation.
 - Finish real native sync endpoint qualification, release-device divergence
-  review/corrective-event workflow qualification, Apple Developer multicast
-  entitlement approval/provisioning for LAN discovery, release-device BGTask
-  execution beyond the current background retry registration/scheduling policy and
+  review/corrective-event workflow qualification, Apple multicast
+  entitlement/provisioning for LAN discovery, release-device BGTask execution
+  beyond the current background retry registration/scheduling policy and
   simulator-covered Auto Pull sequencing,
   hosted/self-hosted qualification for native push/pull paths, and physical
   poor-network validation through the Rust bridge/API contract.

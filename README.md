@@ -880,8 +880,8 @@ disabled, protected LAN reads require HMAC-SHA256 request proof after pairing,
 and native iOS manual LAN pull verifies the peer's published device ID before
 sending signed reads. Native iOS can complete reciprocal pairing against an
 operator-entered peer URL and scan LAN discovery packets into probed peer URLs,
-while Apple Developer account approval/provisioning for the declared multicast
-entitlement plus physical-device LAN/iOS Local Network validation remain TODOs
+while Apple multicast entitlement/provisioning plus physical-device LAN/iOS
+Local Network validation remain TODOs
 before unattended LAN sync.
 
 ## Safe LAN Event Replication
@@ -949,7 +949,7 @@ as user-action-required, plan no unattended retry, and resume only after
 re-pairing plus accepted-hash acknowledgment. LAN auth credential
 rotation/recovery is available through the GUI trust endpoint. Release-device
 cross-client branch review workflow qualification, signed events, Apple
-Developer multicast entitlement approval/provisioning, physical-device LAN/iOS local-network
+multicast entitlement/provisioning, physical-device LAN/iOS local-network
 validation, and formal asymmetric LAN key exchange beyond the current
 endpoint-auth/HMAC model are still deferred.
 
@@ -1096,8 +1096,8 @@ use manual loopback URLs. Mutating LAN pull also requires the explicit
 and signed remote read requests.
 Native iOS can scan the same discovery packets, probe `/api/sync/state`, and
 fill the existing peer URL fields only when the probed device/session identity
-matches the packet. Apple Developer multicast entitlement approval/provisioning
-and physical iOS Local Network permission validation
+matches the packet. Apple multicast entitlement/provisioning and physical iOS
+Local Network permission validation
 remain next sync tasks.
 
 ## Cloud Relay And Self-Hosted Sync

@@ -364,11 +364,9 @@ using the same secret-free discovery packet shape. The scanner derives a
 candidate peer URL from the sender address and advertised API port, probes
 `/api/sync/state`, lists only peers whose probed device/session identity matches
 the discovery packet, and lets the operator copy that discovered peer into the
-existing pairing/pull controls. The iOS app target declares the Apple multicast
-networking entitlement required by this scanner; Apple Developer account
-approval/provisioning, physical-device LAN validation, and physical iOS Local
-Network permission validation remain before unattended LAN sync is considered
-complete.
+existing pairing/pull controls. Apple multicast entitlement/provisioning,
+physical-device LAN validation, and physical iOS Local Network permission
+validation remain before unattended LAN sync is considered complete.
 
 ## Cloud Relay and Self-Hosted Sync
 
@@ -423,9 +421,8 @@ The current self-hosted server uses durable local storage by default: embedded S
 
 ## Deferred Work
 
-- Apple Developer account approval/provisioning and release-device validation
-  for the declared native iOS multicast entitlement over the durable trust
-  store.
+- Apple multicast entitlement/provisioning and release-device validation for
+  native iOS LAN discovery over the durable trust store.
 - Signed official events.
 - End-to-end encrypted relay.
 - Formal asymmetric LAN key exchange beyond the current distinct endpoint-auth

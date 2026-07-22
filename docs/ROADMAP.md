@@ -41,8 +41,8 @@ wrapper is not the iOS client. See `V1_RELEASE_PLAN.md`,
      credential rotation/recovery. Native iOS now has Rust-owned LAN trust
      snapshot/issue/accept/trust/rotate/revoke bridge commands with
      Keychain-backed credential references, reciprocal peer-URL pairing, and
-     multicast discovery peer selection. Apple Developer multicast entitlement
-     approval/provisioning and physical-device LAN/iOS local-network
+     multicast discovery peer selection. Apple multicast
+     entitlement/provisioning and physical-device LAN/iOS local-network
      validation remain high priority.
 
 6. **Cloud/Self-Hosted Sync**
@@ -142,9 +142,8 @@ The dependency-ordered v1 critical path is tracked in
 `V1_EXECUTION_PLAN.md`. The next high-impact work should minimize future
 rewrites:
 
-1. Finish the remaining sync/reconciliation hardening: Apple Developer account
-   approval/provisioning for the declared multicast entitlement,
-   release-device cross-client branch
+1. Finish the remaining sync/reconciliation hardening: Apple multicast
+   entitlement/provisioning, release-device cross-client branch
    review/reconciliation workflow qualification,
    physical-device LAN/iOS local-network validation, and release-device iOS
    background task execution/poor-network qualification before unattended desktop/iOS
