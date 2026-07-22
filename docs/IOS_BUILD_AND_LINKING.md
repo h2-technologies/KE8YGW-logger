@@ -13,9 +13,9 @@ FFI library and linking it into the native iOS app.
   locations (`~/.cargo/bin`, `/opt/homebrew/bin`, `/usr/local/bin`) because
   Xcode archive shells do not load normal interactive shell profiles.
 - Xcode Cloud runs `ios/KE8YGWLogger/ci_scripts/ci_post_clone.sh` before
-  `xcodebuild`. That script installs the pinned Rust toolchain and targets,
-  sets Cargo network retries, and prefetches the locked Cargo dependency graph
-  with retry before the archive action starts.
+  `xcodebuild`. That script installs the pinned Rust toolchain and targets with
+  bounded network retry, sets Cargo network retries, and prefetches the locked
+  Cargo dependency graph before the archive action starts.
 - iOS deployment target: 17.0, matching `KE8YGWLogger.xcodeproj`.
 - Supported Rust Apple targets:
   - `aarch64-apple-ios`
@@ -183,10 +183,11 @@ for every XCFramework slice.
 - `xcode-select` points at command line tools only: run
   `sudo xcode-select -s /Applications/Xcode.app/Contents/Developer`.
 - Missing Rust target: run `bash scripts/ios/install-targets.sh`.
-- Xcode Cloud fails while fetching a Cargo dependency such as `serde`: rerun the
-  Xcode Cloud build if the post-clone retry exhausted all attempts, then inspect
-  the App Store Connect logs artifact for network, crates.io, or cache-service
-  failures before changing repository code.
+- Xcode Cloud exits `ci_post_clone.sh` while downloading Rust or fetching a
+  Cargo dependency such as `serde`: rerun the Xcode Cloud build if the
+  post-clone retry exhausted all attempts, then inspect the App Store Connect
+  logs artifact for network, crates.io, or cache-service failures before
+  changing repository code.
 - `required tool 'rustup' was not found on PATH`: install Rust from
   `https://rustup.rs`, then rerun the build. The build scripts load
   `~/.cargo/env` automatically for Xcode, so do not add developer-specific

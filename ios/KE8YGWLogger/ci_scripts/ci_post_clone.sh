@@ -52,7 +52,7 @@ if ! command -v rustup >/dev/null 2>&1; then
 
   rustup_init="$(mktemp "${TMPDIR:-/tmp}/rustup-init.XXXXXX")"
   trap 'rm -f "$rustup_init"' EXIT
-  curl --proto '=https' --tlsv1.2 -fL \
+  retry_command 5 curl --proto '=https' --tlsv1.2 -fL \
     "https://static.rust-lang.org/rustup/archive/${RUSTUP_VERSION}/${rustup_arch}/rustup-init" \
     -o "$rustup_init"
   actual_sha256="$(shasum -a 256 "$rustup_init" | awk '{print $1}')"
@@ -61,7 +61,7 @@ if ! command -v rustup >/dev/null 2>&1; then
     exit 1
   fi
   chmod +x "$rustup_init"
-  "$rustup_init" -y --profile minimal --default-toolchain 1.96.0
+  retry_command 3 "$rustup_init" -y --profile minimal --default-toolchain 1.96.0
   rm -f "$rustup_init"
   trap - EXIT
 fi
@@ -69,9 +69,9 @@ fi
 # shellcheck source=/dev/null
 . "$CARGO_HOME/env"
 
-rustup target add aarch64-apple-ios
-rustup target add aarch64-apple-ios-sim
-if rustup target add x86_64-apple-ios; then
+retry_command 5 rustup target add aarch64-apple-ios
+retry_command 5 rustup target add aarch64-apple-ios-sim
+if retry_command 5 rustup target add x86_64-apple-ios; then
   echo "Installed Intel simulator target x86_64-apple-ios."
 else
   echo "warning: x86_64-apple-ios target unavailable; Apple Silicon simulator builds will still be produced." >&2
