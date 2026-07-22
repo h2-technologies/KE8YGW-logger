@@ -31,8 +31,8 @@ in Keychain and store only credential IDs in Rust support state.
 Local Network usage plus local networking for paired-device sync.
 Signing, provisioning, TestFlight, App Store metadata, privacy manifest,
 physical-device validation, release-safe BGTask execution, real
-hosted/self-hosted native sync endpoint qualification, production reciprocal
-LAN pairing/address-discovery UX, and full v1 offline/sync/provider qualification
+hosted/self-hosted native sync endpoint qualification, production automatic
+LAN address-discovery UX, and full v1 offline/sync/provider qualification
 remain incomplete.
 
 ## Bundle and Signing
@@ -111,6 +111,7 @@ network, or background modes speculatively.
 - The Sync workspace can display saved Rust conflict-review records and
   recommended operator actions without merging history in Swift.
 - The Sync workspace can issue and accept local LAN pairing codes,
+  complete reciprocal pairing against an operator-entered peer URL,
   trust/revoke peers, and rotate LAN auth credentials without storing raw
   pairing codes or LAN auth secrets in Rust support state, logs, diagnostics,
   or SwiftData.

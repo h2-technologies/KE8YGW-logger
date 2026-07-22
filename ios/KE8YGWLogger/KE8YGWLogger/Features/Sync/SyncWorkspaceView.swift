@@ -163,6 +163,9 @@ struct SyncWorkspaceView: View {
                     Button("Accept Code") {
                         Task { await acceptLanPairingToken() }
                     }
+                    Button("Pair With URL") {
+                        Task { await completeLanPairing() }
+                    }
                     Button("Trust Peer") {
                         Task { await trustLanPeer() }
                     }
@@ -268,6 +271,54 @@ struct SyncWorkspaceView: View {
             lanPeerDisplayName = ""
             lanIssuedPairing = nil
             syncMessage = "Accepted LAN pairing for \(result.trustedDevice.displayName ?? displayName)."
+        } catch {
+            try? credentialVault.delete(
+                account: lanAuthAccount(credentialId),
+                providerId: "lan_sync"
+            )
+            syncMessage = error.localizedDescription
+        }
+    }
+
+    private func completeLanPairing() async {
+        guard let peerURL = lanPeerURLValue() else {
+            syncMessage = "Enter the trusted LAN peer URL, such as http://192.168.1.20:17673."
+            return
+        }
+        let tokenId = lanPairingTokenId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard UUID(uuidString: tokenId) != nil else {
+            syncMessage = "Enter the peer pairing token UUID."
+            return
+        }
+        let pairingCode = lanPairingCode.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !pairingCode.isEmpty else {
+            syncMessage = "Enter the peer pairing code."
+            return
+        }
+        let credentialId = UUID().uuidString
+        let authSecret = generateLanAuthSecret()
+        do {
+            try credentialVault.save(
+                secret: authSecret,
+                account: lanAuthAccount(credentialId),
+                providerId: "lan_sync"
+            )
+            let result = try await bridge.completeLanPairing(
+                peerURL: peerURL,
+                tokenId: tokenId,
+                pairingCode: pairingCode,
+                authSecret: authSecret,
+                authCredentialId: credentialId,
+                publicKeyFingerprint: lanPairingFingerprint.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty,
+                networkAvailable: connectivity.state.hasUsableInternet,
+                transport: SyncLanHTTPPairingTransport()
+            )
+            lanSelectedDeviceId = result.trustedDevice.deviceId ?? ""
+            lanPairingTokenId = ""
+            lanPairingCode = ""
+            lanPeerDeviceId = result.trustedDevice.deviceId ?? ""
+            lanPeerDisplayName = result.trustedDevice.displayName ?? ""
+            syncMessage = "Paired with \(result.trustedDevice.displayName ?? "LAN Peer")."
         } catch {
             try? credentialVault.delete(
                 account: lanAuthAccount(credentialId),

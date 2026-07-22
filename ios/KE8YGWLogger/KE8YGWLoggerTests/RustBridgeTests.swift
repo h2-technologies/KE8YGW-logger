@@ -586,6 +586,157 @@ final class RustBridgeTests: XCTestCase {
         }
     }
 
+    func testSyncLanHTTPPairingTransportBuildsRemoteAcceptRequest() throws {
+        let tokenID = "00000000-0000-4000-8000-0000000000c1"
+        let logbookID = "00000000-0000-4000-8000-000000000001"
+        let localIdentity = SyncPeerIdentity(
+            deviceId: "00000000-0000-4000-8000-0000000000f1",
+            sessionId: "00000000-0000-4000-8000-0000000000f2",
+            userHash: nil,
+            displayName: "iOS Field Phone",
+            capabilities: ["discovery.v1", "handshake.v1"],
+            localApiPort: nil
+        )
+        let request = try SyncLanHTTPPairingTransport().makePairingAcceptRequest(
+            peerURL: try XCTUnwrap(URL(string: "http://192.168.1.20:17673")),
+            tokenId: tokenID.uppercased(),
+            pairingCode: "pairing-code",
+            authSecret: "lan-auth-secret-00000000000000000000",
+            localIdentity: localIdentity,
+            logbookId: logbookID.uppercased(),
+            publicKeyFingerprint: "sha256:peer"
+        )
+        let body = try XCTUnwrap(request.httpBody)
+        let object = try JSONSerialization.jsonObject(with: body) as? [String: Any]
+
+        XCTAssertEqual(request.httpMethod, "POST")
+        XCTAssertEqual(request.url?.absoluteString, "http://192.168.1.20:17673/api/sync/lan/pairing-accept")
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "application/json")
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
+        XCTAssertNil(request.value(forHTTPHeaderField: "x-ke8ygw-lan-signature"))
+        XCTAssertEqual(object?["token_id"] as? String, tokenID)
+        XCTAssertEqual(object?["pairing_code"] as? String, "pairing-code")
+        XCTAssertEqual(object?["auth_code"] as? String, "lan-auth-secret-00000000000000000000")
+        XCTAssertEqual(object?["peer_device_id"] as? String, localIdentity.deviceId)
+        XCTAssertEqual(object?["peer_display_name"] as? String, "iOS Field Phone")
+        XCTAssertEqual(object?["logbook_id"] as? String, logbookID)
+        XCTAssertEqual(object?["public_key_fingerprint"] as? String, "sha256:peer")
+    }
+
+    func testSyncLanHTTPPairingTransportValidatesRemoteAcceptResponse() throws {
+        let localIdentity = SyncPeerIdentity(
+            deviceId: "00000000-0000-4000-8000-0000000000f1",
+            sessionId: "00000000-0000-4000-8000-0000000000f2",
+            userHash: nil,
+            displayName: "iOS Field Phone",
+            capabilities: ["discovery.v1", "handshake.v1"],
+            localApiPort: nil
+        )
+        let logbookID = "00000000-0000-4000-8000-000000000001"
+        let trustedDevice = SyncTrustedPeerDevice(
+            deviceId: localIdentity.deviceId,
+            displayName: localIdentity.displayName,
+            logbookIds: [logbookID],
+            trustedAt: "2026-07-22T12:00:00Z",
+            revokedAt: nil,
+            pairingTokenId: nil,
+            publicKeyFingerprint: nil,
+            authCredentialId: "credential-id",
+            authRotatedAt: nil,
+            lastSeenAt: nil
+        )
+
+        XCTAssertNoThrow(
+            try SyncLanHTTPPairingTransport().validateRemotePairingResponse(
+                SyncLanPairingAcceptResponse(ok: true, trustedDevice: trustedDevice),
+                localIdentity: localIdentity,
+                logbookId: logbookID
+            )
+        )
+    }
+
+    func testSyncLanHTTPPairingTransportRejectsWrongRemoteAcceptDevice() throws {
+        let localIdentity = SyncPeerIdentity(
+            deviceId: "00000000-0000-4000-8000-0000000000f1",
+            sessionId: "00000000-0000-4000-8000-0000000000f2",
+            userHash: nil,
+            displayName: "iOS Field Phone",
+            capabilities: ["discovery.v1", "handshake.v1"],
+            localApiPort: nil
+        )
+        let trustedDevice = SyncTrustedPeerDevice(
+            deviceId: "00000000-0000-4000-8000-0000000000ff",
+            displayName: "Unexpected Device",
+            logbookIds: ["00000000-0000-4000-8000-000000000001"],
+            trustedAt: "2026-07-22T12:00:00Z",
+            revokedAt: nil,
+            pairingTokenId: nil,
+            publicKeyFingerprint: nil,
+            authCredentialId: "credential-id",
+            authRotatedAt: nil,
+            lastSeenAt: nil
+        )
+
+        XCTAssertThrowsError(
+            try SyncLanHTTPPairingTransport().validateRemotePairingResponse(
+                SyncLanPairingAcceptResponse(ok: true, trustedDevice: trustedDevice),
+                localIdentity: localIdentity,
+                logbookId: "00000000-0000-4000-8000-000000000001"
+            )
+        ) { error in
+            XCTAssertEqual(error as? SyncLanHTTPTransportError, .invalidPeerPayload)
+        }
+    }
+
+    @MainActor
+    func testLanPairingExecutorCompletesRemoteAcceptAndStoresLocalTrust() async throws {
+        let tokenID = "00000000-0000-4000-8000-0000000000c1"
+        let peerDeviceID = "00000000-0000-4000-8000-0000000000f3"
+        let authCredentialID = UUID().uuidString
+        let transport = StubSyncLanPairingTransport(
+            peerIdentity: SyncPeerIdentity(
+                deviceId: peerDeviceID,
+                sessionId: "00000000-0000-4000-8000-0000000000f4",
+                userHash: nil,
+                displayName: "Desktop LAN Peer",
+                capabilities: ["discovery.v1", "handshake.v1"],
+                localApiPort: 17673
+            ),
+            remoteTrustedDevice: SyncTrustedPeerDevice(
+                deviceId: "00000000-0000-4000-8000-0000000000f1",
+                displayName: "KE8YGW Logger iOS",
+                logbookIds: ["00000000-0000-4000-8000-000000000001"],
+                trustedAt: "2026-07-22T12:00:00Z",
+                revokedAt: nil,
+                pairingTokenId: tokenID,
+                publicKeyFingerprint: "sha256:ios",
+                authCredentialId: "remote-credential-id",
+                authRotatedAt: nil,
+                lastSeenAt: nil
+            )
+        )
+        let store = RustBridgeStore(client: FallbackRustBridgeClient())
+
+        let result = try await store.completeLanPairing(
+            peerURL: try XCTUnwrap(URL(string: "http://192.168.1.20:17673")),
+            tokenId: tokenID,
+            pairingCode: "peer-pairing-code",
+            authSecret: "lan-auth-secret-00000000000000000000",
+            authCredentialId: authCredentialID,
+            publicKeyFingerprint: "sha256:peer",
+            transport: transport
+        )
+
+        XCTAssertEqual(result.trustedDevice.deviceId, peerDeviceID)
+        XCTAssertEqual(result.trustedDevice.displayName, "Desktop LAN Peer")
+        XCTAssertEqual(result.trustedDevice.pairingTokenId, tokenID)
+        XCTAssertEqual(result.trustedDevice.publicKeyFingerprint, "sha256:peer")
+        XCTAssertEqual(result.trustedDevice.authCredentialId, authCredentialID)
+        XCTAssertNotNil(store.sync.lanTrust?.trustedDevices.first(where: { $0.deviceId == peerDeviceID }))
+        XCTAssertEqual(transport.requests.first?.localIdentity.deviceId, "00000000-0000-4000-8000-0000000000f1")
+        XCTAssertEqual(transport.requests.first?.authSecret, "lan-auth-secret-00000000000000000000")
+    }
+
     func testSyncHTTPTransportRejectsEmptyEventBatches() throws {
         XCTAssertThrowsError(
             try SyncHTTPTransport().makePushRequest(
@@ -1353,6 +1504,69 @@ private final class StubSyncLanPullTransport: SyncLanPullTransporting {
                 message: "Local and LAN peer heads match"
             ),
             events: []
+        )
+    }
+}
+
+private final class StubSyncLanPairingTransport: SyncLanPairingTransporting {
+    struct Request {
+        var peerURL: URL
+        var tokenId: String
+        var pairingCode: String
+        var authSecret: String
+        var localIdentity: SyncPeerIdentity
+        var logbookId: String
+        var publicKeyFingerprint: String?
+    }
+
+    private let peerIdentity: SyncPeerIdentity
+    private let remoteTrustedDevice: SyncTrustedPeerDevice?
+    private let error: Error?
+    private(set) var requests: [Request] = []
+
+    init(peerIdentity: SyncPeerIdentity, remoteTrustedDevice: SyncTrustedPeerDevice?) {
+        self.peerIdentity = peerIdentity
+        self.remoteTrustedDevice = remoteTrustedDevice
+        self.error = nil
+    }
+
+    init(error: Error) {
+        self.peerIdentity = SyncPeerIdentity(
+            deviceId: UUID().uuidString,
+            sessionId: UUID().uuidString,
+            userHash: nil,
+            displayName: "LAN Peer",
+            capabilities: ["discovery.v1"],
+            localApiPort: nil
+        )
+        self.remoteTrustedDevice = nil
+        self.error = error
+    }
+
+    func completePairing(
+        peerURL: URL,
+        tokenId: String,
+        pairingCode: String,
+        authSecret: String,
+        localIdentity: SyncPeerIdentity,
+        logbookId: String,
+        publicKeyFingerprint: String?
+    ) async throws -> SyncLanReciprocalPairingResult {
+        requests.append(Request(
+            peerURL: peerURL,
+            tokenId: tokenId,
+            pairingCode: pairingCode,
+            authSecret: authSecret,
+            localIdentity: localIdentity,
+            logbookId: logbookId,
+            publicKeyFingerprint: publicKeyFingerprint
+        ))
+        if let error {
+            throw error
+        }
+        return SyncLanReciprocalPairingResult(
+            peerIdentity: peerIdentity,
+            remoteTrustedDevice: remoteTrustedDevice
         )
     }
 }

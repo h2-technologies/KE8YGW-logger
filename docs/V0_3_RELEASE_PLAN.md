@@ -87,15 +87,19 @@ Last audited: 2026-07-22
   trusted peers without prompt-only handling.
 - Native iOS LAN trust bridge and Sync workspace controls for Rust-owned
   trust snapshots, local one-time code issue and acceptance, direct peer trust,
-  Keychain-backed LAN auth credential rotation, and revocation. `sync.snapshot`
-  returns the durable local identity, and the bundle declares Local Network
-  usage plus local networking for paired-device sync. Pairing codes are returned
-  only by the issue command; snapshots and `lan-trust.json` do not store raw
-  pairing codes or LAN auth secrets. The native Swift LAN pull executor probes
-  `/api/sync/state` to verify the selected trusted peer identity before it
-  signs protected `get-head` and `events-since` requests with the
-  Keychain-backed auth secret, then passes pulled official envelopes through
-  `sync.remote_events.apply` for Rust verification before append.
+  Keychain-backed LAN auth credential rotation, revocation, and reciprocal
+  pairing against an operator-entered peer URL. `sync.snapshot` returns the
+  durable local identity, and the bundle declares Local Network usage plus
+  local networking for paired-device sync. Pairing codes are returned only by
+  the issue command; snapshots and `lan-trust.json` do not store raw pairing
+  codes or LAN auth secrets. The reciprocal URL flow probes `/api/sync/state`,
+  posts the peer token/code plus a generated endpoint auth code to the peer
+  accept endpoint, and then stores only a local Keychain credential reference
+  in Rust trust state after the remote peer accepts. The native Swift LAN pull
+  executor probes `/api/sync/state` to verify the selected trusted peer
+  identity before it signs protected `get-head` and `events-since` requests
+  with the Keychain-backed auth secret, then passes pulled official envelopes
+  through `sync.remote_events.apply` for Rust verification before append.
 - Automatic IPv4/IPv6 multicast discovery worker that probes reachable peer
   identity before recording peers.
 - Older trust records without an `auth_credential_id` remain readable but must
@@ -103,8 +107,8 @@ Last audited: 2026-07-22
 
 ## Still Incomplete For v1
 
-- Production iOS reciprocal LAN pairing/address-discovery UX and full
-  release-device pairing qualification.
+- Production iOS automatic LAN address-discovery UX and full release-device
+  pairing qualification.
 - Stronger LAN key-exchange hardening.
 - Physical-device LAN and iOS Local Network permission prompt validation.
 - End-to-end cross-client branch review and reconciliation workflow beyond the

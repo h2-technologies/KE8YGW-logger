@@ -268,16 +268,21 @@ Native iOS exposes the same durable trust store through Rust FFI commands:
 `sync.lan_trust.rotate_auth`, and `sync.lan_trust.revoke`. The iOS Sync
 workspace can issue a local one-time code, accept a locally issued pairing code
 for a typed peer, directly trust a peer, rotate Keychain-backed LAN auth
-credentials, and revoke trust. The accept-pairing command requires an
+credentials, revoke trust, and complete reciprocal pairing against an
+operator-entered peer URL. The accept-pairing command requires an
 `auth_credential_id`; Swift creates the LAN auth secret in Keychain first and
-Rust persists only that credential ID. `sync.snapshot` returns the durable
-local identity, and issue-token uses that local device ID when the caller does
-not provide an issuer device ID. The native Swift LAN pull executor signs
-protected `get-head` and `events-since` requests for an operator-entered
-trusted peer URL with the Keychain-backed LAN auth secret, constructs the
-preview from the returned head/event range, and applies pulled official
-envelopes only through `sync.remote_events.apply`. Pairing codes are returned
-only from the issue-token command and are not present in snapshots.
+Rust persists only that credential ID. In the reciprocal URL flow, Swift probes
+the peer's `/api/sync/state` identity, posts the operator-entered peer
+token/code plus a generated endpoint auth code to the peer's
+`/api/sync/lan/pairing-accept`, then stores only a local credential reference
+through the Rust trust command after the remote side accepts. `sync.snapshot`
+returns the durable local identity, and issue-token uses that local device ID
+when the caller does not provide an issuer device ID. The native Swift LAN pull
+executor signs protected `get-head` and `events-since` requests for an
+operator-entered trusted peer URL with the Keychain-backed LAN auth secret,
+constructs the preview from the returned head/event range, and applies pulled
+official envelopes only through `sync.remote_events.apply`. Pairing codes are
+returned only from the issue-token command and are not present in snapshots.
 
 LAN `list-logbooks`, `get-head`, `events-since`, and `event-metadata` requests
 must include these headers:
@@ -323,10 +328,9 @@ still not encrypted and must not be exposed outside trusted local networks.
 Native iOS manual LAN pull also probes `/api/sync/state` and rejects a peer
 whose published device ID does not match the selected trusted peer before
 sending signed `get-head` or `events-since` reads.
-Production iOS reciprocal pairing/address-discovery UX, stronger LAN
-key-exchange hardening, physical-device LAN validation, and physical iOS Local
-Network permission validation remain before unattended LAN sync is considered
-complete.
+Production iOS automatic LAN address-discovery UX, stronger LAN key-exchange
+hardening, physical-device LAN validation, and physical iOS Local Network
+permission validation remain before unattended LAN sync is considered complete.
 
 ## Cloud Relay and Self-Hosted Sync
 
@@ -366,12 +370,12 @@ The current self-hosted server uses durable local storage by default: embedded S
 
 ## Deferred Work
 
-- Production iOS reciprocal LAN pairing/address-discovery UX over the durable
-  trust store.
+- Production iOS automatic LAN address-discovery UX over the durable trust
+  store.
 - Signed official events.
 - End-to-end encrypted relay.
-- Stronger LAN key-exchange hardening and production iOS reciprocal LAN
-  pairing/address-discovery UX.
+- Stronger LAN key-exchange hardening and production iOS automatic LAN
+  address-discovery UX.
 - Physical-device LAN and iOS Local Network permission prompt validation.
 - End-to-end cross-client branch review and reconciliation workflow beyond the
   current guided browser review surface and explicit corrective-event commands.

@@ -877,9 +877,10 @@ Security limitations for MVP: peers are untrusted until they pass the durable
 LAN trust store, no destructive commands are accepted, automatic replication is
 disabled, protected LAN reads require HMAC-SHA256 request proof after pairing,
 and native iOS manual LAN pull verifies the peer's published device ID before
-sending signed reads. Production iOS reciprocal LAN pairing/address-discovery
-UX, stronger LAN key-exchange hardening, plus physical-device LAN/iOS Local
-Network validation remain TODOs before unattended LAN sync.
+sending signed reads. Native iOS can complete reciprocal pairing against an
+operator-entered peer URL, while production automatic LAN address-discovery UX,
+stronger LAN key-exchange hardening, plus physical-device LAN/iOS Local Network
+validation remain TODOs before unattended LAN sync.
 
 ## Safe LAN Event Replication
 
@@ -937,9 +938,9 @@ path, structured conflict messages, and review health, and the Sync workspace
 shows open review actions, peer IDs, and conflict details without owning merge
 rules. LAN auth credential rotation/recovery is available through the GUI trust
 endpoint. End-to-end cross-client branch review workflow qualification, signed
-events, production iOS reciprocal LAN pairing/address-discovery UX, stronger
-LAN key-exchange hardening, and physical-device LAN/iOS local-network
-validation are still deferred.
+events, production iOS automatic LAN address-discovery UX, stronger LAN
+key-exchange hardening, and physical-device LAN/iOS local-network validation
+are still deferred.
 
 ## Durable Offline Queue And LAN Trust
 
@@ -1068,9 +1069,9 @@ LAN-reachable address such as
 use manual loopback URLs. Mutating LAN pull also requires the explicit
 `sync.lan.pull` permission, durable peer trust, a matching peer identity probe,
 and signed remote read requests.
-Production iOS reciprocal LAN pairing/address-discovery UX, stronger LAN
-key-exchange hardening, and physical iOS Local Network permission validation
-remain next sync tasks.
+Production iOS automatic LAN address-discovery UX, stronger LAN key-exchange
+hardening, and physical iOS Local Network permission validation remain next
+sync tasks.
 
 ## Cloud Relay And Self-Hosted Sync
 

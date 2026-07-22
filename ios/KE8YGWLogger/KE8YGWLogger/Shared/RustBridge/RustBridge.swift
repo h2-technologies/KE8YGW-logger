@@ -714,6 +714,58 @@ final class RustBridgeStore: ObservableObject {
         return result
     }
 
+    func completeLanPairing<T: SyncLanPairingTransporting>(
+        peerURL: URL,
+        tokenId: String,
+        pairingCode: String,
+        authSecret: String,
+        authCredentialId: String,
+        publicKeyFingerprint: String? = nil,
+        logbookId requestedLogbookId: String? = nil,
+        networkAvailable: Bool = true,
+        transport: T
+    ) async throws -> SyncLanTrustedDeviceBridgeResult {
+        guard networkAvailable else {
+            throw SyncLanHTTPTransportError.networkUnavailable
+        }
+        guard !authCredentialId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              !authSecret.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else {
+            throw SyncLanHTTPTransportError.missingLanAuthCredential
+        }
+
+        let supportURL = try RustBridgePaths.applicationSupportDirectory()
+        let snapshot = try await command("sync.snapshot", payload: AppSupportBridgeRequest(appSupportDir: supportURL.path), as: SyncSnapshot.self)
+        sync = snapshot
+        guard let identity = snapshot.identity else {
+            throw SyncLanHTTPTransportError.missingLocalIdentity
+        }
+        let logbookId = [requestedLogbookId, snapshot.logbookId]
+            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .first { !$0.isEmpty } ?? SyncDefaults.defaultLogbookId
+
+        let remoteResult = try await transport.completePairing(
+            peerURL: peerURL,
+            tokenId: tokenId,
+            pairingCode: pairingCode,
+            authSecret: authSecret,
+            localIdentity: identity,
+            logbookId: logbookId,
+            publicKeyFingerprint: publicKeyFingerprint
+        )
+
+        let trusted = try await trustLanPeer(
+            peerDeviceId: remoteResult.peerIdentity.deviceId,
+            peerDisplayName: remoteResult.peerIdentity.displayName,
+            logbookId: logbookId,
+            pairingTokenId: tokenId,
+            publicKeyFingerprint: publicKeyFingerprint,
+            authCredentialId: authCredentialId
+        )
+        lastError = nil
+        return trusted
+    }
+
     func trustLanPeer(
         peerDeviceId: String,
         peerDisplayName: String,
@@ -2881,6 +2933,26 @@ struct SyncLanPeerStateResponse: Decodable, Equatable {
     var localHead: SyncLogbookHeadSummary?
 }
 
+struct SyncLanPairingAcceptRequestBody: Encodable, Equatable {
+    var tokenId: String
+    var pairingCode: String
+    var authCode: String
+    var peerDeviceId: String
+    var peerDisplayName: String
+    var logbookId: String
+    var publicKeyFingerprint: String?
+}
+
+struct SyncLanPairingAcceptResponse: Decodable {
+    var ok: Bool?
+    var trustedDevice: SyncTrustedPeerDevice?
+}
+
+struct SyncLanReciprocalPairingResult {
+    var peerIdentity: SyncPeerIdentity
+    var remoteTrustedDevice: SyncTrustedPeerDevice?
+}
+
 struct SyncLanEventRangeResponse: Decodable, Equatable {
     var logbookId: String
     var events: [SyncOfficialEvent]
@@ -2945,6 +3017,18 @@ protocol SyncLanPullTransporting {
         logbookId: String,
         localHeadHash: String?
     ) async throws -> SyncPullResponse
+}
+
+protocol SyncLanPairingTransporting {
+    func completePairing(
+        peerURL: URL,
+        tokenId: String,
+        pairingCode: String,
+        authSecret: String,
+        localIdentity: SyncPeerIdentity,
+        logbookId: String,
+        publicKeyFingerprint: String?
+    ) async throws -> SyncLanReciprocalPairingResult
 }
 
 enum SyncRetryExecutionStatus: String, Equatable {
@@ -3020,6 +3104,7 @@ enum SyncHTTPTransportError: LocalizedError, Equatable {
 }
 
 enum SyncLanHTTPTransportError: LocalizedError, Equatable {
+    case networkUnavailable
     case invalidPeerURL
     case invalidLocalIdentity
     case invalidLogbookID
@@ -3036,6 +3121,8 @@ enum SyncLanHTTPTransportError: LocalizedError, Equatable {
 
     var errorDescription: String? {
         switch self {
+        case .networkUnavailable:
+            return "Network unavailable; LAN pairing could not contact the peer."
         case .invalidPeerURL:
             return "The LAN peer URL is invalid."
         case .invalidLocalIdentity:
@@ -3064,7 +3151,7 @@ enum SyncLanHTTPTransportError: LocalizedError, Equatable {
         case .invalidHTTPResponse:
             return "The LAN peer returned an invalid HTTP response."
         case .peerRejected(let statusCode, let message):
-            return "The LAN peer rejected the pull with HTTP \(statusCode): \(message)"
+            return "The LAN peer rejected the request with HTTP \(statusCode): \(message)"
         }
     }
 }
@@ -3394,6 +3481,163 @@ struct SyncLanHTTPTransport: SyncLanPullTransporting {
             using: key
         )
         return authenticationCode.map { String(format: "%02x", $0) }.joined()
+    }
+}
+
+struct SyncLanHTTPPairingTransport: SyncLanPairingTransporting {
+    func makePairingAcceptRequest(
+        peerURL: URL,
+        tokenId: String,
+        pairingCode: String,
+        authSecret: String,
+        localIdentity: SyncPeerIdentity,
+        logbookId: String,
+        publicKeyFingerprint: String? = nil
+    ) throws -> URLRequest {
+        let canonicalTokenId = try canonicalUUIDString(tokenId, error: .invalidPeerPayload)
+        let canonicalDeviceId = try canonicalUUIDString(localIdentity.deviceId, error: .invalidLocalIdentity)
+        let canonicalLogbookId = try canonicalUUIDString(logbookId, error: .invalidLogbookID)
+        let trimmedPairingCode = pairingCode.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedPairingCode.isEmpty else {
+            throw SyncLanHTTPTransportError.invalidPeerPayload
+        }
+        let trimmedAuthSecret = authSecret.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedAuthSecret.isEmpty else {
+            throw SyncLanHTTPTransportError.missingLanAuthCredential
+        }
+        let displayName = localIdentity.displayName
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .nilIfEmpty ?? "KE8YGW Logger iOS"
+
+        guard var components = URLComponents(url: peerURL, resolvingAgainstBaseURL: false),
+              let scheme = components.scheme?.lowercased(),
+              (scheme == "http" || scheme == "https"),
+              components.host != nil,
+              components.query == nil,
+              components.fragment == nil
+        else {
+            throw SyncLanHTTPTransportError.invalidPeerURL
+        }
+        let basePath = components.percentEncodedPath.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        guard basePath.isEmpty else {
+            throw SyncLanHTTPTransportError.invalidPeerURL
+        }
+        components.path = "/api/sync/lan/pairing-accept"
+        guard let url = components.url else {
+            throw SyncLanHTTPTransportError.invalidPeerURL
+        }
+
+        let body = SyncLanPairingAcceptRequestBody(
+            tokenId: canonicalTokenId,
+            pairingCode: trimmedPairingCode,
+            authCode: trimmedAuthSecret,
+            peerDeviceId: canonicalDeviceId,
+            peerDisplayName: displayName,
+            logbookId: canonicalLogbookId,
+            publicKeyFingerprint: publicKeyFingerprint?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .nilIfEmpty
+        )
+        let encoder = JSONEncoder()
+        encoder.keyEncodingStrategy = .convertToSnakeCase
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 8
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try encoder.encode(body)
+        return request
+    }
+
+    func completePairing(
+        peerURL: URL,
+        tokenId: String,
+        pairingCode: String,
+        authSecret: String,
+        localIdentity: SyncPeerIdentity,
+        logbookId: String,
+        publicKeyFingerprint: String?
+    ) async throws -> SyncLanReciprocalPairingResult {
+        let stateRequest = try SyncLanHTTPTransport().makeStateRequest(peerURL: peerURL)
+        let state: SyncLanPeerStateResponse = try await fetchJSON(stateRequest)
+        guard let peerIdentity = state.identity else {
+            throw SyncLanHTTPTransportError.missingPeerIdentity
+        }
+
+        let request = try makePairingAcceptRequest(
+            peerURL: peerURL,
+            tokenId: tokenId,
+            pairingCode: pairingCode,
+            authSecret: authSecret,
+            localIdentity: localIdentity,
+            logbookId: logbookId,
+            publicKeyFingerprint: publicKeyFingerprint
+        )
+        let response: SyncLanPairingAcceptResponse = try await fetchJSON(request)
+        let trustedDevice = try validateRemotePairingResponse(
+            response,
+            localIdentity: localIdentity,
+            logbookId: logbookId
+        )
+
+        return SyncLanReciprocalPairingResult(
+            peerIdentity: peerIdentity,
+            remoteTrustedDevice: trustedDevice
+        )
+    }
+
+    func validateRemotePairingResponse(
+        _ response: SyncLanPairingAcceptResponse,
+        localIdentity: SyncPeerIdentity,
+        logbookId: String
+    ) throws -> SyncTrustedPeerDevice {
+        guard response.ok != false else {
+            throw SyncLanHTTPTransportError.invalidPeerPayload
+        }
+        guard let trustedDevice = response.trustedDevice else {
+            throw SyncLanHTTPTransportError.invalidPeerPayload
+        }
+        guard equivalentUUID(trustedDevice.deviceId ?? "", localIdentity.deviceId) else {
+            throw SyncLanHTTPTransportError.invalidPeerPayload
+        }
+        if let allowedLogbooks = trustedDevice.logbookIds,
+           !allowedLogbooks.isEmpty,
+           !allowedLogbooks.contains(where: { equivalentUUID($0, logbookId) }) {
+            throw SyncLanHTTPTransportError.invalidPeerPayload
+        }
+        return trustedDevice
+    }
+
+    private func fetchJSON<T: Decodable>(_ request: URLRequest) async throws -> T {
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw SyncLanHTTPTransportError.invalidHTTPResponse
+        }
+        guard (200..<300).contains(http.statusCode) else {
+            let message = String(data: data, encoding: .utf8) ?? "LAN pairing failed"
+            throw SyncLanHTTPTransportError.peerRejected(statusCode: http.statusCode, message: message)
+        }
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        return try decoder.decode(T.self, from: data)
+    }
+
+    private func equivalentUUID(_ left: String, _ right: String) -> Bool {
+        guard let left = UUID(uuidString: left),
+              let right = UUID(uuidString: right)
+        else {
+            return false
+        }
+        return left.uuidString.lowercased() == right.uuidString.lowercased()
+    }
+
+    private func canonicalUUIDString(_ value: String, error: SyncLanHTTPTransportError) throws -> String {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let uuid = UUID(uuidString: trimmed) else {
+            throw error
+        }
+        return uuid.uuidString.lowercased()
     }
 }
 

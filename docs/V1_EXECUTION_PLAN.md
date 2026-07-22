@@ -69,19 +69,19 @@ outside issue #2.
      signed LAN pull fetch -> Rust apply coordination, request retry plans with native network monitor state, display saved conflict-review
      records with recommended actions and structured conflict messages, expose
      Rust-owned LAN trust snapshots, local one-time code issue/acceptance,
-     direct peer trust, Keychain-backed LAN auth rotation, revocation, and
-     trusted-peer identity probing before signed LAN reads, and surface
+     reciprocal peer-URL pairing, direct peer trust, Keychain-backed LAN auth
+     rotation, revocation, and trusted-peer identity probing before signed LAN reads, and surface
      no-network/user-action retry and pull outcomes without owning event
      creation or domain rules.
-   - Remaining: production iOS reciprocal LAN pairing/address-discovery UX, stronger LAN
+   - Remaining: production iOS automatic LAN address-discovery UX, stronger LAN
      key-exchange hardening, end-to-end cross-client branch review/reconciliation workflow
      qualification, physical-device LAN/iOS local-network
      validation, release-device iOS background task and poor-network
      qualification, real hosted/self-hosted endpoint qualification for native
      push/pull execution, and real hosted web/desktop/iOS/self-hosted
      migration/recovery qualification.
-   - Blockers: local network permission behavior on iOS, iOS reciprocal pairing
-     completion UX, physical test devices, and acceptance criteria for manual conflict
+   - Blockers: local network permission behavior on iOS, automatic LAN
+     address-discovery UX, physical test devices, and acceptance criteria for manual conflict
      resolution.
 
 4. Production provider qualification
@@ -167,8 +167,8 @@ outside issue #2.
 
 ## Next Three Goals
 
-1. Finish sync/reconciliation hardening: production iOS reciprocal
-   pairing/address-discovery UX, stronger LAN key-exchange hardening, end-to-end cross-client branch
+1. Finish sync/reconciliation hardening: production iOS automatic LAN
+   address-discovery UX, stronger LAN key-exchange hardening, end-to-end cross-client branch
    review/reconciliation workflow qualification, physical-device LAN/iOS
    local-network validation, and iOS background task and poor-network
    validation on release devices.
