@@ -5,6 +5,7 @@ struct SyncWorkspaceView: View {
     @EnvironmentObject private var bridge: RustBridgeStore
     @Query private var settings: [AppSettings]
     @StateObject private var connectivity = ConnectivityMonitor()
+    @StateObject private var lanDiscovery = SyncLanDiscoveryScanner()
     @State private var backgroundSync = true
     @State private var retryAutomatically = true
     @State private var syncMessage: String?
@@ -99,10 +100,32 @@ struct SyncWorkspaceView: View {
                 let trust = bridge.sync.lanTrust
                 DetailRow(title: "Trusted Devices", value: "\(trust?.activeTrustedDevices.count ?? 0)")
                 DetailRow(title: "Pairing Codes", value: "\(trust?.activePairingTokens.count ?? 0)")
+                DetailRow(title: "LAN Discovery", value: lanDiscovery.isRunning ? "Scanning" : "Stopped")
                 if let error = bridge.sync.lanTrustError {
                     Text(error)
                         .font(.caption)
                         .foregroundStyle(.red)
+                }
+                if let discoveryError = lanDiscovery.lastError {
+                    Text(discoveryError)
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                }
+                if !lanDiscovery.discoveredPeers.isEmpty {
+                    ForEach(lanDiscovery.discoveredPeers) { peer in
+                        Button {
+                            useDiscoveredPeer(peer)
+                        } label: {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(peer.displayName)
+                                    .font(.headline)
+                                Text(peer.detailLabel)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .textSelection(.enabled)
+                            }
+                        }
+                    }
                 }
                 if let lanIssuedPairing {
                     VStack(alignment: .leading, spacing: 4) {
@@ -157,6 +180,9 @@ struct SyncWorkspaceView: View {
                     .autocorrectionDisabled()
                     .keyboardType(.URL)
                 HStack {
+                    Button(lanDiscovery.isRunning ? "Stop Discovery" : "Scan LAN") {
+                        toggleLanDiscovery()
+                    }
                     Button("Issue Code") {
                         Task { await issueLanPairingToken() }
                     }
@@ -215,6 +241,36 @@ struct SyncWorkspaceView: View {
             connectivity.start()
             await bridge.refreshSync()
         }
+        .onDisappear {
+            lanDiscovery.stop()
+        }
+    }
+
+    private func toggleLanDiscovery() {
+        if lanDiscovery.isRunning {
+            lanDiscovery.stop()
+            syncMessage = "Stopped LAN discovery."
+            return
+        }
+        if bridge.sync.identity == nil {
+            Task {
+                await bridge.refreshSync()
+                lanDiscovery.start(identity: bridge.sync.identity)
+                syncMessage = lanDiscovery.isRunning ? "Scanning for LAN peers." : lanDiscovery.lastError
+            }
+        } else {
+            lanDiscovery.start(identity: bridge.sync.identity)
+            syncMessage = lanDiscovery.isRunning ? "Scanning for LAN peers." : lanDiscovery.lastError
+        }
+    }
+
+    private func useDiscoveredPeer(_ peer: SyncLanDiscoveredPeer) {
+        let selected = lanDiscovery.usePeer(peer)
+        lanPeerURL = selected.url
+        lanPeerDeviceId = selected.deviceId
+        lanPeerDisplayName = selected.displayName
+        lanSelectedDeviceId = selected.deviceId
+        syncMessage = "Selected discovered LAN peer \(selected.displayName)."
     }
 
     private func issueLanPairingToken() async {

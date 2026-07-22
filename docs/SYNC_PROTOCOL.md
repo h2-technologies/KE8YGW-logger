@@ -328,9 +328,15 @@ still not encrypted and must not be exposed outside trusted local networks.
 Native iOS manual LAN pull also probes `/api/sync/state` and rejects a peer
 whose published device ID does not match the selected trusted peer before
 sending signed `get-head` or `events-since` reads.
-Production iOS automatic LAN address-discovery UX, stronger LAN key-exchange
-hardening, physical-device LAN validation, and physical iOS Local Network
-permission validation remain before unattended LAN sync is considered complete.
+The iOS Sync workspace can also start an IPv4/IPv6 multicast discovery scanner
+using the same secret-free discovery packet shape. The scanner derives a
+candidate peer URL from the sender address and advertised API port, probes
+`/api/sync/state`, lists only peers whose probed device/session identity matches
+the discovery packet, and lets the operator copy that discovered peer into the
+existing pairing/pull controls. Apple multicast entitlement/provisioning,
+stronger LAN key-exchange hardening, physical-device LAN validation, and
+physical iOS Local Network permission validation remain before unattended LAN
+sync is considered complete.
 
 ## Cloud Relay and Self-Hosted Sync
 
@@ -370,12 +376,12 @@ The current self-hosted server uses durable local storage by default: embedded S
 
 ## Deferred Work
 
-- Production iOS automatic LAN address-discovery UX over the durable trust
-  store.
+- Apple multicast entitlement/provisioning and release-device validation for
+  native iOS LAN discovery over the durable trust store.
 - Signed official events.
 - End-to-end encrypted relay.
-- Stronger LAN key-exchange hardening and production iOS automatic LAN
-  address-discovery UX.
+- Stronger LAN key-exchange hardening and release-device iOS LAN discovery
+  validation.
 - Physical-device LAN and iOS Local Network permission prompt validation.
 - End-to-end cross-client branch review and reconciliation workflow beyond the
   current guided browser review surface and explicit corrective-event commands.

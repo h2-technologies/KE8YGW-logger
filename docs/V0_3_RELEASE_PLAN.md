@@ -88,7 +88,11 @@ Last audited: 2026-07-22
 - Native iOS LAN trust bridge and Sync workspace controls for Rust-owned
   trust snapshots, local one-time code issue and acceptance, direct peer trust,
   Keychain-backed LAN auth credential rotation, revocation, and reciprocal
-  pairing against an operator-entered peer URL. `sync.snapshot` returns the
+  pairing against an operator-entered peer URL. The Sync workspace also has a
+  multicast discovery scanner that listens for the same IPv4/IPv6 discovery
+  packets, derives peer URLs from sender address plus advertised API port,
+  probes `/api/sync/state`, and lists only peers whose probed device/session
+  identity matches the packet. `sync.snapshot` returns the
   durable local identity, and the bundle declares Local Network usage plus
   local networking for paired-device sync. Pairing codes are returned only by
   the issue command; snapshots and `lan-trust.json` do not store raw pairing
@@ -107,8 +111,8 @@ Last audited: 2026-07-22
 
 ## Still Incomplete For v1
 
-- Production iOS automatic LAN address-discovery UX and full release-device
-  pairing qualification.
+- Apple multicast entitlement/provisioning and full release-device iOS LAN
+  discovery/pairing qualification.
 - Stronger LAN key-exchange hardening.
 - Physical-device LAN and iOS Local Network permission prompt validation.
 - End-to-end cross-client branch review and reconciliation workflow beyond the

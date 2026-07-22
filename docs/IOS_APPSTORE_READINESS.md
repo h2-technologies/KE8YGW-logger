@@ -28,11 +28,14 @@ recovery paths, and structured conflict messages, and LAN trust
 snapshot/issue/accept/trust/rotate/revoke controls that keep LAN auth secrets
 in Keychain and store only credential IDs in Rust support state.
 `sync.snapshot` decodes the durable local sync identity, and the bundle declares
-Local Network usage plus local networking for paired-device sync.
+Local Network usage plus local networking for paired-device sync. The Sync
+workspace can also scan IPv4/IPv6 LAN discovery packets, derive peer URLs from
+sender address plus advertised API port, probe `/api/sync/state`, and list only
+peers whose probed device/session identity matches the packet.
 Signing, provisioning, TestFlight, App Store metadata, privacy manifest,
 physical-device validation, release-safe BGTask execution, real
-hosted/self-hosted native sync endpoint qualification, production automatic
-LAN address-discovery UX, and full v1 offline/sync/provider qualification
+hosted/self-hosted native sync endpoint qualification, Apple multicast
+entitlement/provisioning, and full v1 offline/sync/provider qualification
 remain incomplete.
 
 ## Bundle and Signing
@@ -115,6 +118,9 @@ network, or background modes speculatively.
   trust/revoke peers, and rotate LAN auth credentials without storing raw
   pairing codes or LAN auth secrets in Rust support state, logs, diagnostics,
   or SwiftData.
+- The Sync workspace can scan LAN discovery packets, derive peer URLs from the
+  packet source plus advertised API port, and list only peers whose
+  `/api/sync/state` identity matches the discovery packet.
 - The Sync workspace can pull from a trusted LAN peer URL by first checking
   the peer's published sync identity, then using signed protected LAN reads and
   Rust-owned event-chain verification before append.

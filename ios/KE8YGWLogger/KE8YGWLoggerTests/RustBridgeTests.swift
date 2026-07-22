@@ -1,3 +1,4 @@
+import Network
 import XCTest
 @testable import KE8YGWLogger
 
@@ -621,6 +622,110 @@ final class RustBridgeTests: XCTestCase {
         XCTAssertEqual(object?["peer_display_name"] as? String, "iOS Field Phone")
         XCTAssertEqual(object?["logbook_id"] as? String, logbookID)
         XCTAssertEqual(object?["public_key_fingerprint"] as? String, "sha256:peer")
+    }
+
+    func testSyncLanDiscoveryDecodesPacketAndBuildsPeerURL() throws {
+        let json = """
+        {
+          "protocol_name": "ke8ygw-logger-sync",
+          "protocol_version": 1,
+          "device_id": "00000000-0000-4000-8000-0000000000f3",
+          "session_id": "00000000-0000-4000-8000-0000000000f4",
+          "user_hash": null,
+          "display_name": "Desktop LAN Peer",
+          "capabilities": ["discovery.v1", "handshake.v1"],
+          "local_api_port": 17673,
+          "timestamp": "2026-07-22T12:00:00Z"
+        }
+        """
+        let packet = try XCTUnwrap(SyncLanDiscoveryScanner.decodeDiscoveryPacket(Data(json.utf8)))
+        let endpoint = NWEndpoint.hostPort(
+            host: NWEndpoint.Host("192.168.1.20"),
+            port: try XCTUnwrap(NWEndpoint.Port(rawValue: 50300))
+        )
+        let peerURL = try XCTUnwrap(SyncLanDiscoveryScanner.peerURL(packet: packet, remoteEndpoint: endpoint))
+
+        XCTAssertTrue(SyncLanDiscoveryScanner.isSupported(packet))
+        XCTAssertEqual(peerURL.absoluteString, "http://192.168.1.20:17673")
+    }
+
+    func testSyncLanDiscoveryRejectsSelfAndUnscopedLinkLocalIPv6() throws {
+        let identity = SyncPeerIdentity(
+            deviceId: "00000000-0000-4000-8000-0000000000f1",
+            sessionId: "00000000-0000-4000-8000-0000000000f2",
+            userHash: nil,
+            displayName: "iOS Field Phone",
+            capabilities: ["discovery.v1", "handshake.v1"],
+            localApiPort: nil
+        )
+        let selfPacket = SyncLanDiscoveryPacket(
+            protocolName: "ke8ygw-logger-sync",
+            protocolVersion: 1,
+            deviceId: identity.deviceId,
+            sessionId: identity.sessionId,
+            userHash: nil,
+            displayName: identity.displayName,
+            capabilities: identity.capabilities,
+            localApiPort: 17673,
+            timestamp: "2026-07-22T12:00:00Z"
+        )
+        let peerPacket = SyncLanDiscoveryPacket(
+            protocolName: "ke8ygw-logger-sync",
+            protocolVersion: 1,
+            deviceId: "00000000-0000-4000-8000-0000000000f3",
+            sessionId: "00000000-0000-4000-8000-0000000000f4",
+            userHash: nil,
+            displayName: "Desktop LAN Peer",
+            capabilities: ["discovery.v1", "handshake.v1"],
+            localApiPort: 17673,
+            timestamp: "2026-07-22T12:00:00Z"
+        )
+        let linkLocalEndpoint = NWEndpoint.hostPort(
+            host: NWEndpoint.Host("fe80::1234"),
+            port: try XCTUnwrap(NWEndpoint.Port(rawValue: 50300))
+        )
+
+        XCTAssertTrue(SyncLanDiscoveryScanner.isSelf(selfPacket, identity: identity))
+        XCTAssertNil(SyncLanDiscoveryScanner.peerURL(packet: peerPacket, remoteEndpoint: linkLocalEndpoint))
+    }
+
+    func testSyncLanDiscoveryRequiresProbedIdentityToMatchPacket() {
+        let packet = SyncLanDiscoveryPacket(
+            protocolName: "ke8ygw-logger-sync",
+            protocolVersion: 1,
+            deviceId: "00000000-0000-4000-8000-0000000000f3",
+            sessionId: "00000000-0000-4000-8000-0000000000f4",
+            userHash: nil,
+            displayName: "Desktop LAN Peer",
+            capabilities: ["discovery.v1", "handshake.v1"],
+            localApiPort: 17673,
+            timestamp: "2026-07-22T12:00:00Z"
+        )
+        let matchingState = SyncLanPeerStateResponse(
+            identity: SyncPeerIdentity(
+                deviceId: packet.deviceId,
+                sessionId: packet.sessionId,
+                userHash: nil,
+                displayName: packet.displayName,
+                capabilities: packet.capabilities,
+                localApiPort: Int(packet.localApiPort ?? 0)
+            ),
+            localHead: nil
+        )
+        let spoofedState = SyncLanPeerStateResponse(
+            identity: SyncPeerIdentity(
+                deviceId: packet.deviceId,
+                sessionId: "00000000-0000-4000-8000-0000000000ff",
+                userHash: nil,
+                displayName: packet.displayName,
+                capabilities: packet.capabilities,
+                localApiPort: Int(packet.localApiPort ?? 0)
+            ),
+            localHead: nil
+        )
+
+        XCTAssertTrue(SyncLanDiscoveryScanner.peerStateMatches(packet: packet, state: matchingState))
+        XCTAssertFalse(SyncLanDiscoveryScanner.peerStateMatches(packet: packet, state: spoofedState))
     }
 
     func testSyncLanHTTPPairingTransportValidatesRemoteAcceptResponse() throws {

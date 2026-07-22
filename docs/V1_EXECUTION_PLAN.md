@@ -70,19 +70,20 @@ outside issue #2.
      records with recommended actions and structured conflict messages, expose
      Rust-owned LAN trust snapshots, local one-time code issue/acceptance,
      reciprocal peer-URL pairing, direct peer trust, Keychain-backed LAN auth
-     rotation, revocation, and trusted-peer identity probing before signed LAN reads, and surface
-     no-network/user-action retry and pull outcomes without owning event
-     creation or domain rules.
-   - Remaining: production iOS automatic LAN address-discovery UX, stronger LAN
-     key-exchange hardening, end-to-end cross-client branch review/reconciliation workflow
-     qualification, physical-device LAN/iOS local-network
-     validation, release-device iOS background task and poor-network
+     rotation, revocation, multicast discovery peer selection with
+     `/api/sync/state` identity probing before listing peers, and trusted-peer
+     identity probing before signed LAN reads, and surface no-network/user-action
+     retry and pull outcomes without owning event creation or domain rules.
+   - Remaining: Apple multicast entitlement/provisioning, stronger LAN
+     key-exchange hardening, end-to-end cross-client branch
+     review/reconciliation workflow qualification, physical-device LAN/iOS
+     local-network validation, release-device iOS background task and poor-network
      qualification, real hosted/self-hosted endpoint qualification for native
      push/pull execution, and real hosted web/desktop/iOS/self-hosted
      migration/recovery qualification.
-   - Blockers: local network permission behavior on iOS, automatic LAN
-     address-discovery UX, physical test devices, and acceptance criteria for manual conflict
-     resolution.
+   - Blockers: Apple multicast entitlement/provisioning, local network
+     permission behavior on iOS, physical test devices, and acceptance
+     criteria for manual conflict resolution.
 
 4. Production provider qualification
    - Complete QRZ, QRZ Logbook, LoTW/TQSL, eQSL, Club Log, POTA, SOTAWatch, DX
@@ -167,11 +168,11 @@ outside issue #2.
 
 ## Next Three Goals
 
-1. Finish sync/reconciliation hardening: production iOS automatic LAN
-   address-discovery UX, stronger LAN key-exchange hardening, end-to-end cross-client branch
-   review/reconciliation workflow qualification, physical-device LAN/iOS
-   local-network validation, and iOS background task and poor-network
-   validation on release devices.
+1. Finish sync/reconciliation hardening: Apple multicast
+   entitlement/provisioning, stronger LAN key-exchange hardening, end-to-end
+   cross-client branch review/reconciliation workflow qualification,
+   physical-device LAN/iOS local-network validation, and iOS background task and
+   poor-network validation on release devices.
 2. Complete production provider qualification and release-runner live validation
    for the issue #2 provider set.
 3. Wire hosted web, desktop, and iOS UI flows to the implemented account,
