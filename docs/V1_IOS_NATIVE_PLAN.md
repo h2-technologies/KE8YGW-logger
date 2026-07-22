@@ -48,8 +48,10 @@ wrapper.
   mutations, queue health, Rust-planned official event envelopes,
   self-hosted/logbook-scoped push execution coordination, hosted
   `/api/v1/sync/push` request construction, accepted-prefix/rejected-tail retry
-  result recording, Rust-owned pulled-event apply through
-  `sync.remote_events.apply`, self-hosted/logbook-scoped and hosted pull request
+  result recording with shared Rust golden coverage for accepted-prefix
+  queue acknowledgment and rejected-tail user-action stops, Rust-owned
+  pulled-event apply through `sync.remote_events.apply`,
+  self-hosted/logbook-scoped and hosted pull request
   construction, native pull fetch -> Rust apply coordination, saved
   conflict-review records, selected recovery paths, and structured conflict
   messages, plus Rust-owned LAN trust snapshots, local one-time pairing-code

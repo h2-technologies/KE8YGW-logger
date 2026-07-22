@@ -178,6 +178,10 @@ official history itself. The native retry executor now performs the
 Rust-plan -> Swift-transport -> Rust-result sequence for the configured
 sync-token push path, including accepted-prefix recording when a receiver
 accepts early events and rejects a later event.
+`cross_client_golden_partial_push_accepts_prefix_and_blocks_rejected_tail`
+proves the shared Rust cloud/queue path accepts the valid prefix, blocks the
+rejected tail as `user_action_required`, avoids local and cloud duplicates, and
+can complete the reviewed tail by accepted event hash.
 `sync_retry_plan_recovers_terminated_send_and_blocks_without_network`
 proves a terminated `sending` operation is recovered before planning and that a
 poor-network state returns a blocked no-op plan without losing queued work.

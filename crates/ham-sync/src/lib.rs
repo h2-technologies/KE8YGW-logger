@@ -3885,6 +3885,161 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn cross_client_golden_partial_push_accepts_prefix_and_blocks_rejected_tail() {
+        let logbook_id = Uuid::new_v4();
+        let qso_id = Uuid::new_v4();
+        let desktop_device = Uuid::new_v4();
+        let server = cloud_server();
+        let client =
+            paired_client_for_device(server, logbook_id, desktop_device, "Desktop".to_owned())
+                .await;
+        let root =
+            std::env::temp_dir().join(format!("ke8ygw-ham-sync-partial-push-{}", Uuid::new_v4()));
+        let queue_path = root.join("offline-mutations.json");
+        let queue = JsonOfflineMutationQueue::new(&queue_path);
+        let local_store = InMemoryLogbookEventStore::new();
+        let now = fixed_time(20_000);
+
+        let created = qso_create_event(
+            logbook_id,
+            qso_id,
+            None,
+            desktop_device,
+            fixed_time(0),
+            "K1PART",
+        );
+        let corrected = qso_correction_event(
+            logbook_id,
+            qso_id,
+            Some(created.event_hash.clone()),
+            desktop_device,
+            fixed_time(30),
+            "CW",
+        );
+        for event in [&created, &corrected] {
+            local_store
+                .append_verified_remote_event(event.clone())
+                .await
+                .unwrap();
+        }
+        local_store.verify_chain(logbook_id).await.unwrap();
+
+        let create_operation = Uuid::new_v4();
+        let correct_operation = Uuid::new_v4();
+        enqueue_event_for_sync(
+            &queue,
+            &created,
+            OFFLINE_OP_QSO_CREATE,
+            create_operation,
+            now,
+        );
+        enqueue_event_for_sync(
+            &queue,
+            &corrected,
+            OFFLINE_OP_QSO_CORRECT,
+            correct_operation,
+            now + chrono::Duration::seconds(1),
+        );
+
+        let mut rejected_tail = corrected.clone();
+        rejected_tail.previous_hash = Some("missing-prefix-head".to_owned());
+        rejected_tail.event_hash = rejected_tail.calculate_hash();
+
+        let partial_push = client
+            .push_events(logbook_id, vec![created.clone(), rejected_tail])
+            .await
+            .unwrap();
+        assert_eq!(partial_push.status, ReplicationStatus::Diverged);
+        assert_eq!(partial_push.accepted_count, 1);
+        assert_eq!(partial_push.ignored_duplicate_count, 0);
+        assert_eq!(partial_push.rejected_count, 1);
+        assert_eq!(
+            partial_push.server_head_hash,
+            Some(created.event_hash.clone())
+        );
+        assert!(partial_push
+            .errors
+            .iter()
+            .any(|error| error.contains("previous hash")));
+
+        let accepted_hashes = HashSet::from([created.event_hash.clone()]);
+        assert_eq!(
+            queue
+                .mark_accepted_by_event_hashes(&accepted_hashes, now)
+                .unwrap(),
+            1
+        );
+        let blocked_tail = queue
+            .mark_user_action_required(
+                correct_operation,
+                "partial transfer rejected tail; manual sync review required",
+                Some("partial_transfer_rejected_tail".to_owned()),
+                now + chrono::Duration::seconds(2),
+            )
+            .unwrap();
+        assert_eq!(
+            blocked_tail.status,
+            OfflineMutationStatus::UserActionRequired
+        );
+        let blocked_snapshot = queue
+            .load_snapshot(now + chrono::Duration::seconds(2))
+            .unwrap();
+        assert_eq!(blocked_snapshot.health.accepted, 1);
+        assert_eq!(blocked_snapshot.health.user_action_required, 1);
+        assert_eq!(blocked_snapshot.health.ready_to_send, 0);
+        assert_eq!(
+            local_store.list_events(logbook_id).await.unwrap(),
+            vec![created.clone(), corrected.clone()],
+            "partial server acceptance must not rewrite or duplicate local official history"
+        );
+
+        let duplicate_prefix = client
+            .push_events(logbook_id, vec![created.clone()])
+            .await
+            .unwrap();
+        assert_eq!(duplicate_prefix.accepted_count, 0);
+        assert_eq!(duplicate_prefix.ignored_duplicate_count, 1);
+        assert_eq!(
+            duplicate_prefix.server_head_hash,
+            Some(created.event_hash.clone())
+        );
+
+        let reviewed_tail = client
+            .push_events(logbook_id, vec![corrected.clone()])
+            .await
+            .unwrap();
+        assert_eq!(reviewed_tail.status, ReplicationStatus::Pulled);
+        assert_eq!(reviewed_tail.accepted_count, 1);
+        assert_eq!(
+            reviewed_tail.server_head_hash,
+            Some(corrected.event_hash.clone())
+        );
+        let reviewed_at = now + chrono::Duration::seconds(3);
+        let accepted_after_review = HashSet::from([corrected.event_hash.clone()]);
+        assert_eq!(
+            queue
+                .mark_accepted_by_event_hashes(&accepted_after_review, reviewed_at)
+                .unwrap(),
+            1
+        );
+        let drained = queue.load_snapshot(reviewed_at).unwrap();
+        assert_eq!(drained.health.accepted, 2);
+        assert_eq!(drained.health.user_action_required, 0);
+        assert_eq!(drained.health.ready_to_send, 0);
+
+        let duplicate_full_chain = client
+            .push_events(logbook_id, vec![created, corrected])
+            .await
+            .unwrap();
+        assert_eq!(duplicate_full_chain.accepted_count, 0);
+        assert_eq!(duplicate_full_chain.ignored_duplicate_count, 2);
+        let cloud_pull = client.pull_events(logbook_id, None).await.unwrap();
+        assert_eq!(cloud_pull.events.len(), 2);
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
     async fn cross_client_golden_divergence_revocation_and_upgrade_review_path() {
         let logbook_id = Uuid::new_v4();
         let qso_id = Uuid::new_v4();

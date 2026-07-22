@@ -31,6 +31,9 @@ Last audited: 2026-07-22
   execution coordination, hosted `/api/v1/sync/push` request construction, and
   partial-acceptance retry-result handling to the iOS Sync workspace without
   moving queue ordering, event creation, or failure classification out of Rust.
+- Shared sync golden coverage proves a partial push can accept a valid prefix,
+  stop the rejected tail as `user_action_required`, avoid local or cloud
+  duplicates, and complete the reviewed tail by acknowledged event hash.
 - Shared pull application accepts verified missing-tail responses that directly
   follow the actual local head as well as full remote chains, and iOS exposes
   `sync.remote_events.apply` so native transports can apply pulled official
@@ -47,9 +50,10 @@ Last audited: 2026-07-22
   implicitly.
 - Deterministic shared sync golden scenarios for desktop-style crash recovery,
   transient network retry, duplicate replay, reordered delivery rejection,
-  iOS-style pull/projection replay, clock-skewed event timestamps ordered by
-  hashes, divergent heads, concurrent correction and tombstone/restore review,
-  v0.2 legacy queue migration, and LAN revocation.
+  iOS-style pull/projection replay, partial push accepted-prefix/rejected-tail
+  queue recovery, clock-skewed event timestamps ordered by hashes, divergent
+  heads, concurrent correction and tombstone/restore review, v0.2 legacy queue
+  migration, and LAN revocation.
 - Structured conflict reports for divergent previews, dependency-blocked queued
   mutations, unsupported remote schema versions, concurrent QSO corrections, and
   remote QSO tombstone/restore events that overlap local pending mutations.

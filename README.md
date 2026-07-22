@@ -941,7 +941,9 @@ shows open review actions, peer IDs, and conflict details without owning merge
 rules. The shared cross-client golden tests now prove server-derived conflict
 reports round-trip through JSON, persist in desktop and iOS review stores,
 reject unsafe pull-after-review decisions, mark queued work as user-action
-required, and refuse to append a divergent remote branch. LAN auth credential
+required, refuse to append a divergent remote branch, and handle a partial push
+by accepting a valid prefix, blocking the rejected tail, avoiding duplicates,
+and completing the reviewed tail by accepted event hash. LAN auth credential
 rotation/recovery is available through the GUI trust endpoint. Release-device
 cross-client branch review workflow qualification, signed events, Apple
 multicast entitlement/provisioning, physical-device LAN/iOS local-network
