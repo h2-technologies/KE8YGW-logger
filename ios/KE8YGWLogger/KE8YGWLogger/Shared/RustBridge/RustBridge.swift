@@ -313,6 +313,152 @@ final class RustBridgeStore: ObservableObject {
         return response
     }
 
+    func executeOfflineRetryPush<T: SyncPushTransporting>(
+        serverURL: URL,
+        bearerToken: String? = nil,
+        syncToken: String? = nil,
+        endpointStyle: SyncPushEndpointStyle = .logbookScoped,
+        maxMutations: Int = 25,
+        networkAvailable: Bool = true,
+        backgroundTimeBudgetSeconds: Int = 25,
+        transport: T
+    ) async throws -> SyncRetryExecutionResult {
+        let planResult = try await planOfflineRetry(
+            maxMutations: maxMutations,
+            markSending: true,
+            networkAvailable: networkAvailable,
+            backgroundTimeBudgetSeconds: backgroundTimeBudgetSeconds
+        )
+        let plan = planResult.retryPlan
+        if plan.blockedByNetwork {
+            return SyncRetryExecutionResult(
+                plan: plan,
+                pushResponse: nil,
+                retryResults: [],
+                status: .blockedByNetwork,
+                acceptedOperationCount: 0,
+                failedOperationCount: 0
+            )
+        }
+        if plan.operationIds.isEmpty {
+            return SyncRetryExecutionResult(
+                plan: plan,
+                pushResponse: nil,
+                retryResults: [],
+                status: .noReadyEvents,
+                acceptedOperationCount: 0,
+                failedOperationCount: 0
+            )
+        }
+        let events = plan.transportableEvents
+        guard !events.isEmpty else {
+            let retryResult = try await recordOfflineRetryResult(
+                operationIds: plan.operationIds,
+                result: .missingLocalEvent,
+                errorCode: "missing_local_official_event",
+                message: "Rust retry planning did not return local official event envelopes."
+            )
+            return SyncRetryExecutionResult(
+                plan: plan,
+                pushResponse: nil,
+                retryResults: [retryResult],
+                status: .missingTransportEventsRecorded,
+                acceptedOperationCount: 0,
+                failedOperationCount: plan.operationIds.count
+            )
+        }
+        guard let logbookId = SyncRetryExecutionClassifier.logbookId(from: plan, events: events) else {
+            let retryResult = try await recordOfflineRetryResult(
+                operationIds: plan.operationIds,
+                result: .validationFailed,
+                errorCode: "missing_logbook_id",
+                message: "Rust retry planning did not return a logbook ID."
+            )
+            return SyncRetryExecutionResult(
+                plan: plan,
+                pushResponse: nil,
+                retryResults: [retryResult],
+                status: .userActionRequired,
+                acceptedOperationCount: 0,
+                failedOperationCount: plan.operationIds.count
+            )
+        }
+
+        do {
+            let response = try await transport.push(
+                serverURL: serverURL,
+                bearerToken: bearerToken,
+                syncToken: syncToken,
+                endpointStyle: endpointStyle,
+                logbookId: logbookId,
+                events: events
+            )
+            return try await recordRetryResponse(plan: plan, response: response)
+        } catch {
+            let classification = SyncRetryExecutionClassifier.classify(error: error)
+            let retryResult = try await recordOfflineRetryResult(
+                operationIds: plan.operationIds,
+                result: classification.result,
+                errorCode: classification.errorCode,
+                message: classification.message
+            )
+            return SyncRetryExecutionResult(
+                plan: plan,
+                pushResponse: nil,
+                retryResults: [retryResult],
+                status: SyncRetryExecutionClassifier.status(for: classification.result, acceptedPrefixCount: 0),
+                acceptedOperationCount: 0,
+                failedOperationCount: plan.operationIds.count
+            )
+        }
+    }
+
+    private func recordRetryResponse(
+        plan: SyncRetryPlan,
+        response: SyncPushResponse
+    ) async throws -> SyncRetryExecutionResult {
+        let classification = SyncRetryExecutionClassifier.classify(response: response, planCount: plan.operationIds.count)
+        var retryResults: [SyncRetryResultBridgeResult] = []
+        let acceptedPrefixCount = min(
+            classification.acceptedPrefixCount,
+            plan.operationIds.count,
+            plan.eventHashes.count
+        )
+        if acceptedPrefixCount > 0 {
+            let acceptedOperationIds = Array(plan.operationIds.prefix(acceptedPrefixCount))
+            let acceptedEventHashes = Array(plan.eventHashes.prefix(acceptedPrefixCount))
+            retryResults.append(try await recordOfflineRetryResult(
+                operationIds: acceptedOperationIds,
+                acceptedEventHashes: acceptedEventHashes,
+                result: .accepted
+            ))
+        }
+
+        if classification.result != .accepted {
+            let remainingOperationIds = Array(plan.operationIds.dropFirst(acceptedPrefixCount))
+            if !remainingOperationIds.isEmpty {
+                retryResults.append(try await recordOfflineRetryResult(
+                    operationIds: remainingOperationIds,
+                    result: classification.result,
+                    errorCode: classification.errorCode,
+                    message: classification.message
+                ))
+            }
+        }
+
+        return SyncRetryExecutionResult(
+            plan: plan,
+            pushResponse: response,
+            retryResults: retryResults,
+            status: SyncRetryExecutionClassifier.status(
+                for: classification.result,
+                acceptedPrefixCount: acceptedPrefixCount
+            ),
+            acceptedOperationCount: acceptedPrefixCount,
+            failedOperationCount: max(0, plan.operationIds.count - acceptedPrefixCount)
+        )
+    }
+
     func resolveConflictReview(
         reviewId: String,
         resolution: SyncManualConflictResolution
@@ -1914,6 +2060,51 @@ struct SyncPushResponse: Decodable, Equatable {
     var errors: [String]?
 }
 
+enum SyncPushEndpointStyle: Equatable {
+    case logbookScoped
+    case hostedSync
+
+    func path(logbookId: String) -> String {
+        switch self {
+        case .logbookScoped:
+            return "api/v1/logbooks/\(logbookId)/push"
+        case .hostedSync:
+            return "api/v1/sync/push"
+        }
+    }
+}
+
+protocol SyncPushTransporting {
+    func push(
+        serverURL: URL,
+        bearerToken: String?,
+        syncToken: String?,
+        endpointStyle: SyncPushEndpointStyle,
+        logbookId: String,
+        events: [SyncOfficialEvent]
+    ) async throws -> SyncPushResponse
+}
+
+enum SyncRetryExecutionStatus: String, Equatable {
+    case blockedByNetwork = "blocked_by_network"
+    case noReadyEvents = "no_ready_events"
+    case missingTransportEventsRecorded = "missing_transport_events_recorded"
+    case accepted
+    case partialFailureRecorded = "partial_failure_recorded"
+    case transientFailureRecorded = "transient_failure_recorded"
+    case userActionRequired = "user_action_required"
+    case diverged
+}
+
+struct SyncRetryExecutionResult {
+    var plan: SyncRetryPlan
+    var pushResponse: SyncPushResponse?
+    var retryResults: [SyncRetryResultBridgeResult]
+    var status: SyncRetryExecutionStatus
+    var acceptedOperationCount: Int
+    var failedOperationCount: Int
+}
+
 enum SyncHTTPTransportError: LocalizedError, Equatable {
     case emptyEventBatch
     case invalidServerURL
@@ -1934,11 +2125,12 @@ enum SyncHTTPTransportError: LocalizedError, Equatable {
     }
 }
 
-struct SyncHTTPTransport {
+struct SyncHTTPTransport: SyncPushTransporting {
     func makePushRequest(
         serverURL: URL,
         bearerToken: String?,
         syncToken: String?,
+        endpointStyle: SyncPushEndpointStyle = .logbookScoped,
         logbookId: String,
         events: [SyncOfficialEvent]
     ) throws -> URLRequest {
@@ -1953,7 +2145,7 @@ struct SyncHTTPTransport {
         }
 
         let basePath = components.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-        let pushPath = "api/v1/logbooks/\(logbookId)/push"
+        let pushPath = endpointStyle.path(logbookId: logbookId)
         components.path = "/" + ([basePath, pushPath].filter { !$0.isEmpty }.joined(separator: "/"))
         guard let url = components.url else {
             throw SyncHTTPTransportError.invalidServerURL
@@ -1982,6 +2174,7 @@ struct SyncHTTPTransport {
         serverURL: URL,
         bearerToken: String?,
         syncToken: String?,
+        endpointStyle: SyncPushEndpointStyle = .logbookScoped,
         logbookId: String,
         events: [SyncOfficialEvent]
     ) async throws -> SyncPushResponse {
@@ -1989,6 +2182,7 @@ struct SyncHTTPTransport {
             serverURL: serverURL,
             bearerToken: bearerToken,
             syncToken: syncToken,
+            endpointStyle: endpointStyle,
             logbookId: logbookId,
             events: events
         )
@@ -2003,6 +2197,215 @@ struct SyncHTTPTransport {
         let decoder = JSONDecoder()
         decoder.keyDecodingStrategy = .convertFromSnakeCase
         return try decoder.decode(SyncPushResponse.self, from: data)
+    }
+}
+
+private struct SyncRetryExecutionClassification {
+    var result: SyncRetryResultKind
+    var errorCode: String?
+    var message: String?
+    var acceptedPrefixCount: Int
+}
+
+private enum SyncRetryExecutionClassifier {
+    static func logbookId(from plan: SyncRetryPlan, events: [SyncOfficialEvent]) -> String? {
+        [plan.logbookId, events.first?.logbookId]
+            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .first { !$0.isEmpty }
+    }
+
+    static func classify(response: SyncPushResponse, planCount: Int) -> SyncRetryExecutionClassification {
+        let status = response.status?.lowercased()
+        let rejectedCount = response.rejectedCount ?? 0
+        let errors = response.errors?.filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty } ?? []
+        let success = rejectedCount == 0
+            && errors.isEmpty
+            && status != "rejected"
+            && status != "diverged"
+        if success {
+            return SyncRetryExecutionClassification(
+                result: .accepted,
+                errorCode: nil,
+                message: nil,
+                acceptedPrefixCount: planCount
+            )
+        }
+
+        let acceptedPrefixCount = min(
+            planCount,
+            max(0, (response.acceptedCount ?? 0) + (response.ignoredDuplicateCount ?? 0))
+        )
+        let message = sanitizedMessage(errors.first) ?? "Sync server rejected queued official events."
+        let result = classifyFailure(statusCode: nil, status: status, message: message)
+        return SyncRetryExecutionClassification(
+            result: result,
+            errorCode: defaultErrorCode(for: result),
+            message: messageFor(result: result, fallback: message),
+            acceptedPrefixCount: acceptedPrefixCount
+        )
+    }
+
+    static func classify(error: Error) -> SyncRetryExecutionClassification {
+        if let transportError = error as? SyncHTTPTransportError {
+            switch transportError {
+            case .emptyEventBatch:
+                return SyncRetryExecutionClassification(
+                    result: .missingLocalEvent,
+                    errorCode: "missing_local_official_event",
+                    message: "Rust retry planning did not return local official event envelopes.",
+                    acceptedPrefixCount: 0
+                )
+            case .invalidServerURL:
+                return SyncRetryExecutionClassification(
+                    result: .validationFailed,
+                    errorCode: "invalid_sync_server_url",
+                    message: "Sync server URL is invalid.",
+                    acceptedPrefixCount: 0
+                )
+            case .invalidHTTPResponse:
+                return SyncRetryExecutionClassification(
+                    result: .transientFailure,
+                    errorCode: "invalid_sync_http_response",
+                    message: "Sync server returned an invalid HTTP response.",
+                    acceptedPrefixCount: 0
+                )
+            case .serverRejected(let statusCode, let message):
+                let result = classifyFailure(
+                    statusCode: statusCode,
+                    status: nil,
+                    message: message
+                )
+                return SyncRetryExecutionClassification(
+                    result: result,
+                    errorCode: defaultErrorCode(for: result, statusCode: statusCode),
+                    message: messageFor(
+                        result: result,
+                        fallback: "Sync server rejected the push with HTTP \(statusCode)."
+                    ),
+                    acceptedPrefixCount: 0
+                )
+            }
+        }
+        return SyncRetryExecutionClassification(
+            result: .transientFailure,
+            errorCode: "sync_transport_unavailable",
+            message: "Sync push could not reach the server.",
+            acceptedPrefixCount: 0
+        )
+    }
+
+    static func status(for result: SyncRetryResultKind, acceptedPrefixCount: Int) -> SyncRetryExecutionStatus {
+        if result == .accepted {
+            return .accepted
+        }
+        if acceptedPrefixCount > 0 {
+            return .partialFailureRecorded
+        }
+        switch result {
+        case .transientFailure:
+            return .transientFailureRecorded
+        case .diverged:
+            return .diverged
+        case .missingLocalEvent:
+            return .missingTransportEventsRecorded
+        case .accepted:
+            return .accepted
+        case .authFailed, .validationFailed, .permanentFailure:
+            return .userActionRequired
+        }
+    }
+
+    private static func classifyFailure(statusCode: Int?, status: String?, message: String) -> SyncRetryResultKind {
+        if statusCode == 401 || statusCode == 403 {
+            return .authFailed
+        }
+        if statusCode == 409 || status == "diverged" {
+            return .diverged
+        }
+        if statusCode == 400 || statusCode == 422 {
+            return .validationFailed
+        }
+        if let statusCode, statusCode >= 500 {
+            return .transientFailure
+        }
+
+        let lowercased = message.lowercased()
+        if lowercased.contains("unauthorized")
+            || lowercased.contains("forbidden")
+            || lowercased.contains("auth")
+            || lowercased.contains("revoked")
+            || lowercased.contains("token") {
+            return .authFailed
+        }
+        if lowercased.contains("diverg")
+            || lowercased.contains("previous hash")
+            || lowercased.contains("remote chain")
+            || lowercased.contains("local head") {
+            return .diverged
+        }
+        if lowercased.contains("invalid")
+            || lowercased.contains("hash")
+            || lowercased.contains("schema")
+            || lowercased.contains("unsupported")
+            || lowercased.contains("logbook")
+            || lowercased.contains("event id") {
+            return .validationFailed
+        }
+        return .permanentFailure
+    }
+
+    private static func defaultErrorCode(for result: SyncRetryResultKind, statusCode: Int? = nil) -> String {
+        if let statusCode {
+            return "sync_http_\(statusCode)"
+        }
+        switch result {
+        case .accepted:
+            return "accepted"
+        case .transientFailure:
+            return "sync_transport_unavailable"
+        case .authFailed:
+            return "auth_failed"
+        case .validationFailed:
+            return "validation_failed"
+        case .diverged:
+            return "diverged"
+        case .missingLocalEvent:
+            return "missing_local_official_event"
+        case .permanentFailure:
+            return "permanent_failure"
+        }
+    }
+
+    private static func messageFor(result: SyncRetryResultKind, fallback: String) -> String {
+        switch result {
+        case .authFailed:
+            return "Sync authorization failed."
+        case .diverged:
+            return "Sync peer history diverged; manual review is required."
+        case .validationFailed:
+            return "Sync peer rejected queued official events during validation."
+        case .transientFailure:
+            return "Sync push could not be completed; retry will be scheduled."
+        case .missingLocalEvent:
+            return "Rust retry planning did not return local official event envelopes."
+        case .permanentFailure:
+            return sanitizedMessage(fallback) ?? "Sync peer permanently rejected queued official events."
+        case .accepted:
+            return "Sync peer accepted queued official events."
+        }
+    }
+
+    private static func sanitizedMessage(_ message: String?) -> String? {
+        guard let message else { return nil }
+        var trimmed = message
+            .replacingOccurrences(of: "\r", with: " ")
+            .replacingOccurrences(of: "\n", with: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        if trimmed.count > 240 {
+            trimmed = String(trimmed.prefix(240)) + "..."
+        }
+        return trimmed
     }
 }
 

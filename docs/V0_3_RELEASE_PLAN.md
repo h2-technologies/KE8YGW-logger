@@ -1,6 +1,6 @@
 # v0.3 Release Plan
 
-Last audited: 2026-07-21
+Last audited: 2026-07-22
 
 `0.3.0` is the offline-sync foundation baseline for the locked November 24,
 2026 v1 release. It is not the complete v1 product.
@@ -27,9 +27,10 @@ Last audited: 2026-07-21
   missing-local-event, and permanent failures.
 - Native Swift bridge methods and typed sync snapshots now expose queue
   recovery, retry planning, retry results, queue health, affected mutations,
-  Rust-planned official event envelopes, and hosted push request construction
-  to the iOS Sync workspace without moving queue ordering, event creation, or
-  failure classification out of Rust.
+  Rust-planned official event envelopes, self-hosted/logbook-scoped push
+  execution coordination, hosted `/api/v1/sync/push` request construction, and
+  partial-acceptance retry-result handling to the iOS Sync workspace without
+  moving queue ordering, event creation, or failure classification out of Rust.
 - Queue-aware cloud push acknowledgment for queued official events.
 - Deterministic desktop restart/reconnect queue-drain coverage for interrupted
   sends, ordered queued official events, accepted-by-hash handling, and
@@ -89,8 +90,8 @@ Last audited: 2026-07-21
   current guided browser review surface, native saved-review display, and
   desktop/iOS corrective-event endpoints.
 - Release-device iOS background task execution, poor-network behavior, and
-  local-network permission validation, including actual native push execution
-  against hosted/self-hosted endpoints.
+  local-network permission validation, including real hosted/self-hosted
+  endpoint qualification for the native push execution path.
 - Real hosted web/desktop/iOS/self-hosted end-to-end device qualification,
   physical-device tests, and full migration matrix.
 

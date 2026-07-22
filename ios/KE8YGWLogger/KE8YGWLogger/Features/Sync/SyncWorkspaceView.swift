@@ -1,11 +1,14 @@
+import SwiftData
 import SwiftUI
 
 struct SyncWorkspaceView: View {
     @EnvironmentObject private var bridge: RustBridgeStore
+    @Query private var settings: [AppSettings]
     @StateObject private var connectivity = ConnectivityMonitor()
     @State private var backgroundSync = true
     @State private var retryAutomatically = true
     @State private var syncMessage: String?
+    private let credentialVault = KeychainCredentialVault()
 
     var body: some View {
         List {
@@ -86,10 +89,10 @@ struct SyncWorkspaceView: View {
 
             Section("Actions") {
                 Button("Sync Now") {
-                    Task { await planRetry(markSending: false) }
+                    Task { await executeRetryPush() }
                 }
                 Button("Retry Pending Uploads") {
-                    Task { await planRetry(markSending: false) }
+                    Task { await executeRetryPush() }
                 }
                 .disabled(!retryAutomatically)
                 Button("Recover Queue") {
@@ -121,6 +124,41 @@ struct SyncWorkspaceView: View {
         }
     }
 
+    private func executeRetryPush() async {
+        guard let serverURL = syncServerURL() else {
+            syncMessage = "Enter a valid sync server URL in Settings."
+            return
+        }
+        let syncToken: String?
+        do {
+            syncToken = try credentialVault
+                .read(account: "sync_token", providerId: "sync")?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        } catch {
+            syncMessage = "Unable to read sync credentials: \(error.localizedDescription)"
+            return
+        }
+        guard let syncToken, !syncToken.isEmpty else {
+            syncMessage = "Add a sync token in Settings before pushing queued changes."
+            return
+        }
+
+        do {
+            let result = try await bridge.executeOfflineRetryPush(
+                serverURL: serverURL,
+                syncToken: syncToken,
+                endpointStyle: .logbookScoped,
+                maxMutations: 25,
+                networkAvailable: connectivity.state.hasUsableInternet,
+                backgroundTimeBudgetSeconds: 20,
+                transport: SyncHTTPTransport()
+            )
+            syncMessage = syncResultMessage(result)
+        } catch {
+            syncMessage = error.localizedDescription
+        }
+    }
+
     private func planRetry(markSending: Bool) async {
         do {
             let result = try await bridge.planOfflineRetry(
@@ -138,6 +176,40 @@ struct SyncWorkspaceView: View {
             }
         } catch {
             syncMessage = error.localizedDescription
+        }
+    }
+
+    private func syncServerURL() -> URL? {
+        let rawValue = (settings.first?.serverURL ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let url = URL(string: rawValue),
+              let scheme = url.scheme?.lowercased(),
+              (scheme == "http" || scheme == "https"),
+              url.host != nil
+        else {
+            return nil
+        }
+        return url
+    }
+
+    private func syncResultMessage(_ result: SyncRetryExecutionResult) -> String {
+        switch result.status {
+        case .blockedByNetwork:
+            return "Network unavailable; queued changes remain pending."
+        case .noReadyEvents:
+            return "No ready offline changes."
+        case .missingTransportEventsRecorded:
+            return "Queued changes need review because local event envelopes are missing."
+        case .accepted:
+            return "Pushed \(result.acceptedOperationCount) queued changes."
+        case .partialFailureRecorded:
+            return "Pushed \(result.acceptedOperationCount) changes; \(result.failedOperationCount) need review."
+        case .transientFailureRecorded:
+            return "Sync push failed; retry was scheduled."
+        case .userActionRequired:
+            return "Sync push needs operator review."
+        case .diverged:
+            return "Sync peer history diverged; manual review is required."
         }
     }
 }

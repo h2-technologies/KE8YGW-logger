@@ -168,11 +168,16 @@ validation, missing-event, permanent, and divergence results stop unattended
 retry and require operator review. The native Swift bridge decodes the typed
 queue snapshot, recovery report, retry plan, retry result, and affected
 mutations. The iOS Sync workspace displays Rust queue health/mutation status
-and asks Rust for retry plans using the native network monitor state; it does
-not mark mutations `sending` until a transport is ready to process the returned
-events. Swift also decodes the Rust-planned official event envelopes and can
-construct the documented hosted `/api/v1/logbooks/{logbook_id}/push` request
-from those envelopes without creating or validating official history itself.
+and asks Rust for retry plans using the native network monitor state; it marks
+mutations `sending` only through the Rust retry-plan command when Swift
+transport is ready to process the returned events. Swift also decodes the
+Rust-planned official event envelopes and can construct both the self-hosted
+logbook-scoped `/api/v1/logbooks/{logbook_id}/push` request and the hosted
+`/api/v1/sync/push` request from those envelopes without creating or validating
+official history itself. The native retry executor now performs the
+Rust-plan -> Swift-transport -> Rust-result sequence for the configured
+sync-token push path, including accepted-prefix recording when a receiver
+accepts early events and rejects a later event.
 `sync_retry_plan_recovers_terminated_send_and_blocks_without_network`
 proves a terminated `sending` operation is recovered before planning and that a
 poor-network state returns a blocked no-op plan without losing queued work.
@@ -306,6 +311,10 @@ Current REST surface:
 - `POST /api/v1/logbooks/{logbook_id}/pull`
 - `POST /api/v1/logbooks/{logbook_id}/push`
 - `GET /api/v1/sync/status`
+
+The hosted `ham-server` API exposes bearer/session-scoped sync push as
+`POST /api/v1/sync/push`; the logbook-scoped routes above are the self-hosted
+sync-server compatibility surface used by sync-token clients.
 
 The current self-hosted server uses durable local storage by default: embedded SurrealDB metadata/support state, append-only JSONL official-event storage, and filesystem-backed diagnostic report payloads. Durable SurrealDB storage is exposed through the `ham-sync` `surreal-storage` feature so GUI, iOS, and other protocol-only clients can avoid the database dependency. The in-memory backend remains for deterministic tests.
 

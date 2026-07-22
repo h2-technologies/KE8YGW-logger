@@ -1,6 +1,6 @@
 # iOS App Store Readiness
 
-Last audited: 2026-07-21
+Last audited: 2026-07-22
 
 This checklist applies to the v1 native SwiftUI iOS app shipping with hosted
 web and desktop on November 24, 2026.
@@ -18,11 +18,13 @@ build scripts, simulator CI, and Rust-owned offline queue plus conflict-review
 commands are present. Native Swift bridge methods and Sync workspace controls
 now expose Rust-owned queue recovery, retry planning, retry result
 classification, queue health, no-network planning, user-action retry states,
-Rust-planned official event envelopes, hosted push request construction, saved
-conflict-review records, selected recovery paths, and structured conflict
-messages. Signing, provisioning, TestFlight, App Store metadata, privacy
-manifest, physical-device validation, release-safe BGTask execution, actual
-native sync transport execution qualification, and full v1
+Rust-planned official event envelopes, self-hosted/logbook-scoped push
+execution coordination, hosted `/api/v1/sync/push` request construction,
+accepted-prefix/rejected-tail retry result recording, saved conflict-review
+records, selected recovery paths, and structured conflict messages. Signing,
+provisioning, TestFlight, App Store metadata, privacy manifest, physical-device
+validation, release-safe BGTask execution, real hosted/self-hosted native sync
+transport qualification, and full v1
 offline/sync/provider qualification remain incomplete.
 
 ## Bundle and Signing
@@ -94,8 +96,10 @@ network, or background modes speculatively.
 - Offline queue behavior can be demonstrated.
 - The Sync workspace can display Rust queue health and request a no-network
   retry plan without marking queued mutations as sending.
-- Rust-planned official event envelopes can be encoded into the documented
-  hosted push request without event creation or validation in Swift.
+- Rust-planned official event envelopes can be pushed through the configured
+  sync-token transport path, with accepted/auth/divergence outcomes recorded
+  back through Rust retry results and without event creation or validation in
+  Swift.
 - The Sync workspace can display saved Rust conflict-review records and
   recommended operator actions without merging history in Swift.
 - ADIF import/export works through native document flows.
@@ -120,7 +124,9 @@ network, or background modes speculatively.
   retry planning, and Swift simulator tests cover no-network retry planning and
   auth-failure user-action classification plus fallback conflict-review
   creation/decoding, selected recovery-path resolution, event-envelope decoding,
-  and hosted push request construction.
+  hosted/self-hosted push request construction, accepted retry execution,
+  auth-failure result recording without token leakage, and partial-divergence
+  retry-result splitting.
 - ADIF document import/export is tested with Files and share sheet flows.
 - Keychain values survive app restart and are cleared on sign-out.
 - Privacy manifest is included in the archive.

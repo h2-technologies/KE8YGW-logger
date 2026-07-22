@@ -1,6 +1,6 @@
 # v1 Execution Plan
 
-Last audited: 2026-07-21
+Last audited: 2026-07-22
 
 This plan converts the remaining issue #2 scope into a dependency-ordered
 critical path for the November 24, 2026 v1 release. It does not add features
@@ -60,8 +60,10 @@ outside issue #2.
      acknowledgment, transient backoff, and user-action stops for auth,
      validation, divergence, missing-event, and permanent failures. Native
      Swift bridge methods and the iOS Sync workspace now decode Rust queue
-     health/mutations, Rust-planned official event envelopes, hosted push
-     request bodies, request retry plans with native network monitor state,
+     health/mutations, Rust-planned official event envelopes,
+     self-hosted/logbook-scoped push execution coordination, hosted
+     `/api/v1/sync/push` request bodies, accepted-prefix/rejected-tail retry
+     result recording, request retry plans with native network monitor state,
      display saved conflict-review records with recommended actions and
      structured conflict messages, and surface no-network/user-action retry
      outcomes without owning event creation or domain rules.
@@ -69,8 +71,8 @@ outside issue #2.
      key-exchange hardening, end-to-end cross-client branch review/reconciliation workflow
      qualification, physical-device LAN/iOS local-network
      validation, release-device iOS background task and poor-network
-     qualification, actual native push execution against hosted/self-hosted
-     endpoints, and real hosted web/desktop/iOS/self-hosted
+     qualification, real hosted/self-hosted endpoint qualification for native
+     push execution, and real hosted web/desktop/iOS/self-hosted
      migration/recovery qualification.
    - Blockers: local network permission behavior on iOS, iOS reciprocal LAN
      pairing UX, physical test devices, and acceptance criteria for manual conflict

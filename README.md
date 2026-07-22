@@ -972,10 +972,12 @@ recovery reports, retry plans, retry results, Rust-planned official event
 envelopes, and affected mutations; the iOS Sync workspace displays queue
 health and asks Rust for retry plans using the native network monitor so
 no-network states remain visible without mutating the official event stream.
-Swift can encode those Rust-planned event envelopes into the documented hosted
-push request without creating or validating official history itself; actual
-hosted/self-hosted endpoint execution and release-device background behavior
-remain v0.3/v1 qualification work.
+Swift can execute the Rust-plan -> Swift-transport -> Rust-result sequence for
+the configured sync-token push path, record accepted server prefixes separately
+from rejected tails, and build both the self-hosted logbook-scoped push request
+and the hosted `/api/v1/sync/push` request without creating or validating
+official history itself. Real hosted/self-hosted endpoint qualification and
+release-device background behavior remain v0.3/v1 qualification work.
 
 LAN trust records are durable support state. Pairing tokens require explicit
 operator approval, expire quickly, are single use, and are stored only as
@@ -1068,6 +1070,10 @@ Cloud API surface:
 - `POST /api/v1/logbooks/{logbook_id}/pull`
 - `POST /api/v1/logbooks/{logbook_id}/push`
 - `GET /api/v1/sync/status?token=...`
+
+The hosted `ham-server` route for bearer/session clients is
+`POST /api/v1/sync/push`; the logbook-scoped routes above are the self-hosted
+sync-server compatibility surface used by sync-token clients.
 
 Push behavior:
 

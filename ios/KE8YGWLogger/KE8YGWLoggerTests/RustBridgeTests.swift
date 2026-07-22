@@ -227,6 +227,28 @@ final class RustBridgeTests: XCTestCase {
         XCTAssertFalse(bodyString.contains("secret-bearer"))
     }
 
+    func testSyncHTTPTransportBuildsHostedSyncPushRequestFromPlannedEvents() throws {
+        let event = sampleOfficialEvent()
+        let request = try SyncHTTPTransport().makePushRequest(
+            serverURL: try XCTUnwrap(URL(string: "https://api.example.test/root/")),
+            bearerToken: "secret-bearer",
+            syncToken: "sync-secret",
+            endpointStyle: .hostedSync,
+            logbookId: event.logbookId,
+            events: [event]
+        )
+        let body = try XCTUnwrap(request.httpBody)
+        let bodyString = String(decoding: body, as: UTF8.self)
+        let object = try JSONSerialization.jsonObject(with: body) as? [String: Any]
+        let auth = object?["auth"] as? [String: Any]
+
+        XCTAssertEqual(request.url?.absoluteString, "https://api.example.test/root/api/v1/sync/push")
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer secret-bearer")
+        XCTAssertEqual(object?["logbook_id"] as? String, event.logbookId)
+        XCTAssertEqual(auth?["sync_token"] as? String, "sync-secret")
+        XCTAssertFalse(bodyString.contains("secret-bearer"))
+    }
+
     func testSyncHTTPTransportRejectsEmptyEventBatches() throws {
         XCTAssertThrowsError(
             try SyncHTTPTransport().makePushRequest(
@@ -239,6 +261,100 @@ final class RustBridgeTests: XCTestCase {
         ) { error in
             XCTAssertEqual(error as? SyncHTTPTransportError, .emptyEventBatch)
         }
+    }
+
+    func testSyncRetryExecutorRecordsAcceptedPushResult() async throws {
+        let logbookID = UUID().uuidString
+        let events = [
+            sampleOfficialEvent(logbookID: logbookID, eventHash: "event-hash-1"),
+            sampleOfficialEvent(logbookID: logbookID, eventHash: "event-hash-2", previousHash: "event-hash-1")
+        ]
+        let operationIDs = [UUID().uuidString, UUID().uuidString]
+        let client = try RetryExecutorRustBridgeClient(
+            retryPlanPayload: retryPlanPayload(operationIds: operationIDs, events: events)
+        )
+        let store = await RustBridgeStore(client: client)
+        let result = try await store.executeOfflineRetryPush(
+            serverURL: try XCTUnwrap(URL(string: "https://sync.example.test")),
+            syncToken: "sync-secret",
+            transport: StubSyncPushTransport(response: SyncPushResponse(
+                status: "pulled",
+                acceptedCount: 2,
+                ignoredDuplicateCount: 0,
+                rejectedCount: 0,
+                serverHeadHash: "event-hash-2",
+                errors: []
+            ))
+        )
+
+        XCTAssertEqual(result.status, .accepted)
+        XCTAssertEqual(result.acceptedOperationCount, 2)
+        XCTAssertEqual(result.failedOperationCount, 0)
+        XCTAssertEqual(client.retryResultPayloads.count, 1)
+        XCTAssertEqual(client.retryResultPayloads[0]["result"] as? String, "accepted")
+        XCTAssertEqual(client.retryResultPayloads[0]["operation_ids"] as? [String], operationIDs)
+        XCTAssertEqual(client.retryResultPayloads[0]["accepted_event_hashes"] as? [String], ["event-hash-1", "event-hash-2"])
+    }
+
+    func testSyncRetryExecutorRecordsAuthFailureWithoutLeakingToken() async throws {
+        let logbookID = UUID().uuidString
+        let event = sampleOfficialEvent(logbookID: logbookID, eventHash: "event-hash-auth")
+        let operationID = UUID().uuidString
+        let client = try RetryExecutorRustBridgeClient(
+            retryPlanPayload: retryPlanPayload(operationIds: [operationID], events: [event])
+        )
+        let store = await RustBridgeStore(client: client)
+        let result = try await store.executeOfflineRetryPush(
+            serverURL: try XCTUnwrap(URL(string: "https://sync.example.test")),
+            syncToken: "sync-secret",
+            transport: StubSyncPushTransport(error: SyncHTTPTransportError.serverRejected(
+                statusCode: 401,
+                message: "unauthorized"
+            ))
+        )
+        let retryPayloadData = try JSONSerialization.data(withJSONObject: client.retryResultPayloads)
+        let retryPayloadJSON = String(decoding: retryPayloadData, as: UTF8.self)
+
+        XCTAssertEqual(result.status, .userActionRequired)
+        XCTAssertEqual(client.retryResultPayloads.count, 1)
+        XCTAssertEqual(client.retryResultPayloads[0]["result"] as? String, "auth_failed")
+        XCTAssertEqual(client.retryResultPayloads[0]["error_code"] as? String, "sync_http_401")
+        XCTAssertFalse(retryPayloadJSON.contains("sync-secret"))
+    }
+
+    func testSyncRetryExecutorSplitsAcceptedPrefixFromDivergedTail() async throws {
+        let logbookID = UUID().uuidString
+        let events = [
+            sampleOfficialEvent(logbookID: logbookID, eventHash: "event-hash-prefix"),
+            sampleOfficialEvent(logbookID: logbookID, eventHash: "event-hash-diverged", previousHash: "wrong-head")
+        ]
+        let operationIDs = [UUID().uuidString, UUID().uuidString]
+        let client = try RetryExecutorRustBridgeClient(
+            retryPlanPayload: retryPlanPayload(operationIds: operationIDs, events: events)
+        )
+        let store = await RustBridgeStore(client: client)
+        let result = try await store.executeOfflineRetryPush(
+            serverURL: try XCTUnwrap(URL(string: "https://sync.example.test")),
+            syncToken: "sync-secret",
+            transport: StubSyncPushTransport(response: SyncPushResponse(
+                status: "rejected",
+                acceptedCount: 1,
+                ignoredDuplicateCount: 0,
+                rejectedCount: 1,
+                serverHeadHash: "event-hash-prefix",
+                errors: ["remote event previous hash does not match expected server head"]
+            ))
+        )
+
+        XCTAssertEqual(result.status, .partialFailureRecorded)
+        XCTAssertEqual(result.acceptedOperationCount, 1)
+        XCTAssertEqual(result.failedOperationCount, 1)
+        XCTAssertEqual(client.retryResultPayloads.count, 2)
+        XCTAssertEqual(client.retryResultPayloads[0]["result"] as? String, "accepted")
+        XCTAssertEqual(client.retryResultPayloads[0]["operation_ids"] as? [String], [operationIDs[0]])
+        XCTAssertEqual(client.retryResultPayloads[0]["accepted_event_hashes"] as? [String], ["event-hash-prefix"])
+        XCTAssertEqual(client.retryResultPayloads[1]["result"] as? String, "diverged")
+        XCTAssertEqual(client.retryResultPayloads[1]["operation_ids"] as? [String], [operationIDs[1]])
     }
 
     func testRustBridgeStoreMapsStructuredErrors() async throws {
@@ -417,14 +533,41 @@ final class RustBridgeTests: XCTestCase {
         ]
     }
 
-    private func sampleOfficialEvent() -> SyncOfficialEvent {
+    private func retryPlanPayload(operationIds: [String], events: [SyncOfficialEvent]) throws -> [String: Any] {
+        let encoder = JSONEncoder()
+        encoder.keyEncodingStrategy = .convertToSnakeCase
+        let eventObjects = try events.map { event -> Any in
+            let data = try encoder.encode(event)
+            return try JSONSerialization.jsonObject(with: data)
+        }
+        return [
+            "schema_version": 1,
+            "logbook_id": events.first?.logbookId ?? UUID().uuidString,
+            "operation_ids": operationIds,
+            "event_hashes": events.map { $0.eventHash },
+            "events": eventObjects,
+            "missing_local_event_operation_ids": [],
+            "network_required": true,
+            "blocked_by_network": false,
+            "max_mutations": operationIds.count,
+            "background_time_budget_seconds": 20,
+            "mark_sending": true,
+            "permanent_failure_results": ["auth_failed", "validation_failed", "diverged"]
+        ]
+    }
+
+    private func sampleOfficialEvent(
+        logbookID: String = UUID().uuidString,
+        eventHash: String = "sample-event-hash",
+        previousHash: String? = nil
+    ) -> SyncOfficialEvent {
         SyncOfficialEvent(
             eventId: UUID().uuidString,
             eventType: "official.log.qso.created",
-            logbookId: UUID().uuidString,
+            logbookId: logbookID,
             entityId: UUID().uuidString,
-            previousHash: nil,
-            eventHash: "sample-event-hash",
+            previousHash: previousHash,
+            eventHash: eventHash,
             timestamp: "2026-07-21T12:00:00Z",
             authorOperatorId: nil,
             stationCallsign: "KE8YGW",
@@ -466,5 +609,162 @@ struct ErrorRustBridgeClient: RustBridgeClient {
             "correlation_id": "corr-test"
         ]
         return try JSONSerialization.data(withJSONObject: envelope)
+    }
+}
+
+private final class RetryExecutorRustBridgeClient: RustBridgeClient {
+    let isLive = false
+    private let retryPlanPayload: [String: Any]
+    private(set) var retryResultPayloads: [[String: Any]] = []
+
+    init(retryPlanPayload: [String: Any]) throws {
+        self.retryPlanPayload = retryPlanPayload
+    }
+
+    func call(_ endpoint: RustBridgeEndpoint, argument: String?) async throws -> Data {
+        try await FallbackRustBridgeClient().call(endpoint, argument: argument)
+    }
+
+    func callJSON(_ requestData: Data) async throws -> Data {
+        let request = try JSONSerialization.jsonObject(with: requestData) as? [String: Any]
+        let command = request?["command"] as? String
+        let correlationID = request?["correlation_id"] as? String ?? "corr-test"
+        let payload = request?["payload"] as? [String: Any] ?? [:]
+
+        switch command {
+        case "sync.offline_queue.retry_plan":
+            return try envelope(data: [
+                "retry_plan": retryPlanPayload,
+                "offline_queue": FallbackBridgeData.offlineQueue(),
+                "recovery": FallbackBridgeData.offlineQueueRecovery()
+            ], correlationID: correlationID)
+        case "sync.offline_queue.retry_result":
+            retryResultPayloads.append(payload)
+            return try envelope(data: retryResultResponse(payload: payload), correlationID: correlationID)
+        default:
+            return try envelope(
+                ok: false,
+                data: NSNull(),
+                error: ["code": "unsupported_test_command", "message": command ?? "missing command"],
+                correlationID: correlationID
+            )
+        }
+    }
+
+    private func retryResultResponse(payload: [String: Any]) -> [String: Any] {
+        let result = payload["result"] as? String ?? "transient_failure"
+        let operationIDs = payload["operation_ids"] as? [String] ?? []
+        let acceptedHashes = payload["accepted_event_hashes"] as? [String] ?? []
+        let mutations = operationIDs.enumerated().map { index, operationID in
+            mutation(
+                operationID: operationID,
+                sequence: index + 1,
+                result: result,
+                errorCode: payload["error_code"] as? String,
+                message: payload["message"] as? String
+            )
+        }
+
+        return [
+            "retry_result": [
+                "schema_version": 1,
+                "logbook_id": retryPlanPayload["logbook_id"] as? String ?? "",
+                "result": result,
+                "operation_ids": operationIDs,
+                "accepted_count": acceptedHashes.count,
+                "error_code": payload["error_code"] ?? NSNull(),
+                "message": payload["message"] ?? NSNull()
+            ],
+            "affected_mutations": mutations,
+            "offline_queue": FallbackBridgeData.offlineQueue(mutations: mutations)
+        ]
+    }
+
+    private func mutation(
+        operationID: String,
+        sequence: Int,
+        result: String,
+        errorCode: String?,
+        message: String?
+    ) -> [String: Any] {
+        let status: String
+        switch result {
+        case "accepted":
+            status = "accepted"
+        case "transient_failure":
+            status = "retrying"
+        case "diverged":
+            status = "blocked"
+        default:
+            status = "user_action_required"
+        }
+        return [
+            "operation_id": operationID,
+            "logbook_id": retryPlanPayload["logbook_id"] as? String ?? "",
+            "entity_id": NSNull(),
+            "sequence": sequence,
+            "operation_type": "qso.create",
+            "status": status,
+            "attempts": 1,
+            "next_attempt_at": NSNull(),
+            "failure_reason": message as Any? ?? NSNull(),
+            "last_error_code": errorCode as Any? ?? NSNull(),
+            "local_event_hash": NSNull()
+        ]
+    }
+
+    private func envelope(
+        ok: Bool = true,
+        data: Any,
+        error: Any = NSNull(),
+        correlationID: String
+    ) throws -> Data {
+        try JSONSerialization.data(withJSONObject: [
+            "ok": ok,
+            "bridge_version": 1,
+            "abi_version": 1,
+            "schema_version": 1,
+            "generated_at": "2026-07-21T12:00:00Z",
+            "data": data,
+            "error": error,
+            "correlation_id": correlationID
+        ])
+    }
+}
+
+private struct StubSyncPushTransport: SyncPushTransporting {
+    var response: SyncPushResponse?
+    var error: Error?
+
+    init(response: SyncPushResponse) {
+        self.response = response
+        self.error = nil
+    }
+
+    init(error: Error) {
+        self.response = nil
+        self.error = error
+    }
+
+    func push(
+        serverURL: URL,
+        bearerToken: String?,
+        syncToken: String?,
+        endpointStyle: SyncPushEndpointStyle,
+        logbookId: String,
+        events: [SyncOfficialEvent]
+    ) async throws -> SyncPushResponse {
+        _ = (serverURL, bearerToken, syncToken, endpointStyle, logbookId, events)
+        if let error {
+            throw error
+        }
+        return response ?? SyncPushResponse(
+            status: "pulled",
+            acceptedCount: events.count,
+            ignoredDuplicateCount: 0,
+            rejectedCount: 0,
+            serverHeadHash: events.last?.eventHash,
+            errors: []
+        )
     }
 }
