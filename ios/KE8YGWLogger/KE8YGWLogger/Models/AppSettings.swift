@@ -28,6 +28,7 @@ final class AppSettings: Identifiable {
     var manualCountry: String?
     var serverURL: String?
     var syncDeviceName: String?
+    var syncEndpointStyle: String?
     var syncIntervalMinutes: Int?
     var preferLANSync: Bool?
     var autoPushSync: Bool?
@@ -65,7 +66,7 @@ final class AppSettings: Identifiable {
 
     init(
         id: UUID = UUID(),
-        settingsSchemaVersion: Int? = 3,
+        settingsSchemaVersion: Int? = 4,
         defaultBand: String = "20m",
         defaultMode: String = "SSB",
         appearance: String = "system",
@@ -89,6 +90,7 @@ final class AppSettings: Identifiable {
         manualCountry: String? = "United States",
         serverURL: String? = "http://127.0.0.1:9740",
         syncDeviceName: String? = "KE8YGW Logger iOS",
+        syncEndpointStyle: String? = "logbook_scoped",
         syncIntervalMinutes: Int? = 15,
         preferLANSync: Bool? = true,
         autoPushSync: Bool? = false,
@@ -149,6 +151,7 @@ final class AppSettings: Identifiable {
         self.manualCountry = manualCountry
         self.serverURL = serverURL
         self.syncDeviceName = syncDeviceName
+        self.syncEndpointStyle = syncEndpointStyle
         self.syncIntervalMinutes = syncIntervalMinutes
         self.preferLANSync = preferLANSync
         self.autoPushSync = autoPushSync
@@ -187,7 +190,7 @@ final class AppSettings: Identifiable {
 }
 
 extension AppSettings {
-    static let currentSchemaVersion = 3
+    static let currentSchemaVersion = 4
 
     var effectiveUseDeviceLocation: Bool {
         get { useDeviceLocation ?? true }
@@ -228,6 +231,7 @@ extension AppSettings {
         manualCountry = manualCountry ?? "United States"
         serverURL = serverURL ?? "http://127.0.0.1:9740"
         syncDeviceName = syncDeviceName ?? "KE8YGW Logger iOS"
+        syncEndpointStyle = syncEndpointStyle ?? "logbook_scoped"
         syncIntervalMinutes = syncIntervalMinutes ?? 15
         preferLANSync = preferLANSync ?? true
         autoPushSync = autoPushSync ?? false
@@ -343,6 +347,7 @@ extension AppSettings {
         manualCountry = settings.location.manualCountry
         serverURL = settings.sync.syncServerUrl
         syncDeviceName = settings.sync.deviceName
+        syncEndpointStyle = settings.sync.syncEndpointStyle ?? "logbook_scoped"
         syncIntervalMinutes = settings.sync.syncIntervalMinutes
         preferLANSync = settings.sync.preferLanSync
         autoPushSync = settings.sync.autoPushEnabled
@@ -424,6 +429,7 @@ extension AppSettings {
             sync: RustSyncSettings(
                 syncServerUrl: serverURL ?? "",
                 deviceName: syncDeviceName ?? "",
+                syncEndpointStyle: syncEndpointStyle ?? "logbook_scoped",
                 preferLanSync: preferLANSync ?? true,
                 autoPushEnabled: autoPushSync ?? false,
                 autoPullEnabled: autoPullSync ?? false,

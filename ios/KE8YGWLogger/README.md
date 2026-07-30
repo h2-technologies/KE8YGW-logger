@@ -154,13 +154,15 @@ the user's manual value when GPS updates arrive.
 
 ## Remaining Roadmap
 
-- Build/link `ham-ios-ffi` for iOS.
-- Run macOS/Xcode validation for simulator, device, archive, and unit tests.
+- Run macOS/Xcode validation for simulator, physical device, archive, and unit
+  tests.
+- Qualify release-device BGTask execution, hosted/self-hosted native sync
+  endpoints selected through the Sync API setting, poor-network behavior, and
+  Local Network permission prompts.
 - Route QSO correct/update, provider queue actions, live provider credential
   validation, Net Control check-in classification updates, Net Control snapshot
-  recovery, emergency assignments, sync push/pull/merge/conflict resolution,
-  and JSON/ZIP restore through Rust FFI.
-- Add hosted sync transport on iOS.
+  recovery, emergency assignments, remaining sync merge/conflict workflows, and
+  JSON/ZIP restore through Rust FFI.
 - Add real provider adapters as they become available in Rust.
 - Add UI, snapshot, offline, provider mock, sync, and map tests in Xcode.
 

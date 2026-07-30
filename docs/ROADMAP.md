@@ -30,12 +30,26 @@ wrapper is not the iOS client. See `V1_RELEASE_PLAN.md`,
 
 5. **Sync Foundation**
    - IPv4/IPv6 LAN discovery, peer registry, handshake, head comparison, safe preview pull and pull missing events over LAN, GUI Sync Status, tests.
-   - Status: implemented as protocol/model layer with MVP GUI/demo paths; real peer-to-peer HTTP transport remains high priority.
+   - Status: implemented as protocol/model layer with MVP GUI/demo paths. A
+     durable LAN trust store with single-use tokens, replay nonce checks, and
+     revocation is implemented in `ham-sync` and exposed through GUI endpoints;
+     LAN list/head/event read endpoints are guarded by trust-scoped requester
+     device ID, replay nonce, and HMAC-SHA256 signature headers;
+     manual direct LAN HTTP preview/pull is available between GUI instances;
+     the GUI also runs IPv4/IPv6 multicast discovery with reachable identity
+     probing, plus guided browser LAN pairing/trust controls and GUI LAN auth
+     credential rotation/recovery. Native iOS now has Rust-owned LAN trust
+     snapshot/issue/accept/trust/rotate/revoke bridge commands with
+     Keychain-backed credential references, reciprocal peer-URL pairing, and
+     multicast discovery peer selection. Apple multicast
+     entitlement/provisioning and physical-device LAN/iOS local-network
+     validation remain high priority.
 
 6. **Cloud/Self-Hosted Sync**
    - Sync server/client, pairing-token MVP auth, push/pull/preview via cloud, self-hosted config/Docker, GUI cloud settings, tests.
    - Status: implemented with durable SurrealDB support metadata and JSONL
-     official event storage for hosted/self-hosted server paths.
+     official event storage for hosted/self-hosted server paths. Desktop cloud
+     push is queue-aware for local official mutations.
 
 7. **POTA/SOTA Vertical Slice**
    - POTA/SOTA plugin model, activation events/proposals/projections, QSO activation links, activation GUI, ADIF fields, tests.
@@ -87,14 +101,53 @@ wrapper is not the iOS client. See `V1_RELEASE_PLAN.md`,
       and durable scheduler
       execution remain planned.
 
+17. **Offline Mutation Queue + Reconciliation Foundation**
+   - Versioned offline mutation envelopes, deterministic per-logbook queue
+     ordering, idempotency keys, dependency checks, retry/backoff state,
+     interrupted-send recovery, desktop/iOS mutation hooks, optional target
+     entity metadata, queue health snapshots, structured conflict reports for
+     divergent heads, missing dependencies, unsupported schemas, concurrent QSO
+     corrections, and tombstone/restore overlaps, durable manual
+     conflict-review records, direct LAN HTTP preview/pull, automatic LAN
+     discovery, durable LAN trust state, and desktop/iOS corrective-event
+     commands that submit explicit proposals and resolve reviews with generated
+     official event hashes, plus guided browser conflict-review and LAN
+     pairing/trust surfaces for saved reviews, structured conflict summaries,
+     explicit recovery choices, corrective QSO note events, local one-time
+     pairing codes, reciprocal pairing completion with generated endpoint auth
+     codes, auth rotation, and trust
+     revocation. Deterministic shared sync golden tests
+     cover crash recovery, transient retry, duplicate/reordered delivery,
+     iOS-style pull replay, partial push accepted-prefix/rejected-tail queue
+     recovery, revoked and expired cloud-auth user-action recovery, clock-skewed
+     timestamps, divergent heads, conflict-review resolution, legacy queue
+     migration, restore replay, and LAN revocation.
+   - Status: implemented as a v0.3 foundation with HMAC-SHA256 signed LAN read
+     endpoint authorization, GUI LAN auth credential rotation/recovery, desktop
+     cloud reconnect auto-drain when auto-push is enabled, iOS FFI background
+     retry planning/result classification, and iOS LAN trust
+     snapshot/issue/accept/trust/rotate/revoke bridge commands, reciprocal
+     peer-URL pairing, multicast discovery peer selection, native iOS
+     background retry task registration/scheduling policy, background Auto Pull
+     sequencing through `sync.remote_events.apply`, and explicit native
+     self-hosted versus hosted sync endpoint routing.
+     Release-device cross-client branch review/reconciliation workflow
+     qualification,
+     physical-device LAN/iOS local-network validation, and release-device iOS
+     background task execution/poor-network qualification remain planned.
+
 ## Dependency Order
 
 The dependency-ordered v1 critical path is tracked in
 `V1_EXECUTION_PLAN.md`. The next high-impact work should minimize future
 rewrites:
 
-1. Finish sync/offline reconciliation, LAN trust pairing, and conflict review
-   before unattended desktop/iOS operation.
+1. Finish the remaining sync/reconciliation hardening: Apple multicast
+   entitlement/provisioning, release-device cross-client branch
+   review/reconciliation workflow qualification,
+   physical-device LAN/iOS local-network validation, and release-device iOS
+   background task execution/poor-network qualification before unattended desktop/iOS
+   operation.
 2. Complete provider runtime hardening and production provider qualification
    before release-candidate data migration or operations work.
 3. Build the remaining client surfaces on top of stable account, sync, provider,

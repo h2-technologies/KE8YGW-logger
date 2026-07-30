@@ -13,6 +13,40 @@ function Assert-File($path) {
     }
 }
 
+function Get-PlistValue($dictNode, $keyName) {
+    for ($i = 0; $i -lt $dictNode.ChildNodes.Count; $i++) {
+        $node = $dictNode.ChildNodes[$i]
+        if ($node.Name -eq 'key' -and $node.InnerText -eq $keyName) {
+            if ($i + 1 -ge $dictNode.ChildNodes.Count) {
+                return $null
+            }
+            return $dictNode.ChildNodes[$i + 1]
+        }
+    }
+    return $null
+}
+
+function Assert-PlistString($dictNode, $keyName) {
+    $value = Get-PlistValue $dictNode $keyName
+    if ($null -eq $value -or $value.Name -ne 'string' -or [string]::IsNullOrWhiteSpace($value.InnerText)) {
+        Fail "Info.plist must define a non-empty string for $keyName."
+    }
+    return $value.InnerText
+}
+
+function Assert-PlistArrayContains($dictNode, $keyName, $expectedValue) {
+    $value = Get-PlistValue $dictNode $keyName
+    if ($null -eq $value -or $value.Name -ne 'array') {
+        Fail "Info.plist must define an array for $keyName."
+    }
+    $containsValue = $value.ChildNodes | Where-Object {
+        $_.Name -eq 'string' -and $_.InnerText -eq $expectedValue
+    }
+    if (-not $containsValue) {
+        Fail "Info.plist $keyName must contain $expectedValue."
+    }
+}
+
 function Get-TextFiles {
     git ls-files | Where-Object {
         $_ -match '\.(md|yml|yaml|toml|rs|js|css|html|json|ps1)$' -or
@@ -45,8 +79,8 @@ $rootCargo = Get-Content -Raw Cargo.toml
 if ($rootCargo -notmatch '(?m)^edition\s*=\s*"2021"\s*$') {
     Fail 'Workspace edition must remain 2021.'
 }
-if ($rootCargo -notmatch '(?m)^version\s*=\s*"0\.2\.0"\s*$') {
-    Fail 'Workspace version must remain 0.2.0 for this baseline.'
+if ($rootCargo -notmatch '(?m)^version\s*=\s*"0\.3\.0"\s*$') {
+    Fail 'Workspace version must remain 0.3.0 for the offline-sync baseline.'
 }
 if ($rootCargo -notmatch '(?m)^license\s*=\s*"MIT"\s*$') {
     Fail 'Workspace license must remain MIT.'
@@ -132,6 +166,49 @@ foreach ($file in $trackedFiles) {
             Fail "Obvious secret-like file is tracked: $file"
         }
     }
+    foreach ($pattern in @(
+        '(^|/)xcuserdata/',
+        '\.xcuserstate$',
+        '\.xcresult($|/)',
+        '\.xcarchive($|/)',
+        '(^|/)DerivedData($|/)',
+        '^artifacts/ios/'
+    )) {
+        if ($normalized -match $pattern) {
+            Fail "Generated Xcode/iOS artifact is tracked: $file"
+        }
+    }
+}
+
+$iosInfoPlistPath = 'ios/KE8YGWLogger/KE8YGWLogger/Resources/Info.plist'
+Assert-File $iosInfoPlistPath
+$iosRustBridgePath = 'ios/KE8YGWLogger/KE8YGWLogger/Shared/RustBridge/RustBridge.swift'
+Assert-File $iosRustBridgePath
+$iosRustBridgeSource = Get-Content -Raw $iosRustBridgePath
+$backgroundTaskMatch = [regex]::Match(
+    $iosRustBridgeSource,
+    'static\s+let\s+identifier\s*=\s*"([^"]+)"'
+)
+if (-not $backgroundTaskMatch.Success) {
+    Fail 'Swift SyncBackgroundRetryTask.identifier was not found.'
+}
+$syncBackgroundTaskIdentifier = $backgroundTaskMatch.Groups[1].Value
+
+[xml]$iosInfoPlist = Get-Content -Raw $iosInfoPlistPath
+$iosInfoDict = $iosInfoPlist.plist.dict
+if ($null -eq $iosInfoDict) {
+    Fail 'iOS Info.plist must contain a top-level dict.'
+}
+Assert-PlistString $iosInfoDict 'NSLocalNetworkUsageDescription' | Out-Null
+Assert-PlistArrayContains $iosInfoDict 'BGTaskSchedulerPermittedIdentifiers' $syncBackgroundTaskIdentifier
+Assert-PlistArrayContains $iosInfoDict 'UIBackgroundModes' 'processing'
+$ats = Get-PlistValue $iosInfoDict 'NSAppTransportSecurity'
+if ($null -eq $ats -or $ats.Name -ne 'dict') {
+    Fail 'Info.plist must define NSAppTransportSecurity for local sync transport.'
+}
+$allowsLocalNetworking = Get-PlistValue $ats 'NSAllowsLocalNetworking'
+if ($null -eq $allowsLocalNetworking -or $allowsLocalNetworking.Name -ne 'true') {
+    Fail 'Info.plist NSAppTransportSecurity must enable NSAllowsLocalNetworking for paired-device sync.'
 }
 
 $markdownFiles = git ls-files '*.md'

@@ -15,7 +15,7 @@ release credentials and the corresponding Windows/macOS/Linux runners. They
 have not been validated merely because unsigned local builds succeed.
 
 v1 includes signed desktop clients for Windows, macOS, and broad Linux
-distribution support. The `0.2.0` workspace now has a real Tauri runtime
+distribution support. The `0.3.0` workspace has a real Tauri runtime
 wrapper and keeps signing, notarization, updater policy, and installer branding
 as v1 work.
 
