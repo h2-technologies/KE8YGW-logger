@@ -46,7 +46,15 @@ Foundational or partial functionality:
 
 Planned but not implemented end-to-end:
 - Real runtime plugin loading, sandboxing, and signatures.
-- LAN trust pairing and real peer-to-peer HTTP transport.
+- Apple multicast entitlement/provisioning and physical-device validation
+  beyond the automatic
+  discovery/manual direct LAN HTTP peer paths, HMAC-SHA256 signed LAN read
+  endpoint authorization, browser pairing/auth-credential rotation/recovery
+  panel, and native iOS LAN trust snapshot/issue/accept/trust/rotate/revoke
+  plus reciprocal peer-URL pairing, multicast discovery peer selection, and
+  peer-identity-gated signed LAN pull bridge. The maintainer-controlled Apple
+  provisioning sequence is tracked in
+  [iOS Multicast Provisioning](docs/IOS_MULTICAST_PROVISIONING.md).
 - Conflict resolution UI and automatic merge policy.
 - Full production provider coverage for LoTW/TQSL, SOTAWatch live access, NOAA/Open-Meteo, FCC ULS, RBN, and other placeholder providers.
 - Swift projection cache and production App Store packaging.
@@ -144,6 +152,7 @@ Repository absences that matter:
 | `docs/plugins/*` and `docs/plugin-map-providers/*` | Provider and plugin-development guidance. |
 | `docs/maps`, `docs/grid-system`, `docs/propagation`, `docs/weather` | GIS, Maidenhead, propagation, and weather model guidance. |
 | `docs/*RELEASE*.md`, `docs/ROADMAP.md`, `docs/V*_PLAN.md`, `docs/IOS_APPSTORE_READINESS.md` | Release sequencing and gap tracking. |
+| `docs/V0_3_SYNC_QUALIFICATION.md` | Release-device and endpoint evidence checklist for closing sync issues #28-#31. |
 
 ## 5. Core Architectural Invariants
 
@@ -773,14 +782,14 @@ Never state that the repository is fully complete unless the evidence supports t
 
 ## 22. Current Repository-Specific Notes
 
-This section is a verified snapshot of the repository as inspected on July 21, 2026. Update it whenever implementation status materially changes.
+This section is a verified snapshot of the repository as inspected on July 22, 2026. Update it whenever implementation status materially changes.
 
-- Current workspace version: `0.2.0`.
+- Current workspace version: `0.3.0`.
 - Current release target: v1 ships on November 24, 2026 with hosted web, native iOS, and Windows/macOS/Linux desktop.
 - Workspace members: `crates/ham-api-contract`, `crates/ham-core`, `crates/ham-plugin-sdk`, `crates/ham-sync`, `crates/ham-sync-server`, `crates/ham-server`, `crates/ham-cli`, `crates/ham-gui`, `crates/ham-desktop`, `crates/ham-ios-ffi`, and `src-tauri`.
 - Actual desktop state: a real Tauri v2 wrapper exists, bundles `crates/ham-gui/web`, exposes native dialog commands plus a restricted `/api/*` proxy, and packages desktop installers. The local backend is not yet embedded in-process or sidecar-launched automatically.
 - Actual hosted-server state: `ham-server` is the hosted API boundary with durable SurrealDB metadata, route tests, role-scoped logbook access, provider settings, upload execution foundation, backups, divergence review, and sync endpoints. It is still beta, not production-hardened.
-- Actual synchronization state: `ham-sync` implements LAN discovery and verification models, preview/pull/push logic, cloud/self-hosted sync models, durable self-hosted sync/report storage, and guarded replay rules. Real LAN peer-to-peer HTTP transport and trust pairing are still missing.
+- Actual synchronization state: `ham-sync` implements LAN discovery and verification models, preview/pull/push logic including verified missing-tail pull apply, cloud/self-hosted sync models with bounded sync-token session expiry, durable self-hosted sync/report storage, guarded replay rules, durable offline mutation queue models with optional target-entity metadata, v0.2 absent/legacy queue migration, corrupt queue quarantine, interrupted atomic-write promotion, durable local sync identity records that persist stable device IDs while rotating discovery sessions, desktop/iOS queue hooks, desktop cloud reconnect auto-drain when auto-push is enabled, iOS FFI background retry planning/result classification with native Swift retry-plan/result bridge methods, Rust-planned official-event envelope decoding, Rust-owned pulled-event apply through `sync.remote_events.apply`, self-hosted/logbook-scoped push execution coordination, hosted `/api/v1/sync/push` request construction, self-hosted/logbook-scoped and hosted pull request construction, native hosted/self-hosted and signed LAN pull fetch -> Rust apply coordination with peer-identity probing before signed LAN reads, partial-acceptance retry-result handling, typed queue health plus saved conflict-review display and durable identity decoding, Rust-owned iOS LAN trust snapshot/issue/accept/trust/rotate/revoke bridge commands plus reciprocal peer-URL pairing and multicast discovery peer selection with Keychain-backed credential references, queue-aware cloud push acknowledgment, structured conflict reports for divergent heads, missing dependencies, unsupported schemas, concurrent QSO corrections, and tombstone/restore overlaps, durable manual conflict-review records, explicit recovery-path decisions, deterministic shared sync golden tests for crash recovery, retry, duplicate/reordered delivery, verified missing-tail pull apply, partial push accepted-prefix/rejected-tail queue recovery, revoked and expired cloud-auth user-action recovery, clock-skewed timestamps, divergent heads, client-ready conflict-report JSON portability across desktop and iOS review stores, unsafe-resolution rejection, user-action queue marking, no-mutation divergent pull rejection, legacy migration, restore replay, and LAN revocation, desktop/iOS corrective-event commands that submit normal proposals and resolve reviews with generated official event hashes, a guided browser conflict-review surface for saved reviews, structured conflict summaries, explicit recovery choices, and corrective QSO note events, durable LAN trust records with guided browser pairing/trust controls that require generated endpoint auth codes distinct from one-time pairing codes, reject missing/reused endpoint auth codes, and support auth-credential rotation, GUI manual direct LAN HTTP preview/pull transport, HMAC-SHA256 signed LAN read endpoint authorization, and a GUI automatic IPv4/IPv6 multicast discovery worker that probes reachable peer identity before recording peers. Apple multicast entitlement/provisioning, release-device cross-client branch review/reconciliation workflow qualification, physical-device LAN/iOS Local Network validation, real hosted web/desktop/iOS/self-hosted migration/recovery qualification, release-device iOS BGTask execution, real endpoint native sync transport qualification, and physical poor-network validation are still missing.
 - Actual iOS state: native SwiftUI, SwiftData cache/projection models, Rust FFI bridge, Xcode project, Apple build/link scripts, shared scheme, unit tests, and iOS CI are present. App Store signing, TestFlight/App Store distribution, full offline/sync reconciliation, and production validation remain incomplete.
 - Real versus mock providers:
   - Real but gated live transports: Club Log upload, QRZ Logbook upload, eQSL upload, QRZ XML lookup, HamQTH lookup, POTA spot fetch, DX Cluster bounded runtime controls.
@@ -788,7 +797,7 @@ This section is a verified snapshot of the repository as inspected on July 21, 2
   - Placeholder or fake-first providers remain for many map, weather, propagation, and other online-service categories.
 - Known critical and high-priority gaps:
   - Consistent permission-scope enforcement across all workflows.
-  - LAN trust pairing and real peer-to-peer LAN transport.
+  - Apple multicast entitlement/provisioning, physical-device LAN validation, and end-to-end sync branch-review/reconciliation workflow qualification.
   - Cross-OS Tauri package validation and release hardening.
   - Clean release-runner validation for OS credential backends.
   - Browser-level GUI tests.
@@ -800,7 +809,8 @@ This section is a verified snapshot of the repository as inspected on July 21, 2
   - The tagged release workflow builds release `ham-gui` archives and adds GitHub artifact attestations for future release archives and checksums before publishing assets.
 - Current release blockers:
   - Production provider completeness and validation.
-  - LAN trust pairing.
+  - iOS multicast entitlement/provisioning and physical-device validation;
+    see [iOS Multicast Provisioning](docs/IOS_MULTICAST_PROVISIONING.md).
   - Desktop packaging hardening outside local Windows validation.
   - Permission-scope cleanup.
   - Browser-level GUI coverage.

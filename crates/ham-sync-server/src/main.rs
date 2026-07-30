@@ -12,6 +12,7 @@ use ham_sync::{
     CloudAuth, CloudHealthResponse, CloudPreviewPullRequest, CloudPullEventsRequest,
     CloudPushEventsRequest, CloudServerConfig, CloudServiceMode, DiagnosticReportUploadRequest,
     DurableCloudSyncPaths, DurableCloudSyncServer, PairDeviceRequest,
+    DEFAULT_CLOUD_SYNC_SESSION_TTL_SECONDS,
 };
 use serde::Serialize;
 use uuid::Uuid;
@@ -21,6 +22,16 @@ fn main() {
     let public_url = env::var("HAM_SYNC_PUBLIC_URL").unwrap_or_else(|_| format!("http://{addr}"));
     let pairing_code =
         env::var("HAM_SYNC_PAIRING_CODE").unwrap_or_else(|_| "local-dev-pairing-code".to_owned());
+    let sync_session_ttl_seconds = match env::var("HAM_SYNC_SESSION_TTL_SECONDS") {
+        Ok(value) => match value.parse::<i64>() {
+            Ok(seconds) if seconds > 0 => Some(seconds),
+            _ => {
+                eprintln!("HAM_SYNC_SESSION_TTL_SECONDS must be a positive integer");
+                process::exit(1);
+            }
+        },
+        Err(_) => Some(DEFAULT_CLOUD_SYNC_SESSION_TTL_SECONDS),
+    };
     let mode = match env::var("HAM_SYNC_SERVICE_MODE")
         .unwrap_or_else(|_| "self_hosted".to_owned())
         .as_str()
@@ -35,6 +46,7 @@ fn main() {
             mode,
             public_url,
             pairing_code,
+            sync_session_ttl_seconds,
         },
         paths.clone(),
     ) {
@@ -90,10 +102,20 @@ fn handle_client(
             Err(_) => return,
         }
     };
+    let response = route_request(server, runtime, request);
+
+    let _ = stream.write_all(&response);
+}
+
+fn route_request(
+    server: Arc<DurableCloudSyncServer>,
+    runtime: &tokio::runtime::Runtime,
+    request: HttpRequest,
+) -> Vec<u8> {
     let (path, query) = split_target(&request.target);
     let request_id = request_id(&request);
 
-    let response = match (request.method.as_str(), path) {
+    match (request.method.as_str(), path) {
         ("GET", "/health") => json_response(&server.health()),
         ("POST", "/api/v1/auth/pair") => {
             match serde_json::from_slice::<PairDeviceRequest>(&request.body) {
@@ -229,9 +251,7 @@ fn handle_client(
             ),
         },
         _ => json_error(404, "not found", ApiErrorCode::NotFound, request_id),
-    };
-
-    let _ = stream.write_all(&response);
+    }
 }
 
 fn read_http_request(reader: &mut BufReader<&mut TcpStream>) -> std::io::Result<HttpRequest> {
@@ -402,7 +422,198 @@ fn _assert_health_is_serializable(_: CloudHealthResponse) {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::Value;
+    use ham_core::{CoreEventEnvelope, NewLogbookEvent};
+    use ham_sync::{
+        CloudPullEventsResponse, CloudPushEventsResponse, ListLogbooksResponse, PairDeviceResponse,
+        ReplicationStatus,
+    };
+    use serde::de::DeserializeOwned;
+    use serde_json::{json, Value};
+
+    const EVENT_QSO_CREATED: &str = "official.log.qso.created";
+
+    fn durable_paths(label: &str) -> DurableCloudSyncPaths {
+        let root =
+            std::env::temp_dir().join(format!("ke8ygw-ham-sync-server-{label}-{}", Uuid::new_v4()));
+        DurableCloudSyncPaths {
+            metadata_store_path: root.join("surrealdb"),
+            official_event_log_path: root.join("official-events.jsonl"),
+            report_dir: root.join("reports"),
+        }
+    }
+
+    fn durable_server(
+        config: CloudServerConfig,
+        paths: &DurableCloudSyncPaths,
+    ) -> Arc<DurableCloudSyncServer> {
+        let mut last_error = None;
+        for _ in 0..20 {
+            match DurableCloudSyncServer::open(config.clone(), paths.clone()) {
+                Ok(server) => return Arc::new(server),
+                Err(error) => {
+                    last_error = Some(error);
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                }
+            }
+        }
+        panic!(
+            "failed to open SurrealDB sync route test server: {}",
+            last_error.unwrap()
+        );
+    }
+
+    fn pair_request(logbook_id: Uuid, device_id: Uuid) -> PairDeviceRequest {
+        PairDeviceRequest {
+            pairing_code: "local-dev-pairing-code".to_owned(),
+            account_id: "acct-route".to_owned(),
+            user_id: "user-route".to_owned(),
+            device_id,
+            device_name: "Route Test Device".to_owned(),
+            requested_logbooks: vec![logbook_id],
+            role_hints: vec!["admin".to_owned()],
+        }
+    }
+
+    fn http_request(method: &str, target: impl Into<String>, body: impl Serialize) -> HttpRequest {
+        let body = serde_json::to_vec(&body).expect("test request should serialize");
+        let mut headers = HashMap::new();
+        headers.insert("x-request-id".to_owned(), "sync-route-test".to_owned());
+        headers.insert("content-length".to_owned(), body.len().to_string());
+        HttpRequest {
+            method: method.to_owned(),
+            target: target.into(),
+            headers,
+            body,
+        }
+    }
+
+    fn empty_http_request(method: &str, target: impl Into<String>) -> HttpRequest {
+        HttpRequest {
+            method: method.to_owned(),
+            target: target.into(),
+            headers: HashMap::from([("x-request-id".to_owned(), "sync-route-test".to_owned())]),
+            body: Vec::new(),
+        }
+    }
+
+    fn response_status(response: &[u8]) -> u16 {
+        let text = String::from_utf8(response.to_vec()).expect("HTTP response should be UTF-8");
+        text.lines()
+            .next()
+            .expect("HTTP response should have status line")
+            .split_whitespace()
+            .nth(1)
+            .expect("HTTP status line should contain status code")
+            .parse()
+            .expect("HTTP status should be numeric")
+    }
+
+    fn response_body(response: &[u8]) -> &[u8] {
+        let marker = b"\r\n\r\n";
+        let start = response
+            .windows(marker.len())
+            .position(|window| window == marker)
+            .expect("HTTP response should contain body separator")
+            + marker.len();
+        &response[start..]
+    }
+
+    fn response_json<T: DeserializeOwned>(response: &[u8]) -> T {
+        serde_json::from_slice(response_body(response)).expect("HTTP response body should be JSON")
+    }
+
+    fn route_json<T: DeserializeOwned>(
+        server: Arc<DurableCloudSyncServer>,
+        runtime: &tokio::runtime::Runtime,
+        request: HttpRequest,
+    ) -> T {
+        let response = route_request(server, runtime, request);
+        assert_eq!(response_status(&response), 200);
+        response_json(&response)
+    }
+
+    fn raw_json_http_request(
+        method: &str,
+        target: impl AsRef<str>,
+        body: impl Serialize,
+    ) -> Vec<u8> {
+        let body = serde_json::to_vec(&body).expect("test request should serialize");
+        let mut request = format!(
+            "{method} {} HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nAccept: application/json\r\nX-Request-Id: sync-wire-test\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            target.as_ref(),
+            body.len()
+        )
+        .into_bytes();
+        request.extend_from_slice(&body);
+        request
+    }
+
+    fn wire_round_trip(server: Arc<DurableCloudSyncServer>, request: Vec<u8>) -> Vec<u8> {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("test listener should bind");
+        let addr = listener
+            .local_addr()
+            .expect("test listener should have a local address");
+        let server_thread = server.clone();
+        let handle = std::thread::spawn(move || {
+            let runtime = tokio::runtime::Runtime::new().expect("test runtime should start");
+            let (stream, _) = listener.accept().expect("test request should connect");
+            handle_client(server_thread, &runtime, stream);
+        });
+
+        let mut client = TcpStream::connect(addr).expect("test client should connect");
+        client
+            .write_all(&request)
+            .expect("test client should write request");
+        client
+            .shutdown(std::net::Shutdown::Write)
+            .expect("test client should close request body");
+
+        let mut response = Vec::new();
+        client
+            .read_to_end(&mut response)
+            .expect("test client should read response");
+        handle.join().expect("test server thread should finish");
+        response
+    }
+
+    fn wire_json<T: DeserializeOwned>(server: Arc<DurableCloudSyncServer>, request: Vec<u8>) -> T {
+        let response = wire_round_trip(server, request);
+        assert_eq!(response_status(&response), 200);
+        response_json(&response)
+    }
+
+    fn sample_qso_event(
+        logbook_id: Uuid,
+        previous_hash: Option<String>,
+        device_id: Uuid,
+    ) -> CoreEventEnvelope {
+        let qso_id = Uuid::new_v4();
+        CoreEventEnvelope::from_new(
+            NewLogbookEvent {
+                event_type: EVENT_QSO_CREATED.to_owned(),
+                logbook_id,
+                entity_id: Some(qso_id),
+                author_operator_id: None,
+                station_callsign: "K1HTTP".to_owned(),
+                operator_callsign: Some("K1HTTP".to_owned()),
+                author_device_id: device_id,
+                source_device_id: device_id,
+                correlation_id: Uuid::new_v4(),
+                source_plugin_id: Some("self-hosted-route-test".to_owned()),
+                schema_version: 1,
+                payload: json!({
+                    "qso_id": qso_id,
+                    "station_callsign": "K1HTTP",
+                    "operator_callsign": "K1HTTP",
+                    "contacted_callsign": "K1REMOTE",
+                    "started_at": "2026-07-05T12:00:00Z",
+                    "band": "20m",
+                    "mode": "SSB"
+                }),
+            },
+            previous_hash,
+        )
+    }
 
     #[test]
     fn self_hosted_errors_keep_stable_shape() {
@@ -422,5 +633,219 @@ mod tests {
         assert_eq!(json["code"], "missing_token");
         assert_eq!(json["request_id"], "sync-contract-test");
         assert_eq!(json["retryable"], false);
+    }
+
+    #[test]
+    fn self_hosted_routes_pair_push_pull_duplicates_and_auth_errors() {
+        let runtime = tokio::runtime::Runtime::new().expect("test runtime should start");
+        let paths = durable_paths("route-round-trip");
+        let server = durable_server(CloudServerConfig::default(), &paths);
+        let logbook_id = Uuid::new_v4();
+        let device_id = Uuid::new_v4();
+
+        let pair: PairDeviceResponse = route_json(
+            server.clone(),
+            &runtime,
+            http_request(
+                "POST",
+                "/api/v1/auth/pair",
+                pair_request(logbook_id, device_id),
+            ),
+        );
+        assert!(pair.accepted);
+        let session = pair.session.expect("paired route should return a session");
+        assert_eq!(session.authorized_logbooks, vec![logbook_id]);
+        assert!(session.expires_at.is_some());
+        let auth = CloudAuth {
+            sync_token: session.sync_token.clone(),
+        };
+
+        let logbooks: ListLogbooksResponse = route_json(
+            server.clone(),
+            &runtime,
+            empty_http_request("GET", format!("/api/v1/logbooks?token={}", auth.sync_token)),
+        );
+        assert_eq!(logbooks.logbooks.len(), 1);
+        assert_eq!(logbooks.logbooks[0].logbook_id, logbook_id);
+        assert_eq!(logbooks.logbooks[0].head_hash, None);
+
+        let event = sample_qso_event(logbook_id, None, device_id);
+        let push: CloudPushEventsResponse = route_json(
+            server.clone(),
+            &runtime,
+            http_request(
+                "POST",
+                format!("/api/v1/logbooks/{logbook_id}/push"),
+                CloudPushEventsRequest {
+                    auth: auth.clone(),
+                    logbook_id,
+                    events: vec![event.clone()],
+                },
+            ),
+        );
+        assert_eq!(push.status, ReplicationStatus::Pulled);
+        assert_eq!(push.accepted_count, 1);
+        assert_eq!(push.ignored_duplicate_count, 0);
+        assert_eq!(push.rejected_count, 0);
+        assert_eq!(push.server_head_hash, Some(event.event_hash.clone()));
+
+        let duplicate: CloudPushEventsResponse = route_json(
+            server.clone(),
+            &runtime,
+            http_request(
+                "POST",
+                format!("/api/v1/logbooks/{logbook_id}/push"),
+                CloudPushEventsRequest {
+                    auth: auth.clone(),
+                    logbook_id,
+                    events: vec![event.clone()],
+                },
+            ),
+        );
+        assert_eq!(duplicate.accepted_count, 0);
+        assert_eq!(duplicate.ignored_duplicate_count, 1);
+        assert_eq!(duplicate.server_head_hash, Some(event.event_hash.clone()));
+
+        let pull: CloudPullEventsResponse = route_json(
+            server.clone(),
+            &runtime,
+            http_request(
+                "POST",
+                format!("/api/v1/logbooks/{logbook_id}/pull"),
+                CloudPullEventsRequest {
+                    auth,
+                    logbook_id,
+                    local_head_hash: None,
+                },
+            ),
+        );
+        assert_eq!(pull.preview.status, ReplicationStatus::RemoteAhead);
+        assert_eq!(pull.preview.missing_event_count, 1);
+        assert_eq!(pull.events, vec![event]);
+
+        let bad_auth_response = route_request(
+            server,
+            &runtime,
+            empty_http_request("GET", "/api/v1/logbooks?token=missing-token"),
+        );
+        assert_eq!(response_status(&bad_auth_response), 401);
+        let error: ApiErrorBody = response_json(&bad_auth_response);
+        assert_eq!(error.code, ApiErrorCode::InvalidToken.as_str());
+
+        let _ = std::fs::remove_dir_all(
+            paths
+                .metadata_store_path
+                .parent()
+                .expect("test paths should have a root"),
+        );
+    }
+
+    #[test]
+    fn self_hosted_wire_endpoint_pair_push_pull_round_trip() {
+        let paths = durable_paths("wire-round-trip");
+        let server = durable_server(CloudServerConfig::default(), &paths);
+        let logbook_id = Uuid::new_v4();
+        let device_id = Uuid::new_v4();
+
+        let pair: PairDeviceResponse = wire_json(
+            server.clone(),
+            raw_json_http_request(
+                "POST",
+                "/api/v1/auth/pair",
+                pair_request(logbook_id, device_id),
+            ),
+        );
+        assert!(pair.accepted);
+        let session = pair.session.expect("wire pairing should return a session");
+        let auth = CloudAuth {
+            sync_token: session.sync_token,
+        };
+
+        let event = sample_qso_event(logbook_id, None, device_id);
+        let push: CloudPushEventsResponse = wire_json(
+            server.clone(),
+            raw_json_http_request(
+                "POST",
+                format!("/api/v1/logbooks/{logbook_id}/push"),
+                CloudPushEventsRequest {
+                    auth: auth.clone(),
+                    logbook_id,
+                    events: vec![event.clone()],
+                },
+            ),
+        );
+        assert_eq!(push.status, ReplicationStatus::Pulled);
+        assert_eq!(push.accepted_count, 1);
+        assert_eq!(push.server_head_hash, Some(event.event_hash.clone()));
+
+        let pull: CloudPullEventsResponse = wire_json(
+            server,
+            raw_json_http_request(
+                "POST",
+                format!("/api/v1/logbooks/{logbook_id}/pull"),
+                json!({
+                    "auth": {
+                        "sync_token": auth.sync_token,
+                    },
+                    "logbook_id": logbook_id,
+                    "local_head_hash": null,
+                }),
+            ),
+        );
+        assert_eq!(pull.preview.status, ReplicationStatus::RemoteAhead);
+        assert_eq!(pull.events, vec![event]);
+
+        let _ = std::fs::remove_dir_all(
+            paths
+                .metadata_store_path
+                .parent()
+                .expect("test paths should have a root"),
+        );
+    }
+
+    #[test]
+    fn self_hosted_routes_reject_expired_session_tokens() {
+        let runtime = tokio::runtime::Runtime::new().expect("test runtime should start");
+        let paths = durable_paths("expired-route-token");
+        let server = durable_server(
+            CloudServerConfig {
+                sync_session_ttl_seconds: Some(0),
+                ..CloudServerConfig::default()
+            },
+            &paths,
+        );
+        let logbook_id = Uuid::new_v4();
+
+        let pair: PairDeviceResponse = route_json(
+            server.clone(),
+            &runtime,
+            http_request(
+                "POST",
+                "/api/v1/auth/pair",
+                pair_request(logbook_id, Uuid::new_v4()),
+            ),
+        );
+        let session = pair.session.expect("pairing should still issue a session");
+        assert!(session.expires_at.is_some());
+
+        let response = route_request(
+            server,
+            &runtime,
+            empty_http_request(
+                "GET",
+                format!("/api/v1/logbooks?token={}", session.sync_token),
+            ),
+        );
+
+        assert_eq!(response_status(&response), 401);
+        let error: ApiErrorBody = response_json(&response);
+        assert_eq!(error.code, ApiErrorCode::InvalidToken.as_str());
+
+        let _ = std::fs::remove_dir_all(
+            paths
+                .metadata_store_path
+                .parent()
+                .expect("test paths should have a root"),
+        );
     }
 }

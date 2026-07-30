@@ -92,9 +92,24 @@ metadata.
 Self-hosted sync and support upload routes still use pairing-code/token
 sessions for compatibility-only sync/report flows.
 
+GUI LAN sync read endpoints for logbook lists, heads, event ranges, and event
+metadata require trusted-device, replay-nonce, signature-version, and
+HMAC-SHA256 signature headers. The serving peer verifies those headers against a
+stored endpoint-auth credential created during pairing or rotation through `CredentialStore`, durable LAN trust
+records, logbook scope, revocation state, and replay history before returning
+logbook or event data. LAN trust JSON stores only credential references, not raw
+pairing codes. The GUI LAN auth-rotation endpoint stores the replacement secret
+through `CredentialStore`, updates the trust record to the new credential ID,
+and deletes the previous credential reference after the trust update succeeds.
+The discovery identity endpoint remains unauthenticated and must stay
+secret-free.
+
 Future work:
 
-- device pairing with explicit trust
+- Apple multicast entitlement/provisioning and release-device iOS LAN
+  validation on top of the durable LAN trust store
+- formal asymmetric LAN key exchange beyond the current distinct endpoint-auth
+  code plus HMAC request-proof model
 - signed official events
 - end-to-end encrypted relay
 - organization-managed policies
@@ -106,6 +121,6 @@ Future work:
 - Grant scopes are recorded but not fully enforced across every subsystem.
 - The GUI assumes a local-admin posture for permission review.
 - The self-hosted sync/report server now uses durable local storage by default; production migration, retention, and hosted-operations hardening still remain.
-- LAN peers are not yet authenticated.
+- LAN sync writes are trust-gated and protected LAN reads require HMAC-SHA256 request proof after pairing, but the LAN HTTP transport is not encrypted and must stay on trusted local networks.
 - Native OS credential backends are implemented, but clean release-runner and packaged-app validation still remain.
 - Net Control template UI and ICS-style exports are not complete.

@@ -222,6 +222,10 @@ struct SettingsView: View {
                     Text("Changing the sync server changes future sync traffic only. Existing local log data and device identity are preserved.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                    Picker("Sync API", selection: syncEndpointStyleBind(appSettings)) {
+                        Text("Self-hosted").tag("logbook_scoped")
+                        Text("Hosted").tag("hosted_sync")
+                    }
                     TextField("Device Name", text: optionalBind(appSettings, \.syncDeviceName))
                     TextField("Account Label", text: optionalBind(appSettings, \.syncAccountLabel))
                     NavigationLink("Manage Sync Credentials") {
@@ -408,6 +412,15 @@ struct SettingsView: View {
             settings[keyPath: keyPath] ?? defaultValue
         } set: { value in
             settings[keyPath: keyPath] = value
+            save(settings)
+        }
+    }
+
+    private func syncEndpointStyleBind(_ settings: AppSettings) -> Binding<String> {
+        Binding {
+            settings.syncEndpointStyle ?? "logbook_scoped"
+        } set: { value in
+            settings.syncEndpointStyle = value == "hosted_sync" ? "hosted_sync" : "logbook_scoped"
             save(settings)
         }
     }

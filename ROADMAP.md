@@ -23,10 +23,18 @@ This root roadmap summarizes the current implementation plan. Detailed architect
 - Native iOS SwiftUI skeleton: Xcode project, SwiftData local persistence, QSO logging screens, station profile, ADIF/CSV export, settings, shared scheme, and unit-test targets for manual Xcode builds.
 - Native iOS functional parity pass: repository gap analysis, Rust `ham-ios-ffi` bridge crate, Swift bridge client, iPhone/iPad split-view shell, Dashboard, expanded QSO logging, station/equipment management, provider/callsign/credential screens, MapKit screen, POTA/SOTA workspaces, Net Control, Emergency, Sync, Backup/Restore, Diagnostics, Keychain plumbing, local notification plumbing, and bridge fallback tests.
 - Native iOS Rust-authority bridge pass: hardened byte-buffer FFI command ABI, public header/module map, Apple target build scripts, deterministic XCFramework packaging path, Xcode framework reference/build phase, typed Swift bridge wrappers, QSO/station/activation/Net Control Rust mutation routes, SwiftData projection metadata, Diagnostics self-test, and macOS CI workflow scaffolding.
+- Offline Sync v0.3 foundation: durable versioned mutation envelopes, JSON queue
+  store, desktop and iOS queue hooks for implemented mutations, optional target
+  entity metadata, queue-aware cloud push acknowledgments, structured conflict
+  reports for unsupported schemas/concurrent QSO corrections/tombstone-restore
+  overlaps, and durable LAN trust records with single-use pairing tokens,
+  HMAC-SHA256 signed LAN read endpoint authorization, replay nonce rejection,
+  revocation, and native iOS LAN trust snapshot/issue/accept/trust/rotate/revoke
+  bridge commands with Keychain-backed credential references.
 
 ## Current Milestone
 
-The current `0.2.0` workspace is the v1 foundation baseline, not the complete
+The current `0.3.0` workspace is the offline-sync v1 foundation baseline, not the complete
 v1 product. The locked v1 release ships on November 24, 2026 with hosted web,
 native iOS, and Windows/macOS/Linux desktop. A PWA, pinned hosted website, or
 thin web wrapper is not the iOS client. v1.1 adds a TUI.
@@ -35,11 +43,19 @@ Implemented foundations include the hosted `/api/v1` route slices, durable
 hosted and self-hosted metadata, proposal-backed QSO/POTA/SOTA/Net Control
 workflows, Tauri desktop wrapper, native iOS SwiftUI/Rust bridge, provider
 framework, maps/GIS foundation, diagnostics, governance, version validation,
-and cross-platform CI/security automation.
+cross-platform CI/security automation, and deterministic shared sync golden
+coverage for crash recovery, retry, duplicate/reordered delivery, conflict
+review, partial push accepted-prefix/rejected-tail queue recovery, desktop
+reconnect auto-drain, revoked and expired cloud-auth user-action recovery,
+legacy queue migration, restore replay, and LAN revocation, plus a guided browser
+conflict-review surface for saved review selection, structured
+conflict summaries, explicit recovery choices, and corrective QSO note events.
 
 Partial or incomplete v1 areas include hosted web/desktop/iOS account UX,
-production email/Turnstile deployment configuration, real LAN trust pairing,
-full offline/reconciliation on desktop and iOS, production provider
+production email/Turnstile deployment configuration, production iOS reciprocal
+LAN transport qualification, end-to-end cross-client branch
+review/reconciliation workflow qualification, physical-device LAN/iOS
+local-network validation, release-device iOS background task/poor-network qualification, production provider
 qualification, cached/offline maps, contesting, EmComm forms, signed desktop
 updater, Apple signing/TestFlight/App Store distribution, operations, and
 release-candidate qualification.
@@ -49,8 +65,11 @@ release-candidate qualification.
 See [docs/V1_EXECUTION_PLAN.md](docs/V1_EXECUTION_PLAN.md) for the
 dependency-ordered critical path. The next three implementation goals are:
 
-- Sync/offline reconciliation across desktop and iOS, including LAN trust
-  pairing and conflict review.
+- Finish sync/reconciliation hardening: Apple multicast entitlement/provisioning,
+  production iOS reciprocal LAN transport qualification, end-to-end
+  cross-client branch review/reconciliation workflow qualification,
+  physical-device LAN/iOS local-network validation, and release-device iOS
+  background task/poor-network qualification.
 - Production provider qualification for QRZ, QRZ Logbook, LoTW, eQSL, Club
   Log, POTA, SOTAWatch, DX Cluster/RBN, maps, and propagation.
 - Hosted web, desktop, and iOS UI flows for the implemented account/session,
