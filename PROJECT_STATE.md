@@ -1,5 +1,20 @@
 # Project State
 
+## Desktop and CLI 0.3 preparation (July 30, 2026)
+
+- Desktop/Tauri and CLI package metadata is now independently pinned to
+  `0.3.0`; native iOS marketing metadata is pinned to its separate `0.3.1`
+  release while shared Rust crates remain `0.2.0`.
+- Version validation now rejects drift between those three release lines.
+- The existing CLI commands now expose stable `--json` success output,
+  deterministic usage errors, help, and version/build output.
+- The CLI is still incomplete for v1: logbook/QSO/support-state CRUD, dry-run
+  ADIF, backups, sync/conflict operations, provider diagnostics, diagnostic
+  bundles, and shell completions remain blockers.
+- Desktop packaging/signing, signed updater behavior, offline maps, and
+  production cross-platform install/recovery evidence remain open; no signing,
+  notarization, or clean-machine result is claimed by this update.
+
 Last audited: 2026-07-21
 
 Canonical product version: `0.2.0` from `Cargo.toml`

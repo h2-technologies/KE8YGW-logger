@@ -2244,10 +2244,11 @@ dependencies = [
 
 [[package]]
 name = "ham-cli"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "ham-core",
  "ham-plugin-sdk",
+ "serde_json",
  "tokio",
  "uuid",
 ]
@@ -2272,7 +2273,7 @@ dependencies = [
 
 [[package]]
 name = "ham-desktop"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -3106,7 +3107,7 @@ dependencies = [
 
 [[package]]
 name = "ke8ygw-logger-desktop"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "ham-desktop",
  "rfd",
