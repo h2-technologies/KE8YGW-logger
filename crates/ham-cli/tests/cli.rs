@@ -19,6 +19,19 @@ fn version_json_is_machine_readable_and_product_specific() {
 }
 
 #[test]
+fn json_flag_can_precede_the_command() {
+    let output = cli()
+        .args(["--json", "version"])
+        .output()
+        .expect("run ham-cli");
+    assert!(output.status.success());
+    let value: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("version output is JSON");
+    assert_eq!(value["command"], "version");
+    assert!(output.stderr.is_empty());
+}
+
+#[test]
 fn invalid_command_has_deterministic_usage_exit_code() {
     let output = cli().arg("not-a-command").output().expect("run ham-cli");
     assert_eq!(output.status.code(), Some(2));
@@ -34,4 +47,19 @@ fn help_is_non_interactive_and_successful() {
     assert!(String::from_utf8(output.stderr)
         .expect("stderr is UTF-8")
         .contains("The CLI is offline-first and never prompts"));
+}
+
+#[test]
+fn missing_or_extra_arguments_have_usage_exit_code() {
+    for args in [
+        &["import-adif"][..],
+        &["export-adif"][..],
+        &["verify-chain", "unexpected"][..],
+    ] {
+        let output = cli().args(args).output().expect("run ham-cli");
+        assert_eq!(output.status.code(), Some(2), "arguments: {args:?}");
+        assert!(String::from_utf8(output.stderr)
+            .expect("stderr is UTF-8")
+            .contains("usage:"));
+    }
 }

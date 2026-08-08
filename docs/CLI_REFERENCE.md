@@ -12,8 +12,9 @@ ham-cli help
 ham-cli version [--json]
 ```
 
-`--json` writes one JSON object to standard output. Exit code `0` means
-success, `1` means an operational or data error, and `2` means invalid usage.
+`--json` may appear before or after the command and writes one JSON object to
+standard output. Exit code `0` means success, `1` means an operational or data
+error, and `2` means invalid usage.
 Paths and parse failures are written to standard error in human mode. No
 command prints provider credentials or tokens.
 

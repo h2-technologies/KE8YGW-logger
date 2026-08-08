@@ -5,9 +5,9 @@
 The Tauri desktop package and `ham-desktop` native integration crate are
 `0.3.0`. The native iOS application is independently versioned at `0.3.1`;
 desktop release tags and updater metadata must never rewrite or infer the iOS
-marketing version. Shared internal Rust crates remain at `0.2.0` under the
-existing compatibility policy. Run `python scripts/check_versions.py` before
-creating release artifacts.
+marketing version. Shared internal Rust crates use the workspace `0.3.0`
+version. Run `python scripts/check_versions.py` before creating release
+artifacts.
 
 Signing, notarization, Trusted Signing, updater signatures, clean-machine
 installation, and architecture-specific package validation require protected

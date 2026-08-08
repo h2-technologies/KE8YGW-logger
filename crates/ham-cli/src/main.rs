@@ -11,18 +11,21 @@ const DEFAULT_LOGBOOK_ID: &str = "00000000-0000-4000-8000-000000000001";
 
 #[tokio::main]
 async fn main() {
-    let args = env::args().collect::<Vec<_>>();
+    let mut args = env::args().skip(1).collect::<Vec<_>>();
     let json = args.iter().any(|arg| arg == "--json");
-    let Some(command) = args.get(1).map(String::as_str) else {
+    args.retain(|arg| arg != "--json");
+    let Some(command) = args.first().map(String::as_str) else {
         print_usage();
         process::exit(2);
     };
 
     if matches!(command, "--help" | "-h" | "help") {
+        require_argument_count(&args, 1);
         print_usage();
         return;
     }
     if matches!(command, "--version" | "-V" | "version") {
+        require_argument_count(&args, 1);
         if json {
             println!(
                 "{}",
@@ -39,6 +42,18 @@ async fn main() {
         return;
     }
 
+    let path = match command {
+        "import-adif" | "export-adif" => {
+            require_argument_count(&args, 2);
+            Some(args[1].as_str())
+        }
+        "verify-chain" | "rebuild-projections" => {
+            require_argument_count(&args, 1);
+            None
+        }
+        _ => usage_error(&format!("unknown command: {command}")),
+    };
+
     let logbook_id = Uuid::parse_str(DEFAULT_LOGBOOK_ID).expect("default logbook ID is valid");
     let store = match JsonlLogbookEventStore::open(default_official_event_log_path()) {
         Ok(store) => store,
@@ -50,10 +65,7 @@ async fn main() {
 
     match command {
         "import-adif" => {
-            let Some(path) = args.get(2) else {
-                eprintln!("missing ADIF input file");
-                process::exit(1);
-            };
+            let path = path.expect("validated import path");
             let input = fs::read_to_string(path).unwrap_or_else(|error| {
                 eprintln!("failed to read {path}: {error}");
                 process::exit(1);
@@ -94,10 +106,7 @@ async fn main() {
             }
         }
         "export-adif" => {
-            let Some(path) = args.get(2) else {
-                eprintln!("missing ADIF output file");
-                process::exit(1);
-            };
+            let path = path.expect("validated export path");
             let projection = store
                 .rebuild_projections(logbook_id)
                 .await
@@ -153,12 +162,20 @@ async fn main() {
                 println!("rebuilt QSO projection: {visible_qsos} visible QSOs");
             }
         }
-        _ => {
-            eprintln!("unknown command: {command}");
-            print_usage();
-            process::exit(2);
-        }
+        _ => unreachable!("command validated before opening the event store"),
     }
+}
+
+fn require_argument_count(args: &[String], expected: usize) {
+    if args.len() != expected {
+        usage_error("invalid command arguments");
+    }
+}
+
+fn usage_error(message: &str) -> ! {
+    eprintln!("{message}");
+    print_usage();
+    process::exit(2);
 }
 
 fn proposal_context() -> ProposalContext {
