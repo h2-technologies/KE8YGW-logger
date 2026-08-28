@@ -1,6 +1,6 @@
 # Project State
 
-Last audited: 2026-07-22
+Last audited: 2026-08-28, against `dev` at 09418f4.
 
 Canonical product version: `0.3.0` from `Cargo.toml`
 `[workspace.package].version`.
@@ -16,7 +16,7 @@ the shared architecture, native-client foundations, release-policy baseline,
 governance, and cross-platform automation needed to start full v1
 implementation.
 
-Open baseline items after this branch merges should move to the remaining v1
+Open baseline items should move to the remaining v1
 epics for sync, providers, hosted web, desktop, iOS, maps, contesting, EmComm,
 operations, and release qualification.
 
@@ -86,58 +86,69 @@ operations, and release qualification.
   request IDs, audits, and durable configurable rate limits. Production hosted
   web UI wiring, external email deliverability, infrastructure sizing,
   retention, monitoring, and deployment secrets remain incomplete.
-- Sync has discovery, handshake, preview/pull/push verification models, durable
-  self-hosted backend, desktop queue integration for QSO/activation/Net Control
-  official mutations and station-profile support state, iOS queue integration
-  for QSO/activation/Net Control/station/equipment commands, queue-aware cloud
-  push acknowledgment, LAN trust persistence/endpoints, structured divergence
-  reports, durable manual conflict-review create/resolve commands, and GUI
-  manual direct LAN HTTP preview/pull transport, HMAC-SHA256 proof-of-possession
-  for protected LAN read endpoints, explicit LAN auth credential
-  rotation/recovery through the GUI trust endpoint, desktop/iOS corrective-event
-  commands that submit explicit proposals and resolve reviews with generated
-  official event hashes, guided browser conflict-review selection, structured
-  conflict summaries, explicit recovery-path buttons, form-based corrective QSO
-  note events, and automatic IPv4/IPv6 multicast discovery that probes peer
-  identity before recording reachable peers, plus a guided browser LAN
-  pairing/trust panel for issuing one-time codes, completing reciprocal pairing
-  with generated endpoint auth secrets distinct from one-time pairing codes,
-  rotating LAN auth credentials, and revoking trusted peers without prompt-only
-  handling. GUI and native iOS now load a durable local sync identity support
-  file so trusted-peer identity is stable across restart while discovery
-  session IDs remain ephemeral. Native iOS Swift decodes saved
-  conflict-review records, displays open-review status, recommended actions,
-  peer IDs, and structured conflict messages in the Sync workspace. Native iOS
-  also exposes Rust-owned LAN trust snapshots, one-time local pairing-code
-  issue and acceptance, reciprocal peer-URL pairing, automatic multicast
-  peer discovery with `/api/sync/state` identity probing, direct peer trust,
-  LAN auth credential rotation, and revocation through FFI commands and a
-  minimal Sync workspace trust section;
-  generated LAN auth secrets stay in Keychain and Rust support state stores
-  only credential IDs. The GUI LAN accept endpoint requires a distinct
-  endpoint auth code and rejects missing auth codes or attempts to reuse the
-  one-time pairing code as a long-lived endpoint secret. Native iOS can plan through Rust,
-  execute the configured sync-token push path through Swift transport, split an
-  accepted server prefix from a rejected tail, record accepted/auth/divergence
-  outcomes back through Rust-owned retry results, fetch
-  self-hosted/logbook-scoped pull responses and trusted LAN peer event ranges
-  through Swift transport, verify a trusted LAN peer's published identity
-  before signed reads, sign protected LAN `get-head`/`events-since` requests
-  with Keychain-backed auth secrets, apply pulled official envelopes
-  through `sync.remote_events.apply` without owning event validation, and select
-  the configured self-hosted/logbook-scoped or hosted `/api/v1/sync/*` endpoint
-  style for manual and background push/pull execution. The iOS
-  app registers a permitted `BGProcessingTask` retry identifier, schedules it
-  only when Rust settings enable background sync, a valid sync URL and Keychain
-  sync token are present, and either the Rust queue snapshot reports pending
-  work or Auto Pull is enabled. The task handler delegates to the existing
-  Rust-plan -> Swift-transport -> Rust-result retry executor and can run
-  configured Auto Pull after a clean accepted push or no-ready-events push plan
-  through `sync.remote_events.apply`. Manual hosted/self-hosted pull, trusted
-  LAN pull, and background Auto Pull refresh SwiftData QSO cache rows from the
-  Rust `qso.list` projection after Rust accepts remote events; SwiftData remains
-  a projection cache and not an official-state owner.
-  Simulator-safe fallback tests cover review creation/decoding, selected
+- Sync - shared core: discovery, handshake, preview/pull/push verification
+  models, durable self-hosted backend, queue-aware cloud push acknowledgment,
+  structured divergence reports, and durable manual conflict-review
+  create/resolve commands. Desktop/iOS corrective-event commands submit
+  explicit proposals and resolve reviews with generated official event hashes.
+- Sync - desktop: queue integration for QSO/activation/Net Control official
+  mutations and station-profile support state, GUI manual direct LAN HTTP
+  preview/pull transport, and guided browser conflict-review selection with
+  structured conflict summaries, explicit recovery-path buttons, and
+  form-based corrective QSO note events.
+- Sync - native iOS: queue integration for QSO/activation/Net
+  Control/station/equipment commands. Swift decodes saved conflict-review
+  records and displays open-review status, recommended actions, peer IDs, and
+  structured conflict messages in the Sync workspace. iOS can plan through
+  Rust, execute the configured sync-token push path through Swift transport,
+  split an accepted server prefix from a rejected tail, record
+  accepted/auth/divergence outcomes back through Rust-owned retry results,
+  fetch self-hosted/logbook-scoped pull responses and trusted LAN peer event
+  ranges through Swift transport, verify a trusted LAN peer's published
+  identity before signed reads, sign protected LAN `get-head`/`events-since`
+  requests with Keychain-backed auth secrets, apply pulled official envelopes
+  through `sync.remote_events.apply` without owning event validation, and
+  select the configured self-hosted/logbook-scoped or hosted `/api/v1/sync/*`
+  endpoint style for manual and background push/pull execution.
+- Sync - iOS background execution: the app registers a permitted
+  `BGProcessingTask` retry identifier and schedules it only when Rust settings
+  enable background sync, a valid sync URL and Keychain sync token are present,
+  and either the Rust queue snapshot reports pending work or Auto Pull is
+  enabled. The handler delegates to the Rust-plan -> Swift-transport ->
+  Rust-result retry executor and can run configured Auto Pull after a clean
+  accepted push or no-ready-events push plan through
+  `sync.remote_events.apply`. Manual hosted/self-hosted pull, trusted LAN pull,
+  and background Auto Pull refresh SwiftData QSO cache rows from the Rust
+  `qso.list` projection after Rust accepts remote events; SwiftData remains a
+  projection cache and not an official-state owner.
+- Sync - LAN trust, pairing, and discovery: LAN trust persistence/endpoints,
+  HMAC-SHA256 proof-of-possession for protected LAN read endpoints, explicit
+  LAN auth credential rotation/recovery through the GUI trust endpoint, and
+  automatic IPv4/IPv6 multicast discovery that probes peer identity before
+  recording reachable peers. A guided browser LAN pairing/trust panel issues
+  one-time codes, completes reciprocal pairing with generated endpoint auth
+  secrets distinct from one-time pairing codes, rotates LAN auth credentials,
+  and revokes trusted peers without prompt-only handling; the GUI LAN accept
+  endpoint requires a distinct endpoint auth code and rejects missing auth
+  codes or attempts to reuse the one-time pairing code as a long-lived
+  endpoint secret. Native iOS exposes Rust-owned LAN trust snapshots, one-time
+  local pairing-code issue and acceptance, reciprocal peer-URL pairing,
+  automatic multicast peer discovery with `/api/sync/state` identity probing,
+  direct peer trust, LAN auth credential rotation, and revocation through FFI
+  commands and a minimal Sync workspace trust section; generated LAN auth
+  secrets stay in Keychain and Rust support state stores only credential IDs.
+  GUI and native iOS load a durable local sync identity support file so
+  trusted-peer identity is stable across restart while discovery session IDs
+  remain ephemeral.
+- Sync - iOS bundle and governance: the iOS bundle declares Local Network usage
+  and allows local networking for paired-device sync, declares the background
+  processing mode plus the permitted retry task identifier, and declares the
+  approved and provisioned Apple multicast entitlement on the app target. The
+  governance check enforces those Info.plist declarations, verifies the
+  permitted identifier matches the Swift runtime constant, enforces the
+  multicast entitlement value and its Debug/Release app-target references, and
+  rejects tracked generated Xcode/iOS artifacts.
+- Sync - simulator-safe test coverage: review creation/decoding, selected
   recovery-path resolution, retry execution acceptance, auth-failure
   user-action stops without token leakage, pull request construction, pull
   fetch/apply coordination, unsigned LAN state request construction, iOS LAN
@@ -147,23 +158,14 @@ operations, and release qualification.
   divergence result recording, hosted endpoint-style execution routing,
   background retry scheduling policy boundaries, background auto-pull
   sequencing after a clean push and after a no-ready queue plan,
-  Rust-projection SwiftData cache refresh, and pull suppression after
-  user-action push failures,
-  shared accepted-prefix/rejected-tail queue
-  recovery, expired cloud-auth user-action recovery, durable local identity
-  decoding, and LAN trust
-  snapshot/issue/accept/trust/rotate/revoke decoding without pairing-code
-  persistence. The iOS bundle now declares Local Network usage and allows local
-  networking for paired-device sync, and declares the background processing
-  mode plus the permitted retry task identifier; the governance check now
-  enforces those Info.plist declarations, verifies the permitted identifier
-  matches the Swift runtime constant, and rejects tracked generated Xcode/iOS
-  artifacts. The app target now declares the Apple multicast entitlement needed
-  by native discovery; Apple Developer account approval/provisioning,
-  release-device cross-device reconciliation workflow qualification,
-  physical-device LAN/iOS Local Network
-  permission validation, release-device BGTask execution, and poor-network
-  validation are incomplete.
+  Rust-projection SwiftData cache refresh, pull suppression after user-action
+  push failures, shared accepted-prefix/rejected-tail queue recovery, expired
+  cloud-auth user-action recovery, durable local identity decoding, and LAN
+  trust snapshot/issue/accept/trust/rotate/revoke decoding without
+  pairing-code persistence.
+- Sync - incomplete for v1: release-device cross-device reconciliation workflow
+  qualification, physical-device LAN/iOS Local Network permission validation,
+  release-device BGTask execution, and poor-network validation.
 - Providers have metadata, fake/default execution, credential references,
   hosted QRZ XML/HamQTH lookup, POTA spot fetch, bounded DX Cluster controls,
   and gated Club Log/QRZ Logbook/eQSL live uploads; LoTW/TQSL, SOTAWatch live,
@@ -172,10 +174,11 @@ operations, and release qualification.
 - Desktop has a real Tauri wrapper and native dialog bridge; signed packaging,
   updater behavior, notarization, Trusted Signing, and cross-runner installer
   qualification are incomplete.
-- iOS has native SwiftUI/Rust bridge foundations; App Store signing,
-  TestFlight/App Store distribution, full offline/sync reconciliation, cached
-  maps, provider setup, contesting, EmComm, device/archive validation, and
-  production privacy review are incomplete.
+- iOS has native SwiftUI/Rust bridge foundations plus the offline queue and
+  sync work described in the Sync entries above; App Store signing,
+  TestFlight/App Store distribution, cached maps, provider setup, contesting,
+  EmComm, device/archive validation, and production privacy review are
+  incomplete.
 - Maps have reusable GIS, layer, marker, grayline, weather, and propagation
   models; interactive tile/vector rendering and cached/offline regions are
   incomplete.
@@ -191,21 +194,12 @@ operations, and release qualification.
 
 ## Deferred Or Unimplemented For v1
 
-- Apple multicast entitlement declaration is configured in the iOS project, but
-  Apple Developer account approval/provisioning and physical-device validation
-  remain beyond the current
-  browser pairing panel, HMAC-SHA256 signed LAN read endpoints, durable local
-  sync identity store, GUI auth-rotation path, and native iOS LAN trust
-  snapshot/issue/accept/trust/rotate/revoke, reciprocal peer-URL pairing,
-  multicast discovery peer selection, plus peer-identity-gated signed LAN pull
-  bridge and Sync workspace controls. The maintainer-controlled Apple approval
-  and provisioning sequence is tracked in
-  `docs/IOS_MULTICAST_PROVISIONING.md`.
+- App Store Connect archive confirmation and on-device Local Network
+  permission validation for the approved and provisioned multicast entitlement.
+  Tracked in `docs/IOS_MULTICAST_PROVISIONING.md`.
 - Release-device cross-device branch review and reconciliation workflow
-  qualification beyond the current deterministic shared golden tests, guided
-  browser review surface, and desktop/iOS review stores, plus release-device
-  iOS background task and poor-network validation beyond the current
-  BGTaskScheduler registration, eligibility policy, and simulator-safe tests.
+  qualification.
+- Release-device iOS background task execution and poor-network validation.
 - LoTW/TQSL managed certificate/signing mode, SOTAWatch approved live access,
   RBN/DX background lifecycle, production maps/offline caching, and propagation
   provider qualification.
@@ -221,9 +215,10 @@ operations, and release qualification.
 
 ## Validation Baseline
 
-Local commands:
+Local commands. `just governance-check` runs `scripts/governance-check.ps1`
+and needs PowerShell 7+ (`pwsh`); the rest are shell-agnostic.
 
-```powershell
+```sh
 just fmt-check
 just clippy
 just test
@@ -244,6 +239,10 @@ CI coverage:
   manifests.
 - `.github/workflows/ios.yml` runs Rust FFI and iOS simulator validation on
   macOS.
+- `.github/workflows/branch-promotion-policy.yml` enforces the branch/channel
+  promotion policy in `docs/BRANCHING_AND_RELEASE_CHANNELS.md`.
+- `.github/workflows/scorecard.yml` runs OpenSSF Scorecard supply-chain
+  analysis.
 - `.github/workflows/security.yml` runs Cargo advisory checks, cargo-deny
   advisories, local Semgrep SAST/SARIF upload, and actionlint.
 - `.github/workflows/release.yml` validates production tags, requires the tag to
@@ -257,17 +256,17 @@ Known manual repository/external settings remain in
 
 ## Baseline Issue Audit
 
-| Issue | Status after this branch merges | Evidence |
+| Issue | Status | Evidence |
 | --- | --- | --- |
 | #15 Native iOS integration | Satisfied for baseline integration; release hardening remains in v1 iOS work | Merged PR #1 and PR #96, `ios/KE8YGWLogger`, `crates/ham-ios-ffi`, `scripts/ios`, `.github/workflows/ios.yml`, `.gitignore`, PR #101 passing iOS checks |
 | #16 Scope/docs consistency | Satisfied for baseline docs | `README.md`, `ROADMAP.md`, `docs/ROADMAP.md`, `docs/V1_RELEASE_PLAN.md`, `docs/V1_IOS_NATIVE_PLAN.md`, `docs/IOS_APPSTORE_READINESS.md`, `docs/V1_EXECUTION_PLAN.md`, `AGENTS.md` |
 | #17 Version and channels | Satisfied for baseline version/channel policy | `scripts/check_versions.py`, `justfile`, `.github/workflows/ci.yml`, `.github/workflows/release.yml`, `RELEASE.md`, `docs/BRANCHING_AND_RELEASE_CHANNELS.md`, OpenAPI `x-product-version` |
 | #18 Governance/license | Already closed by PR #88; still verified | `LICENSE`, `GOVERNANCE.md`, `CONTRIBUTING.md`, `SECURITY.md`, `SUPPORT.md`, `.github/CODEOWNERS`, templates, `scripts/governance-check.ps1` |
-| #19 Cross-platform CI baseline | Satisfied for baseline automation when this branch merges with PR #101 work | CI, iOS, security, scorecard, release workflows; dependency/security docs; version/docs-link/governance checks; container smoke; Tauri/platform validation |
+| #19 Cross-platform CI baseline | Satisfied for baseline automation, including PR #101 work | CI, iOS, security, scorecard, release workflows; dependency/security docs; version/docs-link/governance checks; container smoke; Tauri/platform validation |
 
 ## v1 Account Foundation Issue Audit
 
-| Issue | Status after this branch merges | Evidence |
+| Issue | Status | Evidence |
 | --- | --- | --- |
 | #21 Registration and hosting modes | Satisfied for server foundation | `HostingConfig`, `RegistrationMode`, one-time `POST /api/v1/admin/bootstrap`, `GET/PATCH /api/v1/admin/hosting`, invitation create/list/inspect/resend/expire/revoke routes, Surreal `hosting_config`, `server_admins`, `server_invites`, `tests::bootstrap_admin_is_single_use_and_stores_only_token_hashes`, `tests::invite_only_registration_requires_single_use_invite_and_email_verification` |
 | #22 Verified email and Turnstile | Satisfied for server foundation | `EmailDeliveryConfig`, deterministic test outbox, webhook boundary, `EmailVerificationRecord`, `verify_turnstile_token`, Turnstile Siteverify path with official test-key behavior, `tests::open_registration_turnstile_fails_closed_and_replays_tokens` |
@@ -277,7 +276,7 @@ Known manual repository/external settings remain in
 
 ## v0.3 Offline Sync Issue Audit
 
-| Issue | Status after this branch merges | Evidence |
+| Issue | Status | Evidence |
 | --- | --- | --- |
 | #26 Durable idempotent offline mutation envelopes | Satisfied for shared contract | `crates/ham-sync/src/offline.rs`, `JsonOfflineMutationQueue`, schema-version rejection, idempotent enqueue, deterministic sequence tests, retry/recovery tests, `docs/SYNC_PROTOCOL.md`, `docs/V0_3_RELEASE_PLAN.md` |
 | #27 Persistent desktop offline queue | Satisfied | GUI persists queue entries before QSO/activation/Net Control/station support mutations, recovers/interprets queue state at startup, exposes queue state/recovery, and cloud push acknowledges queued official event hashes. `desktop_queue_recovers_restart_and_drains_to_cloud_without_duplicates` proves a desktop-style restart/reconnect drain path recovers a `sending` operation, drains queued official events in order, marks accepted entries by event hash, and ignores duplicate cloud replay without creating local duplicates. `cloud_connect_auto_push_drains_recovered_desktop_queue` proves the GUI reconnect path with `auto_push_enabled` recovers an interrupted desktop queue, drains ready queued QSO events to cloud, marks the queue accepted, and does not duplicate local official history. `cloud_connect_auto_push_skips_unqueued_local_history` proves reconnect auto-drain is queue-only and does not push unrelated accepted local history when no offline mutation is ready. Shared recovery initializes v0.2 absent queues, migrates legacy `version: 0` records, promotes interrupted atomic writes, and quarantines corrupt queue JSON. |
@@ -288,12 +287,11 @@ Known manual repository/external settings remain in
 
 ## Next Recommended Goal
 
-Finish the remaining sync/reconciliation hardening: Apple Developer account
-approval/provisioning for the declared multicast entitlement, release-device
-cross-client branch review and
-reconciliation workflow qualification, physical LAN/iOS local-network
-validation, release-device hosted/self-hosted native endpoint
-qualification, and release-device iOS background task and poor-network
-qualification. Use `docs/V0_3_SYNC_QUALIFICATION.md` as the evidence checklist
+Finish the remaining sync/reconciliation hardening: App Store Connect archive
+confirmation for the newly provisioned multicast entitlement, release-device
+cross-client branch review and reconciliation workflow qualification, physical
+LAN/iOS local-network validation, release-device hosted/self-hosted native
+endpoint qualification, and release-device iOS background task and
+poor-network qualification. Use `docs/V0_3_SYNC_QUALIFICATION.md` as the evidence checklist
 for #28-#31. That goal unblocks unattended desktop/iOS operation, cached
 map/offline work, contesting, EmComm, and release qualification.
