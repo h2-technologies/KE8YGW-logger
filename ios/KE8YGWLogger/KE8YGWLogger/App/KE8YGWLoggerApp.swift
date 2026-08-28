@@ -5,22 +5,28 @@ import SwiftUI
 @main
 struct KE8YGWLoggerApp: App {
     private let backgroundRetryCoordinator = SyncBackgroundRetryCoordinator.shared
-    private let modelContainer: ModelContainer
+    private let projectionStore: ProjectionStore
 
     init() {
-        do {
-            modelContainer = try ModelContainer(for: QSO.self, StationProfile.self, StationEquipment.self, AppSettings.self)
-        } catch {
-            fatalError("Unable to create SwiftData model container: \(error)")
+        // The projection cache is a rebuildable view of the Rust event store, so
+        // a store that will not open is recovered here instead of ending the
+        // process before any UI exists.
+        projectionStore = ProjectionStoreFactory.make()
+        if let modelContainer = projectionStore.container {
+            backgroundRetryCoordinator.registerLaunchHandler(modelContainer: modelContainer)
         }
-        backgroundRetryCoordinator.registerLaunchHandler(modelContainer: modelContainer)
     }
 
     var body: some Scene {
         WindowGroup {
-            RootView(backgroundRetryCoordinator: backgroundRetryCoordinator)
+            if let modelContainer = projectionStore.container {
+                RootView(backgroundRetryCoordinator: backgroundRetryCoordinator)
+                    .environment(\.projectionStoreRecovery, projectionStore.recovery)
+                    .modelContainer(modelContainer)
+            } else {
+                ProjectionStoreUnavailableView(recovery: projectionStore.recovery)
+            }
         }
-        .modelContainer(modelContainer)
     }
 }
 

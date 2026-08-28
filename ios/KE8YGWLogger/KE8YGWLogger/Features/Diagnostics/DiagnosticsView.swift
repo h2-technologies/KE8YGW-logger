@@ -4,6 +4,7 @@ import UniformTypeIdentifiers
 
 struct DiagnosticsView: View {
     @EnvironmentObject private var bridge: RustBridgeStore
+    @Environment(\.projectionStoreRecovery) private var storeRecovery
     @Query private var qsos: [QSO]
     @State private var reportURL: URL?
     @State private var exportMessage: String?
@@ -21,6 +22,12 @@ struct DiagnosticsView: View {
                 DetailRow(title: "Bridge", value: bridge.client.isLive ? "live" : "unavailable")
                 DetailRow(title: "Report ID", value: bridge.diagnostics.reportId ?? "")
                 DetailRow(title: "Database", value: "SwiftData cache; Rust event store via FFI")
+                DetailRow(title: "Projection Cache", value: storeRecovery.label)
+                if let reason = storeRecovery.reason {
+                    Text(reason)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
 
             Section("Queues") {
@@ -85,6 +92,11 @@ struct DiagnosticsView: View {
             "sync_protocol_version": jsonValue(bridge.diagnostics.syncProtocolVersion),
             "backup_schema_version": jsonValue(bridge.diagnostics.backupSchemaVersion),
             "bridge_live": bridge.client.isLive,
+            "projection_cache": [
+                "state": storeRecovery.label,
+                "reason": jsonValue(storeRecovery.reason),
+                "quarantine": jsonValue(storeRecovery.quarantineURL?.lastPathComponent)
+            ],
             "bridge_self_test": [
                 "success": jsonValue(selfTest?.success),
                 "library_linked": jsonValue(selfTest?.libraryLinked),
