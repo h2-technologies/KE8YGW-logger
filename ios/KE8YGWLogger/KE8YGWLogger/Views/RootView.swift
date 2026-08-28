@@ -4,6 +4,7 @@ import SwiftUI
 struct RootView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.projectionStoreRecovery) private var storeRecovery
     @Query private var profiles: [StationProfile]
     @Query private var equipment: [StationEquipment]
     @Query private var settings: [AppSettings]
@@ -63,8 +64,23 @@ struct RootView: View {
         } catch {
             bridge.lastError = error.localizedDescription
         }
+        await rebuildQSOProjectionIfRecovered()
         if settings.first?.effectiveUseDeviceLocation == true {
             location.requestCurrentGrid(useDeviceLocation: true)
+        }
+    }
+
+    /// A replaced projection cache starts empty. Repopulating it from the Rust
+    /// event store keeps a lost cache from reading as a lost logbook.
+    private func rebuildQSOProjectionIfRecovered() async {
+        guard storeRecovery.requiresFullProjectionRebuild else { return }
+        do {
+            try await ProjectionRefreshService.refreshQSOProjection(
+                from: bridge,
+                modelContainer: modelContext.container
+            )
+        } catch {
+            bridge.lastError = error.localizedDescription
         }
     }
 

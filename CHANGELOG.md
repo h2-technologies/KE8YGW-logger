@@ -17,6 +17,8 @@
 - Added native iOS split-view shell and feature workspaces for Dashboard, Logging, Callsign Lookup, Stations, Providers, Maps, POTA, SOTA, Net Control, Emergency, Sync, Backup/Restore, Diagnostics, and Settings.
 - Added Keychain credential storage and local notification authorization plumbing.
 - Added SwiftData station equipment cache model.
+- Added a recoverable iOS projection cache: a SwiftData store that cannot be opened is quarantined and rebuilt from the Rust event store, with an in-memory fallback and a recovery screen instead of a launch crash.
+- Added `ProjectionStoreTests` covering the projection cache recovery ladder, quarantine, and quarantine pruning.
 
 ### Changed
 
@@ -26,6 +28,8 @@
 - iOS ADIF export now prefers the Rust bridge and falls back to Swift export if the bridge is unavailable.
 - Updated `PROJECT_STATE.md`, `ROADMAP.md`, and iOS documentation for the parity pass.
 - Hardened iOS Rust build scripts to load Rust/Homebrew paths in Xcode archive shells and removed a developer-specific Xcode run script path.
+- iOS no longer calls `fatalError` when the SwiftData model container cannot be created, which crashed the app at launch (TestFlight 0.3.0 build 149, `EXC_BREAKPOINT` in `App.main()`); the container is now created with staged recovery.
+- iOS Diagnostics now reports projection cache health and includes it in the exported diagnostics report.
 
 ### Testing
 
