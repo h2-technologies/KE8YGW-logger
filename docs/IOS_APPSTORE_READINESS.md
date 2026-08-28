@@ -42,19 +42,21 @@ no-ready-events push plan, with pulled envelopes applied by
 the no-ready queue plan path where no push transport should run.
 The Sync API setting is persisted through the Rust settings schema and routes
 native manual/background retry to either self-hosted logbook-scoped endpoints or
-hosted `/api/v1/sync/*` endpoints.
-`scripts/governance-check.ps1` now fails if the bundle loses the Local Network
-usage string, local-network ATS allowance, background-processing mode, permitted
-sync retry task identifier matching the Swift runtime constant, or if generated
-Xcode/iOS artifacts are tracked.
+hosted `/api/v1/sync/*` endpoints. The app target includes
+`KE8YGWLogger.entitlements` with the Apple multicast networking entitlement
+needed by the native LAN discovery scanner. `scripts/governance-check.ps1` now
+fails if the bundle loses the Local Network usage string, local-network ATS
+allowance, background-processing mode, permitted sync retry task identifier
+matching the Swift runtime constant, multicast entitlement declaration,
+app-target entitlements reference, or if generated Xcode/iOS artifacts are
+tracked.
 Signing, provisioning, TestFlight, App Store metadata, privacy manifest,
 physical-device validation, release-device BGTask execution, real
-hosted/self-hosted native sync endpoint qualification, Apple multicast
-entitlement/provisioning, and full v1 offline/sync/provider qualification
-remain incomplete.
-See [iOS Multicast Provisioning](IOS_MULTICAST_PROVISIONING.md) for the
-Apple-controlled entitlement approval/provisioning steps and the failed
-App Store Connect archive evidence from the PR #113 entitlement wiring attempt.
+hosted/self-hosted native sync endpoint qualification and full v1
+offline/sync/provider qualification remain incomplete. The Apple multicast
+entitlement is approved, provisioned, and declared on the app target; see
+[iOS Multicast Provisioning](IOS_MULTICAST_PROVISIONING.md) for the remaining
+physical-device validation sequence.
 
 ## Bundle and Signing
 
@@ -148,6 +150,8 @@ processing must remain tied to implemented native features and App Review copy.
 - Governance validation passes for Local Network, background retry bundle
   declarations, Swift/plist retry identifier consistency, and generated
   Xcode/iOS artifact hygiene.
+- App Store provisioning profile includes the Apple multicast networking
+  entitlement declared by the app target.
 - ADIF import/export works through native document flows.
 - POTA/SOTA and Net Control features are usable or clearly gated by account
   capability.

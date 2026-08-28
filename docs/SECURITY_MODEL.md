@@ -106,8 +106,9 @@ secret-free.
 
 Future work:
 
-- Apple multicast entitlement/provisioning and release-device iOS LAN
-  validation on top of the durable LAN trust store
+- Apple Developer account approval/provisioning and release-device iOS LAN
+  validation for the declared multicast entitlement on top of the durable LAN
+  trust store
 - formal asymmetric LAN key exchange beyond the current distinct endpoint-auth
   code plus HMAC request-proof model
 - signed official events

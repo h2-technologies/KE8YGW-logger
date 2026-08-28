@@ -65,11 +65,11 @@ release-candidate qualification.
 See [docs/V1_EXECUTION_PLAN.md](docs/V1_EXECUTION_PLAN.md) for the
 dependency-ordered critical path. The next three implementation goals are:
 
-- Finish sync/reconciliation hardening: Apple multicast entitlement/provisioning,
-  production iOS reciprocal LAN transport qualification, end-to-end
-  cross-client branch review/reconciliation workflow qualification,
-  physical-device LAN/iOS local-network validation, and release-device iOS
-  background task/poor-network qualification.
+- Finish sync/reconciliation hardening: production iOS reciprocal LAN
+  transport qualification, end-to-end cross-client branch
+  review/reconciliation workflow qualification, physical-device LAN/iOS
+  local-network validation, and release-device iOS background
+  task/poor-network qualification.
 - Production provider qualification for QRZ, QRZ Logbook, LoTW, eQSL, Club
   Log, POTA, SOTAWatch, DX Cluster/RBN, maps, and propagation.
 - Hosted web, desktop, and iOS UI flows for the implemented account/session,
