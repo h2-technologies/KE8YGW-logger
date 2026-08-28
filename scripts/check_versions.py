@@ -18,6 +18,8 @@ from typing import Iterable
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 SEMVER = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
 PRODUCTION_TAG = re.compile(r"^v[0-9]+\.[0-9]+\.[0-9]+$")
+DESKTOP_CLI_VERSION = "0.3.0"
+IOS_VERSION = "0.3.1"
 
 
 def fail(message: str) -> None:
@@ -56,12 +58,25 @@ def workspace_members() -> Iterable[pathlib.Path]:
 
 
 def check_cargo(version: str, errors: list[str]) -> None:
+    product_versions = {
+        "crates/ham-cli/Cargo.toml": DESKTOP_CLI_VERSION,
+        "crates/ham-desktop/Cargo.toml": DESKTOP_CLI_VERSION,
+        "src-tauri/Cargo.toml": DESKTOP_CLI_VERSION,
+    }
     for manifest in workspace_members():
         if not manifest.exists():
             errors.append(f"workspace member manifest is missing: {rel(manifest)}")
             continue
         package = load_toml(manifest).get("package", {})
         package_version = package.get("version")
+        expected_product_version = product_versions.get(rel(manifest))
+        if expected_product_version is not None:
+            if package_version != expected_product_version:
+                errors.append(
+                    f"{rel(manifest)} package.version {package_version!r} does not equal "
+                    f"desktop/CLI release {expected_product_version}"
+                )
+            continue
         if isinstance(package_version, dict):
             if package_version.get("workspace") is not True:
                 errors.append(f"{rel(manifest)} has unsupported package.version table")
@@ -71,12 +86,12 @@ def check_cargo(version: str, errors: list[str]) -> None:
             )
 
 
-def check_tauri(version: str, errors: list[str]) -> None:
+def check_tauri(errors: list[str]) -> None:
     config_path = ROOT / "src-tauri" / "tauri.conf.json"
     config = json.loads(read_text(config_path))
-    if config.get("version") != version:
+    if config.get("version") != DESKTOP_CLI_VERSION:
         errors.append(
-            f"{rel(config_path)} version {config.get('version')!r} does not match workspace {version}"
+            f"{rel(config_path)} version {config.get('version')!r} does not equal desktop release {DESKTOP_CLI_VERSION}"
         )
 
 
@@ -88,7 +103,7 @@ def clean_xcode_value(value: str) -> str:
     return value.strip().strip('"')
 
 
-def check_ios(version: str, errors: list[str]) -> None:
+def check_ios(errors: list[str]) -> None:
     plist_path = ROOT / "ios" / "KE8YGWLogger" / "KE8YGWLogger" / "Resources" / "Info.plist"
     with plist_path.open("rb") as handle:
         plist = plistlib.load(handle)
@@ -100,9 +115,9 @@ def check_ios(version: str, errors: list[str]) -> None:
     project_path = ROOT / "ios" / "KE8YGWLogger" / "KE8YGWLogger.xcodeproj" / "project.pbxproj"
     project_text = read_text(project_path)
     marketing_versions = {clean_xcode_value(value) for value in parse_xcode_values(project_text, "MARKETING_VERSION")}
-    if marketing_versions != {version}:
+    if marketing_versions != {IOS_VERSION}:
         errors.append(
-            f"{rel(project_path)} MARKETING_VERSION values {sorted(marketing_versions)} do not equal {version}"
+            f"{rel(project_path)} MARKETING_VERSION values {sorted(marketing_versions)} do not equal iOS release {IOS_VERSION}"
         )
 
     build_versions = {clean_xcode_value(value) for value in parse_xcode_values(project_text, "CURRENT_PROJECT_VERSION")}
@@ -162,8 +177,8 @@ def check_release_tag(version: str, release_tag: str | None, errors: list[str]) 
     if not PRODUCTION_TAG.match(tag):
         errors.append(f"production release tag must match vMAJOR.MINOR.PATCH: {tag}")
         return
-    if tag != f"v{version}":
-        errors.append(f"production tag {tag} does not match workspace version {version}")
+    if tag != f"v{DESKTOP_CLI_VERSION}":
+        errors.append(f"production tag {tag} does not match desktop/CLI version {DESKTOP_CLI_VERSION}")
 
 
 def check_existing_tags(errors: list[str]) -> None:
@@ -189,13 +204,13 @@ def main() -> int:
 
     version = workspace_version()
     if args.print_version:
-        print(version)
+        print(DESKTOP_CLI_VERSION)
         return 0
 
     errors: list[str] = []
     check_cargo(version, errors)
-    check_tauri(version, errors)
-    check_ios(version, errors)
+    check_tauri(errors)
+    check_ios(errors)
     check_openapi(version, errors)
     check_release_workflow(version, errors)
     check_release_tag(version, args.release_tag, errors)
@@ -206,7 +221,10 @@ def main() -> int:
             print(f"version check failed: {error}", file=sys.stderr)
         return 1
 
-    print(f"validated product version {version} across Cargo, Tauri, iOS, API metadata, artifacts, and tags")
+    print(
+        f"validated shared Rust {version}, desktop/CLI {DESKTOP_CLI_VERSION}, "
+        f"and iOS {IOS_VERSION} versions across release surfaces"
+    )
     return 0
 
 

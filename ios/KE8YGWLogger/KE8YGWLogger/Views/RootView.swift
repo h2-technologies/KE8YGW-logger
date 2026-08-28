@@ -3,11 +3,17 @@ import SwiftUI
 
 struct RootView: View {
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.scenePhase) private var scenePhase
     @Query private var profiles: [StationProfile]
     @Query private var equipment: [StationEquipment]
     @Query private var settings: [AppSettings]
     @StateObject private var bridge = RustBridgeStore()
     @StateObject private var location = LocationCoordinator()
+    private let backgroundRetryCoordinator: SyncBackgroundRetryCoordinator?
+
+    init(backgroundRetryCoordinator: SyncBackgroundRetryCoordinator? = nil) {
+        self.backgroundRetryCoordinator = backgroundRetryCoordinator
+    }
 
     var body: some View {
         AppShellView()
@@ -35,6 +41,11 @@ struct RootView: View {
                 } catch {
                     bridge.lastError = error.localizedDescription
                 }
+            }
+        }
+        .onChange(of: scenePhase) { _, newPhase in
+            if newPhase == .background {
+                scheduleBackgroundRetry()
             }
         }
     }
@@ -73,5 +84,13 @@ struct RootView: View {
         } catch {
             bridge.lastError = error.localizedDescription
         }
+    }
+
+    private func scheduleBackgroundRetry() {
+        let syncSettings = settings.first?.rustSettingsPayload().sync
+        backgroundRetryCoordinator?.scheduleIfEligible(
+            syncSettings: syncSettings,
+            pendingChanges: bridge.sync.pendingChanges
+        )
     }
 }

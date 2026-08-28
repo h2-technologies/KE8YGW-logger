@@ -1,6 +1,6 @@
 # v1 Release Plan
 
-Last audited: 2026-07-21
+Last audited: 2026-07-22
 
 v1 ships on November 24, 2026 with hosted web, native iOS, and signed desktop
 clients for Windows, macOS, and broad Linux distribution support. This plan
@@ -42,7 +42,9 @@ Partial:
 - Hosted web/desktop/iOS UX for the implemented account/session/device/admin
   APIs, production email/Turnstile deployment configuration, hosted
   backup/divergence UX, provider runtime execution, cloud/self-hosted sync,
-  desktop packaging, native iOS projection/cache flows, and release automation.
+  physical LAN/iOS validation,
+  desktop
+  packaging, native iOS projection/cache flows, and release automation.
 
 Test-only or fake/default paths:
 - Mock lookup/rig providers, placeholder map/weather/propagation providers,
@@ -50,9 +52,10 @@ Test-only or fake/default paths:
   GUI demo peer/runtime data.
 
 Deferred or unimplemented:
-- Real LAN trust pairing and peer-to-peer HTTP transport, LoTW/TQSL live upload,
-  SOTAWatch approved live access, RBN/background DX lifecycle, cached/offline map
-  regions, full contesting, full EmComm forms, signed desktop updater, production
+- Physical-device LAN/iOS local-network validation, LoTW/TQSL live upload,
+  SOTAWatch approved live access, RBN/background DX lifecycle,
+  cached/offline map regions, full contesting, full EmComm forms, signed desktop
+  updater, production
   signing/notarization/App Store distribution, full production provider
   qualification, and release-candidate operations hardening.
 
