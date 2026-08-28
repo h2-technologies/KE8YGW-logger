@@ -69,6 +69,7 @@
 		10000000000000000000000D /* Views/ExportView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/ExportView.swift; sourceTree = "<group>"; };
 		10000000000000000000000E /* Views/SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/SettingsView.swift; sourceTree = "<group>"; };
 		10000000000000000000000F /* Resources/Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Resources/Info.plist; sourceTree = "<group>"; };
+		500000000000000000000001 /* KE8YGWLogger.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = KE8YGWLogger.entitlements; sourceTree = "<group>"; };
 		100000000000000000000021 /* HamRadioUtilitiesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HamRadioUtilitiesTests.swift; sourceTree = "<group>"; };
 		100000000000000000000022 /* ExportServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExportServiceTests.swift; sourceTree = "<group>"; };
 		100000000000000000000030 /* KE8YGW Logger.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "KE8YGW Logger.app"; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -144,6 +145,7 @@
 				10000000000000000000000D /* Views/ExportView.swift */,
 				10000000000000000000000E /* Views/SettingsView.swift */,
 				10000000000000000000000F /* Resources/Info.plist */,
+				500000000000000000000001 /* KE8YGWLogger.entitlements */,
 				FAAEDEAC2FFCAE2E007249F1 /* appicon.xcassets */,
 			);
 			path = KE8YGWLogger;
@@ -490,6 +492,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = KE8YGWLogger/KE8YGWLogger.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 2;
 				DEVELOPMENT_TEAM = R4B2HA4TUA;
@@ -524,6 +527,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = KE8YGWLogger/KE8YGWLogger.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 2;
 				DEVELOPMENT_TEAM = R4B2HA4TUA;

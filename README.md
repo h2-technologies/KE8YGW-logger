@@ -886,10 +886,11 @@ disabled, protected LAN reads require HMAC-SHA256 request proof after pairing,
 and native iOS manual LAN pull verifies the peer's published device ID before
 sending signed reads. Native iOS can complete reciprocal pairing against an
 operator-entered peer URL and scan LAN discovery packets into probed peer URLs,
-while Apple multicast entitlement/provisioning plus physical-device LAN/iOS
-Local Network validation remain a release gate documented in
+while physical-device LAN and iOS Local Network validation remain a release
+gate documented in
 [iOS Multicast Provisioning](docs/IOS_MULTICAST_PROVISIONING.md) before
-unattended LAN sync.
+unattended LAN sync. The Apple multicast entitlement is approved, provisioned,
+and declared on the iOS app target.
 
 ## Safe LAN Event Replication
 
@@ -955,10 +956,9 @@ revoked and expired cloud-auth pushes append nothing remotely, stop queued work
 as user-action-required, plan no unattended retry, and resume only after
 re-pairing plus accepted-hash acknowledgment. LAN auth credential
 rotation/recovery is available through the GUI trust endpoint. Release-device
-cross-client branch review workflow qualification, signed events, Apple
-multicast entitlement/provisioning, physical-device LAN/iOS local-network
-validation, and formal asymmetric LAN key exchange beyond the current
-endpoint-auth/HMAC model are still deferred.
+cross-client branch review workflow qualification, signed events,
+physical-device LAN/iOS local-network validation, and formal asymmetric LAN key
+exchange beyond the current endpoint-auth/HMAC model are still deferred.
 
 ## Durable Offline Queue And LAN Trust
 
@@ -1103,8 +1103,9 @@ use manual loopback URLs. Mutating LAN pull also requires the explicit
 and signed remote read requests.
 Native iOS can scan the same discovery packets, probe `/api/sync/state`, and
 fill the existing peer URL fields only when the probed device/session identity
-matches the packet. Apple multicast entitlement/provisioning and physical iOS
-Local Network permission validation remain release gates documented in
+matches the packet. The Apple multicast entitlement is approved, provisioned,
+and declared on the iOS app target; physical iOS Local Network permission
+validation remains a release gate documented in
 [iOS Multicast Provisioning](docs/IOS_MULTICAST_PROVISIONING.md).
 
 ## Cloud Relay And Self-Hosted Sync
