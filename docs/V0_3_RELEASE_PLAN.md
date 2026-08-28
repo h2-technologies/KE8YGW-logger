@@ -46,8 +46,9 @@ Last audited: 2026-07-22
   no push transport should run.
 - Governance validation now enforces the iOS Local Network usage string,
   local-network ATS allowance, background-processing mode, permitted sync retry
-  task identifier matching the Swift runtime constant, and absence of tracked
-  generated Xcode/iOS artifacts.
+  task identifier matching the Swift runtime constant, multicast entitlement
+  declaration/app-target reference, and absence of tracked generated Xcode/iOS
+  artifacts.
 - Native iOS manual hosted/self-hosted pull, trusted LAN pull, and background
   Auto Pull refresh the SwiftData QSO cache from the Rust `qso.list`
   projection after Rust accepts remote events. Swift still treats SwiftData as
@@ -154,10 +155,10 @@ Last audited: 2026-07-22
   [v0.3 Sync Qualification Runbook](V0_3_SYNC_QUALIFICATION.md). Keep #28-#31
   open until that runbook has physical-device and endpoint evidence for each
   applicable row.
-- Apple multicast entitlement/provisioning and full release-device iOS LAN
-  discovery/pairing qualification. See
+- Full release-device iOS LAN discovery/pairing qualification for the declared
+  multicast entitlement. The entitlement is approved and provisioned; see
   [iOS Multicast Provisioning](IOS_MULTICAST_PROVISIONING.md) for the
-  maintainer-controlled Apple entitlement gate and validation sequence.
+  validation sequence.
 - Physical-device LAN and iOS Local Network permission prompt validation.
 - Release-device cross-client branch review and reconciliation workflow beyond
   the current deterministic shared golden tests, guided browser review surface,
