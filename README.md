@@ -8,9 +8,10 @@ sync, with room for emergency communications, net control, and contesting.
 
 The locked v1 release target is November 24, 2026. v1 includes hosted web,
 native iOS, and signed desktop clients for Windows, macOS, and broad Linux
-distribution support. The current workspace version is `0.3.0`; that value in
-`Cargo.toml` is the canonical product version until a release branch or tag
-updates it.
+distribution support. The current shared Rust, desktop application, and CLI
+release line is `0.3.0`. Native iOS is a separate `0.3.1` release and is not
+coupled to the desktop tag. CI enforces these deliberately different release
+versions with `scripts/check_versions.py`.
 
 ## Start Here
 
@@ -116,7 +117,10 @@ passes should start with these documents:
   hosting modes, registration, verified email, recovery, session/device,
   logbook, QSO, station/equipment, ADIF, provider, upload, sync, and audit
   routes.
-- `ham-cli`: placeholder command-line entry point.
+- `ham-cli`: offline scriptable ADIF import/export, chain verification,
+  projection rebuild, and machine-readable version/build reporting. See the
+  [CLI command reference](docs/CLI_REFERENCE.md) for the implemented v1 slice
+  and the commands that remain release blockers.
 - `ham-gui`: initial GUI shell, workspace model, panel registry, command registry,
   and static web shell served by a small Rust binary.
 - `ham-ios-ffi`: Rust FFI bridge used by the native iOS client.
