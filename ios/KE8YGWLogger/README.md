@@ -125,6 +125,16 @@ state, projection source, schema version, and last refresh timestamp. The
 SwiftData `AppSettings` row is likewise a cache of the Rust
 `application-settings.json` support record.
 
+Because the projection is a cache and not the authority, a SwiftData store that
+cannot be opened is recovered rather than fatal. `ProjectionStoreFactory` opens
+the store, and on failure moves it into a `QuarantinedProjectionCache` folder
+beside it and opens a fresh one, falling back to an in-memory cache and then to
+a recovery screen. The store is moved instead of deleted so a cache written
+before the Rust bridge became authoritative can still be recovered by hand, and
+only the newest three quarantined stores are kept. After a recovery the QSO
+projection is rebuilt from the Rust event store on the next launch, and
+Diagnostics reports the cache state.
+
 Draft state remains local iOS support state. It is not a substitute for Rust
 official events or Rust-backed application settings. Net Control accepted
 check-ins and traffic still go through Rust proposals, but the current iOS ABI

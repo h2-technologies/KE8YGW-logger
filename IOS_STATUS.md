@@ -18,8 +18,11 @@ hosted web and Windows/macOS/Linux desktop; it is not a v1.1 deliverable.
 - Rust-backed bridge paths for version/self-test, settings, QSO create/delete,
   station profile/equipment/select, POTA/SOTA activation start/end, Net Control
   session/check-in/traffic, diagnostics, and snapshot/fallback flows.
-- Unit tests for ham-radio utilities, export helpers, and bridge fallback
-  decoding.
+- Recoverable SwiftData projection cache: a store that cannot be opened is
+  quarantined and rebuilt from the Rust event store, with an in-memory fallback
+  and a recovery screen instead of a launch crash.
+- Unit tests for ham-radio utilities, export helpers, bridge fallback decoding,
+  and projection cache recovery.
 - `.github/workflows/ios.yml` simulator workflow on macOS.
 
 ## Partial
