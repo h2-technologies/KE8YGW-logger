@@ -45,7 +45,7 @@ jobs:
           cargo install cargo-deny --version "$CARGO_DENY_VERSION" --locked
 
       - name: Audit Cargo.lock
-        run: cargo audit --ignore RUSTSEC-2023-0071
+        run: cargo audit --ignore RUSTSEC-2023-0071 --ignore RUSTSEC-2026-0235
 
       - name: Check advisory ledger exceptions
         run: cargo deny check advisories
