@@ -12,7 +12,9 @@ ham-plugin-sdk = { path = "../ham-plugin-sdk" }
 ham-sync = { path = "../ham-sync" }
 serde.workspace = true
 serde_json.workspace = true
+thiserror.workspace = true
 tokio.workspace = true
+ureq.workspace = true
 uuid.workspace = true
 
 [lib]

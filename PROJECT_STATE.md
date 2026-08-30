@@ -77,6 +77,32 @@ operations, and release qualification.
   HMAC-SHA256 signed LAN read endpoint authorization for logbook/head/event
   APIs, plus durable local sync identity support files that persist stable
   device IDs while rotating session IDs.
+- Rust-owned hosted account/session client state in `ham_sync::account`:
+  versioned durable support state with atomic writes and corrupt-file
+  quarantine, request planning for the hosted account/session/recovery/device
+  routes, credential-reference plans that never carry secrets, hosted response
+  classification into a stable outcome vocabulary, cleartext-transport refusal
+  outside loopback/private/link-local hosts, and tolerant decoding of additive
+  hosted fields.
+- Desktop hosted account UX: `/api/account/state`, `/api/account/server`, and
+  `/api/account/action` GUI endpoints behind the cloud-connect permission
+  check; a `ureq` transport that resolves credential references through
+  `CredentialStore`; an Account screen with register, verify-email, sign-in,
+  session refresh/rotate, sign-out, sign-out-everywhere, recovery start and
+  complete, device list/revoke/revoke-all, and confirmed account deletion; a
+  status-bar account pill; a Settings account card; and `account.open`,
+  `account.session.refresh`, `account.devices.open`, and `account.sign-out`
+  command IDs.
+- Native iOS hosted account UX: `account.snapshot`, `account.set_server`,
+  `account.plan`, `account.record_result`, and `account.record_credentials`
+  bridge commands; typed Swift bridge models with explicit wire keys; a
+  `URLSession` transport that classifies nothing; Keychain-backed session and
+  refresh token storage referenced by credential ID; and an Account workspace
+  covering the same flows as desktop.
+- Unauthenticated `GET /api/v1/status` publishes the registration policy
+  clients render sign-up against, including an additive `turnstile` object with
+  `required` and the public `site_key`; the Turnstile secret key is never
+  published.
 - Tauri v2 desktop wrapper with bundled web assets, native dialog commands, and
   restricted `/api/*` proxying.
 - Native iOS SwiftUI project, SwiftData cache/projection models, Rust FFI bridge,
@@ -93,6 +119,11 @@ operations, and release qualification.
 
 ## Partial
 
+- Hosted account UX now covers desktop and native iOS against the implemented
+  account, session, recovery, and device APIs. Hosted web has no browser client
+  in this repository yet, production email deliverability and Turnstile keys are
+  unconfigured, and neither account surface has been qualified against a
+  production hosted deployment or on release devices.
 - Hosted accounts have a v1 foundation for personal/public/self-hosted modes:
   invite-only registration by default, administrator open/disabled switches,
   hashed expiring single-use invite/verification/recovery tokens, verified

@@ -1,6 +1,8 @@
 //! Local-first LAN discovery and sync handshake primitives.
 
+pub mod account;
 pub mod offline;
+pub use account::*;
 pub use offline::*;
 
 use std::{

@@ -92,6 +92,24 @@ metadata.
 Self-hosted sync and support upload routes still use pairing-code/token
 sessions for compatibility-only sync/report flows.
 
+Client-side hosted account state is Rust-owned support state. It records the
+account profile, session metadata, device, logbook scope, and credential
+references only. Session and refresh tokens are handed to the platform
+credential backend at issue time and are referenced by `credential_id`
+afterwards: the desktop GUI stores them through `CredentialStore`, and native
+iOS stores them in the Keychain and reports only the credential IDs back to
+Rust. Planned account requests carry credential references rather than secrets,
+so the executing transport is the only layer that ever holds the raw token.
+Deleting a credential now erases the stored secret on every backend, including
+the explicit insecure development fallback, so signing out destroys the token
+rather than only marking it revoked. Account runtime events and the durable
+account state carry the hosted `request_id` and error code but never emails,
+tokens, or credential secrets.
+
+Clients refuse cleartext hosted account transport during request planning for
+anything but loopback, private, and link-local hosts, so a public hosted server
+must use `https://` before any account request is sent.
+
 GUI LAN sync read endpoints for logbook lists, heads, event ranges, and event
 metadata require trusted-device, replay-nonce, signature-version, and
 HMAC-SHA256 signature headers. The serving peer verifies those headers against a

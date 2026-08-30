@@ -18,11 +18,20 @@ hosted web and Windows/macOS/Linux desktop; it is not a v1.1 deliverable.
 - Rust-backed bridge paths for version/self-test, settings, QSO create/delete,
   station profile/equipment/select, POTA/SOTA activation start/end, Net Control
   session/check-in/traffic, diagnostics, and snapshot/fallback flows.
+- Hosted account and session workspace: `account.snapshot`,
+  `account.set_server`, `account.plan`, `account.record_result`, and
+  `account.record_credentials` bridge commands; a `URLSession` transport that
+  classifies nothing; Keychain-stored session and refresh tokens referenced by
+  credential ID in Rust support state; and register, verify-email, sign-in,
+  session refresh/rotate, sign-out, sign-out-everywhere, recovery, device
+  list/revoke/revoke-all, and confirmed account deletion flows.
 - Recoverable SwiftData projection cache: a store that cannot be opened is
   quarantined and rebuilt from the Rust event store, with an in-memory fallback
   and a recovery screen instead of a launch crash.
 - Unit tests for ham-radio utilities, export helpers, bridge fallback decoding,
-  and projection cache recovery.
+  projection cache recovery, and hosted account action encoding, snapshot/plan
+  wire-key decoding, Keychain token storage, bearer injection, sign-out token
+  clearing, and transport-failure handling.
 - `.github/workflows/ios.yml` simulator workflow on macOS.
 
 ## Partial
@@ -35,6 +44,10 @@ hosted web and Windows/macOS/Linux desktop; it is not a v1.1 deliverable.
   remain incomplete.
 - Keychain plumbing exists, but production provider setup and privacy review are
   incomplete.
+- The hosted account workspace is implemented against the hosted account APIs
+  but has not been qualified on a release device or against a production hosted
+  deployment, and administrator hosting/invitation management has no iOS
+  surface.
 
 ## Test-Only Or Fallback
 

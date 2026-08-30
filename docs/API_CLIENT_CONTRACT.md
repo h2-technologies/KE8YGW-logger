@@ -101,6 +101,54 @@ Token rules:
 - `Set-Cookie` carries the hosted session token as `HttpOnly`, `Secure`, and
   `SameSite=Lax`; clients that cannot use cookies must use the bearer token.
 
+`GET /api/v1/status` is unauthenticated and publishes the registration policy a
+client needs before it can render sign-up: `operation_mode`, `registration_mode`,
+and an additive `turnstile` object with `required` and the public `site_key`.
+The Turnstile secret key is never published on any route.
+
+## Rust-Owned Client Account State
+
+Desktop and native iOS do not implement account rules of their own. Both drive
+`ham_sync::account`, which owns the durable client account state, request
+planning, response classification, and every state transition:
+
+1. `plan_account_request` turns an `AccountAction` into an `AccountRequestPlan`
+   with method, path, absolute URL, validated body, and credential references.
+   The plan carries `bearer_credential_id` and `body_secret_fields` rather than
+   secrets, so the platform resolves them from its own credential backend.
+2. The platform executes the plan on its native transport and classifies
+   nothing.
+3. `apply_account_response` turns the raw status, body, and transport failure
+   into an `AccountOutcome`, updates the durable state, and returns any freshly
+   issued session and refresh tokens exactly once so the caller can store them.
+
+Client account state is support state, not official state. It is versioned
+(`ACCOUNT_SESSION_FILE_VERSION`), written atomically, quarantined rather than
+deleted when corrupt or unsupported, and it holds only credential references.
+Raw session, refresh, invitation, verification, and recovery tokens are never
+written to it, and additive hosted response fields are tolerated.
+
+Cleartext hosted transport is refused during planning for anything but
+loopback, private, and link-local hosts, so a public hosted server must use
+`https://`.
+
+Client action vocabulary: `hosting_status`, `register`, `verify_email`,
+`login`, `refresh_session`, `rotate_session`, `logout`, `logout_all`,
+`recovery_start`, `recovery_complete`, `list_devices`, `revoke_device`,
+`revoke_all_devices`, and `delete_account`.
+
+Client outcome vocabulary: `succeeded`, `email_verification_required`,
+`invalid_request`, `unauthorized`, `session_expired`, `device_revoked`,
+`registration_closed`, `token_expired`, `token_replayed`, `turnstile_failed`,
+`forbidden`, `not_found`, `rate_limited`, `server_unavailable`, and
+`network_unavailable`. Only the last three are retryable without operator input.
+
+Native iOS drives the same module through the `account.snapshot`,
+`account.set_server`, `account.plan`, `account.record_result`, and
+`account.record_credentials` bridge commands. Rust hands issued tokens back to
+Swift once, Swift stores them in the Keychain, and Swift reports only the
+resulting credential IDs through `account.record_credentials`.
+
 ## Account, Device, and Logbook Scope
 
 Client calls are scoped by account, logbook, user, and device:

@@ -31,7 +31,8 @@ use ham_core::{
 };
 use ham_gui::{
     mock::{capability_labels, mock_plugins},
-    CommandRegistry, GuiRuntimeBridge, GuiShellState, RuntimeBridgeStatus, RuntimeEventInput,
+    run_account_action, AccountClientError, AccountTransport, CommandRegistry, GuiRuntimeBridge,
+    GuiShellState, RuntimeBridgeStatus, RuntimeEventInput, UreqAccountTransport,
 };
 use ham_plugin_sdk::{
     PluginCapability, PluginManifest, ProposalEnvelope, ServiceType, PROPOSAL_ACTIVATION_CANCEL,
@@ -45,6 +46,7 @@ use ham_plugin_sdk::{
     PROPOSAL_QSO_RESTORE,
 };
 use ham_sync::{
+    account::{AccountAction, AccountActionRecord, AccountSessionState, JsonAccountSessionStore},
     build_handshake_response, conflict_report_from_preview, lan_auth_signature, metadata_for_event,
     preview_pull_from_events, pull_missing_events, verify_lan_auth_signature, CloudAuth,
     CloudConnectionState, CloudPreviewPullRequest, CloudPullEventsRequest, CloudPullEventsResponse,
@@ -136,6 +138,8 @@ fn main() {
     let lan_trust_store = JsonLanTrustStore::new(support_dir.join("lan-trust.json"));
     let local_sync_identity_store =
         JsonLocalSyncIdentityStore::new(support_dir.join("local-sync-identity.json"));
+    let account_session_store =
+        JsonAccountSessionStore::new(support_dir.join("account-session.json"));
     let local_api_port = local_api_port_from_bound_addr(&bound_addr);
     let sync_identity = match local_sync_identity_store.load_or_create(
         "KE8YGW Logger Local",
@@ -376,6 +380,30 @@ fn main() {
         }
     }
 
+    let account_session = match account_session_store.load_or_create(
+        &CloudSyncConfig::default().sync_server_url,
+        chrono::Utc::now(),
+    ) {
+        Ok(account_session) => account_session,
+        Err(error) => {
+            let _ = bridge.publish(RuntimeEventInput {
+                event_type: "account.state.load_failed".to_owned(),
+                severity: RuntimeEventSeverity::Warn,
+                source: "ham-gui".to_owned(),
+                source_plugin_id: None,
+                workspace_id: Some("dashboard".to_owned()),
+                payload_summary: "Hosted account state could not be loaded; starting signed out"
+                    .to_owned(),
+                redacted_payload: None,
+                error: Some(error.to_string()),
+            });
+            AccountSessionState::new(
+                CloudSyncConfig::default().sync_server_url,
+                chrono::Utc::now(),
+            )
+        }
+    };
+
     let state = Arc::new(AppState {
         bridge,
         store,
@@ -385,6 +413,9 @@ fn main() {
         offline_queue,
         conflict_review_store,
         lan_trust_store,
+        account_session: Mutex::new(account_session),
+        account_session_store,
+        account_transport: Box::new(UreqAccountTransport::default()),
         cloud_server: InMemoryCloudSyncServer::new(CloudServerConfig::default()),
         lookup_cache: LookupCache::new(),
         lookup_config: Mutex::new(lookup_config),
@@ -428,6 +459,9 @@ struct AppState {
     offline_queue: JsonOfflineMutationQueue,
     conflict_review_store: JsonConflictReviewStore,
     lan_trust_store: JsonLanTrustStore,
+    account_session: Mutex<AccountSessionState>,
+    account_session_store: JsonAccountSessionStore,
+    account_transport: Box<dyn AccountTransport>,
     cloud_server: InMemoryCloudSyncServer,
     lookup_cache: LookupCache,
     lookup_config: Mutex<LookupUiConfig>,
@@ -732,6 +766,9 @@ fn handle_client(state: Arc<AppState>, mut stream: TcpStream) {
                 .expect("last report mutex should not be poisoned")
                 .clone(),
         ),
+        ("GET", "/api/account/state") => handle_account_state(&state),
+        ("POST", "/api/account/server") => handle_account_server_url(&state, &request.body),
+        ("POST", "/api/account/action") => handle_account_action(&state, &request.body),
         ("GET", "/api/sync/state") => json_response(&sync_state_payload(&state)),
         ("GET", "/api/sync/list-logbooks") => handle_sync_list_logbooks(&state, &request),
         ("GET", "/api/sync/get-head") => handle_sync_get_head(&state, query, &request),
@@ -7722,6 +7759,225 @@ fn publish_gui_runtime(
     })
 }
 
+fn account_state_payload(state: &AppState) -> Value {
+    let account = state
+        .account_session
+        .lock()
+        .expect("account session mutex should not be poisoned")
+        .clone();
+    let backend = state
+        .credential_store
+        .lock()
+        .expect("credential store mutex should not be poisoned")
+        .backend_status();
+    let transport_permitted =
+        ham_sync::account::ensure_transport_is_permitted(&account.server_url).is_ok();
+    json!({
+        "ok": true,
+        "account": account,
+        "credential_backend": backend,
+        "transport_permitted": transport_permitted,
+        "supported_actions": [
+            "hosting_status",
+            "register",
+            "verify_email",
+            "login",
+            "refresh_session",
+            "rotate_session",
+            "logout",
+            "logout_all",
+            "recovery_start",
+            "recovery_complete",
+            "list_devices",
+            "revoke_device",
+            "revoke_all_devices",
+            "delete_account"
+        ]
+    })
+}
+
+fn handle_account_state(state: &AppState) -> Vec<u8> {
+    if let Err(response) = ensure_gui_permission(
+        state,
+        &core_gui_manifest(),
+        PluginCapability::SyncCloudConnect,
+        "Hosted account state permission check",
+    ) {
+        return response;
+    }
+    json_response(&account_state_payload(state))
+}
+
+#[derive(Debug, Deserialize)]
+struct AccountServerUrlRequest {
+    server_url: String,
+}
+
+fn handle_account_server_url(state: &AppState, body: &[u8]) -> Vec<u8> {
+    if let Err(response) = ensure_gui_permission(
+        state,
+        &core_gui_manifest(),
+        PluginCapability::SyncCloudConnect,
+        "Hosted account server permission check",
+    ) {
+        return response;
+    }
+    let Ok(request) = serde_json::from_slice::<AccountServerUrlRequest>(body) else {
+        return json_error(400, "hosted server URL request was invalid");
+    };
+    let normalized = match ham_sync::account::normalize_server_url(&request.server_url) {
+        Ok(normalized) => normalized,
+        Err(error) => return json_error(400, error.to_string()),
+    };
+    if let Err(error) = ham_sync::account::ensure_transport_is_permitted(&normalized) {
+        return json_error(400, error.to_string());
+    }
+    {
+        let mut account = state
+            .account_session
+            .lock()
+            .expect("account session mutex should not be poisoned");
+        account.server_url = normalized.clone();
+        account.updated_at = chrono::Utc::now();
+        if let Err(error) = state.account_session_store.save(&account) {
+            return json_error(
+                500,
+                format!("hosted account state could not be saved: {error}"),
+            );
+        }
+    }
+    let _ = publish_account_runtime(
+        state,
+        "account.server.updated",
+        RuntimeEventSeverity::Info,
+        "Hosted account server URL updated",
+        Some(json!({"server_url": normalized})),
+        None,
+    );
+    json_response(&account_state_payload(state))
+}
+
+fn handle_account_action(state: &AppState, body: &[u8]) -> Vec<u8> {
+    if let Err(response) = ensure_gui_permission(
+        state,
+        &core_gui_manifest(),
+        PluginCapability::SyncCloudConnect,
+        "Hosted account action permission check",
+    ) {
+        return response;
+    }
+    let action = match serde_json::from_slice::<AccountAction>(body) {
+        Ok(action) => action,
+        Err(error) => {
+            return json_error(400, format!("hosted account action was invalid: {error}"))
+        }
+    };
+    let kind = action.kind();
+    let outcome = {
+        let mut account = state
+            .account_session
+            .lock()
+            .expect("account session mutex should not be poisoned");
+        let mut credentials = state
+            .credential_store
+            .lock()
+            .expect("credential store mutex should not be poisoned");
+        run_account_action(
+            &mut account,
+            &state.account_session_store,
+            credentials.as_mut(),
+            state.account_transport.as_ref(),
+            &action,
+            chrono::Utc::now(),
+        )
+    };
+    match outcome {
+        Ok(record) => {
+            let severity = if record.outcome.succeeded() {
+                RuntimeEventSeverity::Info
+            } else if record.retryable {
+                RuntimeEventSeverity::Warn
+            } else {
+                RuntimeEventSeverity::Error
+            };
+            let _ = publish_account_runtime(
+                state,
+                kind.runtime_event_type(),
+                severity,
+                &format!("Hosted account action {}", kind.as_str()),
+                Some(account_runtime_payload(state, &record)),
+                (!record.outcome.succeeded()).then(|| record.message.clone()),
+            );
+            let payload = account_state_payload(state);
+            json_response(&json!({
+                "ok": record.outcome.succeeded(),
+                "record": record,
+                "account": payload["account"].clone(),
+                "credential_backend": payload["credential_backend"].clone()
+            }))
+        }
+        Err(error) => {
+            let status = match error {
+                AccountClientError::Plan(_) => 400,
+                _ => 500,
+            };
+            let message = error.to_string();
+            let _ = publish_account_runtime(
+                state,
+                kind.runtime_event_type(),
+                RuntimeEventSeverity::Error,
+                &format!("Hosted account action {} could not run", kind.as_str()),
+                Some(json!({"action": kind.as_str()})),
+                Some(message.clone()),
+            );
+            json_response_with_status(
+                status,
+                &json!({
+                    "ok": false,
+                    "error": message,
+                    "account": account_state_payload(state)["account"].clone()
+                }),
+            )
+        }
+    }
+}
+
+fn account_runtime_payload(state: &AppState, record: &AccountActionRecord) -> Value {
+    let account = state
+        .account_session
+        .lock()
+        .expect("account session mutex should not be poisoned");
+    json!({
+        "action": record.kind.as_str(),
+        "outcome": record.outcome.as_str(),
+        "retryable": record.retryable,
+        "request_id": record.request_id,
+        "error_code": record.error_code,
+        "status": account.status.as_str(),
+        "account_id": account.account.as_ref().map(|profile| profile.account_id)
+    })
+}
+
+fn publish_account_runtime(
+    state: &AppState,
+    event_type: &str,
+    severity: RuntimeEventSeverity,
+    summary: &str,
+    redacted_payload: Option<Value>,
+    error: Option<String>,
+) -> std::io::Result<ham_core::RuntimeEventEnvelope> {
+    state.bridge.publish(RuntimeEventInput {
+        event_type: event_type.to_owned(),
+        severity,
+        source: "ham-gui-account".to_owned(),
+        source_plugin_id: None,
+        workspace_id: Some("dashboard".to_owned()),
+        payload_summary: summary.to_owned(),
+        redacted_payload,
+        error,
+    })
+}
+
 fn publish_cloud_runtime(
     state: &AppState,
     event_type: &str,
@@ -7848,6 +8104,7 @@ fn start_demo_runtime_publisher(bridge: GuiRuntimeBridge) {
 mod tests {
     use super::*;
     use ham_core::InsecureDevCredentialStore;
+    use ham_sync::account::AccountSessionStatus;
 
     fn test_root(prefix: &str) -> std::path::PathBuf {
         let root = std::env::temp_dir().join(format!("{prefix}-{}", uuid::Uuid::new_v4()));
@@ -7902,6 +8159,14 @@ mod tests {
                 support_dir.join("conflict-reviews.json"),
             ),
             lan_trust_store: JsonLanTrustStore::new(support_dir.join("lan-trust.json")),
+            account_session: Mutex::new(AccountSessionState::new(
+                "https://logger.example",
+                chrono::Utc::now(),
+            )),
+            account_session_store: JsonAccountSessionStore::new(
+                support_dir.join("account-session.json"),
+            ),
+            account_transport: Box::new(ScriptedAccountTransport::default()),
             cloud_server: InMemoryCloudSyncServer::new(CloudServerConfig::default()),
             lookup_cache: LookupCache::new(),
             lookup_config: Mutex::new(LookupUiConfig::default()),
@@ -7928,6 +8193,224 @@ mod tests {
             permission_grants: Mutex::new(permission_grants),
             permission_settings: Mutex::new(permission_settings),
         }
+    }
+
+    #[derive(Default)]
+    struct ScriptedAccountTransport {
+        responses: Mutex<Vec<ham_sync::account::AccountResponseInput>>,
+        seen: Arc<Mutex<Vec<(String, String, bool)>>>,
+    }
+
+    impl AccountTransport for ScriptedAccountTransport {
+        fn execute(
+            &self,
+            request: &ham_gui::AccountHttpRequest,
+        ) -> ham_sync::account::AccountResponseInput {
+            self.seen.lock().unwrap().push((
+                request.method.clone(),
+                request.url.clone(),
+                request.bearer_token.is_some(),
+            ));
+            let mut responses = self.responses.lock().unwrap();
+            if responses.is_empty() {
+                ham_sync::account::AccountResponseInput::transport_failure("no scripted response")
+            } else {
+                responses.remove(0)
+            }
+        }
+    }
+
+    #[allow(clippy::type_complexity)]
+    fn account_test_state(
+        prefix: &str,
+        responses: Vec<ham_sync::account::AccountResponseInput>,
+    ) -> (AppState, Arc<Mutex<Vec<(String, String, bool)>>>) {
+        let mut state = test_state(prefix);
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        state.account_transport = Box::new(ScriptedAccountTransport {
+            responses: Mutex::new(responses),
+            seen: seen.clone(),
+        });
+        (state, seen)
+    }
+
+    fn account_login_body() -> Value {
+        json!({
+            "account": {
+                "account_id": uuid::Uuid::new_v4(),
+                "user_id": uuid::Uuid::new_v4(),
+                "email": "operator@example.com",
+                "display_name": "Operator"
+            },
+            "session": {
+                "session_id": uuid::Uuid::new_v4(),
+                "account_id": uuid::Uuid::new_v4(),
+                "user_id": uuid::Uuid::new_v4(),
+                "device_id": uuid::Uuid::new_v4(),
+                "token": "gui-session-secret",
+                "issued_at": "2026-08-30T11:59:00Z",
+                "expires_at": "2026-09-29T11:59:00Z",
+                "active": true
+            },
+            "device": {"device_id": uuid::Uuid::new_v4(), "device_name": "Shack Desktop"},
+            "logbooks": [],
+            "refresh_token": "gui-refresh-secret",
+            "session_cookie": "ham_session=..."
+        })
+    }
+
+    #[test]
+    fn account_state_endpoint_reports_a_signed_out_client() {
+        let state = test_state("ham-gui-account-state");
+        let payload = response_json(handle_account_state(&state));
+        assert_eq!(payload["ok"], true);
+        assert_eq!(payload["account"]["status"], "signed_out");
+        assert_eq!(payload["account"]["server_url"], "https://logger.example");
+        assert!(payload["credential_backend"]["backend_name"].is_string());
+        assert!(payload["supported_actions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|action| action == "login"));
+    }
+
+    #[test]
+    fn account_login_action_signs_in_without_exposing_tokens() {
+        let (state, seen) = account_test_state(
+            "ham-gui-account-login",
+            vec![ham_sync::account::AccountResponseInput::success(
+                200,
+                account_login_body(),
+            )],
+        );
+        let payload = response_json(handle_account_action(
+            &state,
+            serde_json::to_vec(&json!({
+                "action": "login",
+                "email": "operator@example.com",
+                "device_name": "Shack Desktop"
+            }))
+            .unwrap()
+            .as_slice(),
+        ));
+        assert_eq!(payload["ok"], true);
+        assert_eq!(payload["record"]["outcome"], "succeeded");
+        assert_eq!(payload["account"]["status"], "signed_in");
+        let serialized = serde_json::to_string(&payload).unwrap();
+        assert!(!serialized.contains("gui-session-secret"));
+        assert!(!serialized.contains("gui-refresh-secret"));
+
+        let requests = seen.lock().unwrap();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].0, "POST");
+        assert_eq!(requests[0].1, "https://logger.example/api/v1/auth/login");
+        assert!(!requests[0].2);
+        drop(requests);
+
+        assert_eq!(
+            state.account_session.lock().unwrap().status,
+            AccountSessionStatus::SignedIn
+        );
+    }
+
+    #[test]
+    fn account_action_rejects_unknown_action_payloads() {
+        let state = test_state("ham-gui-account-invalid");
+        let response = handle_account_action(
+            &state,
+            serde_json::to_vec(&json!({"action": "not_a_real_action"}))
+                .unwrap()
+                .as_slice(),
+        );
+        let payload = response_json_any_status(response);
+        assert!(payload["error"]
+            .as_str()
+            .unwrap()
+            .contains("hosted account action was invalid"));
+    }
+
+    #[test]
+    fn account_action_requires_a_session_before_bearer_calls() {
+        let (state, seen) = account_test_state("ham-gui-account-bearer", Vec::new());
+        let response = handle_account_action(
+            &state,
+            serde_json::to_vec(&json!({"action": "list_devices"}))
+                .unwrap()
+                .as_slice(),
+        );
+        let payload = response_json_any_status(response);
+        assert_eq!(payload["ok"], false);
+        assert!(payload["error"]
+            .as_str()
+            .unwrap()
+            .contains("requires a stored session credential reference"));
+        assert!(seen.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn account_server_url_endpoint_normalizes_and_rejects_cleartext_public_hosts() {
+        let state = test_state("ham-gui-account-server");
+        let payload = response_json(handle_account_server_url(
+            &state,
+            serde_json::to_vec(&json!({"server_url": "https://hosted.example/api/v1/"}))
+                .unwrap()
+                .as_slice(),
+        ));
+        assert_eq!(payload["account"]["server_url"], "https://hosted.example");
+        assert_eq!(payload["transport_permitted"], true);
+
+        let rejected = response_json_any_status(handle_account_server_url(
+            &state,
+            serde_json::to_vec(&json!({"server_url": "http://hosted.example"}))
+                .unwrap()
+                .as_slice(),
+        ));
+        assert!(rejected["error"].as_str().unwrap().contains("https://"));
+        assert_eq!(
+            state.account_session.lock().unwrap().server_url,
+            "https://hosted.example"
+        );
+
+        let loopback = response_json(handle_account_server_url(
+            &state,
+            serde_json::to_vec(&json!({"server_url": "http://127.0.0.1:9750"}))
+                .unwrap()
+                .as_slice(),
+        ));
+        assert_eq!(loopback["account"]["server_url"], "http://127.0.0.1:9750");
+    }
+
+    #[test]
+    fn account_session_expiry_is_surfaced_to_the_client() {
+        let (state, _) = account_test_state(
+            "ham-gui-account-expiry",
+            vec![
+                ham_sync::account::AccountResponseInput::success(200, account_login_body()),
+                ham_sync::account::AccountResponseInput {
+                    status: 401,
+                    body: Some(json!({"error": "session expired", "code": "session_expired"})),
+                    request_id: Some("req-gui".to_owned()),
+                    transport_error: None,
+                },
+            ],
+        );
+        response_json(handle_account_action(
+            &state,
+            serde_json::to_vec(&json!({"action": "login", "email": "operator@example.com"}))
+                .unwrap()
+                .as_slice(),
+        ));
+        let payload = response_json(handle_account_action(
+            &state,
+            serde_json::to_vec(&json!({"action": "refresh_session"}))
+                .unwrap()
+                .as_slice(),
+        ));
+        assert_eq!(payload["ok"], false);
+        assert_eq!(payload["record"]["outcome"], "session_expired");
+        assert_eq!(payload["record"]["request_id"], "req-gui");
+        assert_eq!(payload["account"]["status"], "session_expired");
+        assert!(payload["account"]["session_token_credential_id"].is_null());
     }
 
     fn response_json(response: Vec<u8>) -> Value {

@@ -28,6 +28,34 @@ impl CommandRegistry {
             ),
             command("open.plugins", "Open Plugin Manager", "Shell", None, None),
             command(
+                "account.open",
+                "Open Account and Sessions",
+                "Account",
+                None,
+                None,
+            ),
+            command(
+                "account.session.refresh",
+                "Refresh Hosted Session",
+                "Account",
+                None,
+                None,
+            ),
+            command(
+                "account.devices.open",
+                "Review Account Devices",
+                "Account",
+                None,
+                None,
+            ),
+            command(
+                "account.sign-out",
+                "Sign Out Of Hosted Account",
+                "Account",
+                None,
+                None,
+            ),
+            command(
                 "open.diagnostics",
                 "Open Diagnostic Report",
                 "Diagnostics",
@@ -803,6 +831,10 @@ mod tests {
 
         assert!(ids.contains(&"open.settings"));
         assert!(ids.contains(&"open.plugins"));
+        assert!(ids.contains(&"account.open"));
+        assert!(ids.contains(&"account.session.refresh"));
+        assert!(ids.contains(&"account.devices.open"));
+        assert!(ids.contains(&"account.sign-out"));
         assert!(ids.contains(&"focus.callsign-entry"));
         assert!(ids.contains(&"toggle.event-bus-monitor"));
         assert!(ids.contains(&"event-bus.export"));

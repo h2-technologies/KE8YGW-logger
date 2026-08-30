@@ -745,7 +745,7 @@ impl JsonOfflineMutationQueue {
                 return Ok(report);
             }
             Err(_) if is_legacy_v0_2_queue(&bytes).unwrap_or(false) => {
-                quarantine_file(&self.path, now)?;
+                quarantine_support_file(&self.path, now)?;
                 self.save_file(&OfflineQueueFile::default())?;
                 report.quarantined_corrupt_file = true;
                 report.initialized_empty_queue = true;
@@ -763,7 +763,7 @@ impl JsonOfflineMutationQueue {
                 Ok(report)
             }
             Err(_) => {
-                quarantine_file(&self.path, now)?;
+                quarantine_support_file(&self.path, now)?;
                 self.save_file(&OfflineQueueFile::default())?;
                 report.quarantined_corrupt_file = true;
                 report.initialized_empty_queue = true;
@@ -870,7 +870,7 @@ impl JsonOfflineMutationQueue {
                 return Ok(Some(file.sorted()));
             }
         }
-        quarantine_file(&temp_path, now)?;
+        quarantine_support_file(&temp_path, now)?;
         report.removed_stale_temp_file = true;
         Ok(None)
     }
@@ -2458,7 +2458,7 @@ fn atomic_temp_path(path: &Path) -> PathBuf {
     ))
 }
 
-fn quarantine_file(path: &Path, now: DateTime<Utc>) -> Result<(), io::Error> {
+pub(crate) fn quarantine_support_file(path: &Path, now: DateTime<Utc>) -> Result<(), io::Error> {
     if !path.exists() {
         return Ok(());
     }
@@ -2483,7 +2483,7 @@ fn quarantine_file(path: &Path, now: DateTime<Utc>) -> Result<(), io::Error> {
     Ok(())
 }
 
-fn write_json_atomically<T>(path: &Path, value: &T) -> Result<(), io::Error>
+pub(crate) fn write_json_atomically<T>(path: &Path, value: &T) -> Result<(), io::Error>
 where
     T: Serialize,
 {

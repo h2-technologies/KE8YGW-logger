@@ -114,6 +114,7 @@ final class RustBridgeStore: ObservableObject {
     @Published var map = MapSnapshot.placeholder
     @Published var sync = SyncSnapshot.placeholder
     @Published var diagnostics = DiagnosticsSnapshot.placeholder
+    @Published var account = AccountSessionSnapshot.placeholder
     @Published var lastError: String?
 
     let client: RustBridgeClient
@@ -887,6 +888,123 @@ final class RustBridgeStore: ObservableObject {
         }
     }
 
+    // MARK: - Hosted account
+
+    /// Read the Rust-owned hosted account snapshot. Rust remains the authority
+    /// for account status; Swift only renders and transports.
+    @discardableResult
+    func refreshAccount(defaultServerURL: String? = nil) async throws -> AccountSessionSnapshot {
+        let supportURL = try RustBridgePaths.applicationSupportDirectory()
+        let result = try await accountCommand(
+            "account.snapshot",
+            payload: AccountSnapshotBridgeRequest(
+                appSupportDir: supportURL.path,
+                defaultServerUrl: defaultServerURL
+            ),
+            as: AccountSnapshotBridgeResult.self
+        )
+        account = result.account
+        lastError = nil
+        return result.account
+    }
+
+    @discardableResult
+    func setAccountServer(_ serverURL: String) async throws -> AccountSessionSnapshot {
+        let supportURL = try RustBridgePaths.applicationSupportDirectory()
+        let result = try await accountCommand(
+            "account.set_server",
+            payload: AccountServerBridgeRequest(
+                appSupportDir: supportURL.path,
+                serverUrl: serverURL
+            ),
+            as: AccountSnapshotBridgeResult.self
+        )
+        account = result.account
+        lastError = nil
+        return result.account
+    }
+
+    func planAccountRequest(_ action: AccountActionRequest) async throws -> AccountRequestPlan {
+        let supportURL = try RustBridgePaths.applicationSupportDirectory()
+        let result = try await accountCommand(
+            "account.plan",
+            payload: AccountPlanBridgeRequest(appSupportDir: supportURL.path, action: action),
+            as: AccountPlanBridgeResult.self
+        )
+        account = result.account
+        return result.plan
+    }
+
+    func recordAccountResult(
+        action: AccountActionRequest,
+        response: AccountTransportResponse
+    ) async throws -> AccountRecordResult {
+        let supportURL = try RustBridgePaths.applicationSupportDirectory()
+        let result = try await accountCommand(
+            "account.record_result",
+            payload: AccountRecordResultBridgeRequest(
+                appSupportDir: supportURL.path,
+                action: action,
+                response: response
+            ),
+            as: AccountRecordResult.self
+        )
+        account = result.account
+        lastError = result.record.outcome == "succeeded" ? nil : result.record.message
+        return result
+    }
+
+    @discardableResult
+    func recordAccountCredentials(
+        sessionTokenCredentialId: String?,
+        refreshTokenCredentialId: String?
+    ) async throws -> AccountSessionSnapshot {
+        let supportURL = try RustBridgePaths.applicationSupportDirectory()
+        let result = try await accountCommand(
+            "account.record_credentials",
+            payload: AccountRecordCredentialsBridgeRequest(
+                appSupportDir: supportURL.path,
+                sessionTokenCredentialId: sessionTokenCredentialId,
+                refreshTokenCredentialId: refreshTokenCredentialId
+            ),
+            as: AccountSnapshotBridgeResult.self
+        )
+        account = result.account
+        return result.account
+    }
+
+    /// Hosted account commands use explicit wire keys instead of automatic
+    /// snake_case conversion so Rust-planned request bodies and hosted response
+    /// bodies survive the round trip byte for byte.
+    private func accountCommand<P: Encodable, T: Decodable>(
+        _ command: String,
+        payload: P,
+        as type: T.Type
+    ) async throws -> T {
+        let correlationID = UUID().uuidString
+        let request = AccountCommandEnvelope(command: command, correlationId: correlationID, payload: payload)
+        let requestData = try AccountCoding.encoder.encode(request)
+        let data = try await client.callJSON(requestData)
+        let envelope = try AccountCoding.decoder.decode(AccountBridgeEnvelope<T>.self, from: data)
+        guard envelope.ok else {
+            throw RustBridgeError.bridge(
+                code: envelope.error?.code ?? "unknown",
+                message: envelope.error?.message ?? "Rust bridge request failed.",
+                correlationID: envelope.correlationId ?? correlationID
+            )
+        }
+        if let abiVersion = envelope.abiVersion, abiVersion != 1 {
+            throw RustBridgeError.incompatibleSchema("Unsupported Rust ABI version \(abiVersion).")
+        }
+        if let schemaVersion = envelope.schemaVersion, schemaVersion != 1 {
+            throw RustBridgeError.incompatibleSchema("Unsupported Rust bridge schema version \(schemaVersion).")
+        }
+        guard let payload = envelope.data else {
+            throw RustBridgeError.invalidResponse
+        }
+        return payload
+    }
+
     private func request<T: Decodable>(
         _ endpoint: RustBridgeEndpoint,
         as type: T.Type,
@@ -1171,6 +1289,31 @@ struct FallbackRustBridgeClient: RustBridgeClient {
                     "pending_event_count": 1
                 ]
             ]
+        case "account.snapshot":
+            data = ["account": FallbackBridgeData.accountSnapshot(
+                serverUrl: payload["default_server_url"] as? String ?? ""
+            )]
+        case "account.set_server":
+            data = ["account": FallbackBridgeData.accountSnapshot(
+                serverUrl: payload["server_url"] as? String ?? ""
+            )]
+        case "account.plan":
+            let action = payload["action"] as? [String: Any] ?? [:]
+            data = [
+                "plan": FallbackBridgeData.accountPlan(action: action),
+                "account": FallbackBridgeData.accountSnapshot(serverUrl: "https://logger.example")
+            ]
+        case "account.record_result":
+            let action = payload["action"] as? [String: Any] ?? [:]
+            let response = payload["response"] as? [String: Any] ?? [:]
+            data = FallbackBridgeData.accountRecordResult(action: action, response: response)
+        case "account.record_credentials":
+            data = ["account": FallbackBridgeData.accountSnapshot(
+                serverUrl: "https://logger.example",
+                status: "signed_in",
+                sessionCredentialId: payload["session_token_credential_id"] as? String,
+                refreshCredentialId: payload["refresh_token_credential_id"] as? String
+            )]
         case "qso.list":
             data = [
                 "records": [],
@@ -1927,6 +2070,110 @@ private enum FallbackSettingsMemory {
 }
 
 enum FallbackBridgeData {
+    /// Development-only hosted account payloads used when no Rust library is
+    /// linked. They carry no real account state and never issue real tokens.
+    static func accountSnapshot(
+        serverUrl: String,
+        status: String = "signed_out",
+        sessionCredentialId: String? = nil,
+        refreshCredentialId: String? = nil
+    ) -> [String: Any] {
+        [
+            "version": 1,
+            "server_url": serverUrl,
+            "status": status,
+            "hosting": [
+                "operation_mode": "personal_hosted",
+                "registration_mode": "invite_only",
+                "turnstile_required": false
+            ],
+            "account": NSNull(),
+            "session": NSNull(),
+            "device": NSNull(),
+            "logbooks": [],
+            "memberships": [],
+            "devices": [],
+            "session_token_credential_id": sessionCredentialId ?? NSNull(),
+            "refresh_token_credential_id": refreshCredentialId ?? NSNull(),
+            "pending_email": NSNull(),
+            "email_verification_required": false,
+            "last_action": NSNull(),
+            "updated_at": ISO8601DateFormatter().string(from: Date())
+        ]
+    }
+
+    static func accountPlan(action: [String: Any]) -> [String: Any] {
+        let kind = action["action"] as? String ?? "hosting_status"
+        let route: (String, String, Bool) = {
+            switch kind {
+            case "register": return ("POST", "/api/v1/auth/register", false)
+            case "verify_email": return ("POST", "/api/v1/auth/verify-email", false)
+            case "login": return ("POST", "/api/v1/auth/login", false)
+            case "refresh_session": return ("GET", "/api/v1/auth/session", true)
+            case "rotate_session": return ("POST", "/api/v1/auth/session/rotate", true)
+            case "logout": return ("POST", "/api/v1/auth/logout", true)
+            case "logout_all": return ("POST", "/api/v1/auth/logout-all", true)
+            case "recovery_start": return ("POST", "/api/v1/auth/recovery/start", false)
+            case "recovery_complete": return ("POST", "/api/v1/auth/recovery/complete", false)
+            case "list_devices": return ("GET", "/api/v1/devices", true)
+            case "revoke_all_devices": return ("POST", "/api/v1/devices/revoke-all", true)
+            case "delete_account": return ("POST", "/api/v1/auth/account/delete", true)
+            case "revoke_device":
+                let deviceId = action["device_id"] as? String ?? UUID().uuidString
+                return ("POST", "/api/v1/devices/\(deviceId)/revoke", true)
+            default: return ("GET", "/api/v1/status", false)
+            }
+        }()
+        var body = action
+        body.removeValue(forKey: "action")
+        return [
+            "kind": kind,
+            "method": route.0,
+            "path": route.1,
+            "url": "https://logger.example\(route.1)",
+            "body": route.0 == "GET" ? NSNull() : body,
+            "requires_bearer": route.2,
+            "bearer_credential_id": route.2 ? UUID().uuidString : NSNull(),
+            "body_secret_fields": [],
+            "idempotent": route.0 == "GET"
+        ]
+    }
+
+    static func accountRecordResult(
+        action: [String: Any],
+        response: [String: Any]
+    ) -> [String: Any] {
+        let kind = action["action"] as? String ?? "hosting_status"
+        let status = response["status"] as? Int ?? 0
+        let body = response["body"] as? [String: Any] ?? [:]
+        let errorCode = body["code"] as? String
+        let succeeded = (200..<300).contains(status)
+        let outcome = succeeded ? "succeeded" : (errorCode ?? "invalid_request")
+        let sessionToken = (body["session"] as? [String: Any])?["token"] as? String
+        let refreshToken = body["refresh_token"] as? String
+        let signedIn = succeeded && sessionToken != nil
+        return [
+            "record": [
+                "kind": kind,
+                "outcome": outcome,
+                "message": succeeded
+                    ? "hosted request succeeded"
+                    : (body["error"] as? String ?? "hosted request failed"),
+                "error_code": errorCode ?? NSNull(),
+                "request_id": response["request_id"] ?? NSNull(),
+                "retryable": status == 429 || status >= 500 || status == 0,
+                "occurred_at": ISO8601DateFormatter().string(from: Date())
+            ],
+            "account": accountSnapshot(
+                serverUrl: "https://logger.example",
+                status: signedIn ? "signed_in" : "signed_out"
+            ),
+            "issued_session_token": sessionToken ?? NSNull(),
+            "issued_refresh_token": refreshToken ?? NSNull(),
+            "clear_session_credentials": outcome == "session_expired" || kind == "logout"
+        ]
+    }
+
     static let dashboard: [String: Any] = [
         "operator": "KE8YGW",
         "active_station": stationProfile,
@@ -4680,5 +4927,754 @@ enum RustBridgePaths {
         }
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         return url
+    }
+}
+
+// MARK: - Hosted account bridge models
+//
+// Rust owns hosted account status, request planning, response classification,
+// and every state transition. These types mirror the Rust payloads so SwiftUI
+// can render them; they never reproduce account rules. Session and refresh
+// tokens go to the Keychain and are referenced by credential ID only.
+//
+// Every account type declares explicit wire keys. The shared bridge coders
+// convert snake_case automatically, which would rewrite the keys inside
+// Rust-planned request bodies and hosted response bodies; these coders do not.
+
+enum AccountCoding {
+    static let decoder = JSONDecoder()
+    static let encoder = JSONEncoder()
+}
+
+struct AccountCommandEnvelope<P: Encodable>: Encodable {
+    var command: String
+    var correlationId: String
+    var payload: P
+
+    private enum CodingKeys: String, CodingKey {
+        case command
+        case correlationId = "correlation_id"
+        case payload
+    }
+}
+
+struct AccountBridgeEnvelope<T: Decodable>: Decodable {
+    let ok: Bool
+    let abiVersion: Int?
+    let schemaVersion: Int?
+    let data: T?
+    let error: AccountBridgeEnvelopeError?
+    let correlationId: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case ok
+        case abiVersion = "abi_version"
+        case schemaVersion = "schema_version"
+        case data
+        case error
+        case correlationId = "correlation_id"
+    }
+}
+
+struct AccountBridgeEnvelopeError: Decodable {
+    let code: String
+    let message: String
+}
+
+/// Minimal JSON value used to carry planned request bodies and hosted response
+/// bodies across the bridge without rewriting their keys.
+indirect enum BridgeJSONValue: Codable, Equatable {
+    case null
+    case bool(Bool)
+    case number(Double)
+    case string(String)
+    case array([BridgeJSONValue])
+    case object([String: BridgeJSONValue])
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if container.decodeNil() {
+            self = .null
+        } else if let value = try? container.decode(Bool.self) {
+            self = .bool(value)
+        } else if let value = try? container.decode(Double.self) {
+            self = .number(value)
+        } else if let value = try? container.decode(String.self) {
+            self = .string(value)
+        } else if let value = try? container.decode([BridgeJSONValue].self) {
+            self = .array(value)
+        } else if let value = try? container.decode([String: BridgeJSONValue].self) {
+            self = .object(value)
+        } else {
+            throw DecodingError.dataCorruptedError(in: container, debugDescription: "Unsupported JSON value")
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        switch self {
+        case .null: try container.encodeNil()
+        case .bool(let value): try container.encode(value)
+        case .number(let value): try container.encode(value)
+        case .string(let value): try container.encode(value)
+        case .array(let value): try container.encode(value)
+        case .object(let value): try container.encode(value)
+        }
+    }
+
+    static func decode(from data: Data) -> BridgeJSONValue? {
+        guard !data.isEmpty else { return nil }
+        return try? AccountCoding.decoder.decode(BridgeJSONValue.self, from: data)
+    }
+}
+
+struct AccountProfile: Codable, Equatable {
+    var accountId: String
+    var userId: String
+    var email: String
+    var displayName: String?
+    var createdAt: String?
+    var emailVerifiedAt: String?
+    var deletedAt: String?
+
+    var isEmailVerified: Bool { emailVerifiedAt != nil }
+
+    private enum CodingKeys: String, CodingKey {
+        case accountId = "account_id"
+        case userId = "user_id"
+        case email
+        case displayName = "display_name"
+        case createdAt = "created_at"
+        case emailVerifiedAt = "email_verified_at"
+        case deletedAt = "deleted_at"
+    }
+}
+
+struct AccountSessionInfo: Codable, Equatable {
+    var sessionId: String
+    var accountId: String
+    var userId: String
+    var deviceId: String
+    var issuedAt: String?
+    var expiresAt: String?
+    var refreshExpiresAt: String?
+    var rotatedAt: String?
+    var active: Bool?
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionId = "session_id"
+        case accountId = "account_id"
+        case userId = "user_id"
+        case deviceId = "device_id"
+        case issuedAt = "issued_at"
+        case expiresAt = "expires_at"
+        case refreshExpiresAt = "refresh_expires_at"
+        case rotatedAt = "rotated_at"
+        case active
+    }
+}
+
+struct AccountDevice: Codable, Equatable, Identifiable {
+    var deviceId: String
+    var deviceName: String?
+    var trusted: Bool?
+    var revoked: Bool?
+    var registeredAt: String?
+    var revokedAt: String?
+
+    var id: String { deviceId }
+    var isRevoked: Bool { revoked ?? false }
+
+    private enum CodingKeys: String, CodingKey {
+        case deviceId = "device_id"
+        case deviceName = "device_name"
+        case trusted
+        case revoked
+        case registeredAt = "registered_at"
+        case revokedAt = "revoked_at"
+    }
+}
+
+struct AccountLogbookSummary: Codable, Equatable, Identifiable {
+    var logbookId: String
+    var name: String?
+    var description: String?
+    var stationCallsign: String?
+
+    var id: String { logbookId }
+
+    private enum CodingKeys: String, CodingKey {
+        case logbookId = "logbook_id"
+        case name
+        case description
+        case stationCallsign = "station_callsign"
+    }
+}
+
+struct AccountMembership: Codable, Equatable, Identifiable {
+    var logbookId: String
+    var role: String?
+    var createdAt: String?
+
+    var id: String { logbookId }
+
+    private enum CodingKeys: String, CodingKey {
+        case logbookId = "logbook_id"
+        case role
+        case createdAt = "created_at"
+    }
+}
+
+struct AccountHostingSnapshot: Codable, Equatable {
+    var operationMode: String?
+    var registrationMode: String?
+    var bootstrapAdminCompleted: Bool?
+    var turnstileRequired: Bool?
+    var turnstileSiteKey: String?
+    var observedAt: String?
+
+    var allowsOpenRegistration: Bool { registrationMode == "open" }
+    var requiresInvitation: Bool { registrationMode == "invite_only" }
+    var registrationDisabled: Bool { registrationMode == "disabled" }
+
+    private enum CodingKeys: String, CodingKey {
+        case operationMode = "operation_mode"
+        case registrationMode = "registration_mode"
+        case bootstrapAdminCompleted = "bootstrap_admin_completed"
+        case turnstileRequired = "turnstile_required"
+        case turnstileSiteKey = "turnstile_site_key"
+        case observedAt = "observed_at"
+    }
+}
+
+struct AccountActionRecord: Codable, Equatable {
+    var kind: String
+    var outcome: String
+    var message: String
+    var errorCode: String?
+    var requestId: String?
+    var retryable: Bool
+    var occurredAt: String
+
+    var succeeded: Bool { outcome == "succeeded" }
+
+    private enum CodingKeys: String, CodingKey {
+        case kind
+        case outcome
+        case message
+        case errorCode = "error_code"
+        case requestId = "request_id"
+        case retryable
+        case occurredAt = "occurred_at"
+    }
+}
+
+struct AccountSessionSnapshot: Codable, Equatable {
+    var version: Int
+    var serverUrl: String
+    var status: String
+    var hosting: AccountHostingSnapshot?
+    var account: AccountProfile?
+    var session: AccountSessionInfo?
+    var device: AccountDevice?
+    var logbooks: [AccountLogbookSummary]?
+    var memberships: [AccountMembership]?
+    var devices: [AccountDevice]?
+    var sessionTokenCredentialId: String?
+    var refreshTokenCredentialId: String?
+    var pendingEmail: String?
+    var emailVerificationRequired: Bool?
+    var lastAction: AccountActionRecord?
+    var updatedAt: String
+
+    var isSignedIn: Bool { status == "signed_in" }
+
+    var statusLabel: String {
+        switch status {
+        case "signed_out": return "Signed out"
+        case "pending_email_verification": return "Verify email"
+        case "signed_in": return "Signed in"
+        case "session_expired": return "Session expired"
+        case "device_revoked": return "Device revoked"
+        case "account_deleted": return "Account deleted"
+        default: return status
+        }
+    }
+
+    static let placeholder = AccountSessionSnapshot(
+        version: 1,
+        serverUrl: "",
+        status: "signed_out",
+        hosting: nil,
+        account: nil,
+        session: nil,
+        device: nil,
+        logbooks: [],
+        memberships: [],
+        devices: [],
+        sessionTokenCredentialId: nil,
+        refreshTokenCredentialId: nil,
+        pendingEmail: nil,
+        emailVerificationRequired: false,
+        lastAction: nil,
+        updatedAt: ""
+    )
+
+    private enum CodingKeys: String, CodingKey {
+        case version
+        case serverUrl = "server_url"
+        case status
+        case hosting
+        case account
+        case session
+        case device
+        case logbooks
+        case memberships
+        case devices
+        case sessionTokenCredentialId = "session_token_credential_id"
+        case refreshTokenCredentialId = "refresh_token_credential_id"
+        case pendingEmail = "pending_email"
+        case emailVerificationRequired = "email_verification_required"
+        case lastAction = "last_action"
+        case updatedAt = "updated_at"
+    }
+}
+
+struct AccountSecretField: Codable, Equatable {
+    var field: String
+    var credentialId: String
+
+    private enum CodingKeys: String, CodingKey {
+        case field
+        case credentialId = "credential_id"
+    }
+}
+
+struct AccountRequestPlan: Codable, Equatable {
+    var kind: String
+    var method: String
+    var path: String
+    var url: String
+    var body: BridgeJSONValue?
+    var requiresBearer: Bool?
+    var bearerCredentialId: String?
+    var bodySecretFields: [AccountSecretField]?
+    var idempotent: Bool
+
+    private enum CodingKeys: String, CodingKey {
+        case kind
+        case method
+        case path
+        case url
+        case body
+        case requiresBearer = "requires_bearer"
+        case bearerCredentialId = "bearer_credential_id"
+        case bodySecretFields = "body_secret_fields"
+        case idempotent
+    }
+}
+
+struct AccountTransportResponse: Codable, Equatable {
+    var status: Int
+    var body: BridgeJSONValue?
+    var requestId: String?
+    var transportError: String?
+
+    static func failure(_ message: String) -> AccountTransportResponse {
+        AccountTransportResponse(status: 0, body: nil, requestId: nil, transportError: message)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case status
+        case body
+        case requestId = "request_id"
+        case transportError = "transport_error"
+    }
+}
+
+struct AccountRecordResult: Codable, Equatable {
+    var record: AccountActionRecord
+    var account: AccountSessionSnapshot
+    var issuedSessionToken: String?
+    var issuedRefreshToken: String?
+    var clearSessionCredentials: Bool?
+
+    private enum CodingKeys: String, CodingKey {
+        case record
+        case account
+        case issuedSessionToken = "issued_session_token"
+        case issuedRefreshToken = "issued_refresh_token"
+        case clearSessionCredentials = "clear_session_credentials"
+    }
+}
+
+/// A hosted account action. Only the fields an action needs are encoded, which
+/// matches the Rust internally tagged `AccountAction` enum.
+struct AccountActionRequest: Codable, Equatable {
+    var action: String
+    var email: String?
+    var displayName: String?
+    var deviceName: String?
+    var invitationToken: String?
+    var turnstileToken: String?
+    var token: String?
+    var deviceId: String?
+    var confirm: Bool?
+
+    static func hostingStatus() -> AccountActionRequest { AccountActionRequest(action: "hosting_status") }
+
+    static func login(email: String, displayName: String? = nil, deviceName: String? = nil) -> AccountActionRequest {
+        AccountActionRequest(action: "login", email: email, displayName: displayName, deviceName: deviceName)
+    }
+
+    static func register(
+        email: String,
+        displayName: String? = nil,
+        deviceName: String? = nil,
+        invitationToken: String? = nil,
+        turnstileToken: String? = nil
+    ) -> AccountActionRequest {
+        AccountActionRequest(
+            action: "register",
+            email: email,
+            displayName: displayName,
+            deviceName: deviceName,
+            invitationToken: invitationToken,
+            turnstileToken: turnstileToken
+        )
+    }
+
+    static func verifyEmail(token: String) -> AccountActionRequest {
+        AccountActionRequest(action: "verify_email", token: token)
+    }
+
+    static func recoveryStart(email: String) -> AccountActionRequest {
+        AccountActionRequest(action: "recovery_start", email: email)
+    }
+
+    static func recoveryComplete(token: String, deviceName: String? = nil) -> AccountActionRequest {
+        AccountActionRequest(action: "recovery_complete", deviceName: deviceName, token: token)
+    }
+
+    static func refreshSession() -> AccountActionRequest { AccountActionRequest(action: "refresh_session") }
+    static func rotateSession() -> AccountActionRequest { AccountActionRequest(action: "rotate_session") }
+    static func logout() -> AccountActionRequest { AccountActionRequest(action: "logout") }
+    static func logoutAll() -> AccountActionRequest { AccountActionRequest(action: "logout_all") }
+    static func listDevices() -> AccountActionRequest { AccountActionRequest(action: "list_devices") }
+
+    static func revokeDevice(deviceId: String) -> AccountActionRequest {
+        AccountActionRequest(action: "revoke_device", deviceId: deviceId)
+    }
+
+    static func revokeAllDevices() -> AccountActionRequest { AccountActionRequest(action: "revoke_all_devices") }
+
+    static func deleteAccount() -> AccountActionRequest {
+        AccountActionRequest(action: "delete_account", confirm: true)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case action
+        case email
+        case displayName = "display_name"
+        case deviceName = "device_name"
+        case invitationToken = "invitation_token"
+        case turnstileToken = "turnstile_token"
+        case token
+        case deviceId = "device_id"
+        case confirm
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(action, forKey: .action)
+        try container.encodeIfPresent(email, forKey: .email)
+        try container.encodeIfPresent(displayName, forKey: .displayName)
+        try container.encodeIfPresent(deviceName, forKey: .deviceName)
+        try container.encodeIfPresent(invitationToken, forKey: .invitationToken)
+        try container.encodeIfPresent(turnstileToken, forKey: .turnstileToken)
+        try container.encodeIfPresent(token, forKey: .token)
+        try container.encodeIfPresent(deviceId, forKey: .deviceId)
+        try container.encodeIfPresent(confirm, forKey: .confirm)
+    }
+}
+
+struct AccountSnapshotBridgeRequest: Codable {
+    var appSupportDir: String
+    var defaultServerUrl: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case appSupportDir = "app_support_dir"
+        case defaultServerUrl = "default_server_url"
+    }
+}
+
+struct AccountServerBridgeRequest: Codable {
+    var appSupportDir: String
+    var serverUrl: String
+
+    private enum CodingKeys: String, CodingKey {
+        case appSupportDir = "app_support_dir"
+        case serverUrl = "server_url"
+    }
+}
+
+struct AccountPlanBridgeRequest: Codable {
+    var appSupportDir: String
+    var action: AccountActionRequest
+
+    private enum CodingKeys: String, CodingKey {
+        case appSupportDir = "app_support_dir"
+        case action
+    }
+}
+
+struct AccountRecordResultBridgeRequest: Codable {
+    var appSupportDir: String
+    var action: AccountActionRequest
+    var response: AccountTransportResponse
+
+    private enum CodingKeys: String, CodingKey {
+        case appSupportDir = "app_support_dir"
+        case action
+        case response
+    }
+}
+
+struct AccountRecordCredentialsBridgeRequest: Codable {
+    var appSupportDir: String
+    var sessionTokenCredentialId: String?
+    var refreshTokenCredentialId: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case appSupportDir = "app_support_dir"
+        case sessionTokenCredentialId = "session_token_credential_id"
+        case refreshTokenCredentialId = "refresh_token_credential_id"
+    }
+}
+
+struct AccountSnapshotBridgeResult: Codable {
+    var account: AccountSessionSnapshot
+}
+
+struct AccountPlanBridgeResult: Codable {
+    var plan: AccountRequestPlan
+    var account: AccountSessionSnapshot
+}
+
+// MARK: - Hosted account transport
+
+protocol AccountHTTPTransport: Sendable {
+    func execute(
+        method: String,
+        url: String,
+        bearerToken: String?,
+        body: Data?,
+        requestId: String
+    ) async -> AccountTransportResponse
+}
+
+/// Native transport. It classifies nothing: every status and failure is handed
+/// straight back to Rust, which owns the outcome.
+struct URLSessionAccountTransport: AccountHTTPTransport {
+    var timeout: TimeInterval = 15
+
+    func execute(
+        method: String,
+        url: String,
+        bearerToken: String?,
+        body: Data?,
+        requestId: String
+    ) async -> AccountTransportResponse {
+        guard let requestURL = URL(string: url) else {
+            return .failure("The hosted account URL is invalid.")
+        }
+        var request = URLRequest(url: requestURL, timeoutInterval: timeout)
+        request.httpMethod = method
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.setValue(requestId, forHTTPHeaderField: "X-Request-ID")
+        if let bearerToken {
+            request.setValue("Bearer \(bearerToken)", forHTTPHeaderField: "Authorization")
+        }
+        if let body {
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.httpBody = body
+        }
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let http = response as? HTTPURLResponse else {
+                return .failure("The hosted account response was not an HTTP response.")
+            }
+            return AccountTransportResponse(
+                status: http.statusCode,
+                body: BridgeJSONValue.decode(from: data),
+                requestId: http.value(forHTTPHeaderField: "x-request-id"),
+                transportError: nil
+            )
+        } catch {
+            return .failure(error.localizedDescription)
+        }
+    }
+}
+
+/// Keychain-backed storage for hosted session and refresh tokens. Rust support
+/// state keeps only the credential IDs generated here.
+struct AccountTokenVault {
+    static let providerId = "hosted-account"
+    static let sessionAccount = "session-token"
+    static let refreshAccount = "refresh-token"
+
+    var vault: CredentialVault = KeychainCredentialVault()
+
+    func store(secret: String, account: String) throws -> String {
+        try vault.save(secret: secret, account: account, providerId: Self.providerId)
+        return UUID().uuidString
+    }
+
+    func read(account: String) throws -> String? {
+        try vault.read(account: account, providerId: Self.providerId)
+    }
+
+    func delete(account: String) throws {
+        try vault.delete(account: account, providerId: Self.providerId)
+    }
+
+    func clearAll() {
+        try? delete(account: Self.sessionAccount)
+        try? delete(account: Self.refreshAccount)
+    }
+}
+
+/// Drives one hosted account action: Rust plan -> Keychain secret injection ->
+/// native transport -> Rust classification -> Keychain and credential-reference
+/// bookkeeping.
+@MainActor
+final class AccountService: ObservableObject {
+    @Published private(set) var isBusy = false
+    @Published private(set) var lastRecord: AccountActionRecord?
+    @Published private(set) var lastError: String?
+
+    private var boundBridge: RustBridgeStore?
+    private let transport: AccountHTTPTransport
+    private let tokens: AccountTokenVault
+
+    init(
+        transport: AccountHTTPTransport = URLSessionAccountTransport(),
+        tokens: AccountTokenVault = AccountTokenVault()
+    ) {
+        self.transport = transport
+        self.tokens = tokens
+    }
+
+    /// Bind the shared bridge store the surrounding view already observes, so
+    /// account state stays in one place instead of a detached copy.
+    func bind(_ bridge: RustBridgeStore) {
+        boundBridge = bridge
+    }
+
+    var snapshot: AccountSessionSnapshot { boundBridge?.account ?? .placeholder }
+
+    private func requireBridge() throws -> RustBridgeStore {
+        guard let boundBridge else {
+            throw RustBridgeError.unavailable("The hosted account service is not bound to a Rust bridge.")
+        }
+        return boundBridge
+    }
+
+    func refresh() async {
+        do {
+            _ = try await requireBridge().refreshAccount()
+            lastError = nil
+        } catch {
+            lastError = error.localizedDescription
+        }
+    }
+
+    func setServer(_ serverURL: String) async {
+        isBusy = true
+        defer { isBusy = false }
+        do {
+            _ = try await requireBridge().setAccountServer(serverURL)
+            lastError = nil
+        } catch {
+            lastError = error.localizedDescription
+        }
+    }
+
+    @discardableResult
+    func run(_ action: AccountActionRequest) async -> AccountActionRecord? {
+        isBusy = true
+        defer { isBusy = false }
+        do {
+            let bridge = try requireBridge()
+            let plan = try await bridge.planAccountRequest(action)
+            let bearerToken = try resolveBearerToken(for: plan)
+            let body = try resolveBody(for: plan)
+            let response = await transport.execute(
+                method: plan.method,
+                url: plan.url,
+                bearerToken: bearerToken,
+                body: body,
+                requestId: UUID().uuidString
+            )
+            let result = try await bridge.recordAccountResult(action: action, response: response)
+            try await persistIssuedTokens(result)
+            lastRecord = result.record
+            lastError = result.record.succeeded ? nil : result.record.message
+            return result.record
+        } catch {
+            lastError = error.localizedDescription
+            return nil
+        }
+    }
+
+    private func resolveBearerToken(for plan: AccountRequestPlan) throws -> String? {
+        guard plan.bearerCredentialId != nil else { return nil }
+        guard let token = try tokens.read(account: AccountTokenVault.sessionAccount) else {
+            throw RustBridgeError.unavailable("The hosted session token is missing from the Keychain.")
+        }
+        return token
+    }
+
+    private func resolveBody(for plan: AccountRequestPlan) throws -> Data? {
+        guard let planned = plan.body else { return nil }
+        guard case .object(var fields) = planned else {
+            return try AccountCoding.encoder.encode(planned)
+        }
+        for secret in plan.bodySecretFields ?? [] {
+            let account = secret.field == "refresh_token"
+                ? AccountTokenVault.refreshAccount
+                : AccountTokenVault.sessionAccount
+            guard let value = try tokens.read(account: account) else {
+                throw RustBridgeError.unavailable("A stored hosted account token is missing from the Keychain.")
+            }
+            fields[secret.field] = .string(value)
+        }
+        return try AccountCoding.encoder.encode(BridgeJSONValue.object(fields))
+    }
+
+    private func persistIssuedTokens(_ result: AccountRecordResult) async throws {
+        if result.clearSessionCredentials == true {
+            tokens.clearAll()
+            return
+        }
+        var sessionCredentialId: String?
+        var refreshCredentialId: String?
+        if let sessionToken = result.issuedSessionToken {
+            sessionCredentialId = try tokens.store(
+                secret: sessionToken,
+                account: AccountTokenVault.sessionAccount
+            )
+        }
+        if let refreshToken = result.issuedRefreshToken {
+            refreshCredentialId = try tokens.store(
+                secret: refreshToken,
+                account: AccountTokenVault.refreshAccount
+            )
+        }
+        guard sessionCredentialId != nil || refreshCredentialId != nil else { return }
+        _ = try await requireBridge().recordAccountCredentials(
+            sessionTokenCredentialId: sessionCredentialId,
+            refreshTokenCredentialId: refreshCredentialId
+        )
     }
 }

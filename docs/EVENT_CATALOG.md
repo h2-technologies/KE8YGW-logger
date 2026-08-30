@@ -161,6 +161,30 @@ Runtime event categories are dotted strings. Current and planned category roots:
 - `sync.cloud.pull.started`
 - `sync.cloud.pull.completed`
 
+### Hosted Account
+
+Published by the desktop GUI account surface. Payloads carry the action, the
+Rust-classified outcome, retryability, the hosted `request_id`, the hosted error
+code, the resulting client account status, and the account UUID. They never
+carry emails, tokens, or credential secrets.
+
+- `account.state.load_failed`
+- `account.server.updated`
+- `account.hosting.status`
+- `account.register`
+- `account.email.verify`
+- `account.login`
+- `account.session.refresh`
+- `account.session.rotate`
+- `account.logout`
+- `account.logout_all`
+- `account.recovery.start`
+- `account.recovery.complete`
+- `account.devices.list`
+- `account.device.revoke`
+- `account.devices.revoke_all`
+- `account.delete`
+
 ### Lookup
 
 - `lookup.callsign.started`

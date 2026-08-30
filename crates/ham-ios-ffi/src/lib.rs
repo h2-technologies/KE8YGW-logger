@@ -37,6 +37,10 @@ use ham_plugin_sdk::{
     PROPOSAL_QSO_NOTE_ADD, PROPOSAL_QSO_RESTORE,
 };
 use ham_sync::{
+    account::{
+        apply_account_response, plan_account_request, AccountAction, AccountResponseInput,
+        AccountSessionState, JsonAccountSessionStore,
+    },
     pull_missing_events, CloudConnectionState, CloudSyncConfig, ConflictReviewStatus,
     JsonConflictReviewStore, JsonLanTrustStore, JsonLocalSyncIdentityStore,
     JsonOfflineMutationQueue, LanPairingAcceptance, LanPeerTrustUpdate, LocalPeerIdentity,
@@ -299,6 +303,41 @@ struct IosRemoteEventsApplyRequest {
 #[derive(Debug, Deserialize)]
 struct LanTrustSnapshotRequest {
     app_support_dir: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct AccountSnapshotRequest {
+    app_support_dir: String,
+    #[serde(default)]
+    default_server_url: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AccountServerUrlRequest {
+    app_support_dir: String,
+    server_url: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct AccountPlanRequest {
+    app_support_dir: String,
+    action: AccountAction,
+}
+
+#[derive(Debug, Deserialize)]
+struct AccountRecordResultRequest {
+    app_support_dir: String,
+    action: AccountAction,
+    response: AccountResponseInput,
+}
+
+#[derive(Debug, Deserialize)]
+struct AccountRecordCredentialsRequest {
+    app_support_dir: String,
+    #[serde(default)]
+    session_token_credential_id: Option<Uuid>,
+    #[serde(default)]
+    refresh_token_credential_id: Option<Uuid>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -662,6 +701,11 @@ fn dispatch_call(call: BridgeCall, correlation_id: Uuid) -> Result<Value, Bridge
         "sync.lan_trust.trust_peer" => sync_lan_trust_trust_peer_command(payload),
         "sync.lan_trust.rotate_auth" => sync_lan_trust_rotate_auth_command(payload),
         "sync.lan_trust.revoke" => sync_lan_trust_revoke_command(payload),
+        "account.snapshot" => account_snapshot_command(payload),
+        "account.set_server" => account_set_server_command(payload),
+        "account.plan" => account_plan_command(payload),
+        "account.record_result" => account_record_result_command(payload),
+        "account.record_credentials" => account_record_credentials_command(payload),
         "diagnostics.snapshot" => diagnostics_command_payload(payload),
         "settings.get" => settings_get_command(payload),
         "settings.create_default" => settings_create_default_command(payload),
@@ -2594,6 +2638,103 @@ fn conflict_review_store(app_support_dir: &str) -> Result<JsonConflictReviewStor
     ))
 }
 
+fn account_session_store(app_support_dir: &str) -> Result<JsonAccountSessionStore, BridgeFault> {
+    Ok(JsonAccountSessionStore::new(
+        rust_support_dir(app_support_dir)?.join("account-session.json"),
+    ))
+}
+
+fn load_account_state(
+    store: &JsonAccountSessionStore,
+    default_server_url: Option<&str>,
+) -> Result<AccountSessionState, BridgeFault> {
+    let default_server_url = default_server_url
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+        .unwrap_or_else(|| CloudSyncConfig::default().sync_server_url);
+    store
+        .load_or_create(&default_server_url, Utc::now())
+        .map_err(|error| BridgeFault::storage(error.to_string()))
+}
+
+fn account_snapshot_command(payload: Value) -> Result<Value, BridgeFault> {
+    let request: AccountSnapshotRequest = serde_json::from_value(payload)
+        .map_err(|error| BridgeFault::invalid_input(error.to_string()))?;
+    let store = account_session_store(&request.app_support_dir)?;
+    let account = load_account_state(&store, request.default_server_url.as_deref())?;
+    Ok(json!({ "account": account }))
+}
+
+fn account_set_server_command(payload: Value) -> Result<Value, BridgeFault> {
+    let request: AccountServerUrlRequest = serde_json::from_value(payload)
+        .map_err(|error| BridgeFault::invalid_input(error.to_string()))?;
+    let normalized = ham_sync::account::normalize_server_url(&request.server_url)
+        .map_err(|error| BridgeFault::invalid_input(error.to_string()))?;
+    ham_sync::account::ensure_transport_is_permitted(&normalized)
+        .map_err(|error| BridgeFault::invalid_input(error.to_string()))?;
+    let store = account_session_store(&request.app_support_dir)?;
+    let mut account = load_account_state(&store, Some(&normalized))?;
+    account.server_url = normalized;
+    account.updated_at = Utc::now();
+    store
+        .save(&account)
+        .map_err(|error| BridgeFault::storage(error.to_string()))?;
+    Ok(json!({ "account": account }))
+}
+
+fn account_plan_command(payload: Value) -> Result<Value, BridgeFault> {
+    let request: AccountPlanRequest = serde_json::from_value(payload)
+        .map_err(|error| BridgeFault::invalid_input(error.to_string()))?;
+    let store = account_session_store(&request.app_support_dir)?;
+    let account = load_account_state(&store, None)?;
+    let plan = plan_account_request(&account, &request.action)
+        .map_err(|error| BridgeFault::invalid_input(error.to_string()))?;
+    Ok(json!({ "plan": plan, "account": account }))
+}
+
+fn account_record_result_command(payload: Value) -> Result<Value, BridgeFault> {
+    let request: AccountRecordResultRequest = serde_json::from_value(payload)
+        .map_err(|error| BridgeFault::invalid_input(error.to_string()))?;
+    let store = account_session_store(&request.app_support_dir)?;
+    let mut account = load_account_state(&store, None)?;
+    let result =
+        apply_account_response(&mut account, &request.action, &request.response, Utc::now());
+    store
+        .save(&account)
+        .map_err(|error| BridgeFault::storage(error.to_string()))?;
+    Ok(json!({
+        "record": result.record,
+        "account": account,
+        "issued_session_token": result.issued_session_token,
+        "issued_refresh_token": result.issued_refresh_token,
+        "clear_session_credentials": result.clear_session_credentials
+    }))
+}
+
+fn account_record_credentials_command(payload: Value) -> Result<Value, BridgeFault> {
+    let request: AccountRecordCredentialsRequest = serde_json::from_value(payload)
+        .map_err(|error| BridgeFault::invalid_input(error.to_string()))?;
+    if request.session_token_credential_id.is_none()
+        && request.refresh_token_credential_id.is_none()
+    {
+        return Err(BridgeFault::invalid_input(
+            "at least one credential reference is required",
+        ));
+    }
+    let store = account_session_store(&request.app_support_dir)?;
+    let mut account = load_account_state(&store, None)?;
+    account.record_session_credentials(
+        request.session_token_credential_id,
+        request.refresh_token_credential_id,
+        Utc::now(),
+    );
+    store
+        .save(&account)
+        .map_err(|error| BridgeFault::storage(error.to_string()))?;
+    Ok(json!({ "account": account }))
+}
+
 fn lan_trust_store(app_support_dir: &str) -> Result<JsonLanTrustStore, BridgeFault> {
     Ok(JsonLanTrustStore::new(
         rust_support_dir(app_support_dir)?.join("lan-trust.json"),
@@ -3808,6 +3949,221 @@ mod tests {
             snapshot["data"]["conflict_reviews"]["health"]["resolved"],
             1
         );
+        let _ = std::fs::remove_dir_all(app_support_dir);
+    }
+
+    fn account_login_body() -> Value {
+        json!({
+            "account": {
+                "account_id": Uuid::new_v4(),
+                "user_id": Uuid::new_v4(),
+                "email": "operator@example.com",
+                "display_name": "Operator"
+            },
+            "session": {
+                "session_id": Uuid::new_v4(),
+                "account_id": Uuid::new_v4(),
+                "user_id": Uuid::new_v4(),
+                "device_id": Uuid::new_v4(),
+                "token": "ios-session-secret",
+                "issued_at": "2026-08-30T11:59:00Z",
+                "expires_at": "2026-09-29T11:59:00Z",
+                "active": true
+            },
+            "device": {"device_id": Uuid::new_v4(), "device_name": "iPhone"},
+            "logbooks": [],
+            "refresh_token": "ios-refresh-secret",
+            "session_cookie": "ham_session=..."
+        })
+    }
+
+    #[test]
+    fn account_commands_plan_execute_and_store_only_credential_references() {
+        let app_support_dir = std::env::temp_dir().join(format!("ham-ios-{}", Uuid::new_v4()));
+        let support = app_support_dir.to_string_lossy().to_string();
+
+        let configured = call_json(json!({
+            "command": "account.set_server",
+            "payload": {
+                "app_support_dir": support,
+                "server_url": "https://logger.example/api/v1/"
+            }
+        }));
+        assert_eq!(configured["ok"], true);
+        assert_eq!(
+            configured["data"]["account"]["server_url"],
+            "https://logger.example"
+        );
+
+        let planned = call_json(json!({
+            "command": "account.plan",
+            "payload": {
+                "app_support_dir": support,
+                "action": {
+                    "action": "login",
+                    "email": "operator@example.com",
+                    "device_name": "iPhone"
+                }
+            }
+        }));
+        assert_eq!(planned["ok"], true);
+        assert_eq!(planned["data"]["plan"]["method"], "POST");
+        assert_eq!(
+            planned["data"]["plan"]["url"],
+            "https://logger.example/api/v1/auth/login"
+        );
+        assert_eq!(planned["data"]["plan"]["requires_bearer"], false);
+        assert_eq!(
+            planned["data"]["plan"]["body"]["email"],
+            "operator@example.com"
+        );
+
+        let recorded = call_json(json!({
+            "command": "account.record_result",
+            "payload": {
+                "app_support_dir": support,
+                "action": {
+                    "action": "login",
+                    "email": "operator@example.com",
+                    "device_name": "iPhone"
+                },
+                "response": {"status": 200, "body": account_login_body()}
+            }
+        }));
+        assert_eq!(recorded["ok"], true);
+        assert_eq!(recorded["data"]["record"]["outcome"], "succeeded");
+        assert_eq!(recorded["data"]["account"]["status"], "signed_in");
+        assert_eq!(
+            recorded["data"]["issued_session_token"],
+            "ios-session-secret"
+        );
+        assert_eq!(
+            recorded["data"]["issued_refresh_token"],
+            "ios-refresh-secret"
+        );
+        assert!(recorded["data"]["account"]["session_token_credential_id"].is_null());
+
+        let persisted =
+            std::fs::read_to_string(app_support_dir.join("Rust").join("account-session.json"))
+                .unwrap();
+        assert!(!persisted.contains("ios-session-secret"));
+        assert!(!persisted.contains("ios-refresh-secret"));
+
+        let session_credential = Uuid::new_v4();
+        let refresh_credential = Uuid::new_v4();
+        let referenced = call_json(json!({
+            "command": "account.record_credentials",
+            "payload": {
+                "app_support_dir": support,
+                "session_token_credential_id": session_credential,
+                "refresh_token_credential_id": refresh_credential
+            }
+        }));
+        assert_eq!(referenced["ok"], true);
+        assert_eq!(
+            referenced["data"]["account"]["session_token_credential_id"],
+            session_credential.to_string()
+        );
+
+        let device_plan = call_json(json!({
+            "command": "account.plan",
+            "payload": {
+                "app_support_dir": support,
+                "action": {"action": "list_devices"}
+            }
+        }));
+        assert_eq!(device_plan["ok"], true);
+        assert_eq!(device_plan["data"]["plan"]["requires_bearer"], true);
+        assert_eq!(
+            device_plan["data"]["plan"]["bearer_credential_id"],
+            session_credential.to_string()
+        );
+
+        let rotate_plan = call_json(json!({
+            "command": "account.plan",
+            "payload": {
+                "app_support_dir": support,
+                "action": {"action": "rotate_session"}
+            }
+        }));
+        assert_eq!(rotate_plan["ok"], true);
+        assert_eq!(
+            rotate_plan["data"]["plan"]["body_secret_fields"][0]["field"],
+            "refresh_token"
+        );
+        assert_eq!(
+            rotate_plan["data"]["plan"]["body_secret_fields"][0]["credential_id"],
+            refresh_credential.to_string()
+        );
+
+        let expired = call_json(json!({
+            "command": "account.record_result",
+            "payload": {
+                "app_support_dir": support,
+                "action": {"action": "refresh_session"},
+                "response": {
+                    "status": 401,
+                    "body": {"error": "session expired", "code": "session_expired"},
+                    "request_id": "req-ios"
+                }
+            }
+        }));
+        assert_eq!(expired["ok"], true);
+        assert_eq!(expired["data"]["record"]["outcome"], "session_expired");
+        assert_eq!(expired["data"]["clear_session_credentials"], true);
+        assert_eq!(expired["data"]["account"]["status"], "session_expired");
+        assert!(expired["data"]["account"]["session_token_credential_id"].is_null());
+
+        let snapshot = call_json(json!({
+            "command": "account.snapshot",
+            "payload": {"app_support_dir": support}
+        }));
+        assert_eq!(snapshot["ok"], true);
+        assert_eq!(snapshot["data"]["account"]["status"], "session_expired");
+        let _ = std::fs::remove_dir_all(app_support_dir);
+    }
+
+    #[test]
+    fn account_commands_reject_cleartext_public_servers_and_missing_sessions() {
+        let app_support_dir = std::env::temp_dir().join(format!("ham-ios-{}", Uuid::new_v4()));
+        let support = app_support_dir.to_string_lossy().to_string();
+
+        let rejected = call_json(json!({
+            "command": "account.set_server",
+            "payload": {"app_support_dir": support, "server_url": "http://logger.example"}
+        }));
+        assert_eq!(rejected["ok"], false);
+        assert_eq!(rejected["error"]["code"], "invalid_input");
+        assert!(rejected["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("https://"));
+
+        let loopback = call_json(json!({
+            "command": "account.set_server",
+            "payload": {"app_support_dir": support, "server_url": "http://127.0.0.1:9750"}
+        }));
+        assert_eq!(loopback["ok"], true);
+
+        let unauthorized = call_json(json!({
+            "command": "account.plan",
+            "payload": {
+                "app_support_dir": support,
+                "action": {"action": "list_devices"}
+            }
+        }));
+        assert_eq!(unauthorized["ok"], false);
+        assert_eq!(unauthorized["error"]["code"], "invalid_input");
+
+        let unknown = call_json(json!({
+            "command": "account.plan",
+            "payload": {
+                "app_support_dir": support,
+                "action": {"action": "not_a_real_action"}
+            }
+        }));
+        assert_eq!(unknown["ok"], false);
+        assert_eq!(unknown["error"]["code"], "invalid_input");
         let _ = std::fs::remove_dir_all(app_support_dir);
     }
 

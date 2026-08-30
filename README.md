@@ -1108,6 +1108,45 @@ and declared on the iOS app target; physical iOS Local Network permission
 validation remains a release gate documented in
 [iOS Multicast Provisioning](docs/IOS_MULTICAST_PROVISIONING.md).
 
+## Hosted Account And Session Client
+
+Hosted account rules stay in Rust. `ham_sync::account` owns the durable client
+account state, plans every hosted account request, classifies every hosted
+response, and performs every state transition. The desktop GUI and native iOS
+app supply transport only.
+
+A planned request carries method, path, absolute URL, a validated body, and
+credential references. It never carries a secret: `bearer_credential_id` and
+`body_secret_fields` name credential IDs that the executing client resolves
+through its own credential backend. Freshly issued session and refresh tokens
+are returned from response classification exactly once so the client can store
+them, and the durable client state keeps only the resulting credential IDs.
+Cleartext hosted transport is refused during planning for anything but
+loopback, private, and link-local hosts.
+
+Desktop endpoints:
+
+- `GET /api/account/state`
+- `POST /api/account/server`
+- `POST /api/account/action`
+
+`POST /api/account/action` takes one tagged action: `hosting_status`,
+`register`, `verify_email`, `login`, `refresh_session`, `rotate_session`,
+`logout`, `logout_all`, `recovery_start`, `recovery_complete`, `list_devices`,
+`revoke_device`, `revoke_all_devices`, or `delete_account`. The browser Account
+screen opens from the toolbar, the `account.open` command, or the Settings
+account card, and the status bar shows the current account state. Session and
+refresh tokens are stored through `CredentialStore`.
+
+Native iOS drives the same module through the `account.snapshot`,
+`account.set_server`, `account.plan`, `account.record_result`, and
+`account.record_credentials` bridge commands, executes the plan on
+`URLSession`, and keeps session and refresh tokens in the Keychain.
+
+`GET /api/v1/status` is unauthenticated and publishes the registration policy a
+client renders sign-up against, including a `turnstile` object with `required`
+and the public `site_key`. The Turnstile secret key is never published.
+
 ## Cloud Relay And Self-Hosted Sync
 
 Cloud sync is a fallback when LAN peers cannot reach each other. LAN remains the
@@ -1289,7 +1328,8 @@ The default shell includes:
 - Plugin manager placeholder
 
 The default workspaces are Dashboard, Casual Logger, POTA/SOTA, Net Control,
-EmComm, and Contesting. Panels have stable IDs, titles, plugin/source labels,
+EmComm, and Contesting. Account and session management is a toolbar screen
+rather than a workspace. Panels have stable IDs, titles, plugin/source labels,
 required permissions, and supported workspaces. Workspace cards can be closed,
 reopened, and moved between the center, inspector, and bottom regions. These
 operator layout choices are currently saved in browser local storage; the core

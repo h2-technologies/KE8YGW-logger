@@ -22,9 +22,18 @@ outside issue #2.
      fail-closed public registration; account recovery/deletion; session
      expiry/rotation/logout-all; device revocation; request IDs; audits; and
      durable rate limits.
-   - Remaining: hosted web, desktop, and iOS UX wiring; production email
-     provider/domain validation; Turnstile site/secret keys; privacy/support
-     URLs; infrastructure sizing; retention/monitoring; and deployment secrets.
+   - Client UX implemented: Rust-owned client account state, request planning,
+     and response classification in `ham_sync::account`; desktop GUI account
+     endpoints, Account screen, status pill, Settings card, and command IDs;
+     native iOS account bridge commands, Keychain-referenced session/refresh
+     tokens, and an Account workspace; and an unauthenticated hosted
+     registration-policy status payload with the public Turnstile site key.
+   - Remaining: hosted web browser client; administrator hosting and invitation
+     client surfaces; production email provider/domain validation; Turnstile
+     site/secret keys; privacy/support URLs; infrastructure sizing;
+     retention/monitoring; deployment secrets; and release-device plus
+     production-deployment qualification of the desktop and iOS account
+     surfaces.
 
 3. Offline-first sync and reconciliation
    - Implemented foundation: durable versioned mutation queue, deterministic
@@ -105,7 +114,7 @@ outside issue #2.
      release-runner live-test secrets.
 
 5. Client surfaces
-   - Hosted web: finish account/session/logbook UX, provider setup, maps,
+   - Hosted web: finish the browser client account/session/logbook UX, provider setup, maps,
      contesting, EmComm, backup/restore, and operations feedback.
    - Desktop: finish signed Windows/macOS/Linux packaging, native update policy,
      offline-first flows, provider credentials, maps, contesting, and EmComm.
@@ -185,5 +194,7 @@ outside issue #2.
    execution plus poor-network validation on release devices.
 2. Complete production provider qualification and release-runner live validation
    for the issue #2 provider set.
-3. Wire hosted web, desktop, and iOS UI flows to the implemented account,
-   session, recovery, device, and admin APIs.
+3. Wire the hosted web browser client and the administrator hosting/invitation
+   surfaces to the implemented account, session, recovery, device, and admin
+   APIs, and qualify the desktop and iOS account surfaces against a production
+   hosted deployment.

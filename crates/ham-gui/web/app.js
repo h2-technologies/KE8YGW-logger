@@ -40,6 +40,9 @@ const state = {
   lastReport: null,
   syncState: null,
   selectedPeerId: null,
+  account: null,
+  accountBusy: false,
+  accountError: "",
   activeWorkspace: "dashboard",
   busConnected: false,
   streamPaused: false,
@@ -168,6 +171,7 @@ async function boot() {
   await refreshActivations();
   await refreshRigStatus();
   await refreshSyncState();
+  await refreshAccount();
   await refreshPluginPermissions();
   render();
   startRuntimeEventPolling();
@@ -184,6 +188,7 @@ function bindShellControls() {
   byId("backup-button").addEventListener("click", () => openScreen("backups"));
   byId("settings-button").addEventListener("click", () => openScreen("settings"));
   byId("plugins-button").addEventListener("click", () => openScreen("plugins"));
+  byId("account-button").addEventListener("click", () => openScreen("account"));
   byId("close-screen").addEventListener("click", closeScreen);
   byId("command-search").addEventListener("input", renderCommandResults);
 
@@ -228,6 +233,7 @@ function render() {
   const rigState = state.rigStatus?.active_state;
   const rigLabel = rigState ? `${formatKhz(rigState.frequency_hz) || "freq?"} kHz ${rigState.mode || ""}` : "none";
   byId("status-sync").textContent = `Sync: ${state.runtimeStatus?.sync_state || "Local only"} / Rig: ${rigLabel}`;
+  byId("status-account").textContent = `Account: ${accountStatusLabel()}`;
   byId("status-events").textContent = `Runtime events: ${state.runtimeStatus?.runtime_event_count || state.runtimeEvents.length}`;
   byId("status-errors").textContent = `Errors: ${state.runtimeStatus?.latest_error_count || 0}`;
   byId("status-sync-peers").textContent = `Discovery: ${state.syncState?.discovery_running ? "running" : "stopped"} / ${state.syncState?.peers?.length || 0} peers / ${state.syncState?.warning_count || 0} warnings`;
@@ -484,6 +490,16 @@ function runCommand(commandId) {
   if (command.target_workspace) switchWorkspace(command.target_workspace);
   if (command.id === "open.settings") openScreen("settings");
   if (command.id === "open.plugins") openScreen("plugins");
+  if (command.id === "account.open" || command.id === "account.devices.open") openScreen("account");
+  if (command.id === "account.devices.open") runAccountAction({ action: "list_devices" });
+  if (command.id === "account.session.refresh") {
+    openScreen("account");
+    runAccountAction({ action: "refresh_session" });
+  }
+  if (command.id === "account.sign-out") {
+    openScreen("account");
+    runAccountAction({ action: "logout" });
+  }
   if (command.id === "services.open") openScreen("services");
   if (command.id === "services.cache.clear") clearServiceCache();
   if (command.id === "services.lookup.test") lookupCallsignFromPrompt();
@@ -606,6 +622,14 @@ function openScreen(kind) {
     eyebrow.textContent = "Provider Runtime";
     title.textContent = "Service Providers";
     body.innerHTML = renderServiceProviderScreen();
+    return;
+  }
+
+  if (kind === "account") {
+    eyebrow.textContent = "Hosted Account";
+    title.textContent = "Account and Sessions";
+    body.innerHTML = renderAccountScreen();
+    bindAccountControls();
     return;
   }
 
@@ -789,11 +813,13 @@ function bindCredentialControls() {
 }
 
 function renderSettings() {
-  const sections = ["General", "Appearance", "Callsign/Profile", "Sync", "Service Providers", "Credentials", "Lookup/Enrichment", "Rig Control", "Plugin Permissions", "Plugins", "Diagnostics", "Keyboard Shortcuts"];
+  const sections = ["General", "Appearance", "Callsign/Profile", "Account", "Sync", "Service Providers", "Credentials", "Lookup/Enrichment", "Rig Control", "Plugin Permissions", "Plugins", "Diagnostics", "Keyboard Shortcuts"];
   return `<div class="settings-grid">
     ${sections
       .map((section) =>
-        section === "Sync"
+        section === "Account"
+          ? `<article class="settings-card"><h3>${section}</h3>${renderAccountSummary()}</article>`
+          : section === "Sync"
           ? `<article class="settings-card"><h3>${section}</h3>${renderCloudSettings()}</article>`
           : section === "Service Providers"
             ? `<article class="settings-card"><h3>${section}</h3>${renderServiceProviderSummary()}</article>`
@@ -870,6 +896,351 @@ function renderCredentialSummary() {
     <p>Backend: ${backend.backend_name || "unknown"} / ${backend.available ? "available" : "unavailable"} / ${backend.secure ? "secure" : "not secure"}</p>
     ${warning}
     <button class="toolbar-button" type="button" onclick="openScreen('credentials')">Open Credential Manager</button>`;
+}
+
+const ACCOUNT_STATUS_LABELS = {
+  signed_out: "Signed out",
+  pending_email_verification: "Verify email",
+  signed_in: "Signed in",
+  session_expired: "Session expired",
+  device_revoked: "Device revoked",
+  account_deleted: "Account deleted",
+};
+
+function accountStatusLabel() {
+  const account = state.account?.account;
+  if (!account) return "Not configured";
+  const label = ACCOUNT_STATUS_LABELS[account.status] || account.status;
+  const email = account.account?.email || account.pending_email;
+  return email ? `${label} (${email})` : label;
+}
+
+async function refreshAccount() {
+  try {
+    const payload = await fetch("/api/account/state").then((response) => response.json());
+    state.account = payload?.ok ? payload : null;
+    state.accountError = payload?.ok ? "" : payload?.error || "Hosted account state is unavailable.";
+  } catch (error) {
+    state.account = null;
+    state.accountError = "Hosted account state could not be read from the local backend.";
+  }
+}
+
+async function runAccountAction(payload) {
+  state.accountBusy = true;
+  state.accountError = "";
+  refreshAccountScreen();
+  try {
+    const response = await fetch("/api/account/action", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }).then((result) => result.json());
+    if (response?.account) {
+      state.account = state.account || {};
+      state.account.account = response.account;
+      if (response.credential_backend) state.account.credential_backend = response.credential_backend;
+    }
+    if (!response?.ok && response?.error) state.accountError = response.error;
+    await refreshAccount();
+  } catch (error) {
+    state.accountError = "The local backend could not run the hosted account action.";
+  } finally {
+    state.accountBusy = false;
+    refreshAccountScreen();
+    render();
+  }
+}
+
+async function setAccountServerUrl(serverUrl) {
+  state.accountBusy = true;
+  state.accountError = "";
+  refreshAccountScreen();
+  try {
+    const response = await fetch("/api/account/server", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ server_url: serverUrl }),
+    }).then((result) => result.json());
+    if (!response?.ok && response?.error) state.accountError = response.error;
+    await refreshAccount();
+  } catch (error) {
+    state.accountError = "The hosted server URL could not be saved.";
+  } finally {
+    state.accountBusy = false;
+    refreshAccountScreen();
+    render();
+  }
+}
+
+function refreshAccountScreen() {
+  const body = byId("screen-body");
+  if (!body || byId("overlay")?.hidden) return;
+  if (byId("screen-title")?.textContent !== "Account and Sessions") return;
+  body.innerHTML = renderAccountScreen();
+  bindAccountControls();
+}
+
+function renderAccountStatusCard() {
+  const payload = state.account;
+  const account = payload?.account;
+  if (!account) {
+    return `<div class="sync-summary"><p class="event-error">${escapeHtml(
+      state.accountError || "Hosted account state is unavailable.",
+    )}</p></div>`;
+  }
+  const profile = account.account;
+  const session = account.session;
+  const backend = payload?.credential_backend || {};
+  const last = account.last_action;
+  const statusLabel = ACCOUNT_STATUS_LABELS[account.status] || account.status;
+  const lastLine = last
+    ? `<p class="${last.outcome === "succeeded" ? "muted" : "event-error"}">Last action: ${escapeHtml(
+        last.kind,
+      )} / ${escapeHtml(last.outcome)}${last.retryable ? " (retryable)" : ""} - ${escapeHtml(
+        last.message,
+      )}${last.request_id ? ` [request ${escapeHtml(last.request_id)}]` : ""}</p>`
+    : `<p class="muted">No hosted account action has run on this device yet.</p>`;
+  return `<div class="sync-summary">
+    <p><strong>${escapeHtml(statusLabel)}</strong></p>
+    <p>Server: ${escapeHtml(account.server_url || "not configured")}</p>
+    ${profile ? `<p>Account: ${escapeHtml(profile.email)} / ${escapeHtml(profile.display_name || "")}</p>` : ""}
+    ${profile ? `<p>Email verified: ${profile.email_verified_at ? escapeHtml(profile.email_verified_at) : "not verified"}</p>` : ""}
+    ${session ? `<p>Session expires: ${escapeHtml(session.expires_at || "unknown")}</p>` : ""}
+    ${account.device ? `<p>Device: ${escapeHtml(account.device.device_name || "unnamed")}</p>` : ""}
+    <p>Token storage: ${escapeHtml(backend.backend_name || "unknown")} / ${backend.secure ? "secure" : "not secure"}</p>
+    ${backend.dev_only ? `<p class="event-error">Session tokens are held in the explicit insecure development credential fallback.</p>` : ""}
+    ${payload?.transport_permitted === false ? `<p class="event-error">This server URL uses cleartext http:// outside a local network. Hosted account calls are refused until it uses https://.</p>` : ""}
+    ${state.accountError ? `<p class="event-error">${escapeHtml(state.accountError)}</p>` : ""}
+    ${lastLine}
+  </div>`;
+}
+
+function renderAccountRegistrationPolicy() {
+  const hosting = state.account?.account?.hosting || {};
+  const mode = hosting.registration_mode || "unknown";
+  const description =
+    mode === "open"
+      ? "This server accepts self-service registration."
+      : mode === "invite_only"
+        ? "This server requires an invitation token to register."
+        : mode === "disabled"
+          ? "Registration is disabled on this server."
+          : "Registration policy has not been read from this server yet.";
+  return `<article class="settings-card">
+    <h3>Server Policy</h3>
+    <p>Hosting mode: ${escapeHtml(hosting.operation_mode || "unknown")}</p>
+    <p>Registration: ${escapeHtml(mode)}</p>
+    <p class="muted">${escapeHtml(description)}</p>
+    ${hosting.turnstile_required ? `<p class="muted">Public registration requires a Cloudflare Turnstile response${hosting.turnstile_site_key ? ` (site key ${escapeHtml(hosting.turnstile_site_key)})` : ""}.</p>` : ""}
+    <button class="toolbar-button" type="button" data-account-action="hosting_status" ${state.accountBusy ? "disabled" : ""}>Read Server Policy</button>
+  </article>`;
+}
+
+function renderAccountSignedOutForms() {
+  const hosting = state.account?.account?.hosting || {};
+  const busy = state.accountBusy ? "disabled" : "";
+  return `<article class="settings-card">
+      <h3>Sign In</h3>
+      <form id="account-login-form" class="qso-form">
+        <label>Email <input name="email" type="email" class="placeholder-control" autocomplete="email" required /></label>
+        <label>Display Name <input name="display_name" class="placeholder-control" autocomplete="name" /></label>
+        <label>Device Name <input name="device_name" class="placeholder-control" placeholder="Shack Desktop" /></label>
+        <button class="toolbar-button" type="submit" ${busy}>Sign In</button>
+      </form>
+    </article>
+    <article class="settings-card">
+      <h3>Create Account</h3>
+      <form id="account-register-form" class="qso-form">
+        <label>Email <input name="email" type="email" class="placeholder-control" autocomplete="email" required /></label>
+        <label>Display Name <input name="display_name" class="placeholder-control" autocomplete="name" /></label>
+        <label>Device Name <input name="device_name" class="placeholder-control" placeholder="Shack Desktop" /></label>
+        ${hosting.registration_mode === "open" ? "" : `<label>Invitation Token <input name="invitation_token" class="placeholder-control" autocomplete="off" /></label>`}
+        ${hosting.turnstile_required ? `<label>Turnstile Response <input name="turnstile_token" class="placeholder-control" autocomplete="off" /></label>` : ""}
+        <button class="toolbar-button" type="submit" ${hosting.registration_mode === "disabled" ? "disabled" : busy}>Create Account</button>
+      </form>
+    </article>
+    <article class="settings-card">
+      <h3>Verify Email</h3>
+      <form id="account-verify-form" class="qso-form">
+        <label>Verification Token <input name="token" class="placeholder-control" autocomplete="off" required /></label>
+        <button class="toolbar-button" type="submit" ${busy}>Verify Email</button>
+      </form>
+    </article>
+    <article class="settings-card">
+      <h3>Account Recovery</h3>
+      <form id="account-recovery-start-form" class="qso-form">
+        <label>Email <input name="email" type="email" class="placeholder-control" autocomplete="email" required /></label>
+        <button class="toolbar-button" type="submit" ${busy}>Send Recovery Email</button>
+      </form>
+      <form id="account-recovery-complete-form" class="qso-form">
+        <label>Recovery Token <input name="token" class="placeholder-control" autocomplete="off" required /></label>
+        <label>Device Name <input name="device_name" class="placeholder-control" placeholder="Shack Desktop" /></label>
+        <button class="toolbar-button" type="submit" ${busy}>Complete Recovery</button>
+      </form>
+    </article>`;
+}
+
+function renderAccountSignedInPanels() {
+  const account = state.account?.account || {};
+  const busy = state.accountBusy ? "disabled" : "";
+  const logbooks = account.logbooks || [];
+  const memberships = account.memberships || [];
+  const devices = account.devices || [];
+  return `<article class="settings-card">
+      <h3>Session</h3>
+      <div class="monitor-actions">
+        <button class="toolbar-button" type="button" data-account-action="refresh_session" ${busy}>Refresh Session</button>
+        <button class="toolbar-button" type="button" data-account-action="rotate_session" ${busy}>Rotate Session</button>
+        <button class="toolbar-button" type="button" data-account-action="logout" ${busy}>Sign Out</button>
+        <button class="toolbar-button" type="button" data-account-action="logout_all" ${busy}>Sign Out Everywhere</button>
+      </div>
+    </article>
+    <article class="settings-card">
+      <h3>Logbook Access</h3>
+      <div class="qso-list">${
+        logbooks
+          .map(
+            (logbook) => `<article class="qso-row"><strong>${escapeHtml(logbook.name || "Logbook")}</strong>
+              <small>${escapeHtml(logbook.station_callsign || "no station callsign")}</small></article>`,
+          )
+          .join("") || `<p class="muted">No hosted logbooks were returned for this account.</p>`
+      }</div>
+      ${
+        memberships.length
+          ? `<p class="muted">${memberships
+              .map((membership) => escapeHtml(membership.role || "member"))
+              .join(", ")}</p>`
+          : ""
+      }
+    </article>
+    <article class="settings-card">
+      <h3>Devices</h3>
+      <div class="monitor-actions">
+        <button class="toolbar-button" type="button" data-account-action="list_devices" ${busy}>Refresh Devices</button>
+        <button class="toolbar-button" type="button" data-account-action="revoke_all_devices" ${busy}>Revoke All Devices</button>
+      </div>
+      <div class="qso-list">${
+        devices
+          .map(
+            (device) => `<article class="qso-row">
+              <strong>${escapeHtml(device.device_name || "Unnamed device")}</strong>
+              <small>${device.revoked ? "revoked" : device.trusted ? "trusted" : "registered"}</small>
+              ${device.revoked ? "" : `<button class="toolbar-button" type="button" data-account-revoke-device="${escapeHtml(device.device_id)}" ${busy}>Revoke</button>`}
+            </article>`,
+          )
+          .join("") || `<p class="muted">No devices have been read from the hosted server yet.</p>`
+      }</div>
+    </article>
+    <article class="settings-card">
+      <h3>Delete Account</h3>
+      <p class="muted">Deleting the hosted account revokes every session and device. Local official events stay on this device.</p>
+      <form id="account-delete-form" class="qso-form">
+        <label>Type DELETE to confirm <input name="confirm" class="placeholder-control" autocomplete="off" required /></label>
+        <button class="toolbar-button" type="submit" ${busy}>Delete Hosted Account</button>
+      </form>
+    </article>`;
+}
+
+function renderAccountScreen() {
+  const account = state.account?.account;
+  const signedIn = account?.status === "signed_in";
+  return `<div class="stack">
+    ${renderAccountStatusCard()}
+    <form id="account-server-form" class="qso-form">
+      <label>Hosted Server URL <input name="server_url" class="placeholder-control" value="${escapeHtml(
+        account?.server_url || "",
+      )}" placeholder="https://logger.example" required /></label>
+      <button class="toolbar-button" type="submit" ${state.accountBusy ? "disabled" : ""}>Save Server</button>
+    </form>
+    <div class="settings-grid">
+      ${renderAccountRegistrationPolicy()}
+      ${signedIn ? renderAccountSignedInPanels() : renderAccountSignedOutForms()}
+    </div>
+  </div>`;
+}
+
+function optionalField(form, name) {
+  const value = form.get(name)?.toString().trim();
+  return value ? value : null;
+}
+
+function bindAccountControls() {
+  document.querySelectorAll("[data-account-action]").forEach((button) => {
+    button.addEventListener("click", () => runAccountAction({ action: button.dataset.accountAction }));
+  });
+  document.querySelectorAll("[data-account-revoke-device]").forEach((button) => {
+    button.addEventListener("click", () =>
+      runAccountAction({ action: "revoke_device", device_id: button.dataset.accountRevokeDevice }),
+    );
+  });
+  byId("account-server-form")?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const form = new FormData(event.target);
+    setAccountServerUrl(form.get("server_url")?.toString().trim() || "");
+  });
+  byId("account-login-form")?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const form = new FormData(event.target);
+    runAccountAction({
+      action: "login",
+      email: form.get("email")?.toString().trim() || "",
+      display_name: optionalField(form, "display_name"),
+      device_name: optionalField(form, "device_name"),
+    });
+  });
+  byId("account-register-form")?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const form = new FormData(event.target);
+    runAccountAction({
+      action: "register",
+      email: form.get("email")?.toString().trim() || "",
+      display_name: optionalField(form, "display_name"),
+      device_name: optionalField(form, "device_name"),
+      invitation_token: optionalField(form, "invitation_token"),
+      turnstile_token: optionalField(form, "turnstile_token"),
+    });
+  });
+  byId("account-verify-form")?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const form = new FormData(event.target);
+    runAccountAction({ action: "verify_email", token: form.get("token")?.toString().trim() || "" });
+  });
+  byId("account-recovery-start-form")?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const form = new FormData(event.target);
+    runAccountAction({ action: "recovery_start", email: form.get("email")?.toString().trim() || "" });
+  });
+  byId("account-recovery-complete-form")?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const form = new FormData(event.target);
+    runAccountAction({
+      action: "recovery_complete",
+      token: form.get("token")?.toString().trim() || "",
+      device_name: optionalField(form, "device_name"),
+    });
+  });
+  byId("account-delete-form")?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const form = new FormData(event.target);
+    if (form.get("confirm")?.toString().trim() !== "DELETE") {
+      state.accountError = "Type DELETE to confirm hosted account deletion.";
+      refreshAccountScreen();
+      return;
+    }
+    runAccountAction({ action: "delete_account", confirm: true });
+  });
+}
+
+function renderAccountSummary() {
+  const account = state.account?.account;
+  if (!account) {
+    return `<p class="muted">Hosted account state is unavailable.</p>
+      <button class="toolbar-button" type="button" onclick="openScreen('account')">Open Account</button>`;
+  }
+  return `<p>${escapeHtml(ACCOUNT_STATUS_LABELS[account.status] || account.status)}</p>
+    <p class="muted">${escapeHtml(account.server_url || "No hosted server configured")}</p>
+    <button class="toolbar-button" type="button" onclick="openScreen('account')">Open Account</button>`;
 }
 
 function renderCredentialManager() {

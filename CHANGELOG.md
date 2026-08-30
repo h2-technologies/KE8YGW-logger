@@ -4,6 +4,10 @@
 
 ### Added
 
+- Added `ham_sync::account`: Rust-owned hosted account/session client state with versioned durable support storage, atomic writes, corrupt-file quarantine, request planning, response classification, credential-reference plans that never carry secrets, and cleartext-transport refusal outside loopback/private/link-local hosts.
+- Added desktop hosted account UX: `/api/account/state`, `/api/account/server`, and `/api/account/action` GUI endpoints, a `ureq` account transport that resolves credential references through `CredentialStore`, an Account screen covering registration, verification, sign-in, session refresh/rotation, sign-out, recovery, device management, and confirmed account deletion, a status-bar account pill, a Settings account card, and `account.open`, `account.session.refresh`, `account.devices.open`, and `account.sign-out` commands.
+- Added native iOS hosted account UX: `account.snapshot`, `account.set_server`, `account.plan`, `account.record_result`, and `account.record_credentials` bridge commands, typed Swift bridge models with explicit wire keys, a `URLSession` account transport, Keychain-stored session and refresh tokens referenced by credential ID, and an Account workspace.
+- Added an additive `turnstile` object to `GET /api/v1/status` so clients can render public registration; the Turnstile secret key is never published.
 - Added `IOS_GAP_ANALYSIS.md`.
 - Added `ham-ios-ffi`, a Rust FFI crate for iOS JSON bridge calls backed by `ham-core` and `ham-sync`.
 - Added a hardened byte-buffer Rust FFI command ABI with structured envelopes, ABI/schema versions, correlation IDs, panic containment, bounded input checks, and explicit deallocation.
@@ -22,6 +26,7 @@
 
 ### Changed
 
+- `CredentialStore::delete_credential` now erases the stored secret in the insecure development backend instead of only marking the credential revoked, so signing out destroys the token on every backend.
 - Expanded iOS QSO, station profile, settings, export, logbook, and detail models/views for MVP parity fields.
 - Routed iOS QSO create/delete, station profile/equipment/select, POTA/SOTA activation start/end, and Net Control session/check-in/traffic mutations through Rust bridge commands.
 - Reclassified SwiftData QSO/station/equipment state as cache/projection data for Rust-accepted state.

@@ -31,6 +31,11 @@ This root roadmap summarizes the current implementation plan. Detailed architect
   HMAC-SHA256 signed LAN read endpoint authorization, replay nonce rejection,
   revocation, and native iOS LAN trust snapshot/issue/accept/trust/rotate/revoke
   bridge commands with Keychain-backed credential references.
+- Hosted account and session client UX: Rust-owned client account state,
+  request planning, and response classification in `ham-sync`; desktop GUI
+  account endpoints, Account screen, status pill, and command IDs; native iOS
+  account bridge commands, Keychain-referenced tokens, and Account workspace;
+  and an unauthenticated hosted registration-policy status payload.
 
 ## Current Milestone
 
@@ -51,8 +56,9 @@ legacy queue migration, restore replay, and LAN revocation, plus a guided browse
 conflict-review surface for saved review selection, structured
 conflict summaries, explicit recovery choices, and corrective QSO note events.
 
-Partial or incomplete v1 areas include hosted web/desktop/iOS account UX,
-production email/Turnstile deployment configuration, production iOS reciprocal
+Partial or incomplete v1 areas include hosted web account UX, administrator
+hosting/invitation client surfaces, production email/Turnstile deployment
+configuration, production iOS reciprocal
 LAN transport qualification, end-to-end cross-client branch
 review/reconciliation workflow qualification, physical-device LAN/iOS
 local-network validation, release-device iOS background task/poor-network qualification, production provider
@@ -72,8 +78,11 @@ dependency-ordered critical path. The next three implementation goals are:
   task/poor-network qualification.
 - Production provider qualification for QRZ, QRZ Logbook, LoTW, eQSL, Club
   Log, POTA, SOTAWatch, DX Cluster/RBN, maps, and propagation.
-- Hosted web, desktop, and iOS UI flows for the implemented account/session,
-  recovery, device, and admin APIs.
+- Hosted web UI flows and administrator surfaces for the implemented
+  account/session, recovery, device, and admin APIs. Desktop and native iOS
+  account/session UX now exist; hosted web has no browser client, admin hosting
+  and invitation management have no client surface, and production email,
+  Turnstile, and deployment qualification are still open.
 
 ## Future Milestones
 

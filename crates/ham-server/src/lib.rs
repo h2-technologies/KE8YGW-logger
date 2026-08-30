@@ -2669,6 +2669,11 @@ impl HostedServer {
             "api_tokens": state.api_tokens.len(),
             "durable_server_storage": self.metadata_store.is_durable(),
             "metadata_store": self.metadata_store.label(),
+            "turnstile": {
+                "required": state.hosting_config.registration_mode == RegistrationMode::Open
+                    && state.hosting_config.turnstile.enabled_for_open_registration,
+                "site_key": state.hosting_config.turnstile.site_key
+            },
             "ios_release_target": "v1_native_swiftui"
         }))
     }
@@ -7786,6 +7791,34 @@ mod tests {
             ))
             .await;
         assert_eq!(second.status, 403);
+    }
+
+    #[tokio::test]
+    async fn status_publishes_registration_policy_without_the_turnstile_secret() {
+        let server = HostedServer::new();
+        let response = server.handle(ApiRequest::get("/api/v1/status")).await;
+        assert_eq!(response.status, 200);
+        let body: Value = response.json();
+        assert_eq!(body["registration_mode"], "invite_only");
+        assert_eq!(body["turnstile"]["required"], false);
+        assert_eq!(body["turnstile"]["site_key"], Value::Null);
+
+        {
+            let mut state = server.state.write().await;
+            state.hosting_config.registration_mode = RegistrationMode::Open;
+            state.hosting_config.turnstile.site_key = Some("0x-public-site-key".to_owned());
+            state.hosting_config.turnstile.secret_key = Some("0x-private-secret-key".to_owned());
+        }
+
+        let response = server.handle(ApiRequest::get("/api/v1/status")).await;
+        assert_eq!(response.status, 200);
+        let body: Value = response.json();
+        assert_eq!(body["registration_mode"], "open");
+        assert_eq!(body["turnstile"]["required"], true);
+        assert_eq!(body["turnstile"]["site_key"], "0x-public-site-key");
+        let serialized = serde_json::to_string(&body).unwrap();
+        assert!(!serialized.contains("0x-private-secret-key"));
+        assert!(!serialized.contains("secret_key"));
     }
 
     #[tokio::test]

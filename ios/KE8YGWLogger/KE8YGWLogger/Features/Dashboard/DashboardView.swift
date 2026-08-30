@@ -18,6 +18,7 @@ enum FeatureDestination: String, CaseIterable, Identifiable, Hashable {
     case netControl
     case emergency
     case sync
+    case account
     case backup
     case diagnostics
     case settings
@@ -37,6 +38,7 @@ enum FeatureDestination: String, CaseIterable, Identifiable, Hashable {
         case .netControl: return "Net Control"
         case .emergency: return "Emergency"
         case .sync: return "Sync"
+        case .account: return "Account"
         case .backup: return "Backup"
         case .diagnostics: return "Diagnostics"
         case .settings: return "Settings"
@@ -56,6 +58,7 @@ enum FeatureDestination: String, CaseIterable, Identifiable, Hashable {
         case .netControl: return "person.3.sequence"
         case .emergency: return "cross.case"
         case .sync: return "arrow.triangle.2.circlepath"
+        case .account: return "person.badge.key"
         case .backup: return "externaldrive"
         case .diagnostics: return "stethoscope"
         case .settings: return "gearshape"
@@ -105,6 +108,8 @@ struct AppShellView: View {
             EmergencyCommsView()
         case .sync:
             SyncWorkspaceView()
+        case .account:
+            AccountWorkspaceView()
         case .backup:
             BackupRestoreView()
         case .diagnostics:

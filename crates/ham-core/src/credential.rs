@@ -525,6 +525,14 @@ impl CredentialStore for InsecureDevCredentialStore {
         Ok(metadata)
     }
 
+    fn delete_credential(&mut self, credential_id: Uuid) -> Result<(), CredentialError> {
+        if self.records.remove(&credential_id).is_none() {
+            return Err(CredentialError::NotFound(credential_id));
+        }
+        self.persist()?;
+        Ok(())
+    }
+
     fn test_credential(&self, credential_id: Uuid) -> Result<bool, CredentialError> {
         Ok(self
             .records
@@ -904,6 +912,36 @@ mod tests {
             .unwrap();
         let listed = serde_json::to_value(store.list_metadata()).unwrap();
         assert!(!listed.to_string().contains("TEST_SECRET_SHOULD_NOT_APPEAR"));
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn deleting_a_dev_credential_erases_the_stored_secret() {
+        let path = std::env::temp_dir().join(format!("ham-credentials-{}.json", Uuid::new_v4()));
+        let mut store = InsecureDevCredentialStore::open(&path, true).unwrap();
+        let metadata = CredentialMetadata::new(
+            "hosted-account",
+            "acct",
+            ServiceType::Authentication,
+            "Hosted account session token",
+        );
+        let stored = store
+            .store_credential(metadata, "TEST_SECRET_SHOULD_NOT_APPEAR")
+            .unwrap();
+
+        store.delete_credential(stored.credential_id).unwrap();
+
+        assert!(matches!(
+            store.retrieve_secret(stored.credential_id),
+            Err(CredentialError::NotFound(_))
+        ));
+        assert!(!store.credential_exists(stored.credential_id));
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(!text.contains("TEST_SECRET_SHOULD_NOT_APPEAR"));
+        assert!(matches!(
+            store.delete_credential(stored.credential_id),
+            Err(CredentialError::NotFound(_))
+        ));
         let _ = fs::remove_file(path);
     }
 

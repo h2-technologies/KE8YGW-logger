@@ -178,8 +178,12 @@ performs automatic merge.
 
 - Production email provider/domain configuration and deliverability validation.
 - Cloudflare Turnstile site/secret keys for public open registration.
-- Hosted web UI wiring for registration, verification, recovery, session
-  rotation, device revocation, and account deletion.
+- Hosted web browser UI wiring for registration, verification, recovery, session
+  rotation, device revocation, and account deletion. The desktop GUI and native
+  iOS clients already drive these routes through the Rust-owned account client
+  in `ham_sync::account`; the hosted web surface has no browser client yet.
+- Administrator client surfaces for hosting configuration and invitation
+  management.
 - Provider adapter hardening.
 - Infrastructure rate-limit sizing, audit retention, monitoring, backups, DNS,
   TLS, and protected deployment environments.

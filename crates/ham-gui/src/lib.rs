@@ -5,11 +5,16 @@
 //! serializable layout and registration models instead of hardcoding behavior in
 //! panels.
 
+pub mod account;
 pub mod bridge;
 pub mod commands;
 pub mod mock;
 pub mod shell;
 
+pub use account::{
+    run_account_action, AccountClientError, AccountHttpRequest, AccountTransport,
+    UreqAccountTransport,
+};
 pub use bridge::{GuiRuntimeBridge, RuntimeBridgeStatus, RuntimeEventInput};
 pub use commands::{CommandDefinition, CommandRegistry};
 pub use shell::{

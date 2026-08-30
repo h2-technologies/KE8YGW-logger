@@ -35,7 +35,14 @@ wrapper.
   load/create/update, diagnostics, and bridge fallback paths.
 - SwiftData QSO/station/equipment/settings records with projection/cache
   metadata.
-- Unit tests for ham-radio utilities, export, and bridge fallback decoding.
+- Hosted account bridge commands (`account.snapshot`, `account.set_server`,
+  `account.plan`, `account.record_result`, `account.record_credentials`), a
+  `URLSession` account transport that classifies nothing, Keychain-stored
+  session/refresh tokens referenced by credential ID, and an Account workspace
+  for registration, verification, sign-in, session refresh/rotation, sign-out,
+  recovery, device management, and confirmed account deletion.
+- Unit tests for ham-radio utilities, export, bridge fallback decoding, and the
+  hosted account bridge and service.
 - GitHub Actions iOS simulator workflow on macOS.
 
 ## Partial
@@ -97,6 +104,8 @@ wrapper.
   cacheable map source.
 - Add native contesting and EmComm product surfaces required by issue #2.
 - Add Xcode UI/snapshot/offline/provider/sync/map tests.
+- Qualify the Account workspace on release devices against a production hosted
+  deployment, and add administrator hosting/invitation management surfaces.
 - Configure signing team, provisioning profiles, privacy manifest, TestFlight,
   App Store metadata, support URL, privacy policy URL, and account deletion
   workflow.

@@ -17,7 +17,15 @@ workflow are present. iOS is v1 scope for the November 24, 2026 release.
 | ADIF/backup/diagnostics | Rust ADIF export preference, backup/diagnostics views | Native import, backup inspect/dry-run/apply, and diagnostics export need v1 hardening. |
 | Contesting | No product surface for v1 contest pack | Contest engine/templates/scoring/Cabrillo are unimplemented. |
 | EmComm | Emergency workspace placeholder | ICS 211, 213, 213RR, 214, personnel, assignments, and message/communications records are unimplemented. |
-| App Store | Xcode project, Info.plist, icons, simulator workflow | Signing, provisioning, archive/device validation, TestFlight, App Store metadata, privacy manifest, support/privacy URLs, and account deletion flow are incomplete. |
+| App Store | Xcode project, Info.plist, icons, simulator workflow, in-app account deletion | Signing, provisioning, archive/device validation, TestFlight, App Store metadata, privacy manifest, and support/privacy URLs are incomplete. The in-app account deletion path now exists but is unvalidated on a release device. |
+
+Account and session UX is no longer a gap: native iOS drives the Rust-owned
+hosted account client through dedicated bridge commands, stores session and
+refresh tokens in the Keychain by credential reference, and exposes
+registration, verification, sign-in, session refresh/rotation, sign-out,
+recovery, device management, and account deletion. Release-device qualification
+against a production hosted deployment and administrator hosting/invitation
+management remain open.
 
 ## Non-Gaps
 
