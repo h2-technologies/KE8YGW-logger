@@ -2,10 +2,10 @@
 
 ## Desktop and CLI 0.3 preparation (July 30, 2026)
 
-- Desktop/Tauri, CLI, and shared Rust package metadata is pinned to `0.3.0`;
-  native iOS marketing metadata is pinned to its separate `0.3.1` release.
-- Version validation now rejects drift between the desktop/CLI, shared Rust,
-  and native iOS release lines.
+- Desktop/Tauri, CLI, shared Rust package metadata, and native iOS marketing
+  metadata are all `0.3.0`, inherited from `[workspace.package].version`.
+- Version validation rejects any drift from that single canonical version
+  across Cargo, Tauri, iOS, API metadata, release artifacts, and tags.
 - The existing CLI commands now expose stable `--json` success output,
   deterministic usage errors, help, and version/build output.
 - The CLI is still incomplete for v1: logbook/QSO/support-state CRUD, dry-run

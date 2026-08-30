@@ -8,10 +8,10 @@ sync, with room for emergency communications, net control, and contesting.
 
 The locked v1 release target is November 24, 2026. v1 includes hosted web,
 native iOS, and signed desktop clients for Windows, macOS, and broad Linux
-distribution support. The current shared Rust, desktop application, and CLI
-release line is `0.3.0`. Native iOS is a separate `0.3.1` release and is not
-coupled to the desktop tag. CI enforces these deliberately different release
-versions with `scripts/check_versions.py`.
+distribution support. The current product version is `0.3.0` across shared
+Rust, the desktop application, the CLI, and native iOS. That value in
+`Cargo.toml` is the canonical product version until a release branch or tag
+updates it, and CI enforces it with `scripts/check_versions.py`.
 
 ## Start Here
 
