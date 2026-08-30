@@ -24,6 +24,7 @@ ignore = [
     { id = "RUSTSEC-2025-0098", reason = "Informational rust-unic advisory inherited through Tauri urlpattern; no direct repository usage. Review by 2026-10-18 with Tauri urlpattern updates." },
     { id = "RUSTSEC-2025-0100", reason = "Informational rust-unic advisory inherited through Tauri urlpattern; no direct repository usage. Review by 2026-10-18 with Tauri urlpattern updates." },
     { id = "RUSTSEC-2025-0141", reason = "Informational bincode advisory inherited through surrealdb-core -> surrealmx. Review by 2026-10-18 or the next SurrealDB 3.x milestone." },
+    { id = "RUSTSEC-2026-0235", reason = "rkyv 0.7 out-of-bounds archive validation. Reaches Cargo.lock only as an unenabled optional dependency of rust_decimal (via surrealdb-core/surrealdb-types/surrealdb-protocol/revision), so it is not in the build graph and is never compiled; cargo audit flags it because it scans the lockfile. The fix is rkyv >=0.8.17 and rust_decimal 1.42.1 is the latest release, so no upgrade path exists yet. Review by 2026-10-18 or when rust_decimal moves to rkyv 0.8." },
 ]
 
 [licenses]
