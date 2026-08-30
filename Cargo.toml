@@ -28,6 +28,6 @@ hmac = "0.12"
 sha2 = "0.10"
 socket2 = { version = "0.6", features = ["all"] }
 surrealdb = { version = "3.2.1", default-features = false, features = ["kv-surrealkv", "kv-mem", "protocol-ws", "rustls"] }
-thiserror = "1"
+thiserror = "2"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync"] }
 uuid = { version = "1", features = ["serde", "v4"] }
