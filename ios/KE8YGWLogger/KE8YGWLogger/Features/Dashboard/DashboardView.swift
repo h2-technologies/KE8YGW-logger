@@ -12,6 +12,7 @@ enum FeatureDestination: String, CaseIterable, Identifiable, Hashable {
     case callsign
     case stations
     case providers
+    case account
     case maps
     case pota
     case sota
@@ -31,6 +32,7 @@ enum FeatureDestination: String, CaseIterable, Identifiable, Hashable {
         case .callsign: return "Callsign"
         case .stations: return "Stations"
         case .providers: return "Providers"
+        case .account: return "Account"
         case .maps: return "Maps"
         case .pota: return "POTA"
         case .sota: return "SOTA"
@@ -50,6 +52,7 @@ enum FeatureDestination: String, CaseIterable, Identifiable, Hashable {
         case .callsign: return "person.text.rectangle"
         case .stations: return "antenna.radiowaves.left.and.right"
         case .providers: return "point.3.connected.trianglepath.dotted"
+        case .account: return "person.crop.circle.badge.checkmark"
         case .maps: return "map"
         case .pota: return "tree"
         case .sota: return "mountain.2"
@@ -93,6 +96,8 @@ struct AppShellView: View {
             StationManagementView()
         case .providers:
             ProviderStatusView()
+        case .account:
+            AccountWorkspaceView()
         case .maps:
             MapWorkspaceView()
         case .pota:
@@ -159,6 +164,7 @@ struct DashboardView: View {
                     QuickActionButton("Start SOTA", systemImage: "mountain.2") { selection = .sota }
                     QuickActionButton("Open Net", systemImage: "person.3.sequence") { selection = .netControl }
                     QuickActionButton("Sync", systemImage: "arrow.triangle.2.circlepath") { selection = .sync }
+                    QuickActionButton("Account", systemImage: "person.crop.circle.badge.checkmark") { selection = .account }
                     QuickActionButton("Open Map", systemImage: "map") { selection = .maps }
                     QuickActionButton("Diagnostics", systemImage: "stethoscope") { selection = .diagnostics }
                 }

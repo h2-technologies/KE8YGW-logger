@@ -17,7 +17,7 @@ resolver = "2"
 [workspace.package]
 edition = "2021"
 license = "MIT"
-version = "0.3.0"
+version = "0.4.0"
 
 [workspace.dependencies]
 async-trait = "0.1"
@@ -29,5 +29,6 @@ sha2 = "0.10"
 socket2 = { version = "0.6", features = ["all"] }
 surrealdb = { version = "3.2.1", default-features = false, features = ["kv-surrealkv", "kv-mem", "protocol-ws", "rustls"] }
 thiserror = "1"
+ureq = { version = "2.12", default-features = false, features = ["tls"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync"] }
 uuid = { version = "1", features = ["serde", "v4"] }

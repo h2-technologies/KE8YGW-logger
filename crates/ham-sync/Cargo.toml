@@ -6,6 +6,7 @@ version.workspace = true
 
 [features]
 default = []
+hosted-http = ["dep:ureq"]
 surreal-storage = ["dep:surrealdb"]
 
 [dependencies]
@@ -19,6 +20,7 @@ socket2.workspace = true
 surrealdb = { workspace = true, optional = true }
 thiserror.workspace = true
 tokio.workspace = true
+ureq = { workspace = true, optional = true }
 uuid.workspace = true
 
 [dev-dependencies]

@@ -32,6 +32,11 @@ const state = {
   duplicateWarning: "",
   importSummary: null,
   backupState: { lastBackup: null, dryRun: null, importResult: null },
+  account: null,
+  accountBackend: null,
+  accountResult: null,
+  accountError: null,
+  accountBusy: false,
   divergenceReview: null,
   conflictReview: null,
   selectedConflictReviewId: null,
@@ -162,6 +167,7 @@ async function boot() {
   await refreshAwards();
   await refreshUploads();
   await refreshCredentials();
+  await refreshAccount();
   await refreshNetControl();
   await refreshMapState();
   await refreshOnlineServices();
@@ -184,6 +190,7 @@ function bindShellControls() {
   byId("backup-button").addEventListener("click", () => openScreen("backups"));
   byId("settings-button").addEventListener("click", () => openScreen("settings"));
   byId("plugins-button").addEventListener("click", () => openScreen("plugins"));
+  byId("account-button").addEventListener("click", openAccountScreen);
   byId("close-screen").addEventListener("click", closeScreen);
   byId("command-search").addEventListener("input", renderCommandResults);
 
@@ -484,6 +491,9 @@ function runCommand(commandId) {
   if (command.target_workspace) switchWorkspace(command.target_workspace);
   if (command.id === "open.settings") openScreen("settings");
   if (command.id === "open.plugins") openScreen("plugins");
+  if (command.id === "account.open" || command.id === "account.sign-in" || command.id === "account.devices.open") openAccountScreen();
+  if (command.id === "account.session.refresh") accountRequest("/api/account/session/refresh", {});
+  if (command.id === "account.sign-out") accountRequest("/api/account/logout", {});
   if (command.id === "services.open") openScreen("services");
   if (command.id === "services.cache.clear") clearServiceCache();
   if (command.id === "services.lookup.test") lookupCallsignFromPrompt();
@@ -606,6 +616,14 @@ function openScreen(kind) {
     eyebrow.textContent = "Provider Runtime";
     title.textContent = "Service Providers";
     body.innerHTML = renderServiceProviderScreen();
+    return;
+  }
+
+  if (kind === "account") {
+    eyebrow.textContent = "Account";
+    title.textContent = "Hosted Account";
+    body.innerHTML = renderAccountScreen();
+    bindAccountControls();
     return;
   }
 
@@ -789,12 +807,14 @@ function bindCredentialControls() {
 }
 
 function renderSettings() {
-  const sections = ["General", "Appearance", "Callsign/Profile", "Sync", "Service Providers", "Credentials", "Lookup/Enrichment", "Rig Control", "Plugin Permissions", "Plugins", "Diagnostics", "Keyboard Shortcuts"];
+  const sections = ["General", "Appearance", "Callsign/Profile", "Account", "Sync", "Service Providers", "Credentials", "Lookup/Enrichment", "Rig Control", "Plugin Permissions", "Plugins", "Diagnostics", "Keyboard Shortcuts"];
   return `<div class="settings-grid">
     ${sections
       .map((section) =>
-        section === "Sync"
-          ? `<article class="settings-card"><h3>${section}</h3>${renderCloudSettings()}</article>`
+        section === "Account"
+          ? `<article class="settings-card"><h3>${section}</h3>${renderAccountSummary()}</article>`
+          : section === "Sync"
+            ? `<article class="settings-card"><h3>${section}</h3>${renderCloudSettings()}</article>`
           : section === "Service Providers"
             ? `<article class="settings-card"><h3>${section}</h3>${renderServiceProviderSummary()}</article>`
           : section === "Credentials"
@@ -860,6 +880,14 @@ function renderServiceProviderScreen() {
   return `<p class="muted">Providers are registered through the shared core service framework. Provider configs reference credential IDs; raw secrets are handled only by the credential store.</p>
     ${renderServiceProviderSummary()}
     ${renderServiceProviders()}`;
+}
+
+function renderAccountSummary() {
+  const snapshot = accountSnapshot();
+  const stateLabel = snapshot ? ACCOUNT_STATE_LABELS[snapshot.connection_state] || snapshot.connection_state : "Unknown";
+  return `<p class="muted">${escapeHtml(stateLabel)}${snapshot?.email ? ` &middot; ${escapeHtml(snapshot.email)}` : ""}</p>
+    <p class="muted">${escapeHtml(snapshot?.base_url || "No hosted server configured")}</p>
+    <button class="toolbar-button" type="button" onclick="openAccountScreen()">Open Hosted Account</button>`;
 }
 
 function renderCredentialSummary() {
@@ -3653,3 +3681,276 @@ boot().catch((error) => {
   state.busConnected = false;
   document.body.innerHTML = `<main class="screen"><div class="screen-body"><h1>GUI failed to start</h1><pre>${error}</pre></div></main>`;
 });
+// ---------------------------------------------------------------------------
+// Hosted account and session screen
+// ---------------------------------------------------------------------------
+
+const ACCOUNT_STATE_LABELS = {
+  signed_out: "Signed out",
+  pending_email_verification: "Waiting for email verification",
+  signed_in: "Signed in",
+  session_expired: "Session expired",
+  device_revoked: "Device revoked",
+};
+
+const ACCOUNT_OUTCOME_LABELS = {
+  accepted: "Accepted",
+  authentication_required: "Sign in again",
+  email_verification_required: "Verify the account email",
+  registration_closed: "Registration is closed on this server",
+  token_expired: "Token expired",
+  token_replayed: "Token already used",
+  human_verification_failed: "Human verification failed",
+  rate_limited: "Rate limited",
+  validation_failed: "Request rejected",
+  transient_failure: "Temporary failure",
+  permanent_failure: "Request failed",
+};
+
+async function refreshAccount() {
+  try {
+    const payload = await fetch("/api/account/state").then((response) => response.json());
+    state.account = payload.account || null;
+    state.accountBackend = payload.credential_backend || null;
+    state.accountError = payload.error || null;
+  } catch (error) {
+    state.accountError = String(error);
+  }
+}
+
+function accountSnapshot() {
+  return state.account || null;
+}
+
+function accountIsSignedIn() {
+  return accountSnapshot()?.connection_state === "signed_in";
+}
+
+async function accountRequest(path, body) {
+  if (state.accountBusy) return;
+  state.accountBusy = true;
+  state.accountError = null;
+  renderAccountScreenBody();
+  try {
+    const response = await fetch(path, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body || {}),
+    });
+    const payload = await response.json();
+    if (payload.account_result) {
+      state.accountResult = payload.account_result;
+      state.account = payload.account_result.snapshot;
+    } else if (payload.account) {
+      state.account = payload.account;
+      state.accountResult = null;
+    }
+    if (payload.error) {
+      state.accountError = payload.error;
+    }
+  } catch (error) {
+    state.accountError = String(error);
+  } finally {
+    state.accountBusy = false;
+    await refreshAccount();
+    renderAccountScreenBody();
+    render();
+  }
+}
+
+function renderAccountScreenBody() {
+  const body = byId("screen-body");
+  if (!body || byId("overlay").hidden) return;
+  if (byId("account-screen")) {
+    body.innerHTML = renderAccountScreen();
+    bindAccountControls();
+  }
+}
+
+function renderAccountStatusBanner() {
+  const snapshot = accountSnapshot();
+  if (!snapshot) {
+    return `<p class="muted">Hosted account state is loading.</p>`;
+  }
+  const stateLabel = ACCOUNT_STATE_LABELS[snapshot.connection_state] || snapshot.connection_state;
+  const result = state.accountResult;
+  const backend = state.accountBackend || {};
+  return `<div class="sync-summary">
+    <p><strong>${escapeHtml(stateLabel)}</strong>${snapshot.email ? ` &middot; ${escapeHtml(snapshot.email)}` : ""}</p>
+    <p>Server: ${escapeHtml(snapshot.base_url || "not configured")}</p>
+    <p>Device: ${escapeHtml(snapshot.device_name || "unnamed")}${snapshot.device_id ? ` (${escapeHtml(snapshot.device_id)})` : ""}</p>
+    ${snapshot.session_expires_at ? `<p>Session expires: ${escapeHtml(snapshot.session_expires_at)}</p>` : ""}
+    ${snapshot.pending_email_verification_for ? `<p class="event-error">Verification pending for ${escapeHtml(snapshot.pending_email_verification_for)}.</p>` : ""}
+    ${backend.available === false ? `<p class="event-error">Credential backend unavailable: ${escapeHtml(backend.message || "no secure storage")}. Sign-in cannot store a session token.</p>` : ""}
+    ${state.accountBusy ? `<p class="muted">Contacting the hosted server&hellip;</p>` : ""}
+    ${state.accountError ? `<p class="event-error">${escapeHtml(state.accountError)}</p>` : ""}
+    ${result ? `<p class="${result.outcome === "accepted" ? "muted" : "event-error"}">${escapeHtml(ACCOUNT_OUTCOME_LABELS[result.outcome] || result.outcome)}: ${escapeHtml(result.message)}${result.request_id ? ` (request ${escapeHtml(result.request_id)})` : ""}</p>` : ""}
+    ${result && result.retryable ? `<p class="muted">This request can be retried without any account changes.</p>` : ""}
+  </div>`;
+}
+
+function renderAccountDevices() {
+  const snapshot = accountSnapshot();
+  const devices = snapshot?.devices || [];
+  if (!accountIsSignedIn()) {
+    return `<p class="muted">Sign in to review and revoke hosted devices.</p>`;
+  }
+  if (devices.length === 0) {
+    return `<p class="muted">No hosted devices loaded yet. Refresh the device list.</p>`;
+  }
+  return `<div class="qso-list">${devices
+    .map(
+      (device) => `<article class="qso-row">
+        <strong>${escapeHtml(device.device_name)}</strong>
+        <span>${escapeHtml(device.device_id)}</span>
+        <small>${device.current ? "This device / " : ""}${device.revoked ? "Revoked" : "Active"}${device.trusted ? " / Trusted" : ""}</small>
+        <div class="monitor-actions">
+          <button class="toolbar-button" type="button" data-account-revoke-device="${escapeHtml(device.device_id)}" ${device.revoked ? "disabled" : ""}>Revoke</button>
+        </div>
+      </article>`
+    )
+    .join("")}</div>`;
+}
+
+function renderAccountLogbooks() {
+  const logbooks = accountSnapshot()?.logbooks || [];
+  if (logbooks.length === 0) {
+    return `<p class="muted">No hosted logbook memberships are cached.</p>`;
+  }
+  return `<ul class="stack">${logbooks
+    .map(
+      (logbook) =>
+        `<li>${escapeHtml(logbook.name || "Logbook")} &middot; ${escapeHtml(logbook.logbook_id)}${logbook.role ? ` &middot; ${escapeHtml(logbook.role)}` : ""}</li>`
+    )
+    .join("")}</ul>`;
+}
+
+function renderAccountScreen() {
+  const snapshot = accountSnapshot();
+  const signedIn = accountIsSignedIn();
+  const busy = state.accountBusy ? "disabled" : "";
+  return `<div id="account-screen" class="stack">
+    ${renderAccountStatusBanner()}
+
+    <details open>
+      <summary>Hosted server</summary>
+      <form id="account-configure-form" class="qso-form">
+        <label>Server URL <input name="base_url" class="placeholder-control" value="${escapeHtml(snapshot?.base_url || "")}" placeholder="https://logger.example" required /></label>
+        <label>Device name <input name="device_name" class="placeholder-control" value="${escapeHtml(snapshot?.device_name || "")}" placeholder="Shack Desktop" required /></label>
+        <button class="toolbar-button" type="submit" ${busy}>Save Server</button>
+      </form>
+    </details>
+
+    <details ${signedIn ? "" : "open"}>
+      <summary>Sign in</summary>
+      <form id="account-login-form" class="qso-form">
+        <label>Email <input name="email" class="placeholder-control" type="email" autocomplete="username" value="${escapeHtml(snapshot?.email || "")}" required /></label>
+        <label>Display name <input name="display_name" class="placeholder-control" autocomplete="name" value="${escapeHtml(snapshot?.display_name || "")}" /></label>
+        <button class="toolbar-button" type="submit" ${busy}>Sign In</button>
+      </form>
+      <p class="muted">The hosted server issues the session; the token is stored in the operating-system credential backend and is never shown here.</p>
+    </details>
+
+    <details>
+      <summary>Create an account</summary>
+      <form id="account-register-form" class="qso-form">
+        <label>Email <input name="email" class="placeholder-control" type="email" autocomplete="username" required /></label>
+        <label>Display name <input name="display_name" class="placeholder-control" autocomplete="name" /></label>
+        <label>Invitation token <input name="invitation_token" class="placeholder-control" placeholder="Required on invite-only servers" /></label>
+        <label>Turnstile token <input name="turnstile_token" class="placeholder-control" placeholder="Required on open public servers" /></label>
+        <button class="toolbar-button" type="submit" ${busy}>Register</button>
+      </form>
+      <form id="account-verify-form" class="qso-form">
+        <label>Email verification token <input name="token" class="placeholder-control" required /></label>
+        <button class="toolbar-button" type="submit" ${busy}>Verify Email</button>
+      </form>
+    </details>
+
+    <details>
+      <summary>Account recovery</summary>
+      <form id="account-recovery-start-form" class="qso-form">
+        <label>Email <input name="email" class="placeholder-control" type="email" required /></label>
+        <button class="toolbar-button" type="submit" ${busy}>Send Recovery Token</button>
+      </form>
+      <form id="account-recovery-complete-form" class="qso-form">
+        <label>Recovery token <input name="token" class="placeholder-control" required /></label>
+        <button class="toolbar-button" type="submit" ${busy}>Complete Recovery</button>
+      </form>
+    </details>
+
+    <details ${signedIn ? "open" : ""}>
+      <summary>Session</summary>
+      <div class="monitor-actions">
+        <button class="toolbar-button" type="button" data-account-action="/api/account/session/refresh" ${signedIn ? busy : "disabled"}>Refresh Session</button>
+        <button class="toolbar-button" type="button" data-account-action="/api/account/session/rotate" ${signedIn ? busy : "disabled"}>Rotate Session</button>
+        <button class="toolbar-button" type="button" data-account-action="/api/account/logout" ${signedIn ? busy : "disabled"}>Sign Out</button>
+        <button class="toolbar-button" type="button" data-account-action="/api/account/logout-all" ${signedIn ? busy : "disabled"}>Sign Out Everywhere</button>
+      </div>
+      ${renderAccountLogbooks()}
+    </details>
+
+    <details ${signedIn ? "open" : ""}>
+      <summary>Devices</summary>
+      <div class="monitor-actions">
+        <button class="toolbar-button" type="button" data-account-action="/api/account/devices/refresh" ${signedIn ? busy : "disabled"}>Refresh Devices</button>
+        <button class="toolbar-button" type="button" data-account-confirm="/api/account/devices/revoke-all" ${signedIn ? busy : "disabled"}>Revoke All Devices</button>
+      </div>
+      ${renderAccountDevices()}
+    </details>
+
+    <details>
+      <summary>Delete account</summary>
+      <p class="muted">Account deletion is permanent on the hosted server. Local official logs are not deleted.</p>
+      <button class="toolbar-button" type="button" data-account-confirm="/api/account/delete" ${signedIn ? busy : "disabled"}>Delete Hosted Account</button>
+    </details>
+  </div>`;
+}
+
+function accountFormValues(form) {
+  const data = new FormData(form);
+  const values = {};
+  data.forEach((value, key) => {
+    const trimmed = String(value).trim();
+    if (trimmed.length > 0) values[key] = trimmed;
+  });
+  return values;
+}
+
+function bindAccountControls() {
+  const forms = [
+    ["account-configure-form", "/api/account/configure"],
+    ["account-login-form", "/api/account/login"],
+    ["account-register-form", "/api/account/register"],
+    ["account-verify-form", "/api/account/verify-email"],
+    ["account-recovery-start-form", "/api/account/recovery/start"],
+    ["account-recovery-complete-form", "/api/account/recovery/complete"],
+  ];
+  forms.forEach(([id, path]) => {
+    byId(id)?.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      await accountRequest(path, accountFormValues(event.target));
+    });
+  });
+  document.querySelectorAll("[data-account-action]").forEach((button) => {
+    button.addEventListener("click", () => accountRequest(button.dataset.accountAction, {}));
+  });
+  document.querySelectorAll("[data-account-confirm]").forEach((button) => {
+    button.addEventListener("click", () => {
+      if (!window.confirm("This cannot be undone on the hosted server. Continue?")) return;
+      accountRequest(button.dataset.accountConfirm, {});
+    });
+  });
+  document.querySelectorAll("[data-account-revoke-device]").forEach((button) => {
+    button.addEventListener("click", () => {
+      if (!window.confirm("Revoke this hosted device?")) return;
+      accountRequest("/api/account/devices/revoke", {
+        device_id: button.dataset.accountRevokeDevice,
+      });
+    });
+  });
+}
+
+async function openAccountScreen() {
+  await refreshAccount();
+  openScreen("account");
+}

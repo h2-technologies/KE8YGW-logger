@@ -22,9 +22,14 @@ outside issue #2.
      fail-closed public registration; account recovery/deletion; session
      expiry/rotation/logout-all; device revocation; request IDs; audits; and
      durable rate limits.
-   - Remaining: hosted web, desktop, and iOS UX wiring; production email
-     provider/domain validation; Turnstile site/secret keys; privacy/support
-     URLs; infrastructure sizing; retention/monitoring; and deployment secrets.
+   - Client surfaces: the v0.4 milestone wired hosted web, desktop, native iOS,
+     and the CLI to the account, session, recovery, and device routes through
+     the shared `ham_sync::account` contract. See
+     [V0_4_RELEASE_PLAN.md](V0_4_RELEASE_PLAN.md).
+   - Remaining: server administration UX (hosting mode, invitations, audits);
+     production email provider/domain validation; Turnstile site/secret keys;
+     privacy/support URLs; infrastructure sizing; retention/monitoring; and
+     deployment secrets.
 
 3. Offline-first sync and reconciliation
    - Implemented foundation: durable versioned mutation queue, deterministic
@@ -152,8 +157,8 @@ outside issue #2.
 
 ## Parallel Workstreams
 
-- Hosted web, desktop, and iOS account UX can proceed in parallel now that the
-  shared auth/session contracts are fixed.
+- Hosted web, desktop, and iOS server-administration UX can proceed in parallel
+  on top of the shared hosted account client delivered in v0.4.
 - Desktop signing/updater can proceed in parallel with iOS signing/TestFlight
   after version/artifact validation is stable.
 - Maps/provider licensing can proceed in parallel with contesting and EmComm
@@ -185,5 +190,7 @@ outside issue #2.
    execution plus poor-network validation on release devices.
 2. Complete production provider qualification and release-runner live validation
    for the issue #2 provider set.
-3. Wire hosted web, desktop, and iOS UI flows to the implemented account,
-   session, recovery, device, and admin APIs.
+3. Wire hosted web, desktop, and iOS UI flows to the implemented server
+   administration APIs (hosting mode, invitations, audits). Account, session,
+   recovery, and device flows are done across hosted web, desktop, native iOS,
+   and the CLI.

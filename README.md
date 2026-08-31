@@ -8,7 +8,7 @@ sync, with room for emergency communications, net control, and contesting.
 
 The locked v1 release target is November 24, 2026. v1 includes hosted web,
 native iOS, and signed desktop clients for Windows, macOS, and broad Linux
-distribution support. The current product version is `0.3.0` across shared
+distribution support. The current product version is `0.4.0` across shared
 Rust, the desktop application, the CLI, and native iOS. That value in
 `Cargo.toml` is the canonical product version until a release branch or tag
 updates it, and CI enforces it with `scripts/check_versions.py`.
@@ -118,7 +118,8 @@ passes should start with these documents:
   logbook, QSO, station/equipment, ADIF, provider, upload, sync, and audit
   routes.
 - `ham-cli`: offline scriptable ADIF import/export, chain verification,
-  projection rebuild, and machine-readable version/build reporting. See the
+  projection rebuild, hosted account/session/device commands, and
+  machine-readable version/build reporting. See the
   [CLI command reference](docs/CLI_REFERENCE.md) for the implemented v1 slice
   and the commands that remain release blockers.
 - `ham-gui`: initial GUI shell, workspace model, panel registry, command registry,
@@ -129,7 +130,8 @@ passes should start with these documents:
 
 ## v0.2 Almost-v1 Beta Status
 
-The current `0.3.0` workspace is the offline-sync v1 foundation baseline, not the complete
+The current `0.4.0` workspace carries the offline-sync v1 foundation plus the account
+and session milestone. It is not the complete
 v1 product. The `ham-server` crate exposes `/api/v1` hosted routes, one-time
 server-admin bootstrap, personal/public/self-hosted configuration, invite-only
 registration by default, administrator open/disabled registration switches,
@@ -768,6 +770,7 @@ From the CLI:
 ```powershell
 cargo run -p ham-cli -- verify-chain
 cargo run -p ham-cli -- rebuild-projections
+cargo run -p ham-cli -- account status --json
 ```
 
 ## ADIF Import And Export
@@ -1108,6 +1111,39 @@ and declared on the iOS app target; physical iOS Local Network permission
 validation remains a release gate documented in
 [iOS Multicast Provisioning](docs/IOS_MULTICAST_PROVISIONING.md).
 
+## Hosted Account And Session
+
+Hosted accounts, sessions, recovery, and devices are driven from every client
+through one shared Rust contract in `ham_sync::account`. Rust plans each hosted
+`/api/v1` request, interprets the response, classifies the outcome from the
+stable hosted error code before the HTTP status, and owns the durable
+non-secret account record. Platform layers carry bytes and store secrets only.
+
+Available on every platform:
+
+- Register, verify email, start and complete account recovery.
+- Sign in, read the session, rotate the session, sign out, sign out everywhere.
+- List hosted devices, revoke one device, revoke every device.
+- Delete the hosted account.
+
+Surfaces:
+
+- Hosted web and desktop: the `Account` toolbar screen and the `Account`
+  settings card, backed by `/api/account/*` endpoints in `ham-gui`.
+- Native iOS: the `Account` workspace and dashboard quick action, backed by the
+  `account.*` Rust bridge commands and a URLSession transport.
+- CLI: `ham-cli account ...`, documented in the
+  [CLI command reference](docs/CLI_REFERENCE.md).
+
+Session and refresh tokens are stored only in the operating-system credential
+backend or the iOS Keychain, under credential identifiers assigned by Rust. The
+durable account record, GUI responses, CLI output, and runtime events never
+contain a token. A hosted authentication failure clears both the stored
+identifiers and the stored secrets.
+
+Hosted server administration (hosting mode, invitations, audits) still has no
+client surface; see [docs/V0_4_RELEASE_PLAN.md](docs/V0_4_RELEASE_PLAN.md).
+
 ## Cloud Relay And Self-Hosted Sync
 
 Cloud sync is a fallback when LAN peers cannot reach each other. LAN remains the
@@ -1285,6 +1321,7 @@ The default shell includes:
 - Bottom panel region
 - Bottom status bar
 - Command palette with `Ctrl+K` or `Cmd+K`
+- Hosted account screen
 - Settings placeholder
 - Plugin manager placeholder
 
@@ -1420,8 +1457,8 @@ just release
 Tagged releases are automated from git tags matching `v*.*.*`, for example:
 
 ```powershell
-git tag v0.3.0
-git push origin v0.3.0
+git tag v0.4.0
+git push origin v0.4.0
 ```
 
 The release workflow validates that the production tag matches the workspace

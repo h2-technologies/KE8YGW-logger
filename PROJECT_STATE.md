@@ -1,23 +1,44 @@
 # Project State
 
+## Account and session milestone (August 31, 2026)
+
+- The hosted account, session, recovery, and device routes now have a client
+  surface on every platform in the locked v1 scope: hosted web, Windows/macOS/
+  Linux desktop, native iOS, and the CLI.
+- `ham_sync::account` is the single authority for hosted account request
+  planning, response interpretation, outcome classification, and the durable
+  non-secret account record. Platform layers only carry bytes and store secrets.
+- Session and refresh tokens live only in the OS credential backend or the iOS
+  Keychain under Rust-assigned credential identifiers. The durable record, GUI
+  responses, CLI output, and runtime events are token-free.
+- Server administration UX (hosting mode, invitations, audits) is the remaining
+  account-area client gap and is the next increment. See
+  [docs/V0_4_RELEASE_PLAN.md](docs/V0_4_RELEASE_PLAN.md).
+- Every release surface is unified on product version `0.4.0`: Cargo workspace
+  metadata, Tauri, iOS marketing version, API product metadata, the CLI version
+  assertion, and documentation. Publishing a `v0.4.0` tag remains a separate
+  release action governed by `RELEASE.md`.
+
 ## Desktop and CLI 0.3 preparation (July 30, 2026)
 
 - Desktop/Tauri, CLI, shared Rust package metadata, and native iOS marketing
-  metadata are all `0.3.0`, inherited from `[workspace.package].version`.
+  metadata are all `0.4.0`, inherited from `[workspace.package].version`.
 - Version validation rejects any drift from that single canonical version
   across Cargo, Tauri, iOS, API metadata, release artifacts, and tags.
 - The existing CLI commands now expose stable `--json` success output,
   deterministic usage errors, help, and version/build output.
 - The CLI is still incomplete for v1: logbook/QSO/support-state CRUD, dry-run
-  ADIF, backups, sync/conflict operations, provider diagnostics, diagnostic
-  bundles, and shell completions remain blockers.
+  ADIF, backups, sync/conflict operations, hosted server administration,
+  provider diagnostics, diagnostic bundles, and shell completions remain
+  blockers. Hosted account, session, recovery, and device commands are
+  implemented.
 - Desktop packaging/signing, signed updater behavior, offline maps, and
   production cross-platform install/recovery evidence remain open; no signing,
   notarization, or clean-machine result is claimed by this update.
 
 Last audited: 2026-08-28, against `dev` at 09418f4.
 
-Canonical product version: `0.3.0` from `Cargo.toml`
+Canonical product version: `0.4.0` from `Cargo.toml`
 `[workspace.package].version`.
 
 Locked v1 release target: November 24, 2026 with hosted web, native iOS, and
@@ -50,6 +71,24 @@ operations, and release qualification.
   configuration, invitation management, registration, verified email, recovery,
   session/device/logbook, QSO, station/equipment, ADIF, providers, uploads,
   activations, Net Control, maps, backups, divergence review, and sync.
+- Shared hosted account and session client in `ham_sync::account`: bounded
+  action vocabulary, hosted request planning, response interpretation, stable
+  outcome classification driven by hosted error codes before HTTP status,
+  transport-failure classification, and a versioned JSON support record with
+  atomic writes and corrupt-file quarantine. Issued session and refresh tokens
+  are returned exactly once, excluded from every serialized form, and stored
+  only in the OS credential backend or the iOS Keychain under Rust-assigned
+  credential identifiers; an authentication failure clears both the identifiers
+  and the stored secrets.
+- Client surfaces for hosted registration, email verification, account
+  recovery, sign-in, session read/rotate, sign-out, sign-out-everywhere, device
+  list/revoke/revoke-all, and account deletion: `/api/account/*` GUI endpoints
+  plus a browser Account screen and settings card for hosted web and desktop,
+  `account.*` iOS bridge commands with typed Swift methods, a URLSession
+  transport, Keychain storage and an Account workspace, and `ham-cli account`
+  subcommands with stable `--json` output. Desktop and hosted web share the
+  `ham-sync` `hosted-http` transport with the CLI; native iOS keeps its own
+  transport against the same Rust planning and interpretation.
 - Durable hosted SurrealDB metadata for server admins, users, token hashes,
   sessions, devices, logbooks, memberships, invites, verification/recovery
   tokens, rate limits, audits, and support state; durable self-hosted
@@ -98,9 +137,12 @@ operations, and release qualification.
   hashed expiring single-use invite/verification/recovery tokens, verified
   email gating, Turnstile fail-closed public registration, secure-cookie/bearer
   sessions, refresh rotation, logout-all, device revocation, account deletion,
-  request IDs, audits, and durable configurable rate limits. Production hosted
-  web UI wiring, external email deliverability, infrastructure sizing,
-  retention, monitoring, and deployment secrets remain incomplete.
+  request IDs, audits, and durable configurable rate limits. Account, session,
+  recovery, and device client flows exist on hosted web, desktop, native iOS,
+  and the CLI. Server administration UX (hosting mode, invitations, audits),
+  cookie-based hosted web sessions, external email deliverability,
+  infrastructure sizing, retention, monitoring, and deployment secrets remain
+  incomplete.
 - Sync - shared core: discovery, handshake, preview/pull/push verification
   models, durable self-hosted backend, queue-aware cloud push acknowledgment,
   structured divergence reports, and durable manual conflict-review
@@ -302,7 +344,15 @@ Known manual repository/external settings remain in
 
 ## Next Recommended Goal
 
-Finish the remaining sync/reconciliation hardening: App Store Connect archive
+Wire hosted web, desktop, and native iOS to the implemented server
+administration routes: hosting-mode configuration, invitation
+create/list/inspect/resend/expire/revoke, and audit review. That is the only
+remaining account-area client gap and, like the account milestone, it has no
+external blocker. `ham_sync::account` already provides the planning,
+classification, and secret-handling contract to extend.
+
+After that, or in parallel where hardware and credentials allow, finish the
+remaining sync/reconciliation hardening: App Store Connect archive
 confirmation for the newly provisioned multicast entitlement, release-device
 cross-client branch review and reconciliation workflow qualification, physical
 LAN/iOS local-network validation, release-device hosted/self-hosted native

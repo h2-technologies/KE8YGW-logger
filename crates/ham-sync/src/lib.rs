@@ -1,6 +1,12 @@
 //! Local-first LAN discovery and sync handshake primitives.
 
+pub mod account;
+#[cfg(feature = "hosted-http")]
+pub mod account_http;
 pub mod offline;
+pub use account::*;
+#[cfg(feature = "hosted-http")]
+pub use account_http::*;
 pub use offline::*;
 
 use std::{
