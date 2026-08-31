@@ -8,7 +8,7 @@ sync, with room for emergency communications, net control, and contesting.
 
 The locked v1 release target is November 24, 2026. v1 includes hosted web,
 native iOS, and signed desktop clients for Windows, macOS, and broad Linux
-distribution support. The current product version is `0.4.0` across shared
+distribution support. The current product version is `0.5.0` across shared
 Rust, the desktop application, the CLI, and native iOS. That value in
 `Cargo.toml` is the canonical product version until a release branch or tag
 updates it, and CI enforces it with `scripts/check_versions.py`.
@@ -130,8 +130,8 @@ passes should start with these documents:
 
 ## v0.2 Almost-v1 Beta Status
 
-The current `0.4.0` workspace carries the offline-sync v1 foundation plus the account
-and session milestone. It is not the complete
+The current `0.5.0` workspace carries the offline-sync v1 foundation plus the
+account, session, and server administration milestones. It is not the complete
 v1 product. The `ham-server` crate exposes `/api/v1` hosted routes, one-time
 server-admin bootstrap, personal/public/self-hosted configuration, invite-only
 registration by default, administrator open/disabled registration switches,
@@ -1457,8 +1457,8 @@ just release
 Tagged releases are automated from git tags matching `v*.*.*`, for example:
 
 ```powershell
-git tag v0.4.0
-git push origin v0.4.0
+git tag v0.5.0
+git push origin v0.5.0
 ```
 
 The release workflow validates that the production tag matches the workspace

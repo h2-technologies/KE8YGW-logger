@@ -177,6 +177,169 @@ final class RustBridgeTests: XCTestCase {
         }
     }
 
+    // MARK: - Hosted server administration
+
+    func testHostedAdminSnapshotStartsWithUncheckedRights() async throws {
+        let client = HostedAdminTestBridgeClient()
+        let store = await RustBridgeStore(client: client)
+
+        let result = try await store.refreshHostedAdmin()
+
+        XCTAssertNil(result.admin.administrator)
+        XCTAssertFalse(result.admin.isAdministrator)
+        XCTAssertTrue(result.signedIn)
+        XCTAssertEqual(result.accountEmail, "admin@example.test")
+    }
+
+    func testHostedAdminRequestSendsTheStoredSessionBearerToken() async throws {
+        let client = HostedAdminTestBridgeClient()
+        let store = await RustBridgeStore(client: client)
+        let vault = InMemoryCredentialVault()
+        try vault.save(
+            secret: "stored-session-secret",
+            account: "cred-session",
+            providerId: hostedAccountCredentialProviderId
+        )
+        let transport = StubHostedAdminTransport(
+            response: HostedAccountTransportResponse(status: 200, bodyJson: "{\"ok\":true}")
+        )
+
+        let execution = try await store.executeHostedAdminAction(
+            .hostingRead,
+            transport: transport,
+            vault: vault
+        )
+
+        XCTAssertTrue(execution.result.isAccepted)
+        XCTAssertEqual(transport.requests.count, 1)
+        XCTAssertEqual(transport.requests.first?.sessionToken, "stored-session-secret")
+        XCTAssertEqual(transport.requests.first?.request.method, "GET")
+        let snapshot = await store.admin
+        XCTAssertTrue(snapshot.isAdministrator)
+    }
+
+    func testHostedAdminRequestFailsWithoutAStoredSessionToken() async throws {
+        let client = HostedAdminTestBridgeClient()
+        let store = await RustBridgeStore(client: client)
+        let vault = InMemoryCredentialVault()
+        let transport = StubHostedAdminTransport(
+            response: HostedAccountTransportResponse(status: 200, bodyJson: nil)
+        )
+
+        do {
+            _ = try await store.executeHostedAdminAction(
+                .hostingRead,
+                transport: transport,
+                vault: vault
+            )
+            XCTFail("administration without a stored session token must fail")
+        } catch {
+            XCTAssertTrue(transport.requests.isEmpty)
+        }
+    }
+
+    func testHostedAdminInvitationTokenIsReturnedOnceAndNeverStored() async throws {
+        let client = HostedAdminTestBridgeClient()
+        client.issuesInvitationToken = true
+        let store = await RustBridgeStore(client: client)
+        let vault = InMemoryCredentialVault()
+        try vault.save(
+            secret: "stored-session-secret",
+            account: "cred-session",
+            providerId: hostedAccountCredentialProviderId
+        )
+        let transport = StubHostedAdminTransport(
+            response: HostedAccountTransportResponse(status: 200, bodyJson: "{\"ok\":true}")
+        )
+
+        let execution = try await store.executeHostedAdminAction(
+            .invitationCreate(
+                logbookId: "00000000-0000-4000-8000-000000000001",
+                email: "operator@example.test",
+                role: "operator"
+            ),
+            transport: transport,
+            vault: vault
+        )
+
+        XCTAssertEqual(execution.invitationToken, "issued-invite-secret")
+        // The token belongs to no credential store; only the session token is held.
+        XCTAssertNil(
+            vault.storedSecret(
+                account: "cred-invite",
+                providerId: hostedAccountCredentialProviderId
+            )
+        )
+        let snapshot = await store.admin
+        XCTAssertEqual(snapshot.invitations.count, 1)
+    }
+
+    func testHostedAdminRecordsTransportFailuresThroughRustWithoutSending() async throws {
+        let client = HostedAdminTestBridgeClient()
+        let store = await RustBridgeStore(client: client)
+        let vault = InMemoryCredentialVault()
+        let transport = StubHostedAdminTransport(
+            response: HostedAccountTransportResponse(status: 200, bodyJson: nil)
+        )
+
+        let execution = try await store.executeHostedAdminAction(
+            .auditList,
+            transport: transport,
+            vault: vault,
+            networkAvailable: false
+        )
+
+        XCTAssertEqual(execution.result.outcome, "transient_failure")
+        XCTAssertTrue(execution.result.retryable)
+        XCTAssertNil(execution.invitationToken)
+        XCTAssertTrue(transport.requests.isEmpty)
+        XCTAssertEqual(client.transportFailurePayloads.count, 1)
+    }
+
+    func testHostedAdminInvitationStatusFollowsTheRustLifecycleRules() {
+        let expired = HostedAdminInvitation.fixture(expiresAt: "2026-01-01T00:00:00Z")
+        XCTAssertEqual(expired.status(), "expired")
+        XCTAssertTrue(expired.canResend())
+
+        let pending = HostedAdminInvitation.fixture(expiresAt: "2099-01-01T00:00:00Z")
+        XCTAssertEqual(pending.status(), "pending")
+
+        // Fractional-second timestamps must parse too; Rust omits them only when
+        // they are zero.
+        let fractional = HostedAdminInvitation.fixture(expiresAt: "2026-01-01T00:00:00.123456Z")
+        XCTAssertEqual(fractional.status(), "expired")
+
+        let accepted = HostedAdminInvitation.fixture(
+            expiresAt: "2099-01-01T00:00:00Z",
+            acceptedAt: "2026-02-01T00:00:00Z"
+        )
+        XCTAssertEqual(accepted.status(), "accepted")
+        XCTAssertFalse(accepted.canResend())
+
+        let revoked = HostedAdminInvitation.fixture(
+            expiresAt: "2099-01-01T00:00:00Z",
+            revokedAt: "2026-02-01T00:00:00Z"
+        )
+        XCTAssertEqual(revoked.status(), "revoked")
+        XCTAssertFalse(revoked.canResend())
+    }
+
+    func testHostedAdminHostingUpdateEncodesOnlyTheFieldsTheOperatorSet() throws {
+        var update = HostedAdminHostingUpdateRequest()
+        XCTAssertTrue(update.isEmpty)
+
+        update.registrationMode = "open"
+        XCTAssertFalse(update.isEmpty)
+
+        let encoder = JSONEncoder()
+        encoder.keyEncodingStrategy = .convertToSnakeCase
+        let data = try encoder.encode(update)
+        let decoded = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+
+        XCTAssertEqual(decoded.count, 1)
+        XCTAssertEqual(decoded["registration_mode"] as? String, "open")
+    }
+
     func testFallbackBridgeVersionEnvelopeDecodes() async throws {
         let client = FallbackRustBridgeClient()
         let data = try await client.call(.version, argument: nil)
@@ -2319,6 +2482,221 @@ final class HostedAccountTestBridgeClient: RustBridgeClient {
             "account": snapshot(connectionState: "signed_out"),
             "issued_secrets": issuedSecrets,
             "cleared_credential_ids": cleared
+        ]
+    }
+
+    private func envelope(
+        ok: Bool = true,
+        data: Any,
+        error: Any = NSNull(),
+        correlationID: String
+    ) throws -> Data {
+        try JSONSerialization.data(withJSONObject: [
+            "ok": ok,
+            "bridge_version": 1,
+            "abi_version": 1,
+            "schema_version": 1,
+            "generated_at": "2026-08-31T12:00:00Z",
+            "data": data,
+            "error": error,
+            "correlation_id": correlationID
+        ])
+    }
+}
+
+
+final class StubHostedAdminTransport: HostedAdminTransporting {
+    struct Request {
+        let request: HostedAdminPlannedRequest
+        let body: Data?
+        let sessionToken: String
+    }
+
+    private(set) var requests: [Request] = []
+    private let response: HostedAccountTransportResponse
+
+    init(response: HostedAccountTransportResponse) {
+        self.response = response
+    }
+
+    func execute(
+        request: HostedAdminPlannedRequest,
+        body: Data?,
+        sessionToken: String
+    ) async throws -> HostedAccountTransportResponse {
+        requests.append(Request(request: request, body: body, sessionToken: sessionToken))
+        return response
+    }
+}
+
+extension HostedAdminInvitation {
+    static func fixture(
+        expiresAt: String?,
+        acceptedAt: String? = nil,
+        revokedAt: String? = nil
+    ) -> HostedAdminInvitation {
+        HostedAdminInvitation(
+            inviteId: "00000000-0000-4000-8000-0000000000ff",
+            accountId: nil,
+            logbookId: nil,
+            invitedEmail: "operator@example.test",
+            role: "operator",
+            createdByUserId: nil,
+            createdAt: nil,
+            expiresAt: expiresAt,
+            acceptedAt: acceptedAt,
+            revokedAt: revokedAt,
+            lastSentAt: nil,
+            resendCount: 0
+        )
+    }
+}
+
+/// Deterministic Rust-bridge stand-in for hosted administration planning and applying.
+final class HostedAdminTestBridgeClient: RustBridgeClient {
+    let isLive = false
+    var administrator: Bool? = nil
+    var issuesInvitationToken = false
+    private(set) var appliedPayloads: [[String: Any]] = []
+    private(set) var transportFailurePayloads: [[String: Any]] = []
+
+    func call(_ endpoint: RustBridgeEndpoint, argument: String?) async throws -> Data {
+        try await FallbackRustBridgeClient().call(endpoint, argument: argument)
+    }
+
+    func callJSON(_ requestData: Data) async throws -> Data {
+        let request = try JSONSerialization.jsonObject(with: requestData) as? [String: Any]
+        let command = request?["command"] as? String
+        let correlationID = request?["correlation_id"] as? String ?? "corr-test"
+        let payload = request?["payload"] as? [String: Any] ?? [:]
+
+        switch command {
+        case "admin.snapshot":
+            return try envelope(
+                data: [
+                    "admin": snapshot(),
+                    "signed_in": true,
+                    "account_email": "admin@example.test"
+                ],
+                correlationID: correlationID
+            )
+        case "admin.plan":
+            return try envelope(
+                data: [
+                    "admin": snapshot(),
+                    "plan_token": "test-admin-plan-token",
+                    "request": plannedRequest()
+                ],
+                correlationID: correlationID
+            )
+        case "admin.apply":
+            appliedPayloads.append(payload)
+            return try envelope(data: applyResult(), correlationID: correlationID)
+        case "admin.transport_failure":
+            transportFailurePayloads.append(payload)
+            return try envelope(data: transportFailureResult(), correlationID: correlationID)
+        default:
+            return try envelope(
+                ok: false,
+                data: NSNull(),
+                error: ["code": "unsupported_test_command", "message": command ?? "missing command"],
+                correlationID: correlationID
+            )
+        }
+    }
+
+    private func invitation() -> [String: Any] {
+        [
+            "invite_id": "00000000-0000-4000-8000-0000000000ff",
+            "account_id": NSNull(),
+            "logbook_id": "00000000-0000-4000-8000-000000000001",
+            "invited_email": "operator@example.test",
+            "role": "operator",
+            "created_by_user_id": NSNull(),
+            "created_at": NSNull(),
+            "expires_at": "2099-01-01T00:00:00Z",
+            "accepted_at": NSNull(),
+            "revoked_at": NSNull(),
+            "last_sent_at": NSNull(),
+            "resend_count": 0
+        ]
+    }
+
+    private func snapshot(
+        administratorOverride: Bool? = nil,
+        includeInvitation: Bool = false
+    ) -> [String: Any] {
+        let rights = administratorOverride ?? administrator
+        return [
+            "schema_version": 1,
+            "base_url": "https://logger.example",
+            "administrator": rights as Any? ?? NSNull(),
+            "hosting": NSNull(),
+            "invitations": includeInvitation ? [invitation()] : [[String: Any]](),
+            "audits": [[String: Any]](),
+            "last_action": "admin.hosting.read",
+            "last_outcome": "accepted",
+            "last_error_code": NSNull(),
+            "last_message": "Hosting configuration loaded.",
+            "last_request_id": NSNull(),
+            "last_updated_at": NSNull()
+        ]
+    }
+
+    private func plannedRequest() -> [String: Any] {
+        [
+            "action": "admin.hosting.read",
+            "method": "GET",
+            "url": "https://logger.example/api/v1/admin/hosting",
+            "path": "/api/v1/admin/hosting",
+            "body_json": NSNull(),
+            "session_token_credential_id": "cred-session",
+            "request_id": "22222222-2222-4222-8222-222222222222",
+            "timeout_seconds": 20,
+            "max_response_bytes": 4_194_304
+        ]
+    }
+
+    private func applyResult() -> [String: Any] {
+        let accepted = snapshot(administratorOverride: true, includeInvitation: issuesInvitationToken)
+        let result: [String: Any] = [
+            "action": "admin.hosting.read",
+            "outcome": "accepted",
+            "status": 200,
+            "message": "Hosting configuration loaded.",
+            "error_code": NSNull(),
+            "request_id": NSNull(),
+            "retryable": false,
+            "user_action_required": false,
+            "snapshot": accepted,
+            "invitation": issuesInvitationToken ? invitation() : NSNull()
+        ]
+        return [
+            "result": result,
+            "admin": accepted,
+            "invitation": issuesInvitationToken ? invitation() : NSNull(),
+            "invitation_token": issuesInvitationToken ? "issued-invite-secret" : NSNull()
+        ]
+    }
+
+    private func transportFailureResult() -> [String: Any] {
+        let result: [String: Any] = [
+            "action": "admin.audit.list",
+            "outcome": "transient_failure",
+            "status": 0,
+            "message": "hosted administration transport failure",
+            "error_code": "transport_failure",
+            "request_id": NSNull(),
+            "retryable": true,
+            "user_action_required": false,
+            "snapshot": snapshot(),
+            "invitation": NSNull()
+        ]
+        return [
+            "result": result,
+            "admin": snapshot(),
+            "invitation": NSNull(),
+            "invitation_token": NSNull()
         ]
     }
 
