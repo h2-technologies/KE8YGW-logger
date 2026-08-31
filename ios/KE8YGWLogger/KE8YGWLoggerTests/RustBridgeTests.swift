@@ -2229,8 +2229,8 @@ final class HostedAccountTestBridgeClient: RustBridgeClient {
             "session_token_credential_id": "cred-session",
             "refresh_token_credential_id": "cred-refresh",
             "device_id": NSNull(),
-            "devices": [],
-            "logbooks": [],
+            "devices": [[String: Any]](),
+            "logbooks": [[String: Any]](),
             "pending_email_verification_for": NSNull(),
             "pending_recovery_for": NSNull(),
             "last_action": "account.login",
@@ -2243,17 +2243,20 @@ final class HostedAccountTestBridgeClient: RustBridgeClient {
     }
 
     private func plannedRequest() -> [String: Any] {
-        [
+        let sessionCredentialId: String? = requiresSessionToken ? "cred-session" : nil
+        let refreshCredentialId: String? = requiresRefreshToken ? "cred-refresh" : nil
+        let refreshBodyField: String? = requiresRefreshToken ? "refresh_token" : nil
+        return [
             "action": "account.login",
             "method": "POST",
             "url": "https://logger.example/api/v1/auth/login",
             "path": "/api/v1/auth/login",
             "body_json": "{\"email\":\"operator@example.com\"}",
             "requires_session_token": requiresSessionToken,
-            "session_token_credential_id": requiresSessionToken ? "cred-session" : NSNull(),
+            "session_token_credential_id": sessionCredentialId as Any? ?? NSNull(),
             "requires_refresh_token": requiresRefreshToken,
-            "refresh_token_credential_id": requiresRefreshToken ? "cred-refresh" : NSNull(),
-            "refresh_token_body_field": requiresRefreshToken ? "refresh_token" : NSNull(),
+            "refresh_token_credential_id": refreshCredentialId as Any? ?? NSNull(),
+            "refresh_token_body_field": refreshBodyField as Any? ?? NSNull(),
             "request_id": "11111111-1111-4111-8111-111111111111",
             "timeout_seconds": 20,
             "max_response_bytes": 524_288
@@ -2261,52 +2264,61 @@ final class HostedAccountTestBridgeClient: RustBridgeClient {
     }
 
     private func applyResult() -> [String: Any] {
-        [
-            "result": [
-                "action": "account.login",
-                "outcome": "accepted",
-                "status": 200,
-                "message": "Signed in to the hosted account.",
-                "error_code": NSNull(),
-                "request_id": NSNull(),
-                "retryable": false,
-                "user_action_required": false,
-                "snapshot": snapshot(),
-                "cleared_credential_ids": clearedCredentialIds
-            ],
+        let sessionCredentialId: String? = issuesSecrets ? "cred-session" : nil
+        let sessionToken: String? = issuesSecrets ? "issued-session-secret" : nil
+        let refreshCredentialId: String? = issuesSecrets ? "cred-refresh" : nil
+        let refreshToken: String? = issuesSecrets ? "issued-refresh-secret" : nil
+        let result: [String: Any] = [
+            "action": "account.login",
+            "outcome": "accepted",
+            "status": 200,
+            "message": "Signed in to the hosted account.",
+            "error_code": NSNull(),
+            "request_id": NSNull(),
+            "retryable": false,
+            "user_action_required": false,
+            "snapshot": snapshot(),
+            "cleared_credential_ids": clearedCredentialIds
+        ]
+        let issuedSecrets: [String: Any] = [
+            "session_token_credential_id": sessionCredentialId as Any? ?? NSNull(),
+            "session_token": sessionToken as Any? ?? NSNull(),
+            "refresh_token_credential_id": refreshCredentialId as Any? ?? NSNull(),
+            "refresh_token": refreshToken as Any? ?? NSNull()
+        ]
+        return [
+            "result": result,
             "account": snapshot(),
-            "issued_secrets": [
-                "session_token_credential_id": issuesSecrets ? "cred-session" : NSNull(),
-                "session_token": issuesSecrets ? "issued-session-secret" : NSNull(),
-                "refresh_token_credential_id": issuesSecrets ? "cred-refresh" : NSNull(),
-                "refresh_token": issuesSecrets ? "issued-refresh-secret" : NSNull()
-            ],
+            "issued_secrets": issuedSecrets,
             "cleared_credential_ids": clearedCredentialIds
         ]
     }
 
     private func transportFailureResult() -> [String: Any] {
-        [
-            "result": [
-                "action": "account.login",
-                "outcome": "transient_failure",
-                "status": 0,
-                "message": "hosted account transport failure",
-                "error_code": "transport_failure",
-                "request_id": NSNull(),
-                "retryable": true,
-                "user_action_required": false,
-                "snapshot": snapshot(connectionState: "signed_out"),
-                "cleared_credential_ids": []
-            ],
+        let cleared: [String] = []
+        let result: [String: Any] = [
+            "action": "account.login",
+            "outcome": "transient_failure",
+            "status": 0,
+            "message": "hosted account transport failure",
+            "error_code": "transport_failure",
+            "request_id": NSNull(),
+            "retryable": true,
+            "user_action_required": false,
+            "snapshot": snapshot(connectionState: "signed_out"),
+            "cleared_credential_ids": cleared
+        ]
+        let issuedSecrets: [String: Any] = [
+            "session_token_credential_id": NSNull(),
+            "session_token": NSNull(),
+            "refresh_token_credential_id": NSNull(),
+            "refresh_token": NSNull()
+        ]
+        return [
+            "result": result,
             "account": snapshot(connectionState: "signed_out"),
-            "issued_secrets": [
-                "session_token_credential_id": NSNull(),
-                "session_token": NSNull(),
-                "refresh_token_credential_id": NSNull(),
-                "refresh_token": NSNull()
-            ],
-            "cleared_credential_ids": []
+            "issued_secrets": issuedSecrets,
+            "cleared_credential_ids": cleared
         ]
     }
 
