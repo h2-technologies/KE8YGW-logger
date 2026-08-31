@@ -785,9 +785,10 @@ Never state that the repository is fully complete unless the evidence supports t
 
 This section is a verified snapshot of the repository as inspected on July 22, 2026. Update it whenever implementation status materially changes.
 
-- Current workspace version: `0.3.0`. The account/session milestone described
-  in `docs/V0_4_RELEASE_PLAN.md` is implemented on every client surface; the
-  version bump to `0.4.0` is a separate release action governed by `RELEASE.md`.
+- Current workspace version: `0.4.0`. The account/session milestone described
+  in `docs/V0_4_RELEASE_PLAN.md` is implemented on every client surface, and
+  every release surface is unified on `0.4.0`. Publishing a `v0.4.0` tag is
+  still a separate release action governed by `RELEASE.md`.
 - Current release target: v1 ships on November 24, 2026 with hosted web, native iOS, and Windows/macOS/Linux desktop.
 - Workspace members: `crates/ham-api-contract`, `crates/ham-core`, `crates/ham-plugin-sdk`, `crates/ham-sync`, `crates/ham-sync-server`, `crates/ham-server`, `crates/ham-cli`, `crates/ham-gui`, `crates/ham-desktop`, `crates/ham-ios-ffi`, and `src-tauri`.
 - Actual desktop state: a real Tauri v2 wrapper exists, bundles `crates/ham-gui/web`, exposes native dialog commands plus a restricted `/api/*` proxy, and packages desktop installers. The local backend is not yet embedded in-process or sidecar-launched automatically.

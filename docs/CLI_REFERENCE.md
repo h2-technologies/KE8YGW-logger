@@ -1,7 +1,7 @@
 # CLI command reference
 
 `ham-cli` is an offline-first interface to the same append-only event store and
-ADIF implementation used by the Rust core. The CLI package version is `0.3.0`.
+ADIF implementation used by the Rust core. The CLI package version is `0.4.0`.
 It never prompts. The logging, ADIF, and integrity commands do not contact a
 provider or require a server; the `account` commands contact the hosted server
 that has been configured for this machine.

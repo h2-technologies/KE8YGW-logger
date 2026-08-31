@@ -90,5 +90,8 @@ Swift hosted-account tests in `KE8YGWLoggerTests` cover planning, transport,
 Keychain storage, credential clearing, and offline classification without a
 network.
 
-Production release tags still come only from validated semantic-version tags
-contained in `main`; this document does not authorize a tag or publication.
+The canonical product version is `0.4.0` across Cargo workspace metadata,
+Tauri, the iOS marketing version, API product metadata, the CLI version
+assertion, and documentation. Production release tags still come only from
+validated semantic-version tags contained in `main`; this document does not
+authorize a tag or publication.

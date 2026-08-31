@@ -14,13 +14,15 @@
 - Server administration UX (hosting mode, invitations, audits) is the remaining
   account-area client gap and is the next increment. See
   [docs/V0_4_RELEASE_PLAN.md](docs/V0_4_RELEASE_PLAN.md).
-- The canonical product version is unchanged at `0.3.0`. Bumping every release
-  surface to `0.4.0` is a separate release action governed by `RELEASE.md`.
+- Every release surface is unified on product version `0.4.0`: Cargo workspace
+  metadata, Tauri, iOS marketing version, API product metadata, the CLI version
+  assertion, and documentation. Publishing a `v0.4.0` tag remains a separate
+  release action governed by `RELEASE.md`.
 
 ## Desktop and CLI 0.3 preparation (July 30, 2026)
 
 - Desktop/Tauri, CLI, shared Rust package metadata, and native iOS marketing
-  metadata are all `0.3.0`, inherited from `[workspace.package].version`.
+  metadata are all `0.4.0`, inherited from `[workspace.package].version`.
 - Version validation rejects any drift from that single canonical version
   across Cargo, Tauri, iOS, API metadata, release artifacts, and tags.
 - The existing CLI commands now expose stable `--json` success output,
@@ -36,7 +38,7 @@
 
 Last audited: 2026-08-28, against `dev` at 09418f4.
 
-Canonical product version: `0.3.0` from `Cargo.toml`
+Canonical product version: `0.4.0` from `Cargo.toml`
 `[workspace.package].version`.
 
 Locked v1 release target: November 24, 2026 with hosted web, native iOS, and

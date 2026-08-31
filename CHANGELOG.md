@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.4.0
 
 ### Added
 
@@ -54,6 +54,11 @@
   and runtime events stay token-free.
 - `ureq` is now a workspace dependency shared by `ham-server` and the optional
   `ham-sync` `hosted-http` feature.
+- Unified every release surface on product version `0.4.0`: Cargo workspace
+  metadata, Tauri configuration, iOS marketing version, OpenAPI product
+  metadata, the CLI version assertion, iOS Rust-bridge fallback payloads, and
+  documentation. The iOS build number and the frozen `/api/v1` `info.version`
+  are unchanged.
 - Updated `ROADMAP.md`, `docs/V1_EXECUTION_PLAN.md`, `docs/API_CLIENT_CONTRACT.md`,
   `docs/SECURITY_MODEL.md`, `docs/EVENT_CATALOG.md`, `docs/CLI_REFERENCE.md`, and
   `PROJECT_STATE.md` for the hosted account milestone. The remaining

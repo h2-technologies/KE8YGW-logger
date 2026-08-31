@@ -48,7 +48,7 @@ struct AccountWorkspaceView: View {
                 if let statusMessage {
                     Text(statusMessage)
                         .font(.caption)
-                        .foregroundStyle(account.lastOutcome == "accepted" ? .secondary : .orange)
+                        .foregroundStyle(account.lastOutcome == "accepted" ? Color.secondary : Color.orange)
                 }
                 if isBusy {
                     ProgressView("Contacting the hosted server")
@@ -149,7 +149,7 @@ struct AccountWorkspaceView: View {
                     ForEach(account.logbooks) { logbook in
                         VStack(alignment: .leading, spacing: 2) {
                             Text(logbook.name).font(.headline)
-                            Text([logbook.logbookId, logbook.role].compactMap { $0 }.joined(separator: " / "))
+                            Text(logbookSummary(logbook))
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
@@ -222,6 +222,13 @@ struct AccountWorkspaceView: View {
 
     private var connectionStateLabel: String {
         account.connectionState.replacingOccurrences(of: "_", with: " ").capitalized
+    }
+
+    private func logbookSummary(_ logbook: HostedAccountLogbook) -> String {
+        guard let role = logbook.role, !role.isEmpty else {
+            return logbook.logbookId
+        }
+        return "\(logbook.logbookId) / \(role)"
     }
 
     private func deviceSummary(_ device: HostedAccountDevice) -> String {

@@ -41,8 +41,8 @@ This root roadmap summarizes the current implementation plan. Detailed architect
 
 ## Current Milestone
 
-The current `0.3.0` workspace is the offline-sync v1 foundation baseline, not the complete
-v1 product. The locked v1 release ships on November 24, 2026 with hosted web,
+The current `0.4.0` workspace carries the offline-sync v1 foundation plus the
+account and session milestone. It is not the complete v1 product. The locked v1 release ships on November 24, 2026 with hosted web,
 native iOS, and Windows/macOS/Linux desktop. A PWA, pinned hosted website, or
 thin web wrapper is not the iOS client. v1.1 adds a TUI.
 
