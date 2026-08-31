@@ -1323,7 +1323,10 @@ Desktop release mode bundles `crates/ham-gui/web` and does not require a
 frontend dev server. The local GUI HTTP backend is not embedded in-process yet;
 for local desktop development, run `cargo run -p ham-gui --bin ham-gui` and then
 `cargo tauri dev`. The desktop API base defaults to `http://127.0.0.1:9467` and
-can be set with `HAM_DESKTOP_SERVER_URL`.
+can be set with `HAM_DESKTOP_SERVER_URL`. Pointing it at a non-loopback
+`ham-gui` instance requires that instance to run with
+`HAM_GUI_ALLOW_REMOTE_CONTROL_API=1`, because the GUI control plane has no
+request authentication and is loopback-only by default.
 
 The default shell includes:
 
