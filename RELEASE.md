@@ -14,13 +14,13 @@ must still be documented when user data, APIs, or sync behavior are affected.
 
 ## Versioning
 
-The workspace currently uses version `0.5.0` and Rust edition 2021.
+The workspace currently uses version `0.5.1` and Rust edition 2021.
 `Cargo.toml` `[workspace.package].version` is the canonical product version.
 Versions must be updated consistently across workspace metadata, Tauri metadata,
 iOS marketing/build settings, API product metadata, release notes, tags,
 artifacts, and documentation.
 
-Release tags should use `vMAJOR.MINOR.PATCH`, for example `v0.5.0`. Additional
+Release tags should use `vMAJOR.MINOR.PATCH`, for example `v0.5.1`. Additional
 pre-release identifiers may be used for beta releases when needed.
 
 Run `just version-check` before release work. It validates Cargo crate versions,

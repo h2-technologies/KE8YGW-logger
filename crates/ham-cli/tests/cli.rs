@@ -14,7 +14,7 @@ fn version_json_is_machine_readable_and_product_specific() {
     let value: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("version output is JSON");
     assert_eq!(value["command"], "version");
-    assert_eq!(value["cli_version"], "0.5.0");
+    assert_eq!(value["cli_version"], "0.5.1");
     assert!(output.stderr.is_empty());
 }
 

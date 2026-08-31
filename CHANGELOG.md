@@ -1,5 +1,78 @@
 # Changelog
 
+## 0.5.1
+
+### Added
+
+- Added `ham_core::contest`, the versioned contest rule and exchange schema:
+  contest definitions, bands and modes, sent/received exchange fields, entry
+  categories, duplicate scope, serial policy, multipliers, ordered scoring
+  rules, time windows, and export identity. Definitions are data, so a
+  corrected or newly published rule set can reach operators without an
+  application build.
+- Added signed contest definition packs. A distributed pack carries a detached
+  HMAC-SHA256 signature over its canonical bytes; `ContestPackTrustStore`
+  accepts only packs signed by a key it holds, and an unsigned pack, an unknown
+  key id, a changed digest, and a bad signature are each a distinct error.
+- Added `ContestDefinitionCatalog`, which starts from the compiled-in
+  definitions, applies installed packs, keeps the highest `rule_version` per
+  contest, and records each definition's provenance.
+- Added the built-in generic serial and generic grid definitions in
+  `crates/ham-core/assets/contest-definitions-v1.json`, loaded through the same
+  path as an operator-installed pack.
+- Added `ham_core::emcomm`, the append-only incident, operational period,
+  personnel, assignment, message, and activity-log model behind ICS 211, 213,
+  213RR, and 214, with a rebuildable `EmCommProjection`, per-record event
+  history, precedence ordering, unacknowledged-traffic lookup, and a complete
+  incident package export.
+- Added station-scoped EmComm message numbers (`PREFIX-NNNN`) that two
+  disconnected stations can allocate without coordinating, plus
+  `next_message_number`, which counts only numbers minted by the asking
+  station.
+- Added `official.log.emcomm.*` official events, `proposal.emcomm.*` proposals
+  with payload validation, and the `emcomm.*` plugin capabilities
+  (`view`, `incident.manage`, `period.manage`, `person.manage`,
+  `assignment.manage`, `message.manage`, `activity.log`).
+- Added `docs/CONTEST_RULE_SCHEMA.md`, `docs/EMCOMM_RECORD_MODEL.md`, and
+  `docs/V0_5_1_RELEASE_PLAN.md`.
+
+### Changed
+
+- Contest definition documents reject unknown fields. A pack that carries a
+  rule concept this build does not implement fails to load rather than loading
+  with that rule silently ignored, and a pack written against a newer
+  `schema_version` is rejected whole.
+- An older contest definition pack can no longer downgrade a contest that has
+  already been updated to a higher `rule_version`.
+- EmComm corrections append rather than overwrite: each record keeps the merged
+  current payload and the ordered history of every event that produced it, so a
+  transmitted message keeps its transmission entry after it is cancelled. An
+  empty correction is rejected, and a message number is assigned once and
+  cannot be changed by a correction.
+- Unified every release surface on product version `0.5.1`: Cargo workspace
+  metadata, Tauri configuration, iOS marketing version, OpenAPI product
+  metadata, the CLI version assertion, iOS Rust-bridge fallback payloads, the
+  governance version pin, and documentation. The iOS build number moves to `3`
+  and the frozen `/api/v1` `info.version` is unchanged.
+- Closed the repository/architecture baseline (#3) and the accounts, API
+  contract, and hosting-modes epic (#4) after auditing their remaining child
+  issues against the shipped code.
+
+### Testing
+
+- Added 22 `ham-core` contest schema tests covering built-in pack loading,
+  newer-schema and unknown-kind rejection, unknown-field rejection, serial and
+  multiplier consistency, duplicate contest ids, signed and tampered packs,
+  unsigned and unknown-key refusal, rule-version upgrade and downgrade
+  protection, exchange validation and normalization, duplicate keys, serial
+  sequences, scoring precedence, time windows, and digest stability.
+- Added 10 `ham-core` EmComm tests covering the incident/period/person/
+  assignment lifecycle, corrections that append history, message delivery
+  states, message-number assignment and malformed-number rejection, offline
+  station-scoped numbering, precedence ordering and unacknowledged traffic, the
+  ICS 214 activity log, the incident package and its per-record history, and
+  capability enforcement.
+
 ## 0.5.0
 
 ### Added
