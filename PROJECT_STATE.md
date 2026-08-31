@@ -1,5 +1,34 @@
 # Project State
 
+## Contest and EmComm foundation milestone (August 31, 2026)
+
+- Contesting and EmComm now have their shared domain foundations in
+  `ham-core`. Neither has a client surface yet; both are the data and event
+  contracts the platform workflows will be built on.
+- `ham_core::contest` is the versioned contest rule and exchange schema.
+  Contest definitions are data, so a corrected or newly published rule set
+  reaches operators through a signed definition pack rather than an application
+  build. A pack written against a newer `schema_version` is rejected whole, a
+  definition carrying an unimplemented rule concept fails to load rather than
+  loading with that rule ignored, and an older pack cannot downgrade a contest
+  that already has a higher `rule_version`. See
+  [docs/CONTEST_RULE_SCHEMA.md](docs/CONTEST_RULE_SCHEMA.md).
+- `ham_core::emcomm` is the append-only incident, operational period,
+  personnel, assignment, message, and activity-log model behind ICS 211, 213,
+  213RR, and 214. Corrections append: every record keeps its merged current
+  payload and the ordered history of the events that produced it, so an
+  exported incident package shows how the incident unfolded. Message numbers
+  are station-scoped (`PREFIX-NNNN`) so disconnected stations can allocate them
+  without coordinating, and a message number is assigned once. See
+  [docs/EMCOMM_RECORD_MODEL.md](docs/EMCOMM_RECORD_MODEL.md).
+- Release scope, closed issues, and validation for this milestone are recorded
+  in [docs/V0_5_1_RELEASE_PLAN.md](docs/V0_5_1_RELEASE_PLAN.md).
+- Every release surface is unified on product version `0.5.1`. The iOS build
+  number moves to `3`; the frozen `/api/v1` `info.version` is unchanged.
+- Baseline epic #3 and accounts epic #4 are closed after auditing their
+  remaining child issues (#15, #16, #17, #19, #21, #22, #23, #24, #25) against
+  the shipped code.
+
 ## Account and session milestone (August 31, 2026)
 
 - The hosted account, session, recovery, and device routes now have a client
@@ -20,15 +49,15 @@
   account-area work is operations configuration: production email
   deliverability, Turnstile keys, privacy/support URLs, sizing, retention, and
   monitoring.
-- Every release surface is unified on product version `0.5.0`: Cargo workspace
+- Every release surface is unified on product version `0.5.1`: Cargo workspace
   metadata, Tauri, iOS marketing version, API product metadata, the CLI version
   assertion, the governance version pin, and documentation. Publishing a
-  `v0.5.0` tag remains a separate release action governed by `RELEASE.md`.
+  `v0.5.1` tag remains a separate release action governed by `RELEASE.md`.
 
 ## Desktop and CLI 0.3 preparation (July 30, 2026)
 
 - Desktop/Tauri, CLI, shared Rust package metadata, and native iOS marketing
-  metadata are all `0.5.0`, inherited from `[workspace.package].version`.
+  metadata are all `0.5.1`, inherited from `[workspace.package].version`.
 - Version validation rejects any drift from that single canonical version
   across Cargo, Tauri, iOS, API metadata, release artifacts, and tags.
 - The existing CLI commands now expose stable `--json` success output,
@@ -41,9 +70,9 @@
   production cross-platform install/recovery evidence remain open; no signing,
   notarization, or clean-machine result is claimed by this update.
 
-Last audited: 2026-08-28, against `dev` at 09418f4.
+Last audited: 2026-08-31, against `dev` at 394a8e5.
 
-Canonical product version: `0.5.0` from `Cargo.toml`
+Canonical product version: `0.5.1` from `Cargo.toml`
 `[workspace.package].version`.
 
 Locked v1 release target: November 24, 2026 with hosted web, native iOS, and
@@ -121,6 +150,21 @@ operations, and release qualification.
   HMAC-SHA256 signed LAN read endpoint authorization for logbook/head/event
   APIs, plus durable local sync identity support files that persist stable
   device IDs while rotating session IDs.
+- Versioned contest rule and exchange schema in `ham_core::contest`: contest
+  definitions, exchange field kinds with shared validation and normalization,
+  entry categories, duplicate scope, serial policy, multipliers, ordered
+  scoring rules, time windows, and export identity; signed definition-pack
+  envelopes verified against a trust store before the pack is parsed; and a
+  definition catalog that keeps the highest `rule_version` per contest and
+  records each definition's provenance. The bundled generic serial and generic
+  grid definitions load through the same path as an installed pack.
+- Append-only EmComm record model in `ham_core::emcomm`: incidents,
+  operational periods, ICS 211 personnel, assignments, ICS 213/213RR messages,
+  and ICS 214 activity entries, with `official.log.emcomm.*` events,
+  `proposal.emcomm.*` proposals and payload validation, `emcomm.*` plugin
+  capabilities, a rebuildable projection, per-record correction history,
+  precedence ordering, unacknowledged-traffic lookup, station-scoped offline
+  message numbering, and a complete incident package export.
 - Tauri v2 desktop wrapper with bundled web assets, native dialog commands, and
   restricted `/api/*` proxying.
 - Native iOS SwiftUI project, SwiftData cache/projection models, Rust FFI bridge,
@@ -265,11 +309,13 @@ operations, and release qualification.
 - LoTW/TQSL managed certificate/signing mode, SOTAWatch approved live access,
   RBN/DX background lifecycle, production maps/offline caching, and propagation
   provider qualification.
-- Contesting: Field Day, Winter Field Day, generic serial/grid templates,
-  release-adjacent December/January contest packs, scoring, dupes, multipliers,
-  and Cabrillo export.
-- EmComm: ICS 211, 213, 213RR, 214, personnel, assignments, and
-  message/communications records.
+- Contesting beyond the rule/exchange schema: the offline-safe contest session
+  and logging engine, Field Day and Winter Field Day templates, the
+  release-adjacent December/January definition packs, Cabrillo export, and
+  every contest client surface.
+- EmComm beyond the record model: the ICS 211, 213, 213RR, and 214 form
+  workflows, the cross-platform incident UI, PDF/JSON export, and multi-device
+  exercise qualification.
 - Signed desktop updater, package signing/notarization, TestFlight/App Store
   release, production infrastructure, operations runbooks, and release-candidate
   soak.
@@ -347,21 +393,29 @@ Known manual repository/external settings remain in
 | #30 Device pairing/trust/revocation/LAN transport decision | Partially satisfied | `JsonLanTrustStore` provides explicit approval, hashed expiring single-use tokens, logbook-scoped trusted devices, auth credential references, auth credential rotation, replay nonce rejection, and immediate revocation; `JsonLocalSyncIdentityStore` persists stable local device IDs without persisting discovery sessions; GUI exposes trust endpoints, guided browser pairing/trust controls for issuing one-time local codes, entering peer token/code/fingerprint values, completing reciprocal pairing with generated endpoint auth codes distinct from one-time pairing codes, rejecting missing endpoint auth codes or attempts to reuse the one-time pairing code as long-lived LAN auth, generating replacement auth codes, rotating LAN auth, and revoking selected trusted peers, manual direct LAN HTTP peer add/preview/pull, automatic IPv4/IPv6 multicast discovery with reachable identity probing, advertised API-port normalization, HMAC-SHA256 signed LAN list/head/event read endpoints, LAN auth rotation/recovery, and LAN pull rejects untrusted/revoked/replayed peers before local append. iOS FFI now exposes durable local identity through `sync.snapshot` plus LAN trust snapshot, issue-pairing-token, accept-pairing-token with required auth credential ID, trust-peer, rotate-auth, and revoke commands; the Sync workspace can issue and accept local codes, complete reciprocal pairing against an operator-entered peer URL with the generated LAN auth secret stored only in Keychain and only a credential ID persisted by Rust, scan IPv4/IPv6 LAN discovery packets, derive candidate peer URLs from sender plus advertised API port, require `/api/sync/state` identity matches before listing a peer, trust a peer, rotate Keychain-backed LAN auth credentials, revoke trust while Rust persists only credential IDs, and pull from a trusted peer URL by first verifying the peer's published sync identity, then using signed protected LAN reads followed by Rust event-chain verification; `Info.plist` declares Local Network usage and allows local networking, and the app target declares the approved and provisioned multicast entitlement. Physical LAN/iOS Local Network validation remains. |
 | #31 Cross-client sync recovery/migration test suite | Partially satisfied | New deterministic `ham-sync` golden scenarios cover desktop-style crash recovery, transient network retry, accepted-by-hash drain, duplicate replay, reordered delivery rejection, iOS-style pull/projection replay, verified missing-tail pull apply, partial push accepted-prefix/rejected-tail queue recovery, revoked and expired cloud-auth user-action recovery, clock-skewed event timestamps ordered by hashes, divergent heads, concurrent correction and tombstone/restore conflict reports, client-ready conflict-report JSON portability across desktop and iOS review stores, unsafe-resolution rejection, user-action queue marking, no-mutation divergent pull rejection, manual corrective-event review resolution, v0.2 legacy queue migration, and LAN revocation. `ham-sync-server` route and loopback TCP wire tests prove the self-hosted HTTP compatibility surface can pair a device, list scoped logbooks, push a canonical official event through durable storage, ignore duplicate replay, pull the missing remote event, and reject invalid or expired sync tokens with stable API errors. `ham-server` binary loopback TCP wire tests prove the hosted HTTP compatibility surface can bootstrap hosted auth, create a QSO through the proposal pipeline, pull missing hosted sync events, ignore duplicate hosted sync push, and persist the official event hash exactly once in durable JSONL storage. Existing queue/trust/recovery/conflict-review tests, desktop restart/reconnect drain coverage, queued target-entity persistence/backfill tests, unsupported-schema tests, corrupt queue quarantine tests, interrupted atomic-write promotion tests, and iOS FFI queue/conflict-review/remote-event-apply plus Swift hosted/self-hosted, background scheduling policy, and LAN pull-transport/coordinator assertions remain in place. Release-device hosted web/desktop/iOS/self-hosted end-to-end qualification, physical-device tests, and full migration matrix remain. |
 
+## v0.5.1 Contest And EmComm Foundation Issue Audit
+
+| Issue | Status | Evidence |
+| --- | --- | --- |
+| #67 Versioned contest rule and exchange schema | Satisfied | `crates/ham-core/src/contest.rs`, `crates/ham-core/assets/contest-definitions-v1.json`, `docs/CONTEST_RULE_SCHEMA.md`. `newer_schema_versions_are_rejected_whole`, `unknown_definition_fields_fail_instead_of_being_ignored`, and `unknown_pack_kinds_are_rejected` prove an unknown or incompatible rule version fails safely and is never partially loaded. `a_newer_rule_version_replaces_an_older_one_without_an_app_release` and `an_older_pack_cannot_downgrade_an_updated_contest` prove definitions update without an application release and cannot be silently rolled back. `signed_packs_load_and_tampered_packs_do_not` and `unsigned_and_unknown_key_packs_are_refused_by_default` prove the signed-update path. |
+| #72 Append-only EmComm incident, period, people, assignment, and message model | Satisfied for the shared domain | `crates/ham-core/src/emcomm.rs`, `official.log.emcomm.*` and `proposal.emcomm.*` in `ham-plugin-sdk`, proposal validation and capability enforcement in `crates/ham-core/src/proposal.rs` and `permissions.rs`, `docs/EMCOMM_RECORD_MODEL.md`. `emcomm_corrections_append_history_and_never_rewrite_it` and `emcomm_message_lifecycle_keeps_every_delivery_state` prove corrections and delivery state append instead of mutating. `emcomm_offline_message_numbers_are_scoped_to_the_originating_station` and `emcomm_message_numbers_cannot_be_reassigned_or_malformed` prove offline numbering is collision-free and assigned once. `emcomm_incident_package_carries_every_record_and_its_history` proves the export preserves per-record history. The ICS form workflows and client surfaces (#73-#76) remain open. |
+
 ## Next Recommended Goal
 
-Wire hosted web, desktop, and native iOS to the implemented server
-administration routes: hosting-mode configuration, invitation
-create/list/inspect/resend/expire/revoke, and audit review. That is the only
-remaining account-area client gap and, like the account milestone, it has no
-external blocker. `ham_sync::account` already provides the planning,
-classification, and secret-handling contract to extend.
+Build the offline-safe contest session and logging engine (#68) on the schema
+shipped here: sessions, keyboard-first entry, exchange validation, duplicate
+detection, serial allocation, running score and progress, corrections, and
+reconciliation of conflicting offline serials. It has no external blocker, and
+it is the dependency the Field Day and Winter Field Day templates (#69), the
+December/January definition packs (#70), and Cabrillo export (#71) all wait on.
 
-After that, or in parallel where hardware and credentials allow, finish the
-remaining sync/reconciliation hardening: App Store Connect archive
-confirmation for the newly provisioned multicast entitlement, release-device
-cross-client branch review and reconciliation workflow qualification, physical
-LAN/iOS local-network validation, release-device hosted/self-hosted native
-endpoint qualification, and release-device iOS background task and
-poor-network qualification. Use `docs/V0_3_SYNC_QUALIFICATION.md` as the evidence checklist
-for #28-#31. That goal unblocks unattended desktop/iOS operation, cached
-map/offline work, contesting, EmComm, and release qualification.
+The equivalent EmComm step is the ICS 211 check-in workflow (#73), followed by
+ICS 213/213RR (#74) and ICS 214 (#75) on the record model shipped here.
+
+In parallel where hardware and credentials allow, finish the remaining
+sync/reconciliation hardening: App Store Connect archive confirmation for the
+provisioned multicast entitlement, release-device cross-client branch review
+and reconciliation workflow qualification, physical LAN/iOS local-network
+validation, release-device hosted/self-hosted native endpoint qualification,
+and release-device iOS background task and poor-network qualification. Use
+`docs/V0_3_SYNC_QUALIFICATION.md` as the evidence checklist for #28-#31.

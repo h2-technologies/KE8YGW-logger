@@ -148,6 +148,8 @@ Repository absences that matter:
 | `docs/EVENT_CATALOG.md` | Stable official/proposal/runtime event vocabulary. |
 | `docs/PLUGIN_SDK.md` | Public plugin manifest, permission, and proposal contract. |
 | `docs/SYNC_PROTOCOL.md` | Sync rules and transport expectations. |
+| `docs/CONTEST_RULE_SCHEMA.md` | Versioned contest rule/exchange schema, signed definition packs, and the definition catalog. |
+| `docs/EMCOMM_RECORD_MODEL.md` | Append-only EmComm incident, period, personnel, assignment, message, and activity-log model. |
 | `docs/SECURITY_MODEL.md` and `docs/security/*` | Security constraints, credential handling, and redaction rules. |
 | `docs/architecture/*` | Subsystem architecture notes for services, support storage, stations, search, awards, uploads, and online services. |
 | `docs/plugins/*` and `docs/plugin-map-providers/*` | Provider and plugin-development guidance. |
@@ -785,11 +787,11 @@ Never state that the repository is fully complete unless the evidence supports t
 
 This section is a verified snapshot of the repository as inspected on July 22, 2026. Update it whenever implementation status materially changes.
 
-- Current workspace version: `0.5.0`. The account/session milestone described
+- Current workspace version: `0.5.1`. The account/session milestone described
   in `docs/V0_4_RELEASE_PLAN.md` and the server administration milestone
   described in `docs/V0_5_RELEASE_PLAN.md` are implemented on every client
-  surface, and every release surface is unified on `0.5.0`. Publishing a
-  `v0.5.0` tag is still a separate release action governed by `RELEASE.md`.
+  surface, and every release surface is unified on `0.5.1`. Publishing a
+  `v0.5.1` tag is still a separate release action governed by `RELEASE.md`.
 - Current release target: v1 ships on November 24, 2026 with hosted web, native iOS, and Windows/macOS/Linux desktop.
 - Workspace members: `crates/ham-api-contract`, `crates/ham-core`, `crates/ham-plugin-sdk`, `crates/ham-sync`, `crates/ham-sync-server`, `crates/ham-server`, `crates/ham-cli`, `crates/ham-gui`, `crates/ham-desktop`, `crates/ham-ios-ffi`, and `src-tauri`.
 - Actual desktop state: a real Tauri v2 wrapper exists, bundles `crates/ham-gui/web`, exposes native dialog commands plus a restricted `/api/*` proxy, and packages desktop installers. The local backend is not yet embedded in-process or sidecar-launched automatically.

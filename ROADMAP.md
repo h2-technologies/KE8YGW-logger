@@ -46,11 +46,18 @@ This root roadmap summarizes the current implementation plan. Detailed architect
   instance-administrator bootstrap; single-use invitation tokens returned once
   and never persisted; and hosting updates that send only the fields the
   operator changed.
+- Contest and EmComm foundations v0.5.1: a versioned, signed contest rule and
+  exchange schema with a definition catalog that can be updated without an
+  application release, and an append-only EmComm incident, operational period,
+  personnel, assignment, message, and activity-log model with per-record
+  correction history and station-scoped offline message numbering. See
+  [docs/V0_5_1_RELEASE_PLAN.md](docs/V0_5_1_RELEASE_PLAN.md).
 
 ## Current Milestone
 
-The current `0.5.0` workspace carries the offline-sync v1 foundation plus the
-account, session, and server administration milestones. It is not the complete
+The current `0.5.1` workspace carries the offline-sync v1 foundation, the
+account, session, and server administration milestones, and the contest and
+EmComm domain foundations. It is not the complete
 v1 product. The locked v1 release ships on November 24, 2026 with hosted web,
 native iOS, and Windows/macOS/Linux desktop. A PWA, pinned hosted website, or
 thin web wrapper is not the iOS client. v1.1 adds a TUI.
@@ -66,6 +73,13 @@ reconnect auto-drain, revoked and expired cloud-auth user-action recovery,
 legacy queue migration, restore replay, and LAN revocation, plus a guided browser
 conflict-review surface for saved review selection, structured
 conflict summaries, explicit recovery choices, and corrective QSO note events.
+
+Contesting and EmComm now have their shared domain foundations: the contest
+rule/exchange schema with signed definition packs, and the append-only EmComm
+record model with its proposal and projection surfaces. The contest session and
+logging engine, the Field Day/Winter Field Day templates, the
+December/January definition packs, Cabrillo export, the ICS 211/213/213RR/214
+form workflows, and every contest and EmComm client surface remain open.
 
 Partial or incomplete v1 areas include production email/Turnstile deployment
 configuration, production iOS reciprocal
@@ -91,8 +105,9 @@ dependency-ordered critical path. The next three implementation goals are:
 - Production operations configuration for the hosted server: email
   deliverability, Turnstile site/secret keys, privacy/support URLs,
   infrastructure sizing, retention, and monitoring. The account/session,
-  recovery, and device flows shipped in the v0.4 milestone and the hosting,
-  invitation, and audit flows shipped in v0.5; see
+  recovery, and device flows shipped in the v0.4 milestone, the hosting,
+  invitation, and audit flows shipped in v0.5, and the contest and EmComm
+  domain foundations shipped in v0.5.1; see
   [docs/V0_4_RELEASE_PLAN.md](docs/V0_4_RELEASE_PLAN.md) and
   [docs/V0_5_RELEASE_PLAN.md](docs/V0_5_RELEASE_PLAN.md).
 

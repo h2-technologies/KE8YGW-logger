@@ -1052,7 +1052,7 @@ struct FallbackRustBridgeClient: RustBridgeClient {
         case .version:
             data = [
                 "app": "KE8YGW Logger",
-                "core_version": "0.5.0",
+                "core_version": "0.5.1",
                 "bridge_version": 1,
                 "rust_modules": ["ham-core", "ham-sync", "ham-plugin-sdk"],
                 "contract": "ffi_unavailable_in_this_build"
@@ -1406,7 +1406,7 @@ struct FallbackRustBridgeClient: RustBridgeClient {
                 "library_linked": false,
                 "abi_version": 1,
                 "bridge_schema_version": 1,
-                "core_version": "0.5.0",
+                "core_version": "0.5.1",
                 "sync_protocol_version": 1,
                 "backup_schema_version": 1,
                 "build_target": ["os": "fallback", "arch": "fallback"],
@@ -2355,8 +2355,8 @@ enum FallbackBridgeData {
     }
 
     static let diagnostics: [String: Any] = [
-        "rust_version": "0.5.0",
-        "core_version": "0.5.0",
+        "rust_version": "0.5.1",
+        "core_version": "0.5.1",
         "bridge_loaded": false,
         "abi_version": 1,
         "bridge_schema_version": 1,
