@@ -1,9 +1,10 @@
 # CLI command reference
 
 `ham-cli` is an offline-first interface to the same append-only event store and
-ADIF implementation used by the Rust core. The CLI package version is `0.4.0`.
+ADIF implementation used by the Rust core. The CLI package version is `0.5.0`.
 It never prompts. The logging, ADIF, and integrity commands do not contact a
-provider or require a server; the `account` commands contact the hosted server
+provider or require a server; the `account` and `admin` commands contact the
+hosted server
 that has been configured for this machine.
 
 ## Global behavior
@@ -50,6 +51,7 @@ ham-cli account register <email> [display-name] [invitation-token] [--json]
 ham-cli account verify-email <token> [--json]
 ham-cli account recovery-start <email> [--json]
 ham-cli account recovery-complete <token> [--json]
+ham-cli account bootstrap <email> [display-name] [--json]
 ham-cli account login <email> [display-name] [--json]
 ham-cli account session [--json]
 ham-cli account rotate [--json]
@@ -80,11 +82,61 @@ so scripts can distinguish a retryable failure from one that needs the
 operator. `account rotate` requires a stored refresh token, and
 `account delete` requires the explicit `--confirm` flag.
 
+`account bootstrap` claims the one-time instance-administrator bootstrap on a
+fresh server. The hosted route refuses once any account exists, so it succeeds
+exactly once per server and issues a normal session for the new administrator.
+
+## Hosted server administration
+
+```text
+ham-cli admin status [--json]
+ham-cli admin hosting [--json]
+ham-cli admin set-hosting <field> <value> [--json]
+ham-cli admin invitations [--json]
+ham-cli admin invite <logbook-id> <email> <role> [--json]
+ham-cli admin invitation <invite-id> [--json]
+ham-cli admin resend <invite-id> [--json]
+ham-cli admin expire <invite-id> [--json]
+ham-cli admin revoke <invite-id> --confirm [--json]
+ham-cli admin audits [--json]
+```
+
+The `admin` commands administer the server the `account` commands are signed in
+to. There is no separate endpoint setting: the server URL and the session
+credential both come from the hosted account record, so an operator can only
+administer the server they are signed in to. Every subcommand except
+`admin status` needs a signed-in session belonging to a server administrator.
+
+`admin status` is local: it reports the cached administrator rights, server URL,
+invitation and audit counts without contacting a server. Rights are reported as
+`administrator`, `not-an-administrator`, or `unchecked` when no administration
+call has been made yet.
+
+`set-hosting` takes one field per call: `operation_mode`, `registration_mode`,
+`session_ttl_seconds`, `refresh_ttl_seconds`, `invitation_ttl_seconds`,
+`verification_ttl_seconds`, or `recovery_ttl_seconds`. Fields you do not name
+are left exactly as the server has them, so an update never rewrites a hosting
+value you did not look at. Unknown modes and non-positive lifetimes are rejected
+with exit code `2` before a request is sent.
+
+`invite` and `resend` print a single-use invitation token on one
+`invitation_token=` line. That token is returned by the hosted server exactly
+once, is never written to the durable record or the credential backend, and does
+not appear in `--json` output beyond the same single field. The hosted server
+also emails it to the invitee; capture it from that one output only if you are
+delivering it yourself.
+
+Exit codes match the `account` commands: `0` accepted, `1` rejected or failed in
+transport, `2` invalid usage. `admin revoke` requires the explicit `--confirm`
+flag.
+
 ## Current limitations
 
 Initialization/configuration, logbook management, individual QSO CRUD/search,
 station/operator/equipment CRUD, backup inspection/restore, sync and conflict
-commands, hosted server administration (hosting mode, invitations, audits),
-provider diagnostics, diagnostic bundles, completions, and an ADIF dry-run are
-not implemented in this pass. The CLI must not be described as
+commands, provider diagnostics, diagnostic bundles, completions, and an ADIF
+dry-run are not implemented in this pass. Hosted server administration covers
+hosting mode, invitations, and audit review; editing the hosted email and
+Turnstile configuration is deliberately not exposed, because those blocks carry
+secrets and belong with the operations work. The CLI must not be described as
 feature-complete until those commands and their integration tests exist.

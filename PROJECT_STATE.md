@@ -11,34 +11,39 @@
 - Session and refresh tokens live only in the OS credential backend or the iOS
   Keychain under Rust-assigned credential identifiers. The durable record, GUI
   responses, CLI output, and runtime events are token-free.
-- Server administration UX (hosting mode, invitations, audits) is the remaining
-  account-area client gap and is the next increment. See
-  [docs/V0_4_RELEASE_PLAN.md](docs/V0_4_RELEASE_PLAN.md).
-- Every release surface is unified on product version `0.4.0`: Cargo workspace
+- Server administration UX (hosting mode, invitations, audits) shipped in the
+  v0.5 milestone on hosted web, desktop, native iOS, and the CLI, together with
+  one-time instance-administrator bootstrap. Administration is scoped to the
+  server the hosted account is signed in to, and the single-use invitation token
+  is returned once and never persisted. See
+  [docs/V0_5_RELEASE_PLAN.md](docs/V0_5_RELEASE_PLAN.md). The remaining
+  account-area work is operations configuration: production email
+  deliverability, Turnstile keys, privacy/support URLs, sizing, retention, and
+  monitoring.
+- Every release surface is unified on product version `0.5.0`: Cargo workspace
   metadata, Tauri, iOS marketing version, API product metadata, the CLI version
-  assertion, and documentation. Publishing a `v0.4.0` tag remains a separate
-  release action governed by `RELEASE.md`.
+  assertion, the governance version pin, and documentation. Publishing a
+  `v0.5.0` tag remains a separate release action governed by `RELEASE.md`.
 
 ## Desktop and CLI 0.3 preparation (July 30, 2026)
 
 - Desktop/Tauri, CLI, shared Rust package metadata, and native iOS marketing
-  metadata are all `0.4.0`, inherited from `[workspace.package].version`.
+  metadata are all `0.5.0`, inherited from `[workspace.package].version`.
 - Version validation rejects any drift from that single canonical version
   across Cargo, Tauri, iOS, API metadata, release artifacts, and tags.
 - The existing CLI commands now expose stable `--json` success output,
   deterministic usage errors, help, and version/build output.
 - The CLI is still incomplete for v1: logbook/QSO/support-state CRUD, dry-run
-  ADIF, backups, sync/conflict operations, hosted server administration,
-  provider diagnostics, diagnostic bundles, and shell completions remain
-  blockers. Hosted account, session, recovery, and device commands are
-  implemented.
+  ADIF, backups, sync/conflict operations, provider diagnostics, diagnostic
+  bundles, and shell completions remain blockers. Hosted account, session,
+  recovery, device, and server administration commands are implemented.
 - Desktop packaging/signing, signed updater behavior, offline maps, and
   production cross-platform install/recovery evidence remain open; no signing,
   notarization, or clean-machine result is claimed by this update.
 
 Last audited: 2026-08-28, against `dev` at 09418f4.
 
-Canonical product version: `0.4.0` from `Cargo.toml`
+Canonical product version: `0.5.0` from `Cargo.toml`
 `[workspace.package].version`.
 
 Locked v1 release target: November 24, 2026 with hosted web, native iOS, and

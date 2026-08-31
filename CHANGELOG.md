@@ -1,5 +1,104 @@
 # Changelog
 
+## 0.5.0
+
+### Added
+
+- Added `ham_sync::admin`, the shared hosted server administration client used by
+  every platform: bounded action vocabulary, hosted request planning, response
+  interpretation, and a versioned JSON support store with atomic writes and
+  corrupt-file quarantine. Administration is scoped to the server the hosted
+  account is signed in to, so the endpoint and the session credential both come
+  from the account record and there is no second endpoint setting to drift.
+- Added a shared blocking HTTPS hosted administration transport behind the
+  existing `ham-sync` `hosted-http` feature, used by the desktop/hosted web GUI
+  and the CLI. Native iOS keeps its own URLSession transport.
+- Added `/api/admin/*` GUI endpoints for administration state, hosting
+  read/update, invitation list/create/inspect/resend/expire/revoke, and audit
+  review.
+- Added a browser Admin screen, an Admin toolbar entry, and `admin.*`
+  command-palette commands for hosted web and desktop.
+- Added redacted `admin.*` runtime events for every hosted administration action.
+- Added `admin.snapshot`, `admin.plan`, `admin.apply`, and
+  `admin.transport_failure` iOS bridge commands.
+- Added typed Swift hosted administration bridge methods, a URLSession
+  administration transport, and an iOS Admin workspace with a dashboard quick
+  action.
+- Added `ham-cli admin` subcommands with stable `--json` output for status,
+  hosting, set-hosting, invitations, invite, invitation, resend, expire, revoke,
+  and audits.
+- Added a one-time instance-administrator bootstrap on every surface:
+  the `account.bootstrap` shared action, `ham-cli account bootstrap`, a
+  `POST /api/account/bootstrap` GUI endpoint, and a browser "Claim server
+  administrator" form. An operator can now create the first administrator on a
+  fresh server from a client instead of by hand.
+- Added `docs/V0_5_RELEASE_PLAN.md`.
+
+### Changed
+
+- Hosted administration records whether the signed-in account is a server
+  administrator rather than assuming it. An accepted response on any admin-gated
+  route proves rights, a `forbidden` response records that the account is not an
+  administrator and drops the cached hosting/invitation/audit state, and an
+  authentication failure returns rights to unknown. A transport failure keeps
+  what the operator already loaded.
+- Hosting configuration updates send only the fields the operator set, so an
+  update never rewrites a hosting value they did not look at. Empty updates and
+  non-positive lifetimes are rejected before a request is sent.
+- The single-use invitation token issued by invitation create and resend is
+  returned exactly once and is excluded from every serialized form of the result
+  and the durable record. It is never written to the support record, to platform
+  secure storage, or to a runtime event.
+- Changing the hosted account endpoint resets the cached administration record,
+  so hosting, invitation, and audit state cannot be shown for the wrong server.
+- Invitations and audit records retained in the durable administration record
+  are stored newest-first and bounded, so a long-lived server cannot grow the
+  support file without limit.
+- Unified every release surface on product version `0.5.0`: Cargo workspace
+  metadata, Tauri configuration, iOS marketing version, OpenAPI product
+  metadata, the CLI version assertion, iOS Rust-bridge fallback payloads, the
+  governance version pin, and documentation. The iOS build number and the frozen
+  `/api/v1` `info.version` are unchanged.
+- Updated `ROADMAP.md`, `RELEASE.md`, `PROJECT_STATE.md`,
+  `docs/V1_EXECUTION_PLAN.md`, and `docs/CLI_REFERENCE.md` for the server
+  administration milestone.
+
+### Testing
+
+- Added `ham-sync` hosted administration tests for session-scoped planning,
+  admin route construction, partial and rejected hosting updates, mode/role
+  parsing, accepted hosting reads, invitation-token single-use handling and
+  non-persistence, invitation lifecycle status, cached-invitation replacement,
+  `forbidden` and revoked-session handling, missing stored secrets, transport
+  failures, bounded newest-first audit listings, endpoint-change resets, corrupt
+  record quarantine, and unsupported record versions.
+- Added `ham-gui` tests for administration state defaults, session-scoped
+  request rejection, unknown hosting modes, empty and non-positive hosting
+  updates, unknown invitation roles, and malformed client JSON.
+- Added `ham-ios-ffi` tests for admin plan/apply round-trips, invitation-token
+  handover without persistence, session-required rejection, `forbidden`
+  classification, and persisted transport failures.
+- Added Swift `RustBridgeTests` cases for administration snapshots, bearer-token
+  use, missing stored tokens, single-use invitation-token handling, offline
+  transport classification, invitation lifecycle rules, and partial hosting
+  update encoding.
+- Ran `cargo fmt --all -- --check`.
+- Ran `cargo clippy` with `-D warnings` across every crate that builds in this
+  workspace.
+- Ran the Rust test suite with 363 tests passing.
+- Ran a live `ham-cli admin` flow against a local `ham-server` binary: bootstrap,
+  hosting read, two single-field hosting updates, invitation create, list,
+  inspect, resend, expire, revoke, a server-refused resend after revocation, and
+  audit review; then read the same durable record back through the `ham-gui`
+  `/api/admin/state` endpoint and created an invitation and a hosting update
+  through the browser endpoints.
+- Verified no invitation token reaches any support file or runtime log.
+- Xcode/iOS simulator tests were not run because this workspace does not provide
+  macOS/Xcode tooling.
+- `cargo clippy --workspace --all-targets` and `cargo test --workspace` could not
+  include `ham-desktop`: this container has no `gdk-3.0`, so its `gdk-sys` build
+  script fails. That failure reproduces unchanged on `dev` without these changes.
+
 ## 0.4.0
 
 ### Added

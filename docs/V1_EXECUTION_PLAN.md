@@ -24,12 +24,18 @@ outside issue #2.
      durable rate limits.
    - Client surfaces: the v0.4 milestone wired hosted web, desktop, native iOS,
      and the CLI to the account, session, recovery, and device routes through
-     the shared `ham_sync::account` contract. See
-     [V0_4_RELEASE_PLAN.md](V0_4_RELEASE_PLAN.md).
-   - Remaining: server administration UX (hosting mode, invitations, audits);
-     production email provider/domain validation; Turnstile site/secret keys;
-     privacy/support URLs; infrastructure sizing; retention/monitoring; and
-     deployment secrets.
+     the shared `ham_sync::account` contract. The v0.5 milestone wired the same
+     four surfaces to the administration routes through `ham_sync::admin`:
+     hosting configuration read/update, invitation
+     create/list/inspect/resend/expire/revoke, audit review, and one-time
+     instance-administrator bootstrap. See
+     [V0_4_RELEASE_PLAN.md](V0_4_RELEASE_PLAN.md) and
+     [V0_5_RELEASE_PLAN.md](V0_5_RELEASE_PLAN.md).
+   - Remaining: production email provider/domain validation; Turnstile
+     site/secret keys; privacy/support URLs; infrastructure sizing;
+     retention/monitoring; and deployment secrets. Editing the hosted email and
+     Turnstile blocks from a client is deliberately deferred with that
+     operations work, because those blocks carry secrets.
 
 3. Offline-first sync and reconciliation
    - Implemented foundation: durable versioned mutation queue, deterministic

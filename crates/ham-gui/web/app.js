@@ -37,6 +37,13 @@ const state = {
   accountResult: null,
   accountError: null,
   accountBusy: false,
+  admin: null,
+  adminResult: null,
+  adminError: null,
+  adminBusy: false,
+  adminSignedIn: false,
+  adminAccountEmail: null,
+  adminInvitationToken: null,
   divergenceReview: null,
   conflictReview: null,
   selectedConflictReviewId: null,
@@ -191,6 +198,7 @@ function bindShellControls() {
   byId("settings-button").addEventListener("click", () => openScreen("settings"));
   byId("plugins-button").addEventListener("click", () => openScreen("plugins"));
   byId("account-button").addEventListener("click", openAccountScreen);
+  byId("admin-button")?.addEventListener("click", openAdminScreen);
   byId("close-screen").addEventListener("click", closeScreen);
   byId("command-search").addEventListener("input", renderCommandResults);
 
@@ -494,6 +502,9 @@ function runCommand(commandId) {
   if (command.id === "account.open" || command.id === "account.sign-in" || command.id === "account.devices.open") openAccountScreen();
   if (command.id === "account.session.refresh") accountRequest("/api/account/session/refresh", {});
   if (command.id === "account.sign-out") accountRequest("/api/account/logout", {});
+  if (command.id === "admin.open" || command.id === "admin.invitations.open") openAdminScreen();
+  if (command.id === "admin.hosting.refresh") adminRequest("/api/admin/hosting/refresh", {});
+  if (command.id === "admin.audits.refresh") adminRequest("/api/admin/audits/refresh", {});
   if (command.id === "services.open") openScreen("services");
   if (command.id === "services.cache.clear") clearServiceCache();
   if (command.id === "services.lookup.test") lookupCallsignFromPrompt();
@@ -624,6 +635,14 @@ function openScreen(kind) {
     title.textContent = "Hosted Account";
     body.innerHTML = renderAccountScreen();
     bindAccountControls();
+    return;
+  }
+
+  if (kind === "admin") {
+    eyebrow.textContent = "Administration";
+    title.textContent = "Server Administration";
+    body.innerHTML = renderAdminScreen();
+    bindAdminControls();
     return;
   }
 
@@ -3852,6 +3871,16 @@ function renderAccountScreen() {
     </details>
 
     <details>
+      <summary>Claim server administrator (first run)</summary>
+      <form id="account-bootstrap-form" class="qso-form">
+        <label>Email <input name="email" class="placeholder-control" type="email" autocomplete="username" required /></label>
+        <label>Display name <input name="display_name" class="placeholder-control" autocomplete="name" /></label>
+        <button class="toolbar-button" type="submit" ${busy}>Claim Administrator</button>
+      </form>
+      <p class="muted">Works once, on a server with no accounts yet. It creates the first administrator and signs in. Use the Admin screen afterwards.</p>
+    </details>
+
+    <details>
       <summary>Create an account</summary>
       <form id="account-register-form" class="qso-form">
         <label>Email <input name="email" class="placeholder-control" type="email" autocomplete="username" required /></label>
@@ -3920,6 +3949,7 @@ function bindAccountControls() {
   const forms = [
     ["account-configure-form", "/api/account/configure"],
     ["account-login-form", "/api/account/login"],
+    ["account-bootstrap-form", "/api/account/bootstrap"],
     ["account-register-form", "/api/account/register"],
     ["account-verify-form", "/api/account/verify-email"],
     ["account-recovery-start-form", "/api/account/recovery/start"],
@@ -3953,4 +3983,315 @@ function bindAccountControls() {
 async function openAccountScreen() {
   await refreshAccount();
   openScreen("account");
+}
+
+// ---------------------------------------------------------------------------
+// Hosted server administration screen
+// ---------------------------------------------------------------------------
+
+const ADMIN_OPERATION_MODES = [
+  ["personal_hosted", "Personal hosted"],
+  ["public_hosted", "Public hosted"],
+  ["self_hosted", "Self hosted"],
+];
+
+const ADMIN_REGISTRATION_MODES = [
+  ["invite_only", "Invite only"],
+  ["open", "Open"],
+  ["disabled", "Disabled"],
+];
+
+const ADMIN_ROLES = [
+  ["viewer", "Viewer"],
+  ["operator", "Operator"],
+  ["admin", "Admin"],
+  ["owner", "Owner"],
+];
+
+const ADMIN_INVITATION_STATUS_LABELS = {
+  pending: "Pending",
+  accepted: "Accepted",
+  revoked: "Revoked",
+  expired: "Expired",
+};
+
+async function refreshAdmin() {
+  try {
+    const payload = await fetch("/api/admin/state").then((response) => response.json());
+    state.admin = payload.admin || null;
+    state.adminSignedIn = payload.signed_in === true;
+    state.adminAccountEmail = payload.account_email || null;
+    state.adminError = payload.error || null;
+  } catch (error) {
+    state.adminError = String(error);
+  }
+}
+
+function adminSnapshot() {
+  return state.admin || null;
+}
+
+function adminIsAdministrator() {
+  return adminSnapshot()?.administrator === true;
+}
+
+// Mirrors the Rust invitation status so the list reads the same on every surface.
+function adminInvitationStatus(invitation) {
+  if (!invitation) return "pending";
+  if (invitation.accepted_at) return "accepted";
+  if (invitation.revoked_at) return "revoked";
+  if (invitation.expires_at && new Date(invitation.expires_at) <= new Date()) return "expired";
+  return "pending";
+}
+
+async function adminRequest(path, body) {
+  if (state.adminBusy) return;
+  state.adminBusy = true;
+  state.adminError = null;
+  // A new request always clears the previously issued one-time token so it is
+  // never left on screen next to an unrelated result.
+  state.adminInvitationToken = null;
+  renderAdminScreenBody();
+  try {
+    const response = await fetch(path, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body || {}),
+    });
+    const payload = await response.json();
+    if (payload.admin_result) {
+      state.adminResult = payload.admin_result;
+      state.admin = payload.admin_result.snapshot;
+    }
+    if (payload.invitation_token) {
+      state.adminInvitationToken = payload.invitation_token;
+    }
+    if (payload.error) {
+      state.adminError = payload.error;
+    }
+  } catch (error) {
+    state.adminError = String(error);
+  } finally {
+    state.adminBusy = false;
+    renderAdminScreenBody();
+    render();
+  }
+}
+
+function renderAdminScreenBody() {
+  const body = byId("screen-body");
+  if (!body || byId("overlay").hidden) return;
+  if (byId("admin-screen")) {
+    body.innerHTML = renderAdminScreen();
+    bindAdminControls();
+  }
+}
+
+function renderAdminStatusBanner() {
+  const snapshot = adminSnapshot();
+  const result = state.adminResult;
+  let rights = "Administrator rights have not been checked yet.";
+  if (snapshot?.administrator === true) {
+    rights = "Signed in as a server administrator.";
+  } else if (snapshot?.administrator === false) {
+    rights = "The signed-in account is not a server administrator.";
+  }
+  return `<div class="sync-summary">
+    <p><strong>${escapeHtml(rights)}</strong></p>
+    <p>Server: ${escapeHtml(snapshot?.base_url || "not configured")}</p>
+    <p>Account: ${escapeHtml(state.adminAccountEmail || "not signed in")}</p>
+    ${!state.adminSignedIn ? `<p class="event-error">Sign in on the Hosted Account screen before administering this server.</p>` : ""}
+    ${state.adminBusy ? `<p class="muted">Contacting the hosted server&hellip;</p>` : ""}
+    ${state.adminError ? `<p class="event-error">${escapeHtml(state.adminError)}</p>` : ""}
+    ${result ? `<p class="${result.outcome === "accepted" ? "muted" : "event-error"}">${escapeHtml(ACCOUNT_OUTCOME_LABELS[result.outcome] || result.outcome)}: ${escapeHtml(result.message)}${result.request_id ? ` (request ${escapeHtml(result.request_id)})` : ""}</p>` : ""}
+    ${result && result.retryable ? `<p class="muted">This request can be retried without any server changes.</p>` : ""}
+  </div>`;
+}
+
+// Renders the single-use invitation token exactly once. The token is not stored
+// by Rust, the browser, or the support record, so it disappears as soon as
+// another administration request runs.
+function renderAdminInvitationToken() {
+  if (!state.adminInvitationToken) return "";
+  return `<div class="sync-summary">
+    <p><strong>Single-use invitation token</strong></p>
+    <p><code>${escapeHtml(state.adminInvitationToken)}</code></p>
+    <p class="muted">Shown once and never stored. The hosted server also emailed it to the invitee. Copy it now if you need to deliver it yourself.</p>
+  </div>`;
+}
+
+function renderAdminHosting() {
+  const hosting = adminSnapshot()?.hosting;
+  if (!hosting) {
+    return `<p class="muted">No hosting configuration loaded yet. Refresh to read it from the server.</p>`;
+  }
+  return `<div class="sync-summary">
+    <p>Operation mode: ${escapeHtml(hosting.operation_mode || "unknown")}</p>
+    <p>Registration mode: ${escapeHtml(hosting.registration_mode || "unknown")}</p>
+    <p>Bootstrap administrator: ${hosting.bootstrap_admin_completed ? "completed" : "not completed"}</p>
+    <p>Session lifetime: ${escapeHtml(String(hosting.session_ttl_seconds ?? "unset"))}s &middot; refresh ${escapeHtml(String(hosting.refresh_ttl_seconds ?? "unset"))}s</p>
+    <p>Invitation lifetime: ${escapeHtml(String(hosting.invitation_ttl_seconds ?? "unset"))}s</p>
+    <p>Verification lifetime: ${escapeHtml(String(hosting.verification_ttl_seconds ?? "unset"))}s &middot; recovery ${escapeHtml(String(hosting.recovery_ttl_seconds ?? "unset"))}s</p>
+    <p>Email delivery: ${escapeHtml(hosting.email?.mode || "unknown")}${hosting.email?.from_address ? ` from ${escapeHtml(hosting.email.from_address)}` : ""}</p>
+    <p>Email webhook configured: ${hosting.email?.webhook_configured ? "yes" : "no"} &middot; credential configured: ${hosting.email?.credential_reference_configured ? "yes" : "no"}</p>
+    <p>Turnstile on open registration: ${hosting.turnstile?.enabled_for_open_registration ? "enabled" : "disabled"} &middot; secret configured: ${hosting.turnstile?.secret_configured ? "yes" : "no"}</p>
+    ${hosting.updated_at ? `<p>Last updated: ${escapeHtml(hosting.updated_at)}</p>` : ""}
+  </div>`;
+}
+
+function renderAdminOptions(options, selected) {
+  return [`<option value="">Leave unchanged</option>`]
+    .concat(
+      options.map(
+        ([value, label]) =>
+          `<option value="${escapeHtml(value)}"${value === selected ? " selected" : ""}>${escapeHtml(label)}</option>`,
+      ),
+    )
+    .join("");
+}
+
+function renderAdminInvitations() {
+  const invitations = adminSnapshot()?.invitations || [];
+  if (invitations.length === 0) {
+    return `<p class="muted">No invitations loaded yet. Refresh to read them from the server.</p>`;
+  }
+  return `<div class="qso-list">${invitations
+    .map((invitation) => {
+      const status = adminInvitationStatus(invitation);
+      const canResend = status === "pending" || status === "expired";
+      const canChange = status === "pending";
+      return `<article class="qso-row">
+        <strong>${escapeHtml(invitation.invited_email || "unknown")}</strong>
+        <span>${escapeHtml(invitation.role || "unknown")} &middot; ${escapeHtml(ADMIN_INVITATION_STATUS_LABELS[status] || status)}</span>
+        <small>Expires ${escapeHtml(invitation.expires_at || "never")} / resent ${escapeHtml(String(invitation.resend_count ?? 0))} times</small>
+        <div class="monitor-actions">
+          <button class="toolbar-button" type="button" data-admin-invitation="inspect" data-invite-id="${escapeHtml(invitation.invite_id)}">Inspect</button>
+          <button class="toolbar-button" type="button" data-admin-invitation="resend" data-invite-id="${escapeHtml(invitation.invite_id)}" ${canResend ? "" : "disabled"}>Resend</button>
+          <button class="toolbar-button" type="button" data-admin-invitation="expire" data-invite-id="${escapeHtml(invitation.invite_id)}" ${canChange ? "" : "disabled"}>Expire</button>
+          <button class="toolbar-button" type="button" data-admin-confirm="revoke" data-invite-id="${escapeHtml(invitation.invite_id)}" ${canChange ? "" : "disabled"}>Revoke</button>
+        </div>
+      </article>`;
+    })
+    .join("")}</div>`;
+}
+
+function renderAdminAudits() {
+  const audits = adminSnapshot()?.audits || [];
+  if (audits.length === 0) {
+    return `<p class="muted">No audit records loaded yet. Refresh to read them from the server.</p>`;
+  }
+  return `<div class="stack">
+    ${audits.length > 100 ? `<p class="muted">Showing the 100 most recent of ${escapeHtml(String(audits.length))} loaded records.</p>` : ""}
+    <div class="qso-list">${audits
+      .slice(0, 100)
+      .map(
+        (audit) => `<article class="qso-row">
+          <strong>${escapeHtml(audit.action || "unknown")}</strong>
+          <span>${escapeHtml(audit.outcome || "unknown")}${audit.target ? ` &middot; ${escapeHtml(audit.target)}` : ""}</span>
+          <small>${escapeHtml(audit.occurred_at || "unknown time")}${audit.request_id ? ` / request ${escapeHtml(audit.request_id)}` : ""}</small>
+        </article>`,
+      )
+      .join("")}</div>
+  </div>`;
+}
+
+function renderAdminScreen() {
+  const hosting = adminSnapshot()?.hosting;
+  const busy = state.adminBusy ? "disabled" : "";
+  return `<div id="admin-screen" class="stack">
+    ${renderAdminStatusBanner()}
+    ${renderAdminInvitationToken()}
+
+    <details open>
+      <summary>Hosting configuration</summary>
+      <div class="stack">
+        ${renderAdminHosting()}
+        <button type="button" data-admin-action="/api/admin/hosting/refresh" ${busy}>Refresh Hosting Configuration</button>
+        <form id="admin-hosting-form" class="stack">
+          <label>Operation mode
+            <select name="operation_mode">${renderAdminOptions(ADMIN_OPERATION_MODES, hosting?.operation_mode)}</select>
+          </label>
+          <label>Registration mode
+            <select name="registration_mode">${renderAdminOptions(ADMIN_REGISTRATION_MODES, hosting?.registration_mode)}</select>
+          </label>
+          <label>Session lifetime seconds <input name="session_ttl_seconds" type="number" min="1" class="placeholder-control" placeholder="leave blank to keep" /></label>
+          <label>Refresh lifetime seconds <input name="refresh_ttl_seconds" type="number" min="1" class="placeholder-control" placeholder="leave blank to keep" /></label>
+          <label>Invitation lifetime seconds <input name="invitation_ttl_seconds" type="number" min="1" class="placeholder-control" placeholder="leave blank to keep" /></label>
+          <label>Verification lifetime seconds <input name="verification_ttl_seconds" type="number" min="1" class="placeholder-control" placeholder="leave blank to keep" /></label>
+          <label>Recovery lifetime seconds <input name="recovery_ttl_seconds" type="number" min="1" class="placeholder-control" placeholder="leave blank to keep" /></label>
+          <button type="submit" ${busy}>Update Hosting Configuration</button>
+          <p class="muted">Only the fields you change are sent. Blank fields are left exactly as the server has them.</p>
+        </form>
+      </div>
+    </details>
+
+    <details open>
+      <summary>Invitations</summary>
+      <div class="stack">
+        ${renderAdminInvitations()}
+        <button type="button" data-admin-action="/api/admin/invitations/refresh" ${busy}>Refresh Invitations</button>
+        <form id="admin-invitation-form" class="stack">
+          <label>Logbook ID <input name="logbook_id" class="placeholder-control" placeholder="00000000-0000-4000-8000-000000000001" required /></label>
+          <label>Invited email <input name="email" type="email" class="placeholder-control" placeholder="operator@example.test" required /></label>
+          <label>Role
+            <select name="role">${ADMIN_ROLES.map(([value, label]) => `<option value="${escapeHtml(value)}">${escapeHtml(label)}</option>`).join("")}</select>
+          </label>
+          <button type="submit" ${busy}>Create Invitation</button>
+          <p class="muted">The server emails the invitee and returns a single-use token that is shown here once and never stored.</p>
+        </form>
+      </div>
+    </details>
+
+    <details>
+      <summary>Audit log</summary>
+      <div class="stack">
+        ${renderAdminAudits()}
+        <button type="button" data-admin-action="/api/admin/audits/refresh" ${busy}>Refresh Audit Log</button>
+      </div>
+    </details>
+  </div>`;
+}
+
+function adminFormValues(form) {
+  const values = {};
+  new FormData(form).forEach((value, key) => {
+    const text = String(value).trim();
+    if (!text) return;
+    values[key] = key.endsWith("_seconds") ? Number(text) : text;
+  });
+  return values;
+}
+
+function bindAdminControls() {
+  byId("admin-hosting-form")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    await adminRequest("/api/admin/hosting/update", adminFormValues(event.target));
+  });
+  byId("admin-invitation-form")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    await adminRequest("/api/admin/invitations/create", adminFormValues(event.target));
+  });
+  document.querySelectorAll("[data-admin-action]").forEach((button) => {
+    button.addEventListener("click", () => adminRequest(button.dataset.adminAction, {}));
+  });
+  document.querySelectorAll("[data-admin-invitation]").forEach((button) => {
+    button.addEventListener("click", () =>
+      adminRequest(`/api/admin/invitations/${button.dataset.adminInvitation}`, {
+        invite_id: button.dataset.inviteId,
+      }),
+    );
+  });
+  document.querySelectorAll("[data-admin-confirm]").forEach((button) => {
+    button.addEventListener("click", () => {
+      if (!window.confirm("Revoking an invitation cannot be undone on the hosted server. Continue?")) return;
+      adminRequest(`/api/admin/invitations/${button.dataset.adminConfirm}`, {
+        invite_id: button.dataset.inviteId,
+      });
+    });
+  });
+}
+
+async function openAdminScreen() {
+  await refreshAdmin();
+  openScreen("admin");
 }
