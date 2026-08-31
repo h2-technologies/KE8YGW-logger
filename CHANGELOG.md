@@ -71,6 +71,16 @@
 - Hardened iOS Rust build scripts to load Rust/Homebrew paths in Xcode archive shells and removed a developer-specific Xcode run script path.
 - iOS no longer calls `fatalError` when the SwiftData model container cannot be created, which crashed the app at launch (TestFlight 0.3.0 build 149, `EXC_BREAKPOINT` in `App.main()`); the container is now created with staged recovery.
 - iOS Diagnostics now reports projection cache health and includes it in the exported diagnostics report.
+- The Tauri desktop app now sets `app.withGlobalTauri`, which injects
+  `window.__TAURI__`. Without it the web UI never found `invoke`, so its
+  desktop `/api/*` bridge and native file dialogs were never installed and
+  `/api/shell` fell through to Tauri's `index.html` asset fallback; the app
+  opened on "GUI failed to start" with `SyntaxError: Unexpected token '<'`.
+  The bridge now also accepts `window.__TAURI_INTERNALS__.invoke`, falls back
+  to the default `http://127.0.0.1:9467` API when `desktop_runtime` reports no
+  server URL, and reports a non-JSON `/api/shell` response by endpoint,
+  status, and content type. The startup failure screen escapes the error text
+  so markup in a message is no longer swallowed by `innerHTML`.
 
 ### Testing
 
