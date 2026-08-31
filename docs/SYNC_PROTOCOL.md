@@ -110,6 +110,15 @@ queue JSON before creating a fresh empty current file. Unsupported current file
 versions, mutation schema versions, invalid dependencies, and duplicate
 per-logbook sequences still fail closed instead of being silently repaired.
 
+`sync.offline_queue.recover` exposes that shared path to native iOS. Its
+simulator-safe FFI tests cover a first-launch absent queue that initializes once
+and stays stable on the next launch, legacy `version: 0` records that migrate
+into current envelopes (records with a local official event resume as
+`retrying`, records without one resume as `pending`), corrupt queue JSON that is
+quarantined beside the queue with the original bytes preserved before a fresh
+empty file is created, and an app termination between the atomic temp write and
+the rename that is promoted back into the live queue without losing queued work.
+
 Station/equipment commands are queued as support-state mutations and marked
 accepted after the support store write succeeds. They remain support state and
 are not official logbook history.
@@ -139,6 +148,20 @@ Accepted remote events are appended through the official event store without rew
 ### Push
 
 Push sends local official events to a peer or cloud server. The receiver applies the same verification rules and stores only valid append-only events.
+
+Every transport reports push outcomes with the same vocabulary. Hosted,
+self-hosted, and LAN receivers classify a push result through
+`ham_sync::push_replication_status`, so a rejection caused by a branch that does
+not continue the receiver head is always reported as `diverged` rather than a
+generic `rejected`. Clients depend on that distinction: `diverged` stops
+unattended retry, blocks the queued operations, and opens a manual conflict
+review, while `rejected` describes a validation failure that review cannot
+merge away.
+
+Receivers also scope every pushed envelope to the authorized logbook. A push is
+refused when any event envelope carries a `logbook_id` other than the
+authorized request `logbook_id`, so an authorized session for one logbook can
+never append official events into another logbook.
 
 Desktop cloud push now uses the offline queue when queued local official events
 are present. Queue entries are marked `sending` before transport and `accepted`
@@ -395,6 +418,19 @@ Current REST surface:
 The hosted `ham-server` API exposes bearer/session-scoped sync push as
 `POST /api/v1/sync/push`; the logbook-scoped routes above are the self-hosted
 sync-server compatibility surface used by sync-token clients.
+Hosted push enforces the same logbook scoping and the same
+`pulled`/`diverged`/`rejected` status vocabulary as the self-hosted routes:
+`sync_push_rejects_events_scoped_to_another_logbook` proves a session authorized
+for one logbook cannot append official events into another account's logbook,
+and `sync_push_reports_divergence_with_the_shared_replication_vocabulary` proves
+a branch that does not continue the hosted head is reported as `diverged`,
+appends nothing, and can be reconciled by re-applying the work on the pulled
+head.
+`self_hosted_wire_endpoint_rejects_divergent_branch_and_reconciles_after_pull`
+proves the same divergence rejection, unchanged durable head, `diverged`
+preview for an unknown local head, pull-then-reapply recovery, and duplicate
+replay handling over a real loopback HTTP request against the durable
+self-hosted backend.
 `ham-server` binary loopback TCP wire tests cover hosted admin bootstrap,
 proposal-backed QSO creation, hosted sync pull, duplicate hosted sync push, and
 durable JSONL official-event storage without duplicate replay.

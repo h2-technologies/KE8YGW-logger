@@ -32,6 +32,11 @@ Plugin permissions and operator role permissions are independent:
 - Diagnostics upload is separate from diagnostics export.
 - Rig read is separate from rig write and PTT.
 - Sync pull and sync push are separate.
+- Sync push authorizes the request logbook and additionally requires every
+  pushed official event envelope to carry that same `logbook_id`. Hosted and
+  self-hosted push both refuse mixed-logbook batches instead of appending them,
+  so a session authorized for one logbook cannot write official history into
+  another.
 - Service provider registration/configuration/enablement is separate from
   provider data access.
 - Service cache clear is separate from service cache read/write.

@@ -4,6 +4,9 @@
 
 ### Added
 
+- Added `ham_sync::push_replication_status`, the single classifier that hosted,
+  self-hosted, and in-memory sync servers use to report a push as `pulled`,
+  `diverged`, or `rejected`.
 - Added `ham_sync::account`, the shared hosted account and session client used by
   every platform: bounded action vocabulary, hosted request planning, response
   interpretation, stable outcome classification, transport-failure
@@ -48,6 +51,15 @@
 
 ### Changed
 
+- Hosted `POST /api/v1/sync/push` now rejects a push whose event envelopes carry
+  a `logbook_id` other than the authorized request `logbook_id` with
+  `403 forbidden`. The route previously authorized only the request field, so a
+  session with write access to one logbook could append official events into
+  another logbook.
+- Hosted `POST /api/v1/sync/push` now reports a branch that does not continue the
+  server head as `diverged` instead of `rejected`, matching the self-hosted push
+  route so desktop and iOS clients stop unattended retry and open a manual
+  conflict review on every transport.
 - Hosted account session and refresh tokens are now stored only in the
   operating-system credential backend or the iOS Keychain under Rust-assigned
   credential identifiers; the durable account record, GUI responses, CLI output,
@@ -74,6 +86,15 @@
 
 ### Testing
 
+- Added `ham-server` regression tests for cross-logbook sync push rejection and
+  for hosted divergence reporting plus pull-then-reapply reconciliation.
+- Added a `ham-sync-server` loopback HTTP test proving the durable self-hosted
+  surface refuses a divergent branch without changing the head or official log,
+  reports a `diverged` preview for an unknown local head, reconciles after a
+  pull, and ignores duplicate replay of the reconciled chain.
+- Added `ham-ios-ffi` tests for `sync.offline_queue.recover`: first-launch queue
+  initialization, legacy `version: 0` migration, corrupt-queue quarantine with
+  the original bytes preserved, and interrupted atomic-write promotion.
 - Added `ham-sync` hosted account tests for URL/email normalization, request
   planning, session-required rejection, accepted sign-in with credential-id-only
   persistence, refresh-token rotation, remote session revocation recovery,
