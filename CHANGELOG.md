@@ -4,6 +4,32 @@
 
 ### Added
 
+- Added `ham_sync::account`, the shared hosted account and session client used by
+  every platform: bounded action vocabulary, hosted request planning, response
+  interpretation, stable outcome classification, transport-failure
+  classification, and a versioned JSON support store with atomic writes and
+  corrupt-file quarantine.
+- Added a shared blocking HTTPS hosted account transport behind the new
+  `ham-sync` `hosted-http` feature, used by the desktop/hosted web GUI and the
+  CLI. Native iOS keeps its own URLSession transport.
+- Added `/api/account/*` GUI endpoints for hosted account state, endpoint
+  configuration, registration, email verification, recovery start/complete,
+  sign-in, session read/rotate, sign-out, sign-out-everywhere, device
+  list/revoke/revoke-all, and account deletion.
+- Added a browser Account screen, an Account settings summary card, an Account
+  toolbar entry, and `account.*` command-palette commands for hosted web and
+  desktop.
+- Added redacted `account.*` runtime events for every hosted account action.
+- Added `account.snapshot`, `account.configure`, `account.plan`,
+  `account.apply`, and `account.transport_failure` iOS bridge commands.
+- Added typed Swift hosted account bridge methods, a URLSession hosted account
+  transport, Keychain storage of Rust-assigned session/refresh credentials, and
+  an iOS Account workspace with a dashboard quick action.
+- Added `ham-cli account` subcommands with stable `--json` output for status,
+  configure, register, verify-email, recovery-start, recovery-complete, login,
+  session, rotate, logout, logout-all, devices, revoke-device,
+  revoke-all-devices, and delete.
+- Added `docs/V0_4_RELEASE_PLAN.md`.
 - Added `IOS_GAP_ANALYSIS.md`.
 - Added `ham-ios-ffi`, a Rust FFI crate for iOS JSON bridge calls backed by `ham-core` and `ham-sync`.
 - Added a hardened byte-buffer Rust FFI command ABI with structured envelopes, ABI/schema versions, correlation IDs, panic containment, bounded input checks, and explicit deallocation.
@@ -22,6 +48,16 @@
 
 ### Changed
 
+- Hosted account session and refresh tokens are now stored only in the
+  operating-system credential backend or the iOS Keychain under Rust-assigned
+  credential identifiers; the durable account record, GUI responses, CLI output,
+  and runtime events stay token-free.
+- `ureq` is now a workspace dependency shared by `ham-server` and the optional
+  `ham-sync` `hosted-http` feature.
+- Updated `ROADMAP.md`, `docs/V1_EXECUTION_PLAN.md`, `docs/API_CLIENT_CONTRACT.md`,
+  `docs/SECURITY_MODEL.md`, `docs/EVENT_CATALOG.md`, `docs/CLI_REFERENCE.md`, and
+  `PROJECT_STATE.md` for the hosted account milestone. The remaining
+  account-area client gap is server administration UX.
 - Expanded iOS QSO, station profile, settings, export, logbook, and detail models/views for MVP parity fields.
 - Routed iOS QSO create/delete, station profile/equipment/select, POTA/SOTA activation start/end, and Net Control session/check-in/traffic mutations through Rust bridge commands.
 - Reclassified SwiftData QSO/station/equipment state as cache/projection data for Rust-accepted state.
@@ -33,8 +69,27 @@
 
 ### Testing
 
-- Ran `cargo fmt`.
+- Added `ham-sync` hosted account tests for URL/email normalization, request
+  planning, session-required rejection, accepted sign-in with credential-id-only
+  persistence, refresh-token rotation, remote session revocation recovery,
+  device revocation, transport-failure retryability, error-code classification,
+  registration state, sign-out credential clearing, corrupt-record quarantine,
+  and unsupported record versions.
+- Added `ham-gui` tests for hosted account state defaults, endpoint
+  configuration persistence and rejection, session-scoped request rejection, and
+  malformed client JSON.
+- Added `ham-ios-ffi` tests for configure/plan/apply round-trips, secret
+  handover without persistence, session-required rejection, and persisted
+  transport failures.
+- Added Swift `RustBridgeTests` cases for hosted account snapshots, Keychain
+  storage of issued secrets, bearer-token use, refresh-token injection, offline
+  transport classification, credential clearing, and missing-token rejection.
+- Ran `cargo fmt --all -- --check`.
+- Ran `cargo clippy --locked --workspace --all-targets -- -D warnings`.
 - Ran `cargo check`.
 - Ran `cargo test -p ham-ios-ffi`.
-- Ran full `cargo test` with 177 Rust tests passing.
+- Ran full `cargo test --locked --workspace` with 345 Rust tests passing.
+- Ran a live `ham-cli` account flow against a local `ham-server` binary:
+  configure, sign in, session read, device list, session rotation, sign-out, and
+  recovery from a remotely revoked session.
 - Xcode/iOS simulator tests were not run because this workspace does not provide macOS/Xcode tooling.

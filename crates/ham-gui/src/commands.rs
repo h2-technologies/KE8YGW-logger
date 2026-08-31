@@ -702,6 +702,35 @@ impl CommandRegistry {
                 None,
                 None,
             ),
+            command("account.open", "Open Hosted Account", "Account", None, None),
+            command(
+                "account.sign-in",
+                "Sign In To Hosted Account",
+                "Account",
+                None,
+                None,
+            ),
+            command(
+                "account.session.refresh",
+                "Refresh Hosted Session",
+                "Account",
+                None,
+                None,
+            ),
+            command(
+                "account.sign-out",
+                "Sign Out Of Hosted Account",
+                "Account",
+                None,
+                None,
+            ),
+            command(
+                "account.devices.open",
+                "Open Hosted Account Devices",
+                "Account",
+                None,
+                None,
+            ),
             command(
                 "sync.cloud.diagnostics.copy",
                 "Copy Cloud Sync Diagnostic Summary",
@@ -809,6 +838,11 @@ mod tests {
         assert!(ids.contains(&"event-bus.copy-latest-error"));
         assert!(ids.contains(&"diagnostics.report.problem"));
         assert!(ids.contains(&"diagnostics.report.export"));
+        assert!(ids.contains(&"account.open"));
+        assert!(ids.contains(&"account.sign-in"));
+        assert!(ids.contains(&"account.session.refresh"));
+        assert!(ids.contains(&"account.sign-out"));
+        assert!(ids.contains(&"account.devices.open"));
         assert!(ids.contains(&"diagnostics.report.upload"));
         assert!(ids.contains(&"diagnostics.report.copy-last-id"));
         assert!(ids.contains(&"backup.open"));

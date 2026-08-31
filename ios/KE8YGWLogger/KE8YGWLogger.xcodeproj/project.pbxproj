@@ -37,6 +37,7 @@
 		20000000000000000000010C /* Features/SOTA/SOTAView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 20000000000000000000000C /* Features/SOTA/SOTAView.swift */; };
 		20000000000000000000010D /* Features/NetControl/NetControlView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 20000000000000000000000D /* Features/NetControl/NetControlView.swift */; };
 		20000000000000000000010E /* Features/Diagnostics/DiagnosticsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 20000000000000000000000E /* Features/Diagnostics/DiagnosticsView.swift */; };
+		700000000000000000000101 /* Features/Account/AccountWorkspaceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 700000000000000000000001 /* Features/Account/AccountWorkspaceView.swift */; };
 		200000000000000000000201 /* RustBridgeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000021 /* RustBridgeTests.swift */; };
 		300000000000000000000102 /* Shared/Services/ProjectionRefreshService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 300000000000000000000002 /* Shared/Services/ProjectionRefreshService.swift */; };
 		600000000000000000000101 /* Shared/Persistence/ProjectionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 600000000000000000000001 /* Shared/Persistence/ProjectionStore.swift */; };
@@ -90,6 +91,7 @@
 		20000000000000000000000C /* Features/SOTA/SOTAView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Features/SOTA/SOTAView.swift; sourceTree = "<group>"; };
 		20000000000000000000000D /* Features/NetControl/NetControlView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Features/NetControl/NetControlView.swift; sourceTree = "<group>"; };
 		20000000000000000000000E /* Features/Diagnostics/DiagnosticsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Features/Diagnostics/DiagnosticsView.swift; sourceTree = "<group>"; };
+		700000000000000000000001 /* Features/Account/AccountWorkspaceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Features/Account/AccountWorkspaceView.swift; sourceTree = "<group>"; };
 		200000000000000000000021 /* RustBridgeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RustBridgeTests.swift; sourceTree = "<group>"; };
 		300000000000000000000002 /* Shared/Services/ProjectionRefreshService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Shared/Services/ProjectionRefreshService.swift; sourceTree = "<group>"; };
 		600000000000000000000001 /* Shared/Persistence/ProjectionStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Shared/Persistence/ProjectionStore.swift; sourceTree = "<group>"; };
@@ -141,6 +143,7 @@
 				20000000000000000000000C /* Features/SOTA/SOTAView.swift */,
 				20000000000000000000000D /* Features/NetControl/NetControlView.swift */,
 				20000000000000000000000E /* Features/Diagnostics/DiagnosticsView.swift */,
+				700000000000000000000001 /* Features/Account/AccountWorkspaceView.swift */,
 				100000000000000000000007 /* Views/RootView.swift */,
 				100000000000000000000008 /* Views/HomeView.swift */,
 				100000000000000000000009 /* Views/NewQSOView.swift */,
@@ -340,6 +343,7 @@
 				20000000000000000000010C /* Features/SOTA/SOTAView.swift in Sources */,
 				20000000000000000000010D /* Features/NetControl/NetControlView.swift in Sources */,
 				20000000000000000000010E /* Features/Diagnostics/DiagnosticsView.swift in Sources */,
+				700000000000000000000101 /* Features/Account/AccountWorkspaceView.swift in Sources */,
 				100000000000000000000107 /* Views/RootView.swift in Sources */,
 				100000000000000000000108 /* Views/HomeView.swift in Sources */,
 				100000000000000000000109 /* Views/NewQSOView.swift in Sources */,

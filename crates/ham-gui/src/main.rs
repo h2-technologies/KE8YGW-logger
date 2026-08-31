@@ -52,19 +52,20 @@ use ham_sync::{
     CloudSyncStatusResponse, ConflictReviewSnapshot, ConflictReviewStatus,
     DiagnosticReportUploadRequest, DiagnosticReportUploadResponse, DiagnosticReportUploadType,
     DiscoveryPacket, GetEventMetadataResponse, GetEventRangeResponse, HandshakeRequest,
-    InMemoryCloudSyncServer, JsonConflictReviewStore, JsonLanTrustStore,
-    JsonLocalSyncIdentityStore, JsonOfflineMutationQueue, LanDiscoveryService,
-    LanPairingAcceptance, LanPeerTrustUpdate, LanTrustSnapshot, ListLogbooksResponse,
-    LocalPeerIdentity, LogbookHeadSummary, ManualConflictResolution,
-    ManualConflictResolutionChoice, OfflineMutationEnvelope, OfflineMutationInput,
-    OfflineQueueSnapshot, PairDeviceRequest, PeerObservation, PeerRecord, PeerRegistry,
-    PreviewPullRequest, PreviewPullResponse, PullEventsRequest, PullEventsResponse,
-    ReplicationStatus, SyncConfig, SyncConflictReport, LAN_AUTH_SIGNATURE_VERSION,
-    MAX_CONFLICT_REVIEW_NOTE_BYTES, OFFLINE_OP_ACTIVATION_END, OFFLINE_OP_ACTIVATION_START,
-    OFFLINE_OP_NET_CHECKIN_CREATE, OFFLINE_OP_NET_CHECKIN_DELETE, OFFLINE_OP_NET_SESSION_END,
-    OFFLINE_OP_NET_SESSION_START, OFFLINE_OP_NET_TRAFFIC_CREATE, OFFLINE_OP_QSO_CORRECT,
-    OFFLINE_OP_QSO_CREATE, OFFLINE_OP_QSO_DELETE, OFFLINE_OP_QSO_NOTE_ADD, OFFLINE_OP_QSO_RESTORE,
-    OFFLINE_OP_STATION_PROFILE_SELECT, PROTOCOL_NAME, PROTOCOL_VERSION,
+    HostedAccountAction, HostedAccountClient, HostedAccountConfig, HostedAccountError,
+    HostedAccountResult, HostedAccountSecrets, HttpHostedAccountTransport, InMemoryCloudSyncServer,
+    JsonConflictReviewStore, JsonHostedAccountStore, JsonLanTrustStore, JsonLocalSyncIdentityStore,
+    JsonOfflineMutationQueue, LanDiscoveryService, LanPairingAcceptance, LanPeerTrustUpdate,
+    LanTrustSnapshot, ListLogbooksResponse, LocalPeerIdentity, LogbookHeadSummary,
+    ManualConflictResolution, ManualConflictResolutionChoice, OfflineMutationEnvelope,
+    OfflineMutationInput, OfflineQueueSnapshot, PairDeviceRequest, PeerObservation, PeerRecord,
+    PeerRegistry, PreviewPullRequest, PreviewPullResponse, PullEventsRequest, PullEventsResponse,
+    ReplicationStatus, SyncConfig, SyncConflictReport, HOSTED_ACCOUNT_CREDENTIAL_PROVIDER_ID,
+    LAN_AUTH_SIGNATURE_VERSION, MAX_CONFLICT_REVIEW_NOTE_BYTES, OFFLINE_OP_ACTIVATION_END,
+    OFFLINE_OP_ACTIVATION_START, OFFLINE_OP_NET_CHECKIN_CREATE, OFFLINE_OP_NET_CHECKIN_DELETE,
+    OFFLINE_OP_NET_SESSION_END, OFFLINE_OP_NET_SESSION_START, OFFLINE_OP_NET_TRAFFIC_CREATE,
+    OFFLINE_OP_QSO_CORRECT, OFFLINE_OP_QSO_CREATE, OFFLINE_OP_QSO_DELETE, OFFLINE_OP_QSO_NOTE_ADD,
+    OFFLINE_OP_QSO_RESTORE, OFFLINE_OP_STATION_PROFILE_SELECT, PROTOCOL_NAME, PROTOCOL_VERSION,
 };
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -134,6 +135,9 @@ fn main() {
     let conflict_review_store =
         JsonConflictReviewStore::new(support_dir.join("conflict-reviews.json"));
     let lan_trust_store = JsonLanTrustStore::new(support_dir.join("lan-trust.json"));
+    let hosted_account = HostedAccountClient::new(JsonHostedAccountStore::new(
+        support_dir.join("hosted-account.json"),
+    ));
     let local_sync_identity_store =
         JsonLocalSyncIdentityStore::new(support_dir.join("local-sync-identity.json"));
     let local_api_port = local_api_port_from_bound_addr(&bound_addr);
@@ -385,6 +389,7 @@ fn main() {
         offline_queue,
         conflict_review_store,
         lan_trust_store,
+        hosted_account,
         cloud_server: InMemoryCloudSyncServer::new(CloudServerConfig::default()),
         lookup_cache: LookupCache::new(),
         lookup_config: Mutex::new(lookup_config),
@@ -428,6 +433,7 @@ struct AppState {
     offline_queue: JsonOfflineMutationQueue,
     conflict_review_store: JsonConflictReviewStore,
     lan_trust_store: JsonLanTrustStore,
+    hosted_account: HostedAccountClient,
     cloud_server: InMemoryCloudSyncServer,
     lookup_cache: LookupCache,
     lookup_config: Mutex<LookupUiConfig>,
@@ -764,6 +770,39 @@ fn handle_client(state: Arc<AppState>, mut stream: TcpStream) {
         }
         ("POST", "/api/sync/lan/rotate-auth") => handle_lan_auth_rotate(&state, &request.body),
         ("POST", "/api/sync/lan/revoke") => handle_lan_trust_revoke(&state, &request.body),
+        ("GET", "/api/account/state") => handle_account_state(&state),
+        ("POST", "/api/account/configure") => handle_account_configure(&state, &request.body),
+        ("POST", "/api/account/register") => handle_account_register(&state, &request.body),
+        ("POST", "/api/account/verify-email") => handle_account_verify_email(&state, &request.body),
+        ("POST", "/api/account/recovery/start") => {
+            handle_account_recovery_start(&state, &request.body)
+        }
+        ("POST", "/api/account/recovery/complete") => {
+            handle_account_recovery_complete(&state, &request.body)
+        }
+        ("POST", "/api/account/login") => handle_account_login(&state, &request.body),
+        ("POST", "/api/account/session/refresh") => {
+            run_account_action(&state, HostedAccountAction::Session)
+        }
+        ("POST", "/api/account/session/rotate") => {
+            run_account_action(&state, HostedAccountAction::SessionRotate)
+        }
+        ("POST", "/api/account/logout") => run_account_action(&state, HostedAccountAction::Logout),
+        ("POST", "/api/account/logout-all") => {
+            run_account_action(&state, HostedAccountAction::LogoutAll)
+        }
+        ("POST", "/api/account/delete") => {
+            run_account_action(&state, HostedAccountAction::AccountDelete)
+        }
+        ("POST", "/api/account/devices/refresh") => {
+            run_account_action(&state, HostedAccountAction::DeviceList)
+        }
+        ("POST", "/api/account/devices/revoke") => {
+            handle_account_device_revoke(&state, &request.body)
+        }
+        ("POST", "/api/account/devices/revoke-all") => {
+            run_account_action(&state, HostedAccountAction::DeviceRevokeAll)
+        }
         ("POST", "/api/sync/cloud/connect") => handle_cloud_connect(&state, &request.body),
         ("POST", "/api/sync/cloud/push") => handle_cloud_push(&state),
         ("POST", "/api/sync/cloud/preview-pull") => handle_cloud_preview_pull(&state),
@@ -7722,6 +7761,365 @@ fn publish_gui_runtime(
     })
 }
 
+// ---------------------------------------------------------------------------
+// Hosted account and session flows
+// ---------------------------------------------------------------------------
+
+/// Bridges hosted account secrets to the operating-system credential store.
+///
+/// Rust keeps only credential identifiers in the durable account record; the
+/// session and refresh tokens live in the platform credential backend and are
+/// never returned to JavaScript.
+struct GuiHostedAccountSecrets<'a> {
+    store: &'a mut dyn CredentialStore,
+}
+
+impl HostedAccountSecrets for GuiHostedAccountSecrets<'_> {
+    fn read_secret(
+        &mut self,
+        credential_id: uuid::Uuid,
+    ) -> Result<Option<String>, HostedAccountError> {
+        match self.store.retrieve_secret(credential_id) {
+            Ok(secret) => Ok(Some(secret)),
+            Err(ham_core::CredentialError::NotFound(_)) => Ok(None),
+            Err(error) => Err(HostedAccountError::SecretStorage(error.to_string())),
+        }
+    }
+
+    fn write_secret(
+        &mut self,
+        credential_id: uuid::Uuid,
+        label: &str,
+        secret: &str,
+    ) -> Result<(), HostedAccountError> {
+        if self.store.credential_exists(credential_id) {
+            self.store
+                .update_credential(credential_id, secret, None)
+                .map(|_| ())
+                .map_err(|error| HostedAccountError::SecretStorage(error.to_string()))
+        } else {
+            let mut metadata = CredentialMetadata::new(
+                HOSTED_ACCOUNT_CREDENTIAL_PROVIDER_ID,
+                HOSTED_ACCOUNT_CREDENTIAL_PROVIDER_ID,
+                ServiceType::Authentication,
+                label,
+            );
+            metadata.credential_id = credential_id;
+            self.store
+                .store_credential(metadata, secret)
+                .map(|_| ())
+                .map_err(|error| HostedAccountError::SecretStorage(error.to_string()))
+        }
+    }
+
+    fn clear_secret(&mut self, credential_id: uuid::Uuid) -> Result<(), HostedAccountError> {
+        match self.store.delete_credential(credential_id) {
+            Ok(()) => Ok(()),
+            Err(ham_core::CredentialError::NotFound(_)) => Ok(()),
+            Err(error) => Err(HostedAccountError::SecretStorage(error.to_string())),
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct AccountConfigureRequest {
+    #[serde(default)]
+    base_url: Option<String>,
+    #[serde(default)]
+    device_name: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AccountRegisterRequest {
+    email: String,
+    #[serde(default)]
+    display_name: Option<String>,
+    #[serde(default)]
+    invitation_token: Option<String>,
+    #[serde(default)]
+    turnstile_token: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AccountTokenRequest {
+    token: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct AccountEmailRequest {
+    email: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct AccountLoginRequest {
+    email: String,
+    #[serde(default)]
+    display_name: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AccountDeviceRequest {
+    device_id: uuid::Uuid,
+}
+
+fn hosted_account_config(state: &AppState) -> HostedAccountConfig {
+    state
+        .hosted_account
+        .snapshot(&HostedAccountConfig::default(), chrono::Utc::now())
+        .map(|snapshot| snapshot.config())
+        .unwrap_or_default()
+}
+
+fn handle_account_state(state: &AppState) -> Vec<u8> {
+    if let Err(response) = ensure_gui_permission(
+        state,
+        &core_gui_manifest(),
+        PluginCapability::SyncCloudConnect,
+        "Hosted account state permission check",
+    ) {
+        return response;
+    }
+    match state
+        .hosted_account
+        .snapshot(&HostedAccountConfig::default(), chrono::Utc::now())
+    {
+        Ok(snapshot) => json_response(&json!({
+            "ok": true,
+            "account": snapshot,
+            "credential_backend": state
+                .credential_store
+                .lock()
+                .expect("credential store mutex should not be poisoned")
+                .backend_status(),
+        })),
+        Err(error) => json_error(500, format!("failed to read hosted account state: {error}")),
+    }
+}
+
+fn handle_account_configure(state: &AppState, body: &[u8]) -> Vec<u8> {
+    if let Err(response) = ensure_gui_permission(
+        state,
+        &core_gui_manifest(),
+        PluginCapability::SyncCloudConnect,
+        "Hosted account configure permission check",
+    ) {
+        return response;
+    }
+    let request = match serde_json::from_slice::<AccountConfigureRequest>(body) {
+        Ok(request) => request,
+        Err(_) => return json_error(400, "invalid hosted account configuration JSON"),
+    };
+    let current = hosted_account_config(state);
+    let config = HostedAccountConfig {
+        base_url: request
+            .base_url
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or(current.base_url),
+        device_name: request
+            .device_name
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or(current.device_name),
+    };
+    match state.hosted_account.configure(&config, chrono::Utc::now()) {
+        Ok(snapshot) => {
+            let _ = publish_account_runtime(
+                state,
+                "account.configured",
+                RuntimeEventSeverity::Info,
+                "Hosted account endpoint updated",
+                Some(json!({
+                    "base_url": snapshot.base_url,
+                    "device_name": snapshot.device_name,
+                })),
+                None,
+            );
+            json_response(&json!({"ok": true, "account": snapshot}))
+        }
+        Err(error) => json_error(
+            400,
+            format!("invalid hosted account configuration: {error}"),
+        ),
+    }
+}
+
+fn run_account_action(state: &AppState, action: HostedAccountAction) -> Vec<u8> {
+    if let Err(response) = ensure_gui_permission(
+        state,
+        &core_gui_manifest(),
+        PluginCapability::SyncCloudConnect,
+        "Hosted account permission check",
+    ) {
+        return response;
+    }
+    let config = hosted_account_config(state);
+    let executed = {
+        let mut credential_store = state
+            .credential_store
+            .lock()
+            .expect("credential store mutex should not be poisoned");
+        let mut secrets = GuiHostedAccountSecrets {
+            store: credential_store.as_mut(),
+        };
+        state.hosted_account.execute(
+            &action,
+            &config,
+            &HttpHostedAccountTransport::new(),
+            &mut secrets,
+            chrono::Utc::now(),
+        )
+    };
+    match executed {
+        Ok(result) => {
+            publish_account_result(state, &result);
+            json_response(&json!({"ok": result.outcome.is_accepted(), "account_result": result}))
+        }
+        Err(error) => {
+            let _ = publish_account_runtime(
+                state,
+                "account.request.rejected",
+                RuntimeEventSeverity::Warn,
+                "Hosted account request was rejected before it was sent",
+                Some(json!({"action": action.name()})),
+                Some(error.to_string()),
+            );
+            json_error(400, format!("hosted account request rejected: {error}"))
+        }
+    }
+}
+
+fn publish_account_result(state: &AppState, result: &HostedAccountResult) {
+    let severity = if result.outcome.is_accepted() {
+        RuntimeEventSeverity::Info
+    } else if result.user_action_required {
+        RuntimeEventSeverity::Warn
+    } else {
+        RuntimeEventSeverity::Error
+    };
+    let event_type = if result.outcome.is_accepted() {
+        format!("{}.completed", result.action)
+    } else {
+        format!("{}.failed", result.action)
+    };
+    let _ = publish_account_runtime(
+        state,
+        &event_type,
+        severity,
+        &result.message,
+        Some(json!({
+            "action": result.action,
+            "outcome": result.outcome,
+            "status": result.status,
+            "connection_state": result.snapshot.connection_state,
+            "retryable": result.retryable,
+            "user_action_required": result.user_action_required,
+            "request_id": result.request_id,
+        })),
+        result.error_code.clone(),
+    );
+}
+
+fn publish_account_runtime(
+    state: &AppState,
+    event_type: &str,
+    severity: RuntimeEventSeverity,
+    summary: &str,
+    redacted_payload: Option<Value>,
+    error: Option<String>,
+) -> std::io::Result<ham_core::RuntimeEventEnvelope> {
+    state.bridge.publish(RuntimeEventInput {
+        event_type: event_type.to_owned(),
+        severity,
+        source: "ham-account".to_owned(),
+        source_plugin_id: None,
+        workspace_id: Some("dashboard".to_owned()),
+        payload_summary: summary.to_owned(),
+        redacted_payload,
+        error,
+    })
+}
+
+fn handle_account_register(state: &AppState, body: &[u8]) -> Vec<u8> {
+    let request = match serde_json::from_slice::<AccountRegisterRequest>(body) {
+        Ok(request) => request,
+        Err(_) => return json_error(400, "invalid registration JSON"),
+    };
+    run_account_action(
+        state,
+        HostedAccountAction::Register {
+            email: request.email,
+            display_name: request.display_name,
+            invitation_token: request.invitation_token,
+            turnstile_token: request.turnstile_token,
+        },
+    )
+}
+
+fn handle_account_verify_email(state: &AppState, body: &[u8]) -> Vec<u8> {
+    let request = match serde_json::from_slice::<AccountTokenRequest>(body) {
+        Ok(request) => request,
+        Err(_) => return json_error(400, "invalid verification JSON"),
+    };
+    run_account_action(
+        state,
+        HostedAccountAction::VerifyEmail {
+            token: request.token,
+        },
+    )
+}
+
+fn handle_account_recovery_start(state: &AppState, body: &[u8]) -> Vec<u8> {
+    let request = match serde_json::from_slice::<AccountEmailRequest>(body) {
+        Ok(request) => request,
+        Err(_) => return json_error(400, "invalid recovery JSON"),
+    };
+    run_account_action(
+        state,
+        HostedAccountAction::RecoveryStart {
+            email: request.email,
+        },
+    )
+}
+
+fn handle_account_recovery_complete(state: &AppState, body: &[u8]) -> Vec<u8> {
+    let request = match serde_json::from_slice::<AccountTokenRequest>(body) {
+        Ok(request) => request,
+        Err(_) => return json_error(400, "invalid recovery JSON"),
+    };
+    run_account_action(
+        state,
+        HostedAccountAction::RecoveryComplete {
+            token: request.token,
+        },
+    )
+}
+
+fn handle_account_login(state: &AppState, body: &[u8]) -> Vec<u8> {
+    let request = match serde_json::from_slice::<AccountLoginRequest>(body) {
+        Ok(request) => request,
+        Err(_) => return json_error(400, "invalid sign-in JSON"),
+    };
+    run_account_action(
+        state,
+        HostedAccountAction::Login {
+            email: request.email,
+            display_name: request.display_name,
+        },
+    )
+}
+
+fn handle_account_device_revoke(state: &AppState, body: &[u8]) -> Vec<u8> {
+    let request = match serde_json::from_slice::<AccountDeviceRequest>(body) {
+        Ok(request) => request,
+        Err(_) => return json_error(400, "invalid device revoke JSON"),
+    };
+    run_account_action(
+        state,
+        HostedAccountAction::DeviceRevoke {
+            device_id: request.device_id,
+        },
+    )
+}
+
 fn publish_cloud_runtime(
     state: &AppState,
     event_type: &str,
@@ -7902,6 +8300,9 @@ mod tests {
                 support_dir.join("conflict-reviews.json"),
             ),
             lan_trust_store: JsonLanTrustStore::new(support_dir.join("lan-trust.json")),
+            hosted_account: HostedAccountClient::new(JsonHostedAccountStore::new(
+                support_dir.join("hosted-account.json"),
+            )),
             cloud_server: InMemoryCloudSyncServer::new(CloudServerConfig::default()),
             lookup_cache: LookupCache::new(),
             lookup_config: Mutex::new(LookupUiConfig::default()),
@@ -7952,6 +8353,84 @@ mod tests {
             .unwrap()
             .as_slice(),
         ))
+    }
+
+    #[test]
+    fn account_state_reports_a_signed_out_default_without_contacting_a_server() {
+        let state = test_state("ke8ygw-ham-gui-account-state");
+        let payload = response_json(handle_account_state(&state));
+        assert_eq!(payload["ok"], json!(true));
+        assert_eq!(payload["account"]["connection_state"], json!("signed_out"));
+        assert_eq!(
+            payload["account"]["base_url"],
+            json!(ham_sync::DEFAULT_HOSTED_ACCOUNT_BASE_URL)
+        );
+        assert!(payload["account"]["session_token_credential_id"].is_null());
+        assert!(payload["credential_backend"]["backend_name"].is_string());
+    }
+
+    #[test]
+    fn account_configure_persists_the_hosted_endpoint_and_rejects_bad_urls() {
+        let state = test_state("ke8ygw-ham-gui-account-configure");
+        let payload = response_json(handle_account_configure(
+            &state,
+            serde_json::to_vec(&json!({
+                "base_url": "https://logger.example/",
+                "device_name": "Shack Desktop"
+            }))
+            .unwrap()
+            .as_slice(),
+        ));
+        assert_eq!(
+            payload["account"]["base_url"],
+            json!("https://logger.example")
+        );
+        assert_eq!(payload["account"]["device_name"], json!("Shack Desktop"));
+
+        let reloaded = response_json(handle_account_state(&state));
+        assert_eq!(
+            reloaded["account"]["base_url"],
+            json!("https://logger.example")
+        );
+
+        let rejected = response_json_any_status(handle_account_configure(
+            &state,
+            serde_json::to_vec(&json!({"base_url": "ftp://logger.example"}))
+                .unwrap()
+                .as_slice(),
+        ));
+        assert!(rejected["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("invalid hosted account configuration"));
+        let still_configured = response_json(handle_account_state(&state));
+        assert_eq!(
+            still_configured["account"]["base_url"],
+            json!("https://logger.example")
+        );
+    }
+
+    #[test]
+    fn account_session_routes_are_rejected_before_a_request_is_planned() {
+        let state = test_state("ke8ygw-ham-gui-account-session");
+        for response in [
+            run_account_action(&state, HostedAccountAction::Session),
+            run_account_action(&state, HostedAccountAction::Logout),
+            run_account_action(&state, HostedAccountAction::DeviceList),
+        ] {
+            let payload = response_json_any_status(response);
+            assert!(payload["error"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("hosted account request rejected"));
+        }
+    }
+
+    #[test]
+    fn account_requests_reject_malformed_client_json() {
+        let state = test_state("ke8ygw-ham-gui-account-json");
+        let payload = response_json_any_status(handle_account_login(&state, b"{"));
+        assert_eq!(payload["error"], json!("invalid sign-in JSON"));
     }
 
     #[test]

@@ -44,9 +44,29 @@ fn invalid_command_has_deterministic_usage_exit_code() {
 fn help_is_non_interactive_and_successful() {
     let output = cli().arg("--help").output().expect("run ham-cli");
     assert!(output.status.success());
-    assert!(String::from_utf8(output.stderr)
-        .expect("stderr is UTF-8")
-        .contains("The CLI is offline-first and never prompts"));
+    let stderr = String::from_utf8(output.stderr).expect("stderr is UTF-8");
+    assert!(stderr.contains("The logging commands are offline-first and never prompt"));
+    assert!(stderr.contains("ham-cli account status [--json]"));
+    assert!(stderr.contains("ham-cli account login <email>"));
+    assert!(stderr.contains("never print or persist those tokens"));
+}
+
+#[test]
+fn account_subcommands_have_deterministic_usage_errors() {
+    for args in [
+        &["account"][..],
+        &["account", "not-a-subcommand"][..],
+        &["account", "login"][..],
+        &["account", "revoke-device", "not-a-uuid"][..],
+        &["account", "delete"][..],
+        &["account", "status", "unexpected"][..],
+    ] {
+        let output = cli().args(args).output().expect("run ham-cli");
+        assert_eq!(output.status.code(), Some(2), "arguments: {args:?}");
+        assert!(String::from_utf8(output.stderr)
+            .expect("stderr is UTF-8")
+            .contains("usage:"));
+    }
 }
 
 #[test]

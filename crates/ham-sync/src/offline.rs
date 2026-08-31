@@ -2458,7 +2458,7 @@ fn atomic_temp_path(path: &Path) -> PathBuf {
     ))
 }
 
-fn quarantine_file(path: &Path, now: DateTime<Utc>) -> Result<(), io::Error> {
+pub(crate) fn quarantine_file(path: &Path, now: DateTime<Utc>) -> Result<(), io::Error> {
     if !path.exists() {
         return Ok(());
     }
@@ -2483,7 +2483,7 @@ fn quarantine_file(path: &Path, now: DateTime<Utc>) -> Result<(), io::Error> {
     Ok(())
 }
 
-fn write_json_atomically<T>(path: &Path, value: &T) -> Result<(), io::Error>
+pub(crate) fn write_json_atomically<T>(path: &Path, value: &T) -> Result<(), io::Error>
 where
     T: Serialize,
 {

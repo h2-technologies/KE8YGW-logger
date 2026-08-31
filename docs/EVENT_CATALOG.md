@@ -108,6 +108,7 @@ Runtime event categories are dotted strings. Current and planned category roots:
 - `upload.*`
 - `credential.*`
 - `net.*`
+- `account.*`
 - `app.*`
 
 ## Implemented Runtime Event Examples
@@ -160,6 +161,29 @@ Runtime event categories are dotted strings. Current and planned category roots:
 - `sync.cloud.push.completed`
 - `sync.cloud.pull.started`
 - `sync.cloud.pull.completed`
+
+### Hosted Account
+
+Hosted account runtime events carry only the action name, outcome, HTTP status,
+connection state, retryability, user-action flag, and hosted request ID. They
+never carry an email address, session token, refresh token, invitation token,
+verification token, or recovery token.
+
+- `account.configured`
+- `account.request.rejected`
+- `account.register.completed` / `account.register.failed`
+- `account.verify_email.completed` / `account.verify_email.failed`
+- `account.recovery.start.completed` / `account.recovery.start.failed`
+- `account.recovery.complete.completed` / `account.recovery.complete.failed`
+- `account.login.completed` / `account.login.failed`
+- `account.session.completed` / `account.session.failed`
+- `account.session.rotate.completed` / `account.session.rotate.failed`
+- `account.logout.completed` / `account.logout.failed`
+- `account.logout_all.completed` / `account.logout_all.failed`
+- `account.delete.completed` / `account.delete.failed`
+- `account.devices.list.completed` / `account.devices.list.failed`
+- `account.devices.revoke.completed` / `account.devices.revoke.failed`
+- `account.devices.revoke_all.completed` / `account.devices.revoke_all.failed`
 
 ### Lookup
 

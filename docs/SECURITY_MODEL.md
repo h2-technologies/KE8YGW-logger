@@ -72,6 +72,15 @@ permission and operator role checks pass.
 
 The current implementation includes native OS credential backends for Windows Credential Manager, macOS Keychain, and Linux Secret Service/libsecret tooling, plus an explicit opt-in insecure development fallback. Production online integrations must continue to use native OS credential backends for real provider secrets.
 
+Hosted account session and refresh tokens follow the same rule. The shared
+`ham_sync::account` client returns an issued token exactly once, and the
+durable hosted account record stores only the credential identifier for it.
+Desktop, hosted web, and the CLI write the secret through `CredentialStore`
+under the `hosted-account` provider; native iOS writes it to the Keychain under
+the same Rust-assigned identifier. The account record, GUI JSON responses, CLI
+output, and runtime events are token-free, and a hosted authentication failure
+clears both the stored identifiers and the stored secrets.
+
 ## Net Control Safety
 
 Net Control is an official append-only workflow. Sessions, check-ins, traffic,
@@ -91,6 +100,14 @@ metadata.
 
 Self-hosted sync and support upload routes still use pairing-code/token
 sessions for compatibility-only sync/report flows.
+
+Client account flows go through the shared hosted account contract. Rust plans
+each hosted request, bounds and normalizes the base URL, email address, device
+label, and token inputs, and rejects a session-scoped action when no session
+credential is stored. Outcome classification reads the stable hosted `code`
+field before the HTTP status, so a revoked or expired session, an unverified
+email, a closed registration, a replayed token, and a failed Turnstile check
+are distinguishable without parsing human-readable messages.
 
 GUI LAN sync read endpoints for logbook lists, heads, event ranges, and event
 metadata require trusted-device, replay-nonce, signature-version, and

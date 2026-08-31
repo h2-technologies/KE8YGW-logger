@@ -3,6 +3,180 @@ import XCTest
 @testable import KE8YGWLogger
 
 final class RustBridgeTests: XCTestCase {
+    // MARK: - Hosted account
+
+    func testFallbackHostedAccountSnapshotStartsSignedOut() async throws {
+        let store = await RustBridgeStore(client: FallbackRustBridgeClient())
+        let snapshot = try await store.refreshHostedAccount()
+
+        XCTAssertEqual(snapshot.connectionState, "signed_out")
+        XCTAssertNil(snapshot.sessionTokenCredentialId)
+        XCTAssertFalse(snapshot.isSignedIn)
+    }
+
+    func testHostedAccountSignInStoresIssuedSecretsInTheVaultOnly() async throws {
+        let client = HostedAccountTestBridgeClient()
+        let store = await RustBridgeStore(client: client)
+        let vault = InMemoryCredentialVault()
+        let transport = StubHostedAccountTransport(
+            response: HostedAccountTransportResponse(status: 200, bodyJson: "{\"ok\":true}")
+        )
+
+        let result = try await store.executeHostedAccountAction(
+            .login(email: "operator@example.com"),
+            transport: transport,
+            vault: vault
+        )
+
+        XCTAssertTrue(result.isAccepted)
+        XCTAssertEqual(transport.requests.count, 1)
+        XCTAssertEqual(transport.requests.first?.request.method, "POST")
+        XCTAssertNil(transport.requests.first?.sessionToken)
+        XCTAssertEqual(
+            vault.storedSecret(account: "cred-session", providerId: hostedAccountCredentialProviderId),
+            "issued-session-secret"
+        )
+        XCTAssertEqual(
+            vault.storedSecret(account: "cred-refresh", providerId: hostedAccountCredentialProviderId),
+            "issued-refresh-secret"
+        )
+        let snapshot = await store.account
+        XCTAssertEqual(snapshot.connectionState, "signed_in")
+    }
+
+    func testHostedAccountSessionRequestSendsTheStoredBearerToken() async throws {
+        let client = HostedAccountTestBridgeClient()
+        client.requiresSessionToken = true
+        let store = await RustBridgeStore(client: client)
+        let vault = InMemoryCredentialVault()
+        try vault.save(
+            secret: "stored-session-secret",
+            account: "cred-session",
+            providerId: hostedAccountCredentialProviderId
+        )
+        let transport = StubHostedAccountTransport(
+            response: HostedAccountTransportResponse(status: 200, bodyJson: "{\"ok\":true}")
+        )
+
+        _ = try await store.executeHostedAccountAction(
+            .session,
+            transport: transport,
+            vault: vault
+        )
+
+        XCTAssertEqual(transport.requests.first?.sessionToken, "stored-session-secret")
+    }
+
+    func testHostedAccountRotateInjectsTheStoredRefreshTokenIntoTheBody() async throws {
+        let client = HostedAccountTestBridgeClient()
+        client.requiresSessionToken = true
+        client.requiresRefreshToken = true
+        let store = await RustBridgeStore(client: client)
+        let vault = InMemoryCredentialVault()
+        try vault.save(
+            secret: "stored-session-secret",
+            account: "cred-session",
+            providerId: hostedAccountCredentialProviderId
+        )
+        try vault.save(
+            secret: "stored-refresh-secret",
+            account: "cred-refresh",
+            providerId: hostedAccountCredentialProviderId
+        )
+        let transport = StubHostedAccountTransport(
+            response: HostedAccountTransportResponse(status: 200, bodyJson: "{\"ok\":true}")
+        )
+
+        _ = try await store.executeHostedAccountAction(
+            .sessionRotate,
+            transport: transport,
+            vault: vault
+        )
+
+        let body = try XCTUnwrap(transport.requests.first?.body)
+        let decoded = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: body) as? [String: Any]
+        )
+        XCTAssertEqual(decoded["refresh_token"] as? String, "stored-refresh-secret")
+        XCTAssertEqual(client.appliedPayloads.count, 1)
+    }
+
+    func testHostedAccountRecordsTransportFailuresThroughRustWithoutSending() async throws {
+        let client = HostedAccountTestBridgeClient()
+        let store = await RustBridgeStore(client: client)
+        let vault = InMemoryCredentialVault()
+        let transport = StubHostedAccountTransport(
+            response: HostedAccountTransportResponse(status: 200, bodyJson: nil)
+        )
+
+        let result = try await store.executeHostedAccountAction(
+            .login(email: "operator@example.com"),
+            transport: transport,
+            vault: vault,
+            networkAvailable: false
+        )
+
+        XCTAssertTrue(transport.requests.isEmpty)
+        XCTAssertEqual(result.outcome, "transient_failure")
+        XCTAssertTrue(result.retryable)
+        XCTAssertEqual(client.transportFailurePayloads.count, 1)
+    }
+
+    func testHostedAccountClearsRevokedCredentialsFromTheVault() async throws {
+        let client = HostedAccountTestBridgeClient()
+        client.requiresSessionToken = true
+        client.clearedCredentialIds = ["cred-session", "cred-refresh"]
+        client.issuesSecrets = false
+        let store = await RustBridgeStore(client: client)
+        let vault = InMemoryCredentialVault()
+        try vault.save(
+            secret: "stored-session-secret",
+            account: "cred-session",
+            providerId: hostedAccountCredentialProviderId
+        )
+        try vault.save(
+            secret: "stored-refresh-secret",
+            account: "cred-refresh",
+            providerId: hostedAccountCredentialProviderId
+        )
+        let transport = StubHostedAccountTransport(
+            response: HostedAccountTransportResponse(status: 200, bodyJson: "{\"ok\":true}")
+        )
+
+        _ = try await store.executeHostedAccountAction(
+            .logout,
+            transport: transport,
+            vault: vault
+        )
+
+        XCTAssertNil(
+            vault.storedSecret(account: "cred-session", providerId: hostedAccountCredentialProviderId)
+        )
+        XCTAssertNil(
+            vault.storedSecret(account: "cred-refresh", providerId: hostedAccountCredentialProviderId)
+        )
+    }
+
+    func testHostedAccountSessionRequestFailsWithoutAStoredToken() async throws {
+        let client = HostedAccountTestBridgeClient()
+        client.requiresSessionToken = true
+        let store = await RustBridgeStore(client: client)
+        let transport = StubHostedAccountTransport(
+            response: HostedAccountTransportResponse(status: 200, bodyJson: nil)
+        )
+
+        do {
+            _ = try await store.executeHostedAccountAction(
+                .session,
+                transport: transport,
+                vault: InMemoryCredentialVault()
+            )
+            XCTFail("a missing session token must stop the request")
+        } catch {
+            XCTAssertTrue(transport.requests.isEmpty)
+        }
+    }
+
     func testFallbackBridgeVersionEnvelopeDecodes() async throws {
         let client = FallbackRustBridgeClient()
         let data = try await client.call(.version, argument: nil)
@@ -1938,5 +2112,219 @@ private final class StubSyncLanPairingTransport: SyncLanPairingTransporting {
             peerIdentity: peerIdentity,
             remoteTrustedDevice: remoteTrustedDevice
         )
+    }
+}
+
+final class InMemoryCredentialVault: CredentialVault {
+    private var secrets: [String: String] = [:]
+
+    func save(secret: String, account: String, providerId: String) throws {
+        secrets[key(account: account, providerId: providerId)] = secret
+    }
+
+    func read(account: String, providerId: String) throws -> String? {
+        secrets[key(account: account, providerId: providerId)]
+    }
+
+    func delete(account: String, providerId: String) throws {
+        secrets.removeValue(forKey: key(account: account, providerId: providerId))
+    }
+
+    func storedSecret(account: String, providerId: String) -> String? {
+        secrets[key(account: account, providerId: providerId)]
+    }
+
+    private func key(account: String, providerId: String) -> String {
+        "\(providerId):\(account)"
+    }
+}
+
+final class StubHostedAccountTransport: HostedAccountTransporting {
+    struct Request {
+        let request: HostedAccountPlannedRequest
+        let body: Data?
+        let sessionToken: String?
+    }
+
+    private(set) var requests: [Request] = []
+    private let response: HostedAccountTransportResponse
+
+    init(response: HostedAccountTransportResponse) {
+        self.response = response
+    }
+
+    func execute(
+        request: HostedAccountPlannedRequest,
+        body: Data?,
+        sessionToken: String?
+    ) async throws -> HostedAccountTransportResponse {
+        requests.append(Request(request: request, body: body, sessionToken: sessionToken))
+        return response
+    }
+}
+
+/// Deterministic Rust-bridge stand-in for hosted account planning and applying.
+final class HostedAccountTestBridgeClient: RustBridgeClient {
+    let isLive = false
+    var requiresSessionToken = false
+    var requiresRefreshToken = false
+    var issuesSecrets = true
+    var clearedCredentialIds: [String] = []
+    private(set) var appliedPayloads: [[String: Any]] = []
+    private(set) var transportFailurePayloads: [[String: Any]] = []
+
+    func call(_ endpoint: RustBridgeEndpoint, argument: String?) async throws -> Data {
+        try await FallbackRustBridgeClient().call(endpoint, argument: argument)
+    }
+
+    func callJSON(_ requestData: Data) async throws -> Data {
+        let request = try JSONSerialization.jsonObject(with: requestData) as? [String: Any]
+        let command = request?["command"] as? String
+        let correlationID = request?["correlation_id"] as? String ?? "corr-test"
+        let payload = request?["payload"] as? [String: Any] ?? [:]
+
+        switch command {
+        case "account.snapshot", "account.configure":
+            return try envelope(data: ["account": snapshot()], correlationID: correlationID)
+        case "account.plan":
+            return try envelope(
+                data: [
+                    "account": snapshot(),
+                    "plan_token": "test-plan-token",
+                    "request": plannedRequest()
+                ],
+                correlationID: correlationID
+            )
+        case "account.apply":
+            appliedPayloads.append(payload)
+            return try envelope(data: applyResult(), correlationID: correlationID)
+        case "account.transport_failure":
+            transportFailurePayloads.append(payload)
+            return try envelope(data: transportFailureResult(), correlationID: correlationID)
+        default:
+            return try envelope(
+                ok: false,
+                data: NSNull(),
+                error: ["code": "unsupported_test_command", "message": command ?? "missing command"],
+                correlationID: correlationID
+            )
+        }
+    }
+
+    private func snapshot(connectionState: String = "signed_in") -> [String: Any] {
+        [
+            "schema_version": 1,
+            "base_url": "https://logger.example",
+            "device_name": "iPhone",
+            "connection_state": connectionState,
+            "account_id": NSNull(),
+            "user_id": NSNull(),
+            "email": "operator@example.com",
+            "display_name": NSNull(),
+            "email_verified": true,
+            "session_id": NSNull(),
+            "session_issued_at": NSNull(),
+            "session_expires_at": NSNull(),
+            "refresh_expires_at": NSNull(),
+            "session_token_credential_id": "cred-session",
+            "refresh_token_credential_id": "cred-refresh",
+            "device_id": NSNull(),
+            "devices": [],
+            "logbooks": [],
+            "pending_email_verification_for": NSNull(),
+            "pending_recovery_for": NSNull(),
+            "last_action": "account.login",
+            "last_outcome": "accepted",
+            "last_error_code": NSNull(),
+            "last_message": "Signed in to the hosted account.",
+            "last_request_id": NSNull(),
+            "last_updated_at": NSNull()
+        ]
+    }
+
+    private func plannedRequest() -> [String: Any] {
+        [
+            "action": "account.login",
+            "method": "POST",
+            "url": "https://logger.example/api/v1/auth/login",
+            "path": "/api/v1/auth/login",
+            "body_json": "{\"email\":\"operator@example.com\"}",
+            "requires_session_token": requiresSessionToken,
+            "session_token_credential_id": requiresSessionToken ? "cred-session" : NSNull(),
+            "requires_refresh_token": requiresRefreshToken,
+            "refresh_token_credential_id": requiresRefreshToken ? "cred-refresh" : NSNull(),
+            "refresh_token_body_field": requiresRefreshToken ? "refresh_token" : NSNull(),
+            "request_id": "11111111-1111-4111-8111-111111111111",
+            "timeout_seconds": 20,
+            "max_response_bytes": 524_288
+        ]
+    }
+
+    private func applyResult() -> [String: Any] {
+        [
+            "result": [
+                "action": "account.login",
+                "outcome": "accepted",
+                "status": 200,
+                "message": "Signed in to the hosted account.",
+                "error_code": NSNull(),
+                "request_id": NSNull(),
+                "retryable": false,
+                "user_action_required": false,
+                "snapshot": snapshot(),
+                "cleared_credential_ids": clearedCredentialIds
+            ],
+            "account": snapshot(),
+            "issued_secrets": [
+                "session_token_credential_id": issuesSecrets ? "cred-session" : NSNull(),
+                "session_token": issuesSecrets ? "issued-session-secret" : NSNull(),
+                "refresh_token_credential_id": issuesSecrets ? "cred-refresh" : NSNull(),
+                "refresh_token": issuesSecrets ? "issued-refresh-secret" : NSNull()
+            ],
+            "cleared_credential_ids": clearedCredentialIds
+        ]
+    }
+
+    private func transportFailureResult() -> [String: Any] {
+        [
+            "result": [
+                "action": "account.login",
+                "outcome": "transient_failure",
+                "status": 0,
+                "message": "hosted account transport failure",
+                "error_code": "transport_failure",
+                "request_id": NSNull(),
+                "retryable": true,
+                "user_action_required": false,
+                "snapshot": snapshot(connectionState: "signed_out"),
+                "cleared_credential_ids": []
+            ],
+            "account": snapshot(connectionState: "signed_out"),
+            "issued_secrets": [
+                "session_token_credential_id": NSNull(),
+                "session_token": NSNull(),
+                "refresh_token_credential_id": NSNull(),
+                "refresh_token": NSNull()
+            ],
+            "cleared_credential_ids": []
+        ]
+    }
+
+    private func envelope(
+        ok: Bool = true,
+        data: Any,
+        error: Any = NSNull(),
+        correlationID: String
+    ) throws -> Data {
+        try JSONSerialization.data(withJSONObject: [
+            "ok": ok,
+            "bridge_version": 1,
+            "abi_version": 1,
+            "schema_version": 1,
+            "generated_at": "2026-08-31T12:00:00Z",
+            "data": data,
+            "error": error,
+            "correlation_id": correlationID
+        ])
     }
 }
