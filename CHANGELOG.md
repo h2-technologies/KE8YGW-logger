@@ -51,6 +51,16 @@
 
 ### Changed
 
+- The `ham-gui` listener now serves only the LAN sync read endpoints
+  (`GET /api/sync/state`, `/api/sync/list-logbooks`, `/api/sync/get-head`,
+  `/api/sync/events-since`, `/api/sync/event-metadata`) and reciprocal
+  `POST /api/sync/lan/pairing-accept` to non-loopback requesters. The browser UI and every unauthenticated control endpoint,
+  including QSO/Net Control writes, credential, backup, LAN pairing, and cloud
+  controls, now require a loopback requester or the explicit
+  `HAM_GUI_ALLOW_REMOTE_CONTROL_API=1` opt-in. Automatic LAN discovery needs a
+  LAN-reachable bind, which previously exposed all of that surface to the
+  network. Rejections return `403` and publish a redacted
+  `sync.lan.control_api.rejected` runtime event.
 - Hosted `POST /api/v1/sync/push` now rejects a push whose event envelopes carry
   a `logbook_id` other than the authorized request `logbook_id` with
   `403 forbidden`. The route previously authorized only the request field, so a
@@ -86,6 +96,9 @@
 
 ### Testing
 
+- Added `ham-gui` tests for the LAN read allow-list, the loopback and opt-in
+  decision matrix, and the redacted `403` rejection for non-loopback control
+  requests.
 - Added `ham-server` regression tests for cross-logbook sync push rejection and
   for hosted divergence reporting plus pull-then-reapply reconciliation.
 - Added a `ham-sync-server` loopback HTTP test proving the durable self-hosted

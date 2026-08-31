@@ -1104,6 +1104,19 @@ LAN-reachable address such as
 use manual loopback URLs. Mutating LAN pull also requires the explicit
 `sync.lan.pull` permission, durable peer trust, a matching peer identity probe,
 and signed remote read requests.
+
+Binding the GUI API to a LAN address exposes only the LAN sync peer surface to
+the network: `GET /api/sync/state`, `/api/sync/list-logbooks`,
+`/api/sync/get-head`, `/api/sync/events-since`, `/api/sync/event-metadata`, and
+`POST /api/sync/lan/pairing-accept`, which requires a one-time pairing token.
+Every other endpoint, including the browser UI and all logging, credential,
+backup, pairing, and cloud controls, has no request authentication and is
+served to loopback requesters only; a non-loopback request for one is refused
+with `403` and a redacted `sync.lan.control_api.rejected` runtime event. Open
+the UI at `http://127.0.0.1:<port>` even when the listener is bound wider. If
+you deliberately want the unauthenticated control plane reachable from your
+network, set `HAM_GUI_ALLOW_REMOTE_CONTROL_API=1`; only do that on a network
+you fully control.
 Native iOS can scan the same discovery packets, probe `/api/sync/state`, and
 fill the existing peer URL fields only when the probed device/session identity
 matches the packet. The Apple multicast entitlement is approved, provisioned,

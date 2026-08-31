@@ -370,6 +370,17 @@ remote GUI instance to be participating in discovery and to serve its API from a
 LAN-reachable bind address; loopback-only peers remain supported through manual
 loopback URLs.
 
+The GUI listener also serves the browser UI and the local control plane, which
+have no request authentication. Only the LAN peer endpoints
+(`GET /api/sync/state`, `/api/sync/list-logbooks`, `/api/sync/get-head`,
+`/api/sync/events-since`, `/api/sync/event-metadata`, and reciprocal
+`POST /api/sync/lan/pairing-accept`, which is carried by a one-time pairing
+token) are served to non-loopback requesters. Every other path is refused with `403` and a redacted
+`sync.lan.control_api.rejected` runtime event unless the operator explicitly
+sets `HAM_GUI_ALLOW_REMOTE_CONTROL_API=1`. That keeps a LAN-reachable bind from
+turning unauthenticated logging, credential, backup, pairing, and cloud
+controls into a network surface.
+
 Mutating LAN pull rejects untrusted, revoked, wrong-logbook, or replayed peers
 before appending any remote official events, and serving LAN read endpoints
 reject untrusted, revoked, wrong-logbook, or replayed requesters before

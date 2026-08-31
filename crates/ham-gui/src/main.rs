@@ -172,6 +172,8 @@ fn main() {
         .ok()
         .as_deref()
         == Some("1");
+    let allow_remote_control_api =
+        env::var("HAM_GUI_ALLOW_REMOTE_CONTROL_API").ok().as_deref() == Some("1");
     let credential_store: Box<dyn CredentialStore> =
         default_credential_store(&support_dir, allow_insecure_dev_credentials);
     let permission_registry = PermissionRegistry::mvp_default();
@@ -412,6 +414,7 @@ fn main() {
         upload_queue_store,
         permission_grants: Mutex::new(permission_grants),
         permission_settings: Mutex::new(permission_settings),
+        allow_remote_control_api,
     });
 
     println!("ham-gui listening on http://{bound_addr}");
@@ -456,6 +459,7 @@ struct AppState {
     upload_queue_store: JsonSupportStore<UploadQueue>,
     permission_grants: Mutex<PermissionGrantSet>,
     permission_settings: Mutex<PermissionSettings>,
+    allow_remote_control_api: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -627,6 +631,19 @@ fn handle_client(state: Arc<AppState>, mut stream: TcpStream) {
 
     let target = request.target.as_str();
     let (path, query) = split_target(target);
+
+    if !remote_request_is_permitted(
+        state.allow_remote_control_api,
+        requester_is_loopback(&stream),
+        request.method.as_str(),
+        path,
+    ) {
+        let denied = reject_remote_control_request(&state, request.method.as_str(), path);
+        if let Err(error) = stream.write_all(&denied) {
+            eprintln!("failed to write response: {error}");
+        }
+        return;
+    }
 
     let response = match (request.method.as_str(), path) {
         ("GET", "/") | ("GET", "/index.html") => {
@@ -831,6 +848,69 @@ fn handle_client(state: Arc<AppState>, mut stream: TcpStream) {
     if let Err(error) = stream.write_all(&response) {
         eprintln!("failed to write response: {error}");
     }
+}
+
+/// LAN sync peers only ever issue these requests: unauthenticated identity
+/// probes, signed trust-gated reads, and reciprocal pairing carried by a
+/// one-time pairing token. Everything else on the GUI listener is local
+/// control-plane surface with no request authentication, so it must not be
+/// served to a non-loopback requester.
+fn is_lan_peer_endpoint(method: &str, path: &str) -> bool {
+    matches!(
+        (method, path),
+        (
+            "GET",
+            "/api/sync/state"
+                | "/api/sync/list-logbooks"
+                | "/api/sync/get-head"
+                | "/api/sync/events-since"
+                | "/api/sync/event-metadata"
+        ) | ("POST", "/api/sync/lan/pairing-accept")
+    )
+}
+
+/// A request may reach the local control plane only from loopback, or when the
+/// operator explicitly opted in through `HAM_GUI_ALLOW_REMOTE_CONTROL_API=1`.
+/// LAN peers keep their own signed, trust-gated read endpoints.
+fn remote_request_is_permitted(
+    allow_remote_control_api: bool,
+    requester_is_loopback: bool,
+    method: &str,
+    path: &str,
+) -> bool {
+    allow_remote_control_api || requester_is_loopback || is_lan_peer_endpoint(method, path)
+}
+
+fn requester_is_loopback(stream: &TcpStream) -> bool {
+    stream
+        .peer_addr()
+        .map(|address| address.ip().is_loopback())
+        .unwrap_or(false)
+}
+
+fn reject_remote_control_request(state: &AppState, method: &str, path: &str) -> Vec<u8> {
+    {
+        let mut sync = state
+            .sync
+            .lock()
+            .expect("sync state mutex should not be poisoned");
+        sync.warning_count += 1;
+    }
+    let _ = publish_gui_runtime(
+        state,
+        "sync.lan.control_api.rejected",
+        RuntimeEventSeverity::Warn,
+        "Rejected a non-loopback request for a local control endpoint",
+        Some(json!({"method": method, "path": path})),
+        None,
+    );
+    json_response_with_status(
+        403,
+        &json!({
+            "ok": false,
+            "error": "local control endpoints are served to loopback requesters only"
+        }),
+    )
 }
 
 #[derive(Debug)]
@@ -8328,6 +8408,7 @@ mod tests {
             upload_queue_store,
             permission_grants: Mutex::new(permission_grants),
             permission_settings: Mutex::new(permission_settings),
+            allow_remote_control_api: false,
         }
     }
 
@@ -8560,6 +8641,97 @@ mod tests {
         assert!(parse_lan_peer_address("8.8.8.8:9468").is_err());
         assert!(parse_lan_peer_address("[2001:4860:4860::8888]:9468").is_err());
         assert!(parse_lan_peer_address("127.0.0.1:0").is_err());
+    }
+
+    #[test]
+    fn lan_peers_reach_signed_read_endpoints_but_not_the_local_control_plane() {
+        for (method, path) in [
+            ("GET", "/api/sync/state"),
+            ("GET", "/api/sync/list-logbooks"),
+            ("GET", "/api/sync/get-head"),
+            ("GET", "/api/sync/events-since"),
+            ("GET", "/api/sync/event-metadata"),
+            ("POST", "/api/sync/lan/pairing-accept"),
+        ] {
+            assert!(
+                is_lan_peer_endpoint(method, path),
+                "{method} {path} is part of the LAN read surface"
+            );
+            assert!(remote_request_is_permitted(false, false, method, path));
+        }
+
+        for (method, path) in [
+            ("POST", "/api/qso/create"),
+            ("POST", "/api/qso/delete"),
+            ("POST", "/api/net/session/start"),
+            ("POST", "/api/backup/import"),
+            ("POST", "/api/credentials/create"),
+            ("POST", "/api/sync/lan/pairing-token"),
+            ("POST", "/api/sync/lan/pairing-complete"),
+            ("GET", "/api/sync/lan/pairing-accept"),
+            ("POST", "/api/sync/lan/revoke"),
+            ("POST", "/api/sync/cloud/connect"),
+            ("POST", "/api/sync/pull-events"),
+            ("GET", "/api/qsos"),
+            ("GET", "/api/credentials"),
+            ("GET", "/"),
+            ("POST", "/api/sync/state"),
+            ("GET", "/api/sync/state/extra"),
+        ] {
+            assert!(
+                !is_lan_peer_endpoint(method, path),
+                "{method} {path} is local control surface, not a LAN read"
+            );
+            assert!(
+                !remote_request_is_permitted(false, false, method, path),
+                "{method} {path} must be refused for a non-loopback requester"
+            );
+            assert!(
+                remote_request_is_permitted(false, true, method, path),
+                "{method} {path} must stay available to the local UI"
+            );
+            assert!(
+                remote_request_is_permitted(true, false, method, path),
+                "{method} {path} must be reachable after the explicit remote opt-in"
+            );
+        }
+    }
+
+    #[test]
+    fn rejected_remote_control_requests_return_403_and_record_a_redacted_warning() {
+        let state = test_state("remote-control-guard");
+        let response = reject_remote_control_request(&state, "POST", "/api/qso/create");
+        assert!(
+            http_response_body(&response).is_err(),
+            "the guard must not return a success status"
+        );
+        let body = response_json_any_status(response);
+        assert_eq!(body["ok"], false);
+        assert_eq!(
+            body["error"],
+            "local control endpoints are served to loopback requesters only"
+        );
+
+        let events = state.bridge.replay(RuntimeEventFilter::default(), 10);
+        let rejection = events
+            .iter()
+            .find(|event| event.event_type == "sync.lan.control_api.rejected")
+            .expect("a rejected remote control request should publish a runtime warning");
+        assert_eq!(rejection.severity, RuntimeEventSeverity::Warn);
+        let payload = rejection
+            .redacted_payload
+            .as_ref()
+            .expect("the rejection should carry a redacted payload");
+        assert_eq!(payload["method"], "POST");
+        assert_eq!(payload["path"], "/api/qso/create");
+        assert_eq!(
+            state
+                .sync
+                .lock()
+                .expect("sync state mutex should not be poisoned")
+                .warning_count,
+            1
+        );
     }
 
     #[test]
