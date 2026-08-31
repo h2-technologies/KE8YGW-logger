@@ -85,6 +85,15 @@ safe placeholder and file name.
 When Tauri commands are unavailable, the same web UI falls back to the existing
 browser/server path prompt behavior.
 
+`app.withGlobalTauri` must stay `true` in `src-tauri/tauri.conf.json`. The bundled
+`crates/ham-gui/web` assets are plain scripts with no bundler, so they reach the
+command layer through the injected `window.__TAURI__` global rather than an
+`@tauri-apps/api` import. With the flag off, Tauri injects no global, the UI finds
+no `invoke`, and `/api/*` requests stay relative — Tauri's asset protocol answers
+unknown paths with `index.html`, so `/api/shell` returns the shell markup and
+startup fails with `SyntaxError: Unexpected token '<'`. Native file dialogs
+silently degrade to `window.prompt` in the same state.
+
 ## Security Model
 
 Tauri capabilities grant only `core:default` for the main window. The app does

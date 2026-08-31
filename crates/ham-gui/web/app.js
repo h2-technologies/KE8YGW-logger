@@ -1,3 +1,6 @@
+// Mirrors the desktop proxy default in src-tauri/src/main.rs.
+const DEFAULT_DESKTOP_SERVER_URL = "http://127.0.0.1:9467";
+
 const state = {
   shell: null,
   commands: [],
@@ -97,24 +100,74 @@ function savePanelLayouts() {
 }
 
 function tauriInvoke() {
-  return window.__TAURI__?.core?.invoke || window.__TAURI__?.tauri?.invoke || null;
+  return (
+    window.__TAURI__?.core?.invoke ||
+    window.__TAURI__?.tauri?.invoke ||
+    window.__TAURI_INTERNALS__?.invoke ||
+    null
+  );
+}
+
+// Tauri serves the bundled assets from tauri://localhost (http://tauri.localhost on
+// Windows) and answers unknown paths with index.html, so an unbridged /api/* fetch
+// silently returns the shell markup instead of JSON.
+function isTauriWebview() {
+  if (window.__TAURI__ || window.__TAURI_INTERNALS__) return true;
+  return window.location.protocol === "tauri:" || window.location.hostname === "tauri.localhost";
+}
+
+// localStorage access throws outright where site data is blocked, so guard it the
+// way loadPanelLayouts already does.
+function readStoredServerUrl() {
+  try {
+    return localStorage.getItem("ham.desktopServerUrl") || "";
+  } catch (_) {
+    return "";
+  }
+}
+
+function storeServerUrl(serverUrl) {
+  try {
+    localStorage.setItem("ham.desktopServerUrl", serverUrl);
+  } catch (_) {
+    // Caching only saves one desktop_runtime round trip; the bridge works without it.
+  }
+}
+
+// Which API a diagnostic should point at: the desktop bridge target on desktop, and
+// the origin actually serving the page in browser and hosted web mode.
+function apiOriginLabel() {
+  const stored = readStoredServerUrl();
+  if (stored) return stored;
+  return isTauriWebview() ? DEFAULT_DESKTOP_SERVER_URL : window.location.origin;
 }
 
 async function configureDesktopFetchBridge() {
   const invoke = tauriInvoke();
-  if (!invoke) return;
+  if (!invoke) {
+    if (isTauriWebview()) {
+      throw new Error(
+        "Desktop bridge unavailable: the Tauri API was not injected into this webview, " +
+          "so /api requests cannot reach the local server. Enable app.withGlobalTauri in " +
+          "src-tauri/tauri.conf.json and rebuild the desktop app.",
+      );
+    }
+    return;
+  }
 
-  let serverUrl = localStorage.getItem("ham.desktopServerUrl") || "";
+  let serverUrl = readStoredServerUrl();
   if (!serverUrl) {
     try {
       const runtime = await invoke("desktop_runtime");
       serverUrl = runtime?.server_url || "";
-      if (serverUrl) localStorage.setItem("ham.desktopServerUrl", serverUrl);
+      if (serverUrl) storeServerUrl(serverUrl);
     } catch (_) {
       serverUrl = "";
     }
   }
-  if (!serverUrl) return;
+  // The proxy command applies the same default, so keep routing through it rather
+  // than letting relative /api requests fall back to the bundled index.html.
+  if (!serverUrl) serverUrl = DEFAULT_DESKTOP_SERVER_URL;
 
   const browserFetch = window.fetch.bind(window);
   window.fetch = async (input, init = {}) => {
@@ -155,9 +208,26 @@ function khzToHz(value) {
   return Number.isFinite(khz) && khz > 0 ? Math.round(khz * 1000) : null;
 }
 
+// response.json() on the shell markup reports only "Unexpected token '<'", which hides
+// the fact that the API never answered. Say which endpoint failed and what came back.
+async function fetchJson(path, init) {
+  const response = await fetch(path, init);
+  const body = await response.text();
+  try {
+    return JSON.parse(body);
+  } catch (_) {
+    const contentType = response.headers.get("content-type") || "unknown content type";
+    throw new Error(
+      `${path} returned ${response.status} ${contentType} instead of JSON. ` +
+        `Confirm the API is reachable at ${apiOriginLabel()}. ` +
+        `First bytes: ${body.slice(0, 120)}`,
+    );
+  }
+}
+
 async function boot() {
   await configureDesktopFetchBridge();
-  const payload = await fetch("/api/shell").then((response) => response.json());
+  const payload = await fetchJson("/api/shell");
   state.shell = payload.shell;
   state.commands = payload.commands.commands;
   state.plugins = payload.plugins;
@@ -3698,7 +3768,11 @@ function copySyncDiagnosticSummary() {
 
 boot().catch((error) => {
   state.busConnected = false;
-  document.body.innerHTML = `<main class="screen"><div class="screen-body"><h1>GUI failed to start</h1><pre>${error}</pre></div></main>`;
+  // escapeHtml keeps markup inside the message (an HTML error body, for example) from
+  // being parsed away by innerHTML and truncating the report.
+  document.body.innerHTML = `<main class="screen"><div class="screen-body"><h1>GUI failed to start</h1><pre>${escapeHtml(
+    error,
+  )}</pre></div></main>`;
 });
 // ---------------------------------------------------------------------------
 // Hosted account and session screen
