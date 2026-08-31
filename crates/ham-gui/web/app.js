@@ -109,6 +109,32 @@ function isTauriWebview() {
   return window.location.protocol === "tauri:" || window.location.hostname === "tauri.localhost";
 }
 
+// localStorage access throws outright where site data is blocked, so guard it the
+// way loadPanelLayouts already does.
+function readStoredServerUrl() {
+  try {
+    return localStorage.getItem("ham.desktopServerUrl") || "";
+  } catch (_) {
+    return "";
+  }
+}
+
+function storeServerUrl(serverUrl) {
+  try {
+    localStorage.setItem("ham.desktopServerUrl", serverUrl);
+  } catch (_) {
+    // Caching only saves one desktop_runtime round trip; the bridge works without it.
+  }
+}
+
+// Which API a diagnostic should point at: the desktop bridge target on desktop, and
+// the origin actually serving the page in browser and hosted web mode.
+function apiOriginLabel() {
+  const stored = readStoredServerUrl();
+  if (stored) return stored;
+  return isTauriWebview() ? DEFAULT_DESKTOP_SERVER_URL : window.location.origin;
+}
+
 async function configureDesktopFetchBridge() {
   const invoke = tauriInvoke();
   if (!invoke) {
@@ -122,12 +148,12 @@ async function configureDesktopFetchBridge() {
     return;
   }
 
-  let serverUrl = localStorage.getItem("ham.desktopServerUrl") || "";
+  let serverUrl = readStoredServerUrl();
   if (!serverUrl) {
     try {
       const runtime = await invoke("desktop_runtime");
       serverUrl = runtime?.server_url || "";
-      if (serverUrl) localStorage.setItem("ham.desktopServerUrl", serverUrl);
+      if (serverUrl) storeServerUrl(serverUrl);
     } catch (_) {
       serverUrl = "";
     }
@@ -186,7 +212,7 @@ async function fetchJson(path, init) {
     const contentType = response.headers.get("content-type") || "unknown content type";
     throw new Error(
       `${path} returned ${response.status} ${contentType} instead of JSON. ` +
-        `Confirm the API is reachable at ${localStorage.getItem("ham.desktopServerUrl") || DEFAULT_DESKTOP_SERVER_URL}. ` +
+        `Confirm the API is reachable at ${apiOriginLabel()}. ` +
         `First bytes: ${body.slice(0, 120)}`,
     );
   }
