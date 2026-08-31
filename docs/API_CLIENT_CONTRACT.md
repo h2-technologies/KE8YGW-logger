@@ -101,6 +101,55 @@ Token rules:
 - `Set-Cookie` carries the hosted session token as `HttpOnly`, `Secure`, and
   `SameSite=Lax`; clients that cannot use cookies must use the bearer token.
 
+## Shared Hosted Account Client Contract
+
+Every client surface drives the hosted account routes through
+`ham_sync::account`. Rust plans the request, interprets the response, and owns
+the durable account record; platform layers only carry bytes and store secrets.
+
+- `HostedAccountAction` names the operation (register, verify email, recovery
+  start/complete, login, session, session rotate, logout, logout all, account
+  delete, device list/register/revoke/revoke all).
+- `plan_hosted_account_request` returns the method, URL, path, JSON body,
+  whether a bearer session token is required, and which credential identifiers
+  the caller must resolve. A session-scoped action with no stored session
+  credential is rejected before any request is made.
+- `apply_hosted_account_response` classifies the observed status and body into
+  a `HostedAccountOutcome`, using the stable hosted `code` field first and the
+  HTTP status only as a fallback. `retryable` marks rate-limited and transient
+  failures; `user_action_required` marks authentication, verification,
+  registration-closed, token, human-verification, and validation failures.
+- `hosted_account_transport_failure` records a transport error as a retryable
+  transient failure without clearing the local session.
+- An authentication failure clears the stored session and refresh credential
+  identifiers and reports them in `cleared_credential_ids` so the caller
+  deletes the secrets. `device_revoked` records the device-revoked state.
+
+Secret handling is uniform across platforms:
+
+- The durable account record (`hosted-account.json`) holds no secrets. It holds
+  the base URL, device label, connection state, account identity, session and
+  device identifiers, cached devices and logbooks, and the credential
+  identifiers for the session and refresh tokens.
+- Issued session and refresh tokens are returned exactly once by the shared
+  client and are excluded from every serialized form of the result.
+- Desktop, hosted web, and the CLI store them in the operating-system
+  credential backend under the `hosted-account` provider; native iOS stores
+  them in the Keychain under the same Rust-assigned credential identifiers.
+- `POST /api/v1/auth/session/rotate` needs the refresh token in the request
+  body. Rust names the body field and the caller injects the stored secret for
+  that single request; Rust never receives or stores it.
+
+Transport ownership per surface:
+
+- Desktop and hosted web use the shared `ureq` transport in `ham-sync` behind
+  the `hosted-http` feature, reached through the local `/api/account/*` GUI
+  endpoints.
+- The CLI uses the same shared transport.
+- Native iOS uses URLSession and the `account.plan`, `account.apply`, and
+  `account.transport_failure` bridge commands, so Rust still owns planning and
+  interpretation.
+
 ## Account, Device, and Logbook Scope
 
 Client calls are scoped by account, logbook, user, and device:
@@ -236,7 +285,7 @@ Returns:
 {
   "ok": true,
   "service": "ke8ygw-sync-server",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "mode": "self_hosted"
 }
 ```
@@ -508,8 +557,10 @@ must define and test endpoints or equivalent proposal APIs for:
   provider history endpoints.
 - Backup restore/import UX hardening after the conservative v0.2 same-logbook
   import foundation.
-- Hosted web, desktop, and native iOS UX for the implemented account lifecycle,
-  session rotation, device revocation, and account deletion routes.
+- Hosted server administration UX (hosting mode, invitations, and audits) for
+  the implemented admin routes. Account lifecycle, session rotation, device
+  revocation, and account deletion UX now exist on hosted web, desktop, native
+  iOS, and the CLI through the shared hosted account client.
 - Provider-specific credential setup flows and server-side secret-vault design
   if hosted deployments need to resolve provider credentials directly.
 - Native-client divergence report presentation, durable conflict-review

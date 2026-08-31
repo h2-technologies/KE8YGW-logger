@@ -3,7 +3,7 @@
 ## Release versions
 
 The Tauri desktop package, `ham-desktop` native integration crate, native iOS
-application, and shared internal Rust crates are all `0.3.0`, inherited from
+application, and shared internal Rust crates are all `0.4.0`, inherited from
 `[workspace.package].version`. Desktop and iOS ship on one product version, so
 a release tag covers both. Run `python scripts/check_versions.py` before
 creating release artifacts.
@@ -14,7 +14,7 @@ release credentials and the corresponding Windows/macOS/Linux runners. They
 have not been validated merely because unsigned local builds succeed.
 
 v1 includes signed desktop clients for Windows, macOS, and broad Linux
-distribution support. The `0.3.0` workspace has a real Tauri runtime
+distribution support. The `0.4.0` workspace has a real Tauri runtime
 wrapper and keeps signing, notarization, updater policy, and installer branding
 as v1 work.
 

@@ -114,6 +114,7 @@ final class RustBridgeStore: ObservableObject {
     @Published var map = MapSnapshot.placeholder
     @Published var sync = SyncSnapshot.placeholder
     @Published var diagnostics = DiagnosticsSnapshot.placeholder
+    @Published var account = HostedAccountSnapshot.placeholder
     @Published var lastError: String?
 
     let client: RustBridgeClient
@@ -1050,7 +1051,7 @@ struct FallbackRustBridgeClient: RustBridgeClient {
         case .version:
             data = [
                 "app": "KE8YGW Logger",
-                "core_version": "0.3.0",
+                "core_version": "0.4.0",
                 "bridge_version": 1,
                 "rust_modules": ["ham-core", "ham-sync", "ham-plugin-sdk"],
                 "contract": "ffi_unavailable_in_this_build"
@@ -1098,6 +1099,39 @@ struct FallbackRustBridgeClient: RustBridgeClient {
         let data: [String: Any]
 
         switch command {
+        case "account.snapshot":
+            let appSupportDir = payload["app_support_dir"] as? String ?? "fallback"
+            data = ["account": FallbackAccountMemory.snapshot(appSupportDir: appSupportDir)]
+        case "account.configure":
+            let appSupportDir = payload["app_support_dir"] as? String ?? "fallback"
+            data = [
+                "account": FallbackAccountMemory.configure(
+                    appSupportDir: appSupportDir,
+                    baseUrl: payload["base_url"] as? String ?? "",
+                    deviceName: payload["device_name"] as? String
+                )
+            ]
+        case "account.plan":
+            let appSupportDir = payload["app_support_dir"] as? String ?? "fallback"
+            let action = payload["action"] as? [String: Any] ?? [:]
+            guard let planned = FallbackAccountMemory.plan(appSupportDir: appSupportDir, action: action) else {
+                return try FallbackAccountMemory.errorEnvelope(
+                    correlationID: correlationID,
+                    code: "domain_rejected",
+                    message: "a signed-in hosted session is required"
+                )
+            }
+            data = planned
+        case "account.apply", "account.transport_failure":
+            let appSupportDir = payload["app_support_dir"] as? String ?? "fallback"
+            let action = payload["action"] as? [String: Any] ?? [:]
+            data = FallbackAccountMemory.apply(
+                appSupportDir: appSupportDir,
+                action: action,
+                status: payload["status"] as? Int ?? 0,
+                bodyJson: payload["body_json"] as? String,
+                transportMessage: payload["message"] as? String
+            )
         case "settings.get":
             let appSupportDir = payload["app_support_dir"] as? String ?? "fallback"
             data = FallbackSettingsMemory.result(appSupportDir: appSupportDir, createIfMissing: false)
@@ -1371,7 +1405,7 @@ struct FallbackRustBridgeClient: RustBridgeClient {
                 "library_linked": false,
                 "abi_version": 1,
                 "bridge_schema_version": 1,
-                "core_version": "0.3.0",
+                "core_version": "0.4.0",
                 "sync_protocol_version": 1,
                 "backup_schema_version": 1,
                 "build_target": ["os": "fallback", "arch": "fallback"],
@@ -1797,6 +1831,173 @@ private enum FallbackConflictReviewMemory {
     }
 }
 
+private enum FallbackAccountMemory {
+    private static let lock = NSLock()
+    private static var records: [String: [String: Any]] = [:]
+
+    static func snapshot(appSupportDir: String) -> [String: Any] {
+        lock.lock()
+        defer { lock.unlock() }
+        if let record = records[appSupportDir] { return record }
+        let record = defaultSnapshot()
+        records[appSupportDir] = record
+        return record
+    }
+
+    static func configure(appSupportDir: String, baseUrl: String, deviceName: String?) -> [String: Any] {
+        lock.lock()
+        defer { lock.unlock() }
+        var record = records[appSupportDir] ?? defaultSnapshot()
+        let trimmed = baseUrl.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty {
+            record["base_url"] = trimmed.hasSuffix("/") ? String(trimmed.dropLast()) : trimmed
+        }
+        if let deviceName, !deviceName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            record["device_name"] = deviceName
+        }
+        records[appSupportDir] = record
+        return record
+    }
+
+    static func plan(appSupportDir: String, action: [String: Any]) -> [String: Any]? {
+        let record = snapshot(appSupportDir: appSupportDir)
+        let name = action["action"] as? String ?? ""
+        let sessionActions: Set<String> = [
+            "session", "session_rotate", "logout", "logout_all", "account_delete",
+            "device_list", "device_register", "device_revoke", "device_revoke_all"
+        ]
+        let sessionCredentialId = record["session_token_credential_id"] as? String
+        let refreshCredentialId = record["refresh_token_credential_id"] as? String
+        let requiresSession = sessionActions.contains(name)
+        if requiresSession, sessionCredentialId == nil {
+            return nil
+        }
+        let requiresRefresh = name == "session_rotate"
+        let refreshBodyField: String? = requiresRefresh ? "refresh_token" : nil
+        let method: String = (name == "session" || name == "device_list") ? "GET" : "POST"
+        let baseURL = record["base_url"] as? String ?? ""
+        let request: [String: Any] = [
+            "action": "account.\(name)",
+            "method": method,
+            "url": "\(baseURL)/api/v1/auth/\(name)",
+            "path": "/api/v1/auth/\(name)",
+            "body_json": "{}",
+            "requires_session_token": requiresSession,
+            "session_token_credential_id": sessionCredentialId as Any? ?? NSNull(),
+            "requires_refresh_token": requiresRefresh,
+            "refresh_token_credential_id": refreshCredentialId as Any? ?? NSNull(),
+            "refresh_token_body_field": refreshBodyField as Any? ?? NSNull(),
+            "request_id": UUID().uuidString,
+            "timeout_seconds": 20,
+            "max_response_bytes": 524_288
+        ]
+        return [
+            "account": record,
+            "plan_token": "fallback-plan",
+            "request": request
+        ]
+    }
+
+    static func apply(
+        appSupportDir: String,
+        action: [String: Any],
+        status: Int,
+        bodyJson: String?,
+        transportMessage: String?
+    ) -> [String: Any] {
+        lock.lock()
+        defer { lock.unlock() }
+        var record = records[appSupportDir] ?? defaultSnapshot()
+        let name = action["action"] as? String ?? ""
+        let accepted = transportMessage == nil && (200..<300).contains(status)
+        let outcome = transportMessage != nil ? "transient_failure" : (accepted ? "accepted" : "permanent_failure")
+        if accepted && (name == "login" || name == "recovery_complete") {
+            record["connection_state"] = "signed_in"
+            record["session_token_credential_id"] = UUID().uuidString
+            record["refresh_token_credential_id"] = UUID().uuidString
+            if let email = action["email"] as? String {
+                record["email"] = email
+            }
+        }
+        if accepted && (name == "logout" || name == "logout_all") {
+            record["connection_state"] = "signed_out"
+            record["session_token_credential_id"] = NSNull()
+            record["refresh_token_credential_id"] = NSNull()
+        }
+        record["last_action"] = "account.\(name)"
+        record["last_outcome"] = outcome
+        records[appSupportDir] = record
+        let result: [String: Any] = [
+            "action": "account.\(name)",
+            "outcome": outcome,
+            "status": status,
+            "message": transportMessage ?? "fallback hosted account response",
+            "error_code": NSNull(),
+            "request_id": NSNull(),
+            "retryable": outcome == "transient_failure",
+            "user_action_required": false,
+            "snapshot": record,
+            "cleared_credential_ids": []
+        ]
+        return [
+            "result": result,
+            "account": record,
+            "issued_secrets": [
+                "session_token_credential_id": NSNull(),
+                "session_token": NSNull(),
+                "refresh_token_credential_id": NSNull(),
+                "refresh_token": NSNull()
+            ],
+            "cleared_credential_ids": []
+        ]
+    }
+
+    static func errorEnvelope(correlationID: String, code: String, message: String) throws -> Data {
+        let envelope: [String: Any] = [
+            "ok": false,
+            "bridge_version": 1,
+            "abi_version": 1,
+            "schema_version": 1,
+            "generated_at": ISO8601DateFormatter().string(from: Date()),
+            "correlation_id": correlationID,
+            "error": ["code": code, "message": message],
+            "data": NSNull()
+        ]
+        return try JSONSerialization.data(withJSONObject: envelope)
+    }
+
+    static func defaultSnapshot() -> [String: Any] {
+        [
+            "schema_version": 1,
+            "base_url": "http://127.0.0.1:9750",
+            "device_name": "KE8YGW Logger Device",
+            "connection_state": "signed_out",
+            "account_id": NSNull(),
+            "user_id": NSNull(),
+            "email": NSNull(),
+            "display_name": NSNull(),
+            "email_verified": false,
+            "session_id": NSNull(),
+            "session_issued_at": NSNull(),
+            "session_expires_at": NSNull(),
+            "refresh_expires_at": NSNull(),
+            "session_token_credential_id": NSNull(),
+            "refresh_token_credential_id": NSNull(),
+            "device_id": NSNull(),
+            "devices": [],
+            "logbooks": [],
+            "pending_email_verification_for": NSNull(),
+            "pending_recovery_for": NSNull(),
+            "last_action": NSNull(),
+            "last_outcome": NSNull(),
+            "last_error_code": NSNull(),
+            "last_message": NSNull(),
+            "last_request_id": NSNull(),
+            "last_updated_at": NSNull()
+        ]
+    }
+}
+
 private enum FallbackSettingsMemory {
     private static let lock = NSLock()
     private static var records: [String: [String: Any]] = [:]
@@ -2153,8 +2354,8 @@ enum FallbackBridgeData {
     }
 
     static let diagnostics: [String: Any] = [
-        "rust_version": "0.3.0",
-        "core_version": "0.3.0",
+        "rust_version": "0.4.0",
+        "core_version": "0.4.0",
         "bridge_loaded": false,
         "abi_version": 1,
         "bridge_schema_version": 1,
@@ -4682,3 +4883,514 @@ enum RustBridgePaths {
         return url
     }
 }
+
+// MARK: - Hosted account and session
+
+/// Redacted hosted account record owned by Rust.
+///
+/// Session and refresh tokens are never part of this snapshot; only the
+/// credential identifiers used to look them up in the iOS Keychain are.
+struct HostedAccountSnapshot: Decodable, Equatable {
+    let schemaVersion: Int
+    let baseUrl: String
+    let deviceName: String
+    let connectionState: String
+    let accountId: String?
+    let userId: String?
+    let email: String?
+    let displayName: String?
+    let emailVerified: Bool
+    let sessionId: String?
+    let sessionIssuedAt: String?
+    let sessionExpiresAt: String?
+    let refreshExpiresAt: String?
+    let sessionTokenCredentialId: String?
+    let refreshTokenCredentialId: String?
+    let deviceId: String?
+    let devices: [HostedAccountDevice]
+    let logbooks: [HostedAccountLogbook]
+    let pendingEmailVerificationFor: String?
+    let pendingRecoveryFor: String?
+    let lastAction: String?
+    let lastOutcome: String?
+    let lastErrorCode: String?
+    let lastMessage: String?
+    let lastRequestId: String?
+    let lastUpdatedAt: String?
+
+    var isSignedIn: Bool { connectionState == "signed_in" }
+
+    static let placeholder = HostedAccountSnapshot(
+        schemaVersion: 1,
+        baseUrl: "http://127.0.0.1:9750",
+        deviceName: "KE8YGW Logger Device",
+        connectionState: "signed_out",
+        accountId: nil,
+        userId: nil,
+        email: nil,
+        displayName: nil,
+        emailVerified: false,
+        sessionId: nil,
+        sessionIssuedAt: nil,
+        sessionExpiresAt: nil,
+        refreshExpiresAt: nil,
+        sessionTokenCredentialId: nil,
+        refreshTokenCredentialId: nil,
+        deviceId: nil,
+        devices: [],
+        logbooks: [],
+        pendingEmailVerificationFor: nil,
+        pendingRecoveryFor: nil,
+        lastAction: nil,
+        lastOutcome: nil,
+        lastErrorCode: nil,
+        lastMessage: nil,
+        lastRequestId: nil,
+        lastUpdatedAt: nil
+    )
+}
+
+struct HostedAccountDevice: Decodable, Equatable, Identifiable {
+    let deviceId: String
+    let deviceName: String
+    let trusted: Bool
+    let revoked: Bool
+    let registeredAt: String?
+    let revokedAt: String?
+    let current: Bool
+
+    var id: String { deviceId }
+}
+
+struct HostedAccountLogbook: Decodable, Equatable, Identifiable {
+    let logbookId: String
+    let name: String
+    let role: String?
+
+    var id: String { logbookId }
+}
+
+/// Rust-owned interpretation of one hosted account call.
+struct HostedAccountActionResult: Decodable, Equatable {
+    let action: String
+    let outcome: String
+    let status: Int
+    let message: String
+    let errorCode: String?
+    let requestId: String?
+    let retryable: Bool
+    let userActionRequired: Bool
+    let snapshot: HostedAccountSnapshot
+    let clearedCredentialIds: [String]
+
+    var isAccepted: Bool { outcome == "accepted" }
+}
+
+/// Transport-only description of a Rust-planned hosted account request.
+struct HostedAccountPlannedRequest: Decodable, Equatable {
+    let action: String
+    let method: String
+    let url: String
+    let path: String
+    let bodyJson: String?
+    let requiresSessionToken: Bool
+    let sessionTokenCredentialId: String?
+    let requiresRefreshToken: Bool
+    let refreshTokenCredentialId: String?
+    let refreshTokenBodyField: String?
+    let requestId: String
+    let timeoutSeconds: Int
+    let maxResponseBytes: Int
+}
+
+struct HostedAccountPlanResult: Decodable {
+    let account: HostedAccountSnapshot
+    let planToken: String
+    let request: HostedAccountPlannedRequest
+}
+
+struct HostedAccountIssuedSecrets: Decodable, Equatable {
+    let sessionTokenCredentialId: String?
+    let sessionToken: String?
+    let refreshTokenCredentialId: String?
+    let refreshToken: String?
+}
+
+struct HostedAccountApplyResult: Decodable {
+    let result: HostedAccountActionResult
+    let account: HostedAccountSnapshot
+    let issuedSecrets: HostedAccountIssuedSecrets
+    let clearedCredentialIds: [String]
+}
+
+struct HostedAccountSnapshotResult: Decodable {
+    let account: HostedAccountSnapshot
+}
+
+/// Hosted account operation requested by the UI.
+///
+/// The shape mirrors the Rust `HostedAccountAction` tagged enum; Rust remains
+/// the only place that turns an action into a hosted route.
+struct HostedAccountActionRequest: Encodable, Equatable {
+    let action: String
+    var email: String? = nil
+    var displayName: String? = nil
+    var invitationToken: String? = nil
+    var turnstileToken: String? = nil
+    var token: String? = nil
+    var deviceName: String? = nil
+    var deviceId: String? = nil
+
+    static func login(email: String, displayName: String? = nil) -> Self {
+        Self(action: "login", email: email, displayName: displayName)
+    }
+
+    static func register(
+        email: String,
+        displayName: String?,
+        invitationToken: String?,
+        turnstileToken: String?
+    ) -> Self {
+        Self(
+            action: "register",
+            email: email,
+            displayName: displayName,
+            invitationToken: invitationToken,
+            turnstileToken: turnstileToken
+        )
+    }
+
+    static func verifyEmail(token: String) -> Self { Self(action: "verify_email", token: token) }
+    static func recoveryStart(email: String) -> Self { Self(action: "recovery_start", email: email) }
+    static func recoveryComplete(token: String) -> Self {
+        Self(action: "recovery_complete", token: token)
+    }
+    static let session = Self(action: "session")
+    static let sessionRotate = Self(action: "session_rotate")
+    static let logout = Self(action: "logout")
+    static let logoutAll = Self(action: "logout_all")
+    static let accountDelete = Self(action: "account_delete")
+    static let deviceList = Self(action: "device_list")
+    static func deviceRevoke(deviceId: String) -> Self {
+        Self(action: "device_revoke", deviceId: deviceId)
+    }
+    static let deviceRevokeAll = Self(action: "device_revoke_all")
+}
+
+struct HostedAccountBridgeRequest: Encodable {
+    let appSupportDir: String
+    let action: HostedAccountActionRequest
+}
+
+struct HostedAccountConfigureBridgeRequest: Encodable {
+    let appSupportDir: String
+    let baseUrl: String
+    let deviceName: String?
+}
+
+struct HostedAccountApplyBridgeRequest: Encodable {
+    let appSupportDir: String
+    let action: HostedAccountActionRequest
+    let planToken: String
+    let status: Int
+    let bodyJson: String?
+}
+
+struct HostedAccountTransportFailureBridgeRequest: Encodable {
+    let appSupportDir: String
+    let action: HostedAccountActionRequest
+    let planToken: String
+    let message: String
+}
+
+/// Raw hosted response observed by the platform transport.
+struct HostedAccountTransportResponse: Equatable {
+    let status: Int
+    let bodyJson: String?
+}
+
+enum HostedAccountTransportError: LocalizedError, Equatable {
+    case networkUnavailable
+    case invalidURL
+    case invalidHTTPResponse
+    case responseTooLarge(limit: Int)
+
+    var errorDescription: String? {
+        switch self {
+        case .networkUnavailable:
+            return "Network unavailable; the hosted account request was not sent."
+        case .invalidURL:
+            return "The hosted server URL is invalid."
+        case .invalidHTTPResponse:
+            return "The hosted server returned an invalid HTTP response."
+        case .responseTooLarge(let limit):
+            return "The hosted server response exceeded \(limit) bytes."
+        }
+    }
+}
+
+protocol HostedAccountTransporting {
+    func execute(
+        request: HostedAccountPlannedRequest,
+        body: Data?,
+        sessionToken: String?
+    ) async throws -> HostedAccountTransportResponse
+}
+
+/// URLSession transport for hosted account requests.
+///
+/// The transport only carries bytes: Rust plans the request and interprets the
+/// response, and secrets come from the Keychain rather than from Rust state.
+struct HostedAccountHTTPTransport: HostedAccountTransporting {
+    func execute(
+        request: HostedAccountPlannedRequest,
+        body: Data?,
+        sessionToken: String?
+    ) async throws -> HostedAccountTransportResponse {
+        guard let url = URL(string: request.url),
+              let scheme = url.scheme?.lowercased(),
+              scheme == "http" || scheme == "https"
+        else {
+            throw HostedAccountTransportError.invalidURL
+        }
+        var urlRequest = URLRequest(url: url)
+        urlRequest.httpMethod = request.method
+        urlRequest.timeoutInterval = TimeInterval(max(1, min(request.timeoutSeconds, 120)))
+        urlRequest.setValue("application/json", forHTTPHeaderField: "accept")
+        urlRequest.setValue(request.requestId, forHTTPHeaderField: "x-request-id")
+        if let sessionToken {
+            urlRequest.setValue("Bearer \(sessionToken)", forHTTPHeaderField: "authorization")
+        }
+        if let body {
+            urlRequest.setValue("application/json", forHTTPHeaderField: "content-type")
+            urlRequest.httpBody = body
+        }
+
+        let (data, response) = try await URLSession.shared.data(for: urlRequest)
+        guard let http = response as? HTTPURLResponse else {
+            throw HostedAccountTransportError.invalidHTTPResponse
+        }
+        guard data.count <= request.maxResponseBytes else {
+            throw HostedAccountTransportError.responseTooLarge(limit: request.maxResponseBytes)
+        }
+        return HostedAccountTransportResponse(
+            status: http.statusCode,
+            bodyJson: data.isEmpty ? nil : String(data: data, encoding: .utf8)
+        )
+    }
+}
+
+extension RustBridgeStore {
+    /// Loads the Rust-owned hosted account record.
+    @discardableResult
+    func refreshHostedAccount() async throws -> HostedAccountSnapshot {
+        let supportURL = try RustBridgePaths.applicationSupportDirectory()
+        let result = try await command(
+            "account.snapshot",
+            payload: AppSupportBridgeRequest(appSupportDir: supportURL.path),
+            as: HostedAccountSnapshotResult.self
+        )
+        account = result.account
+        lastError = nil
+        return result.account
+    }
+
+    /// Updates the durable hosted endpoint and device label.
+    @discardableResult
+    func configureHostedAccount(
+        baseURL: String,
+        deviceName: String?
+    ) async throws -> HostedAccountSnapshot {
+        let supportURL = try RustBridgePaths.applicationSupportDirectory()
+        let result = try await command(
+            "account.configure",
+            payload: HostedAccountConfigureBridgeRequest(
+                appSupportDir: supportURL.path,
+                baseUrl: baseURL,
+                deviceName: deviceName
+            ),
+            as: HostedAccountSnapshotResult.self
+        )
+        account = result.account
+        lastError = nil
+        return result.account
+    }
+
+    /// Plans one hosted account action in Rust.
+    func planHostedAccountRequest(
+        _ action: HostedAccountActionRequest
+    ) async throws -> HostedAccountPlanResult {
+        let supportURL = try RustBridgePaths.applicationSupportDirectory()
+        let result = try await command(
+            "account.plan",
+            payload: HostedAccountBridgeRequest(
+                appSupportDir: supportURL.path,
+                action: action
+            ),
+            as: HostedAccountPlanResult.self
+        )
+        account = result.account
+        return result
+    }
+
+    /// Runs one hosted account action through Rust planning, a Swift
+    /// transport, and Rust interpretation.
+    ///
+    /// Swift never decides what an outcome means. It carries bytes, moves
+    /// issued secrets into the Keychain under the Rust-assigned credential
+    /// identifiers, and deletes the credentials Rust reports as cleared.
+    @discardableResult
+    func executeHostedAccountAction<T: HostedAccountTransporting>(
+        _ action: HostedAccountActionRequest,
+        transport: T,
+        vault: CredentialVault,
+        networkAvailable: Bool = true
+    ) async throws -> HostedAccountActionResult {
+        let plan = try await planHostedAccountRequest(action)
+        guard networkAvailable else {
+            return try await recordHostedAccountTransportFailure(
+                action,
+                planToken: plan.planToken,
+                message: HostedAccountTransportError.networkUnavailable.localizedDescription
+            )
+        }
+
+        var sessionToken: String?
+        if plan.request.requiresSessionToken {
+            guard let credentialId = plan.request.sessionTokenCredentialId,
+                  let stored = try vault.read(
+                      account: credentialId,
+                      providerId: hostedAccountCredentialProviderId
+                  )
+            else {
+                throw RustBridgeError.unavailable(
+                    "No stored hosted session token; sign in again before continuing."
+                )
+            }
+            sessionToken = stored
+        }
+
+        var body = plan.request.bodyJson.flatMap { $0.data(using: .utf8) }
+        if plan.request.requiresRefreshToken {
+            guard let credentialId = plan.request.refreshTokenCredentialId,
+                  let refreshToken = try vault.read(
+                      account: credentialId,
+                      providerId: hostedAccountCredentialProviderId
+                  )
+            else {
+                throw RustBridgeError.unavailable(
+                    "No stored hosted refresh token; sign in again before rotating."
+                )
+            }
+            body = try hostedAccountBody(
+                plan.request.bodyJson,
+                injecting: refreshToken,
+                into: plan.request.refreshTokenBodyField
+            )
+        }
+
+        let response: HostedAccountTransportResponse
+        do {
+            response = try await transport.execute(
+                request: plan.request,
+                body: body,
+                sessionToken: sessionToken
+            )
+        } catch {
+            return try await recordHostedAccountTransportFailure(
+                action,
+                planToken: plan.planToken,
+                message: error.localizedDescription
+            )
+        }
+
+        let supportURL = try RustBridgePaths.applicationSupportDirectory()
+        let applied = try await command(
+            "account.apply",
+            payload: HostedAccountApplyBridgeRequest(
+                appSupportDir: supportURL.path,
+                action: action,
+                planToken: plan.planToken,
+                status: response.status,
+                bodyJson: response.bodyJson
+            ),
+            as: HostedAccountApplyResult.self
+        )
+        try persistHostedAccountSecrets(applied, vault: vault)
+        account = applied.account
+        lastError = applied.result.isAccepted ? nil : applied.result.message
+        return applied.result
+    }
+
+    private func recordHostedAccountTransportFailure(
+        _ action: HostedAccountActionRequest,
+        planToken: String,
+        message: String
+    ) async throws -> HostedAccountActionResult {
+        let supportURL = try RustBridgePaths.applicationSupportDirectory()
+        let applied = try await command(
+            "account.transport_failure",
+            payload: HostedAccountTransportFailureBridgeRequest(
+                appSupportDir: supportURL.path,
+                action: action,
+                planToken: planToken,
+                message: message
+            ),
+            as: HostedAccountApplyResult.self
+        )
+        account = applied.account
+        lastError = applied.result.message
+        return applied.result
+    }
+
+    private func persistHostedAccountSecrets(
+        _ applied: HostedAccountApplyResult,
+        vault: CredentialVault
+    ) throws {
+        if let credentialId = applied.issuedSecrets.sessionTokenCredentialId,
+           let token = applied.issuedSecrets.sessionToken {
+            try vault.save(
+                secret: token,
+                account: credentialId,
+                providerId: hostedAccountCredentialProviderId
+            )
+        }
+        if let credentialId = applied.issuedSecrets.refreshTokenCredentialId,
+           let token = applied.issuedSecrets.refreshToken {
+            try vault.save(
+                secret: token,
+                account: credentialId,
+                providerId: hostedAccountCredentialProviderId
+            )
+        }
+        for credentialId in applied.clearedCredentialIds {
+            try? vault.delete(
+                account: credentialId,
+                providerId: hostedAccountCredentialProviderId
+            )
+        }
+    }
+
+    /// Inserts the Rust-named refresh-token field into the planned body.
+    ///
+    /// The field name comes from Rust so Swift never encodes hosted request
+    /// vocabulary of its own.
+    func hostedAccountBody(
+        _ bodyJson: String?,
+        injecting refreshToken: String,
+        into field: String?
+    ) throws -> Data? {
+        guard let field, !field.isEmpty else {
+            return bodyJson.flatMap { $0.data(using: .utf8) }
+        }
+        var object: [String: Any] = [:]
+        if let bodyJson, let data = bodyJson.data(using: .utf8),
+           let decoded = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            object = decoded
+        }
+        object[field] = refreshToken
+        return try JSONSerialization.data(withJSONObject: object)
+    }
+}
+
+let hostedAccountCredentialProviderId = "hosted-account"

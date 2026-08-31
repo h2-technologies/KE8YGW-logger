@@ -31,11 +31,18 @@ This root roadmap summarizes the current implementation plan. Detailed architect
   HMAC-SHA256 signed LAN read endpoint authorization, replay nonce rejection,
   revocation, and native iOS LAN trust snapshot/issue/accept/trust/rotate/revoke
   bridge commands with Keychain-backed credential references.
+- Account and Session v0.4: shared Rust hosted account client with request
+  planning, stable outcome classification, and a durable non-secret account
+  record; hosted web, desktop, native iOS, and CLI flows for registration,
+  email verification, recovery, sign-in, session read/rotate, sign-out,
+  sign-out-everywhere, device listing/revocation, and account deletion; and
+  session/refresh tokens held only in the OS credential backend or iOS Keychain
+  under Rust-assigned credential identifiers.
 
 ## Current Milestone
 
-The current `0.3.0` workspace is the offline-sync v1 foundation baseline, not the complete
-v1 product. The locked v1 release ships on November 24, 2026 with hosted web,
+The current `0.4.0` workspace carries the offline-sync v1 foundation plus the
+account and session milestone. It is not the complete v1 product. The locked v1 release ships on November 24, 2026 with hosted web,
 native iOS, and Windows/macOS/Linux desktop. A PWA, pinned hosted website, or
 thin web wrapper is not the iOS client. v1.1 adds a TUI.
 
@@ -51,8 +58,8 @@ legacy queue migration, restore replay, and LAN revocation, plus a guided browse
 conflict-review surface for saved review selection, structured
 conflict summaries, explicit recovery choices, and corrective QSO note events.
 
-Partial or incomplete v1 areas include hosted web/desktop/iOS account UX,
-production email/Turnstile deployment configuration, production iOS reciprocal
+Partial or incomplete v1 areas include hosted web/desktop/iOS server
+administration UX, production email/Turnstile deployment configuration, production iOS reciprocal
 LAN transport qualification, end-to-end cross-client branch
 review/reconciliation workflow qualification, physical-device LAN/iOS
 local-network validation, release-device iOS background task/poor-network qualification, production provider
@@ -72,8 +79,10 @@ dependency-ordered critical path. The next three implementation goals are:
   task/poor-network qualification.
 - Production provider qualification for QRZ, QRZ Logbook, LoTW, eQSL, Club
   Log, POTA, SOTAWatch, DX Cluster/RBN, maps, and propagation.
-- Hosted web, desktop, and iOS UI flows for the implemented account/session,
-  recovery, device, and admin APIs.
+- Hosted web, desktop, and iOS UI flows for the implemented server
+  administration APIs: hosting mode, invitation management, and audit review.
+  The account/session, recovery, and device flows shipped in the v0.4
+  milestone; see [docs/V0_4_RELEASE_PLAN.md](docs/V0_4_RELEASE_PLAN.md).
 
 ## Future Milestones
 
