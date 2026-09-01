@@ -1109,6 +1109,19 @@ LAN-reachable address such as
 use manual loopback URLs. Mutating LAN pull also requires the explicit
 `sync.lan.pull` permission, durable peer trust, a matching peer identity probe,
 and signed remote read requests.
+
+Binding the GUI API to a LAN address exposes only the LAN sync peer surface to
+the network: `GET /api/sync/state`, `/api/sync/list-logbooks`,
+`/api/sync/get-head`, `/api/sync/events-since`, `/api/sync/event-metadata`, and
+`POST /api/sync/lan/pairing-accept`, which requires a one-time pairing token.
+Every other endpoint, including the browser UI and all logging, credential,
+backup, pairing, and cloud controls, has no request authentication and is
+served to loopback requesters only; a non-loopback request for one is refused
+with `403` and a redacted `sync.lan.control_api.rejected` runtime event. Open
+the UI at `http://127.0.0.1:<port>` even when the listener is bound wider. If
+you deliberately want the unauthenticated control plane reachable from your
+network, set `HAM_GUI_ALLOW_REMOTE_CONTROL_API=1`; only do that on a network
+you fully control.
 Native iOS can scan the same discovery packets, probe `/api/sync/state`, and
 fill the existing peer URL fields only when the probed device/session identity
 matches the packet. The Apple multicast entitlement is approved, provisioned,
@@ -1315,7 +1328,10 @@ Desktop release mode bundles `crates/ham-gui/web` and does not require a
 frontend dev server. The local GUI HTTP backend is not embedded in-process yet;
 for local desktop development, run `cargo run -p ham-gui --bin ham-gui` and then
 `cargo tauri dev`. The desktop API base defaults to `http://127.0.0.1:9467` and
-can be set with `HAM_DESKTOP_SERVER_URL`.
+can be set with `HAM_DESKTOP_SERVER_URL`. Pointing it at a non-loopback
+`ham-gui` instance requires that instance to run with
+`HAM_GUI_ALLOW_REMOTE_CONTROL_API=1`, because the GUI control plane has no
+request authentication and is loopback-only by default.
 
 The default shell includes:
 

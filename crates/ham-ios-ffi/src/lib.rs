@@ -4399,6 +4399,215 @@ mod tests {
     }
 
     #[test]
+    fn sync_offline_queue_recover_initializes_absent_ios_queue_and_stays_stable() {
+        let app_support_dir = std::env::temp_dir().join(format!("ham-ios-{}", Uuid::new_v4()));
+        let recover = json!({
+            "command": "sync.offline_queue.recover",
+            "payload": {
+                "app_support_dir": app_support_dir.to_string_lossy()
+            }
+        });
+
+        let first = call_json(recover.clone());
+        assert_eq!(first["ok"], true);
+        assert_eq!(first["data"]["recovery"]["initialized_empty_queue"], true);
+        assert_eq!(
+            first["data"]["recovery"]["migrated_v0_2_absent_queue"],
+            true
+        );
+        assert_eq!(first["data"]["recovery"]["quarantined_corrupt_file"], false);
+        assert_eq!(first["data"]["offline_queue"]["health"]["total"], 0);
+        assert_eq!(first["data"]["recovered_count"], 0);
+
+        let second = call_json(recover);
+        assert_eq!(second["ok"], true);
+        assert_eq!(second["data"]["recovery"]["initialized_empty_queue"], false);
+        assert_eq!(
+            second["data"]["recovery"]["migrated_v0_2_absent_queue"],
+            false
+        );
+        assert_eq!(second["data"]["offline_queue"]["health"]["total"], 0);
+
+        let _ = std::fs::remove_dir_all(app_support_dir);
+    }
+
+    #[test]
+    fn sync_offline_queue_recover_migrates_legacy_v0_2_ios_queue_records() {
+        let app_support_dir = std::env::temp_dir().join(format!("ham-ios-{}", Uuid::new_v4()));
+        let rust_dir = app_support_dir.join("Rust");
+        std::fs::create_dir_all(&rust_dir).unwrap();
+        let logbook_id = default_logbook_id();
+        let device_id = Uuid::new_v4();
+        let sent_operation_id = Uuid::new_v4();
+        let sent_qso_id = Uuid::new_v4();
+        let unsent_operation_id = Uuid::new_v4();
+        let unsent_qso_id = Uuid::new_v4();
+        std::fs::write(
+            rust_dir.join("offline-mutations.json"),
+            serde_json::to_vec_pretty(&json!({
+                "version": 0,
+                "pending_operations": [
+                    {
+                        "operation_id": sent_operation_id,
+                        "device_id": device_id,
+                        "logbook_id": logbook_id,
+                        "operation_type": OFFLINE_OP_QSO_DELETE,
+                        "payload": { "qso_id": sent_qso_id },
+                        "local_event_hash": "legacy-local-event-hash"
+                    },
+                    {
+                        "operation_id": unsent_operation_id,
+                        "device_id": device_id,
+                        "logbook_id": logbook_id,
+                        "operation_type": OFFLINE_OP_QSO_CORRECT,
+                        "payload": { "qso_id": unsent_qso_id, "mode": "cw" }
+                    }
+                ]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let recovered = call_json(json!({
+            "command": "sync.offline_queue.recover",
+            "payload": {
+                "app_support_dir": app_support_dir.to_string_lossy(),
+                "logbook_id": logbook_id
+            }
+        }));
+        assert_eq!(recovered["ok"], true);
+        assert_eq!(recovered["data"]["recovery"]["migrated_v0_2_file"], true);
+        assert_eq!(
+            recovered["data"]["recovery"]["migrated_legacy_mutations"],
+            2
+        );
+        assert_eq!(
+            recovered["data"]["recovery"]["quarantined_corrupt_file"],
+            false
+        );
+        let health = &recovered["data"]["offline_queue"]["health"];
+        assert_eq!(health["total"], 2);
+        assert_eq!(health["retrying"], 1);
+        assert_eq!(health["pending"], 1);
+        assert_eq!(health["failed"], 0);
+
+        let mutations = recovered["data"]["offline_queue"]["mutations"]
+            .as_array()
+            .expect("migrated queue should expose mutations");
+        let sent = mutations
+            .iter()
+            .find(|mutation| mutation["operation_id"] == json!(sent_operation_id))
+            .expect("legacy record with a local event should survive migration");
+        assert_eq!(sent["status"], "retrying");
+        assert_eq!(sent["entity_id"], json!(sent_qso_id));
+        assert_eq!(sent["local_event_hash"], "legacy-local-event-hash");
+        assert_eq!(sent["schema_version"], 1);
+        let unsent = mutations
+            .iter()
+            .find(|mutation| mutation["operation_id"] == json!(unsent_operation_id))
+            .expect("legacy record without a local event should survive migration");
+        assert_eq!(unsent["status"], "pending");
+        assert_eq!(unsent["entity_id"], json!(unsent_qso_id));
+        assert!(unsent["local_event_hash"].is_null());
+
+        let reloaded = call_json(json!({
+            "command": "sync.snapshot",
+            "payload": {
+                "app_support_dir": app_support_dir.to_string_lossy(),
+                "logbook_id": logbook_id
+            }
+        }));
+        assert_eq!(reloaded["ok"], true);
+        assert_eq!(reloaded["data"]["offline_queue"]["health"]["total"], 2);
+
+        let _ = std::fs::remove_dir_all(app_support_dir);
+    }
+
+    #[test]
+    fn sync_offline_queue_recover_quarantines_corrupt_ios_queue_without_discarding_bytes() {
+        let app_support_dir = std::env::temp_dir().join(format!("ham-ios-{}", Uuid::new_v4()));
+        let rust_dir = app_support_dir.join("Rust");
+        std::fs::create_dir_all(&rust_dir).unwrap();
+        let queue_path = rust_dir.join("offline-mutations.json");
+        let corrupt = "{\"version\": 1, \"mutations\": [ truncated";
+        std::fs::write(&queue_path, corrupt).unwrap();
+
+        let recovered = call_json(json!({
+            "command": "sync.offline_queue.recover",
+            "payload": {
+                "app_support_dir": app_support_dir.to_string_lossy()
+            }
+        }));
+        assert_eq!(recovered["ok"], true);
+        assert_eq!(
+            recovered["data"]["recovery"]["quarantined_corrupt_file"],
+            true
+        );
+        assert_eq!(
+            recovered["data"]["recovery"]["initialized_empty_queue"],
+            true
+        );
+        assert_eq!(recovered["data"]["offline_queue"]["health"]["total"], 0);
+
+        let quarantined = std::fs::read_dir(&rust_dir)
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.path())
+            .filter(|path| {
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .map(|name| name.starts_with("offline-mutations.json.corrupt-"))
+                    .unwrap_or(false)
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            quarantined.len(),
+            1,
+            "corrupt iOS queue state must be preserved for recovery, not deleted"
+        );
+        assert_eq!(std::fs::read_to_string(&quarantined[0]).unwrap(), corrupt);
+        assert!(queue_path.exists());
+
+        let _ = std::fs::remove_dir_all(app_support_dir);
+    }
+
+    #[test]
+    fn sync_offline_queue_recover_promotes_interrupted_ios_atomic_write() {
+        let app_support_dir = std::env::temp_dir().join(format!("ham-ios-{}", Uuid::new_v4()));
+        let logbook_id = default_logbook_id();
+        create_test_qso_event(&app_support_dir, logbook_id, "k1crash", 7);
+        let queue_path = app_support_dir.join("Rust").join("offline-mutations.json");
+        let temp_path = app_support_dir
+            .join("Rust")
+            .join("offline-mutations.json.tmp");
+        std::fs::rename(&queue_path, &temp_path).unwrap();
+        assert!(!queue_path.exists());
+
+        let recovered = call_json(json!({
+            "command": "sync.offline_queue.recover",
+            "payload": {
+                "app_support_dir": app_support_dir.to_string_lossy(),
+                "logbook_id": logbook_id
+            }
+        }));
+        assert_eq!(recovered["ok"], true);
+        assert_eq!(
+            recovered["data"]["recovery"]["promoted_interrupted_atomic_write"],
+            true
+        );
+        assert_eq!(
+            recovered["data"]["recovery"]["quarantined_corrupt_file"],
+            false
+        );
+        assert_eq!(recovered["data"]["offline_queue"]["health"]["total"], 1);
+        assert_eq!(recovered["data"]["offline_queue"]["health"]["pending"], 1);
+        assert!(queue_path.exists());
+        assert!(!temp_path.exists());
+
+        let _ = std::fs::remove_dir_all(app_support_dir);
+    }
+
+    #[test]
     fn sync_remote_events_apply_pulls_verified_official_events() {
         let source_dir = std::env::temp_dir().join(format!("ham-ios-{}", Uuid::new_v4()));
         let target_dir = std::env::temp_dir().join(format!("ham-ios-{}", Uuid::new_v4()));

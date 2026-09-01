@@ -4,6 +4,9 @@
 
 ### Added
 
+- Added `ham_sync::push_replication_status`, the single classifier that hosted,
+  self-hosted, and in-memory sync servers use to report a push as `pulled`,
+  `diverged`, or `rejected`.
 - Added `ham_core::contest`, the versioned contest rule and exchange schema:
   contest definitions, bands and modes, sent/received exchange fields, entry
   categories, duplicate scope, serial policy, multipliers, ordered scoring
@@ -38,6 +41,26 @@
 
 ### Changed
 
+- The `ham-gui` listener now serves only the LAN sync read endpoints
+  (`GET /api/sync/state`, `/api/sync/list-logbooks`, `/api/sync/get-head`,
+  `/api/sync/events-since`, `/api/sync/event-metadata`) and reciprocal
+  `POST /api/sync/lan/pairing-accept` to non-loopback requesters. The browser
+  UI and every unauthenticated control endpoint,
+  including QSO/Net Control writes, credential, backup, LAN pairing, and cloud
+  controls, now require a loopback requester or the explicit
+  `HAM_GUI_ALLOW_REMOTE_CONTROL_API=1` opt-in. Automatic LAN discovery needs a
+  LAN-reachable bind, which previously exposed all of that surface to the
+  network. Rejections return `403` and publish a redacted
+  `sync.lan.control_api.rejected` runtime event.
+- Hosted `POST /api/v1/sync/push` now rejects a push whose event envelopes carry
+  a `logbook_id` other than the authorized request `logbook_id` with
+  `403 forbidden`. The route previously authorized only the request field, so a
+  session with write access to one logbook could append official events into
+  another logbook.
+- Hosted `POST /api/v1/sync/push` now reports a branch that does not continue the
+  server head as `diverged` instead of `rejected`, matching the self-hosted push
+  route so desktop and iOS clients stop unattended retry and open a manual
+  conflict review on every transport.
 - Contest definition documents reject unknown fields. A pack that carries a
   rule concept this build does not implement fails to load rather than loading
   with that rule silently ignored, and a pack written against a newer
@@ -60,6 +83,18 @@
 
 ### Testing
 
+- Added `ham-gui` tests for the LAN read allow-list, the loopback and opt-in
+  decision matrix, and the redacted `403` rejection for non-loopback control
+  requests.
+- Added `ham-server` regression tests for cross-logbook sync push rejection and
+  for hosted divergence reporting plus pull-then-reapply reconciliation.
+- Added a `ham-sync-server` loopback HTTP test proving the durable self-hosted
+  surface refuses a divergent branch without changing the head or official log,
+  reports a `diverged` preview for an unknown local head, reconciles after a
+  pull, and ignores duplicate replay of the reconciled chain.
+- Added `ham-ios-ffi` tests for `sync.offline_queue.recover`: first-launch queue
+  initialization, legacy `version: 0` migration, corrupt-queue quarantine with
+  the original bytes preserved, and interrupted atomic-write promotion.
 - Added 22 `ham-core` contest schema tests covering built-in pack loading,
   newer-schema and unknown-kind rejection, unknown-field rejection, serial and
   multiplier consistency, duplicate contest ids, signed and tampered packs,
