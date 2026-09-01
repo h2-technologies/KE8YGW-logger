@@ -141,6 +141,9 @@ Runtime event categories are dotted strings. Current and planned category roots:
 
 - `network.discovery.started`
 - `network.discovery.stopped`
+- `network.scan.started`
+- `network.scan.completed`
+- `network.scan.multicast_failed`
 - `network.peer.discovered`
 - `network.peer.updated`
 - `network.peer.expired`

@@ -237,7 +237,7 @@ function render() {
   byId("status-sync").textContent = `Sync: ${state.runtimeStatus?.sync_state || "Local only"} / Rig: ${rigLabel}`;
   byId("status-events").textContent = `Runtime events: ${state.runtimeStatus?.runtime_event_count || state.runtimeEvents.length}`;
   byId("status-errors").textContent = `Errors: ${state.runtimeStatus?.latest_error_count || 0}`;
-  byId("status-sync-peers").textContent = `Discovery: ${state.syncState?.discovery_running ? "running" : "stopped"} / ${state.syncState?.peers?.length || 0} peers / ${state.syncState?.warning_count || 0} warnings`;
+  byId("status-sync-peers").textContent = `Discovery: ${state.syncState?.scan_running ? "scanning" : state.syncState?.discovery_running ? "running" : "stopped"} / ${state.syncState?.peers?.length || 0} peers / ${state.syncState?.warning_count || 0} warnings`;
   const mapStatus = state.mapState?.status || {};
   byId("status-map-grid").textContent = `Grid: ${mapStatus.grid || "unknown"}`;
   byId("status-map-coordinates").textContent = `Coords: ${formatCoordinate(mapStatus.coordinates)}`;
@@ -571,6 +571,7 @@ function runCommand(commandId) {
   if (command.id === "projection.rebuild") rebuildProjections();
   if (command.id === "sync.discovery.start") startDiscovery();
   if (command.id === "sync.discovery.stop") stopDiscovery();
+  if (command.id === "sync.discovery.scan") scanNetwork();
   if (command.id === "sync.peers.refresh") refreshPeers();
   if (command.id === "sync.handshake.selected") handshakeSelectedPeer();
   if (command.id === "sync.preview-pull.selected") previewPullSelectedPeer();
@@ -1483,6 +1484,7 @@ function bindPanelControls() {
   if (start) {
     start.addEventListener("click", startDiscovery);
     byId("sync-stop-discovery").addEventListener("click", stopDiscovery);
+    byId("sync-scan-network").addEventListener("click", scanNetwork);
     byId("sync-refresh-peers").addEventListener("click", refreshPeers);
     byId("sync-add-peer").addEventListener("click", addManualPeer);
     byId("sync-handshake").addEventListener("click", handshakeSelectedPeer);
@@ -3315,6 +3317,7 @@ function renderSyncStatus() {
   const trustedCount = trustedDevices.filter((device) => !device.revoked_at).length;
   return `<div class="sync-panel">
     <p><strong>LAN discovery:</strong> ${sync.discovery_running ? "running" : "stopped"}</p>
+    <p><strong>Network scan:</strong> ${renderScanSummary(sync)}</p>
     <p><strong>Local identity:</strong> ${sync.identity.display_name}<br /><small>${sync.identity.device_id}</small></p>
     <div class="qso-form">
       <label>Peer HTTP URL
@@ -3325,6 +3328,7 @@ function renderSyncStatus() {
     <div class="monitor-actions">
       <button id="sync-start-discovery" class="toolbar-button" type="button">Start</button>
       <button id="sync-stop-discovery" class="toolbar-button" type="button">Stop</button>
+      <button id="sync-scan-network" class="toolbar-button" type="button"${sync.scan_running ? " disabled" : ""}>${sync.scan_running ? "Scanning..." : "Scan Network"}</button>
       <button id="sync-refresh-peers" class="toolbar-button" type="button">Refresh Peers</button>
       <button id="sync-handshake" class="toolbar-button" type="button">Handshake</button>
       <button id="sync-preview-pull" class="toolbar-button" type="button">Preview Pull</button>
@@ -3475,8 +3479,29 @@ async function syncPost(path, body = {}) {
   return result;
 }
 
+function renderScanSummary(sync) {
+  if (sync.scan_running) return "scanning the local network for other instances...";
+  const scan = sync.last_scan;
+  if (!scan) return "never run";
+  const found = scan.multicast_peers + scan.probed_peers;
+  const where = scan.local_addresses.length ? scan.local_addresses.join(", ") : "no LAN address";
+  const error = scan.multicast_error ? ` / multicast: ${scan.multicast_error}` : "";
+  return `${found} instance(s) at ${scan.finished_at} / ${scan.probed_addresses} address(es) probed on ports ${scan.scanned_ports.join(", ")} from ${where}${error}`;
+}
+
 function startDiscovery() {
   syncPost("/api/sync/discovery/start");
+}
+
+// The scan runs on the desktop side and reports peers as it finds them, so poll the
+// sync state until it reports the scan finished instead of blocking on one request.
+async function scanNetwork() {
+  await syncPost("/api/sync/discovery/scan");
+  while (state.syncState?.scan_running) {
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    await refreshSyncState();
+    render();
+  }
 }
 
 function stopDiscovery() {

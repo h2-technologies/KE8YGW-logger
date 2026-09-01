@@ -306,6 +306,7 @@ struct SyncLanDiscoveredPeer: Identifiable, Equatable {
 enum SyncLanDiscoveryScannerError: LocalizedError, Equatable {
     case missingLocalIdentity
     case noUsableMulticastGroup
+    case discoveryPortUnavailable(UInt16)
 
     var errorDescription: String? {
         switch self {
@@ -313,6 +314,8 @@ enum SyncLanDiscoveryScannerError: LocalizedError, Equatable {
             return "The local LAN sync identity is unavailable."
         case .noUsableMulticastGroup:
             return "LAN discovery could not join an IPv4 or IPv6 multicast group."
+        case .discoveryPortUnavailable(let port):
+            return "LAN discovery port \(port) is already in use. Stop any other copy of the scan, then try again."
         }
     }
 }
@@ -325,7 +328,12 @@ final class SyncLanDiscoveryScanner: ObservableObject {
 
     private let config: SyncLanDiscoveryConfiguration
     private let queue = DispatchQueue(label: "KE8YGWLogger.SyncLanDiscovery")
-    private var groups: [NWConnectionGroup] = []
+    private var groups: [UInt64: NWConnectionGroup] = [:]
+    private var activeToken: UInt64?
+    private var nextGroupToken: UInt64 = 0
+    private var candidateEndpointSets: [[NWEndpoint]] = []
+    private var candidateIndex = 0
+    private var pendingStartIdentity: SyncPeerIdentity?
     private var localIdentity: SyncPeerIdentity?
 
     init(config: SyncLanDiscoveryConfiguration = .default) {
@@ -333,33 +341,30 @@ final class SyncLanDiscoveryScanner: ObservableObject {
     }
 
     func start(identity: SyncPeerIdentity?) {
-        stop()
         guard let identity else {
+            stop()
             lastError = SyncLanDiscoveryScannerError.missingLocalIdentity.localizedDescription
             return
         }
         localIdentity = identity
         lastError = nil
-
-        for endpoint in config.multicastEndpoints {
-            do {
-                let group = try makeGroup(endpoint: endpoint)
-                groups.append(group)
-                group.start(queue: queue)
-            } catch {
-                lastError = error.localizedDescription
-            }
+        isRunning = true
+        candidateEndpointSets = Self.multicastEndpointCandidates(config: config)
+        candidateIndex = 0
+        cancelActiveGroup()
+        // Cancelling an NWConnectionGroup releases the discovery port asynchronously.
+        // Rebinding before that finishes fails with POSIX EADDRINUSE, so wait for the
+        // outgoing groups to report `.cancelled` before binding again.
+        guard groups.isEmpty else {
+            pendingStartIdentity = identity
+            return
         }
-
-        isRunning = !groups.isEmpty
-        if groups.isEmpty {
-            lastError = SyncLanDiscoveryScannerError.noUsableMulticastGroup.localizedDescription
-        }
+        bindNextCandidate()
     }
 
     func stop() {
-        groups.forEach { $0.cancel() }
-        groups.removeAll()
+        pendingStartIdentity = nil
+        cancelActiveGroup()
         isRunning = false
     }
 
@@ -367,16 +372,103 @@ final class SyncLanDiscoveryScanner: ObservableObject {
         (peer.peerURL.absoluteString, peer.deviceId, peer.displayName)
     }
 
-    private func makeGroup(endpoint: NWEndpoint) throws -> NWConnectionGroup {
-        let multicastGroup = try NWMulticastGroup(for: [endpoint])
+    /// Binding one group per address family would claim the shared discovery port twice,
+    /// so the joint IPv4+IPv6 group is tried first and each single-family group only
+    /// serves as a fallback when the platform rejects the combined join.
+    nonisolated static func multicastEndpointCandidates(
+        config: SyncLanDiscoveryConfiguration = .default
+    ) -> [[NWEndpoint]] {
+        let endpoints = config.multicastEndpoints
+        guard endpoints.count > 1 else {
+            return endpoints.isEmpty ? [] : [endpoints]
+        }
+        return [endpoints] + endpoints.map { [$0] }
+    }
+
+    nonisolated static func describeDiscoveryFailure(_ error: Error, port: UInt16) -> String {
+        if let nwError = error as? NWError,
+           case .posix(let code) = nwError,
+           code == .EADDRINUSE {
+            return SyncLanDiscoveryScannerError.discoveryPortUnavailable(port).localizedDescription
+        }
+        return error.localizedDescription
+    }
+
+    private func bindNextCandidate() {
+        while candidateIndex < candidateEndpointSets.count {
+            let endpoints = candidateEndpointSets[candidateIndex]
+            candidateIndex += 1
+            let token = nextGroupToken
+            nextGroupToken += 1
+            do {
+                let group = try makeGroup(endpoints: endpoints, token: token)
+                groups[token] = group
+                activeToken = token
+                group.start(queue: queue)
+                return
+            } catch {
+                lastError = Self.describeDiscoveryFailure(error, port: config.discoveryPort)
+            }
+        }
+        activeToken = nil
+        isRunning = false
+        if lastError == nil {
+            lastError = SyncLanDiscoveryScannerError.noUsableMulticastGroup.localizedDescription
+        }
+    }
+
+    private func cancelActiveGroup() {
+        guard let token = activeToken else { return }
+        activeToken = nil
+        groups[token]?.cancel()
+    }
+
+    private func handleGroupState(_ state: NWConnectionGroup.State, token: UInt64) {
+        switch state {
+        case .ready:
+            guard token == activeToken else { return }
+            isRunning = true
+            lastError = nil
+        case .waiting(let error):
+            guard token == activeToken else { return }
+            lastError = Self.describeDiscoveryFailure(error, port: config.discoveryPort)
+        case .failed(let error):
+            let failedActiveGroup = token == activeToken
+            lastError = Self.describeDiscoveryFailure(error, port: config.discoveryPort)
+            if failedActiveGroup {
+                activeToken = nil
+            }
+            // A failed group never held the port, so a deferred start does not have to
+            // keep waiting for a `.cancelled` that may never arrive for it.
+            groups.removeValue(forKey: token)?.cancel()
+            if pendingStartIdentity != nil {
+                resumePendingStartIfReady()
+            } else if failedActiveGroup {
+                bindNextCandidate()
+            }
+        case .cancelled:
+            groups.removeValue(forKey: token)
+            resumePendingStartIfReady()
+        default:
+            break
+        }
+    }
+
+    private func resumePendingStartIfReady() {
+        guard groups.isEmpty, let identity = pendingStartIdentity else { return }
+        pendingStartIdentity = nil
+        localIdentity = identity
+        bindNextCandidate()
+    }
+
+    private func makeGroup(endpoints: [NWEndpoint], token: UInt64) throws -> NWConnectionGroup {
+        let multicastGroup = try NWMulticastGroup(for: endpoints)
         let parameters = NWParameters.udp
         parameters.allowLocalEndpointReuse = true
         let group = NWConnectionGroup(with: multicastGroup, using: parameters)
         group.stateUpdateHandler = { [weak self] state in
-            if case .failed(let error) = state {
-                Task { @MainActor in
-                    self?.lastError = error.localizedDescription
-                }
+            Task { @MainActor in
+                self?.handleGroupState(state, token: token)
             }
         }
         group.setReceiveHandler(maximumMessageSize: 4096, rejectOversizedMessages: true) { [weak self] message, content, _ in

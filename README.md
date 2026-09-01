@@ -847,7 +847,8 @@ Event counts are hints only. If head hashes differ and ancestry has not been
 exchanged, the MVP treats the result as unknown or diverged until the later
 replication protocol can compare event ancestry safely.
 
-The GUI Sync Status panel can start/stop discovery, refresh peers, handshake
+The GUI Sync Status panel can start/stop discovery, scan the network for other
+instances, refresh peers, handshake
 with a selected peer, manually add a direct LAN HTTP peer, preview a pull, issue
 local one-time pairing codes, enter peer token/code/fingerprint values,
 complete reciprocal pairing with a generated endpoint auth code, generate
@@ -859,6 +860,28 @@ over IPv4/IPv6 multicast or preview/pull from a manually entered numeric
 loopback/private/link-local `http://ip:port`.
 Discovered peers are recorded only after their advertised API port serves a
 matching `/api/sync/state` identity.
+
+### Desktop Network Scan
+
+`Scan Network` (`POST /api/sync/discovery/scan`, command palette
+`sync.discovery.scan`) runs a one-shot scan without leaving continuous discovery
+enabled. It combines two passes that fail in different ways:
+
+- A multicast pass that announces once per second and listens for six seconds,
+  which is longer than the five-second peer discovery interval, so one scan sees
+  at least one announcement from every instance that is already broadcasting.
+- A direct pass that probes the local IPv4 `/24`s in parallel on the port this
+  instance bound, the default GUI port `9467`, and the configured local sync
+  port `9738`. This finds instances on networks that drop multicast between
+  clients and instances that have discovery switched off.
+
+The direct pass only sweeps private and link-local IPv4 subnets, so a scan never
+reaches past the local network, and it records a peer only when the address
+serves a matching `/api/sync/state` identity - the same requirement multicast
+discovery applies. The scan runs in the background and reports peers as it finds
+them; `scan_running` and `last_scan` in `/api/sync/state` carry its progress and
+its last coverage summary. As with multicast discovery, a peer is only reachable
+if it bound its GUI API to a non-loopback address.
 
 Reciprocal browser pairing stores a generated LAN endpoint auth code through
 the Rust credential path instead of reusing the one-time pairing code. Durable
@@ -877,6 +900,9 @@ Runtime events include:
 
 - `network.discovery.started`
 - `network.discovery.stopped`
+- `network.scan.started`
+- `network.scan.completed`
+- `network.scan.multicast_failed`
 - `network.peer.discovered`
 - `network.peer.updated`
 - `network.peer.expired`
@@ -1101,7 +1127,9 @@ preview and pull. For automatic LAN discovery, both GUI instances must have
 discovery running and the peer being discovered must bind its GUI API to a
 LAN-reachable address such as
 `0.0.0.0:<port>` or a specific private interface; loopback-only peers can still
-use manual loopback URLs. Mutating LAN pull also requires the explicit
+use manual loopback URLs. `Scan Network` needs only the peer to be
+LAN-reachable: its direct pass finds an instance that never started discovery,
+so the other instance does not have to be broadcasting. Mutating LAN pull also requires the explicit
 `sync.lan.pull` permission, durable peer trust, a matching peer identity probe,
 and signed remote read requests.
 Native iOS can scan the same discovery packets, probe `/api/sync/state`, and

@@ -624,6 +624,13 @@ impl CommandRegistry {
                 None,
                 None,
             ),
+            command(
+                "sync.discovery.scan",
+                "Scan Network For Instances",
+                "Sync",
+                None,
+                None,
+            ),
             command("sync.peers.refresh", "Refresh Peers", "Sync", None, None),
             command(
                 "sync.handshake.selected",
@@ -869,6 +876,7 @@ mod tests {
         assert!(ids.contains(&"official-log.verify-chain"));
         assert!(ids.contains(&"projection.rebuild"));
         assert!(ids.contains(&"sync.discovery.start"));
+        assert!(ids.contains(&"sync.discovery.scan"));
         assert!(ids.contains(&"sync.preview-pull.selected"));
         assert!(ids.contains(&"sync.pull.selected"));
         assert!(ids.contains(&"sync.diagnostics.copy"));

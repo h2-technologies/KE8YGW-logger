@@ -919,6 +919,31 @@ final class RustBridgeTests: XCTestCase {
         XCTAssertFalse(SyncLanDiscoveryScanner.peerStateMatches(packet: packet, state: spoofedState))
     }
 
+    func testSyncLanDiscoveryBindsSharedPortOnceAcrossAddressFamilies() {
+        let config = SyncLanDiscoveryConfiguration()
+        let candidates = SyncLanDiscoveryScanner.multicastEndpointCandidates(config: config)
+
+        XCTAssertEqual(candidates.first?.count, config.multicastEndpoints.count)
+        for fallback in candidates.dropFirst() {
+            XCTAssertEqual(fallback.count, 1)
+        }
+        XCTAssertEqual(candidates.count, config.multicastEndpoints.count + 1)
+    }
+
+    func testSyncLanDiscoveryReportsActionableAddressInUseFailure() {
+        let message = SyncLanDiscoveryScanner.describeDiscoveryFailure(
+            NWError.posix(.EADDRINUSE),
+            port: 9737
+        )
+
+        XCTAssertEqual(
+            message,
+            SyncLanDiscoveryScannerError.discoveryPortUnavailable(9737).localizedDescription
+        )
+        XCTAssertTrue(message.contains("9737"))
+        XCTAssertFalse(message.contains("Address already in use"))
+    }
+
     func testSyncLanHTTPPairingTransportValidatesRemoteAcceptResponse() throws {
         let localIdentity = SyncPeerIdentity(
             deviceId: "00000000-0000-4000-8000-0000000000f1",
