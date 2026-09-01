@@ -14,6 +14,15 @@ jobs:
     name: promotion-policy
     runs-on: ubuntu-latest
     steps:
+      # Check out the base commit, never the merge ref: this job is the
+      # promotion gate, so the head branch must not supply the script that
+      # judges it.
+      - name: Checkout base commit
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          persist-credentials: false
+
       - name: Validate branch promotion
         shell: bash
         env:
@@ -21,15 +30,5 @@ jobs:
           BASE_REPOSITORY: ${{ github.repository }}
           HEAD_BRANCH: ${{ github.head_ref }}
           HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
-        run: |
-          if [[ "${BASE_BRANCH}" != "main" ]]; then
-            echo "Pull request into ${BASE_BRANCH} is allowed by the promotion policy."
-            exit 0
-          fi
-
-          if [[ "${HEAD_BRANCH}" != "dev" || "${HEAD_REPOSITORY}" != "${BASE_REPOSITORY}" ]]; then
-            echo "::error title=Invalid promotion::Pull requests into main must originate from the dev branch in this repository."
-            exit 1
-          fi
-
-          echo "Valid promotion: ${BASE_REPOSITORY}:dev -> ${BASE_REPOSITORY}:main"
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: bash scripts/check-promotion-policy.sh
