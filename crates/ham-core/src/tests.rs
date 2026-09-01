@@ -26,6 +26,10 @@ use crate::{
     EMCOMM_SCHEMA_VERSION,
 };
 use crate::{
+    ApplicationSettings, APPEARANCE_MODES, DEFAULT_APPEARANCE_MODE, DEFAULT_DESKTOP_SHELL_LAYOUT,
+    DEFAULT_MOBILE_DASHBOARD_LAYOUT, DESKTOP_SHELL_LAYOUTS, MOBILE_DASHBOARD_LAYOUTS,
+};
+use crate::{
     InMemoryLogbookEventStore, LogbookEventStore, NetControlProjection, NewLogbookEvent,
     OperatorRole, PermissionGrantSet, PermissionGrantStatus, Projection, ProposalContext,
     ProposalValidationError, QsoCurrentStateProjection,
@@ -1795,4 +1799,71 @@ fn emcomm_message_numbers_round_trip_and_reject_bad_input() {
             "`{bad}` must not parse as a message number"
         );
     }
+}
+
+#[test]
+fn display_settings_default_to_the_first_shipped_layouts() {
+    let settings = ApplicationSettings::default();
+    assert_eq!(settings.display.appearance, DEFAULT_APPEARANCE_MODE);
+    assert_eq!(
+        settings.display.desktop_shell_layout,
+        DEFAULT_DESKTOP_SHELL_LAYOUT
+    );
+    assert_eq!(
+        settings.display.mobile_dashboard_layout,
+        DEFAULT_MOBILE_DASHBOARD_LAYOUT
+    );
+    assert!(DESKTOP_SHELL_LAYOUTS.contains(&DEFAULT_DESKTOP_SHELL_LAYOUT));
+    assert!(MOBILE_DASHBOARD_LAYOUTS.contains(&DEFAULT_MOBILE_DASHBOARD_LAYOUT));
+    assert!(APPEARANCE_MODES.contains(&DEFAULT_APPEARANCE_MODE));
+}
+
+#[test]
+fn normalizing_accepts_known_layouts_and_falls_back_for_unknown_ones() {
+    let mut settings = ApplicationSettings::default();
+    settings.display.appearance = "  DARK ".to_owned();
+    settings.display.desktop_shell_layout = "Tabbed-Workbench".to_owned();
+    settings.display.mobile_dashboard_layout = "map-sheet".to_owned();
+    let settings = settings.normalized().expect("known choices normalize");
+    assert_eq!(settings.display.appearance, "dark");
+    assert_eq!(settings.display.desktop_shell_layout, "tabbed-workbench");
+    assert_eq!(settings.display.mobile_dashboard_layout, "map-sheet");
+
+    let mut stale = ApplicationSettings::default();
+    stale.display.appearance = "solarized".to_owned();
+    stale.display.desktop_shell_layout = "holodeck".to_owned();
+    stale.display.mobile_dashboard_layout = "carousel".to_owned();
+    // A client from a different build must not fail the whole save and lose the
+    // operator's other edits just because it named a layout we do not ship.
+    let stale = stale.normalized().expect("unknown choices fall back");
+    assert_eq!(stale.display.appearance, DEFAULT_APPEARANCE_MODE);
+    assert_eq!(
+        stale.display.desktop_shell_layout,
+        DEFAULT_DESKTOP_SHELL_LAYOUT
+    );
+    assert_eq!(
+        stale.display.mobile_dashboard_layout,
+        DEFAULT_MOBILE_DASHBOARD_LAYOUT
+    );
+}
+
+#[test]
+fn settings_saved_before_layout_choice_existed_still_deserialize() {
+    let mut value = serde_json::to_value(ApplicationSettings::default()).expect("serializes");
+    let display = value
+        .get_mut("display")
+        .and_then(|display| display.as_object_mut())
+        .expect("display object");
+    display.remove("desktop_shell_layout");
+    display.remove("mobile_dashboard_layout");
+
+    let restored: ApplicationSettings = serde_json::from_value(value).expect("older payload loads");
+    assert_eq!(
+        restored.display.desktop_shell_layout,
+        DEFAULT_DESKTOP_SHELL_LAYOUT
+    );
+    assert_eq!(
+        restored.display.mobile_dashboard_layout,
+        DEFAULT_MOBILE_DASHBOARD_LAYOUT
+    );
 }

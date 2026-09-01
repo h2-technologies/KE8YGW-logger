@@ -4,6 +4,31 @@
 
 ### Added
 
+- Added switchable shell layouts to the desktop and web GUI. Five layouts —
+  Operating Deck, Command Center, Field Notebook, Focus Console, and Tabbed
+  Workbench — rearrange the same workspaces and panels rather than replacing
+  them, so switching keeps the current workspace, any draft contact, and the
+  operator's own card arrangement. The catalog lives in `ham_gui::shell` with
+  the density and permanent-entry facts the settings screen shows.
+- Added a light and dark theme to the GUI, plus `system` to follow the host.
+  Every colour resolves through tokens on `:root[data-theme]`, so a layout never
+  has to know which theme is active.
+- Added `POST /api/shell/appearance` and `support/shell-appearance.json`, so the
+  layout and theme survive a restart. `GET /api/shell` now serves the saved
+  appearance along with the layout and theme catalogs. An unrecognized slug is
+  rejected without clobbering the saved choice.
+- Added `shell.layout.cycle`, `shell.theme.light`, `shell.theme.dark`, and
+  `shell.theme.system` to the command registry, and `Ctrl/Cmd+Shift+L` to step
+  through the layouts without leaving the log.
+- Added three switchable iOS dashboards — Today, Logbook, and Map & Sheet —
+  selectable from the dashboard toolbar or Settings, with the appearance mode
+  applied above the whole shell so sheets and popovers are themed too.
+- Added `display.desktop_shell_layout` and `display.mobile_dashboard_layout` to
+  `ham_core::ApplicationSettings`, with `DESKTOP_SHELL_LAYOUTS`,
+  `MOBILE_DASHBOARD_LAYOUTS`, and `APPEARANCE_MODES` as the shared vocabulary.
+  Both fields default when absent, so settings written before layout switching
+  existed still load.
+
 - Added `ham_sync::push_replication_status`, the single classifier that hosted,
   self-hosted, and in-memory sync servers use to report a push as `pulled`,
   `diverged`, or `rejected`.
@@ -56,6 +81,14 @@
 
 ### Changed
 
+- Replaced the GUI's left activity rail with a top menu bar. Navigation now
+  costs vertical space, which the shell has, instead of the horizontal space the
+  log, band map, and context panels compete for, and the modes carry readable
+  labels instead of two-letter glyphs. The eight toolbar buttons moved into a
+  More menu beside the command search.
+- Reordered the status bar so sync, discovery, runtime events, and errors come
+  first. The six map cursor readouts now appear only in workspaces that show a
+  map panel.
 - The `ham-gui` listener now serves only the LAN sync read endpoints
   (`GET /api/sync/state`, `/api/sync/list-logbooks`, `/api/sync/get-head`,
   `/api/sync/events-since`, `/api/sync/event-metadata`) and reciprocal

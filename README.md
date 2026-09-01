@@ -1367,18 +1367,48 @@ can be set with `HAM_DESKTOP_SERVER_URL`. Pointing it at a non-loopback
 `HAM_GUI_ALLOW_REMOTE_CONTROL_API=1`, because the GUI control plane has no
 request authentication and is loopback-only by default.
 
-The default shell includes:
+The shell includes:
 
-- Left activity navigation
-- Top toolbar and workspace selector
+- Top menu bar carrying the workspace switcher, command search, the theme
+  switch, the layout switch, and live rig/sync/upload status chips
+- Left context rail, used by the layouts that call for one
 - Central workspace panel region
 - Right inspector/context region
 - Bottom panel region
-- Bottom status bar
+- Bottom status bar, with sync, discovery, runtime events, and errors first and
+  the map cursor readouts shown only where a map panel is on screen
 - Command palette with `Ctrl+K` or `Cmd+K`
 - Hosted account screen
-- Settings placeholder
+- Settings, including the appearance picker
 - Plugin manager placeholder
+
+### Shell layouts and theme
+
+The shell ships five layouts. Each one arranges the same workspaces and panels
+differently; none of them changes what data is available, and switching keeps
+the current workspace, any draft contact, and the operator's own card
+arrangement:
+
+| Layout | Density | Permanent entry field | Best for |
+| --- | --- | --- | --- |
+| Operating Deck | Dense | Yes | Live operating: entry deck across the bottom, context rail on the left |
+| Command Center | Balanced | Yes | Map-led work: propagation, parks, summits, net geography |
+| Field Notebook | Relaxed | Yes | New operators and bright rooms: calm card board |
+| Focus Console | Relaxed | Yes | Field and low-distraction operating: one centred column |
+| Tabbed Workbench | Dense | No | Bulk work: imports, awards, conflict review, admin |
+
+Theme is `system`, `light`, or `dark`. Every colour resolves through tokens on
+`:root[data-theme]`, so a layout never has to know which theme is active.
+
+Layout and theme are chosen from the menu bar or from Settings, cycled with
+`Ctrl/Cmd+Shift+L`, and available in the command palette as *Switch Shell
+Layout*, *Use Light Theme*, *Use Dark Theme*, and *Match System Theme*. The
+choice is served with the shell from `/api/shell` and saved through
+`POST /api/shell/appearance` into `support/shell-appearance.json`, so it
+survives a restart. `ham_core::DisplaySettings` carries the same vocabulary
+(`desktop_shell_layout`, `mobile_dashboard_layout`, `appearance`) so the desktop
+and iOS choices are described by one shared model. An unrecognized layout or
+theme falls back to the default rather than failing the save.
 
 The default workspaces are Dashboard, Casual Logger, POTA/SOTA, Net Control,
 EmComm, and Contesting. Panels have stable IDs, titles, plugin/source labels,
