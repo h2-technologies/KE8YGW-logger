@@ -267,7 +267,12 @@ operations, and release qualification.
   HMAC-SHA256 proof-of-possession for protected LAN read endpoints, explicit
   LAN auth credential rotation/recovery through the GUI trust endpoint, and
   automatic IPv4/IPv6 multicast discovery that probes peer identity before
-  recording reachable peers. A guided browser LAN pairing/trust panel issues
+  recording reachable peers. The desktop GUI also runs an on-demand network
+  scan that pairs a longer multicast listen window with a parallel direct sweep
+  of the local private/link-local IPv4 subnets, so instances are found on
+  networks that drop multicast and instances that never started discovery;
+  swept addresses are recorded under the same `/api/sync/state` identity probe.
+  A guided browser LAN pairing/trust panel issues
   one-time codes, completes reciprocal pairing with generated endpoint auth
   secrets distinct from one-time pairing codes, rotates LAN auth credentials,
   and revokes trusted peers without prompt-only handling; the GUI LAN accept

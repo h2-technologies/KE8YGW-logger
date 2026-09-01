@@ -56,6 +56,9 @@ use uuid::Uuid;
 pub const PROTOCOL_NAME: &str = "ke8ygw-logger-sync";
 pub const PROTOCOL_VERSION: u16 = 1;
 pub const DEFAULT_CLOUD_SYNC_SESSION_TTL_SECONDS: i64 = 2_592_000;
+/// How often an on-demand scan re-announces itself while it listens, so peers
+/// running discovery add the scanning instance during the same sweep.
+pub const DISCOVERY_SCAN_ANNOUNCE_INTERVAL: Duration = Duration::from_secs(1);
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SyncConfig {
@@ -2657,6 +2660,111 @@ impl LanDiscoveryService {
         self.send_once()?;
         receive_discovery_packets(&receivers, listen_for)
     }
+
+    /// Announce repeatedly while listening, so a scan spanning at least one peer
+    /// discovery interval still observes peers that only beacon on their own timer.
+    pub fn scan_once(
+        &self,
+        listen_for: Duration,
+    ) -> Result<Vec<DiscoveryObservation>, DiscoveryServiceError> {
+        if !self.config.enable_lan_discovery {
+            return Ok(Vec::new());
+        }
+        let receivers = discovery_receiver_sockets(&self.config)?;
+        let deadline = Instant::now() + listen_for;
+        let mut observations = Vec::new();
+        loop {
+            self.send_once()?;
+            let now = Instant::now();
+            if now >= deadline {
+                break;
+            }
+            let slice = (deadline - now).min(DISCOVERY_SCAN_ANNOUNCE_INTERVAL);
+            observations.extend(receive_discovery_packets(&receivers, slice)?);
+        }
+        Ok(observations)
+    }
+}
+
+/// Local IPv4 addresses this host would use to reach the LAN, discovered by asking
+/// the routing table which source address a datagram to each probe would take. No
+/// datagram is sent; `connect` on a UDP socket only binds the local endpoint.
+pub fn local_scan_interface_addresses(config: &SyncConfig) -> Vec<Ipv4Addr> {
+    let probes = [
+        // TEST-NET-1, reserved for documentation and never routed to a real host.
+        SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 0, 2, 1)), 9),
+        SocketAddr::new(
+            IpAddr::V4(config.ipv4_multicast_address),
+            config.discovery_port,
+        ),
+    ];
+    let mut addresses: Vec<Ipv4Addr> = Vec::new();
+    for probe in probes {
+        let Ok(socket) = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)) else {
+            continue;
+        };
+        if socket.connect(probe).is_err() {
+            continue;
+        }
+        let Ok(SocketAddr::V4(local)) = socket.local_addr() else {
+            continue;
+        };
+        let address = *local.ip();
+        if !is_scannable_ipv4(address) || addresses.contains(&address) {
+            continue;
+        }
+        addresses.push(address);
+    }
+    addresses
+}
+
+/// Direct probe targets for an on-demand scan. Multicast only reveals peers that are
+/// currently announcing, and plenty of networks drop multicast between clients, so a
+/// scan also sweeps the local IPv4 /24s on the ports instances serve their API from.
+pub fn local_scan_targets(
+    config: &SyncConfig,
+    ports: &[u16],
+    max_targets: usize,
+) -> Vec<SocketAddr> {
+    let mut ports: Vec<u16> = ports.iter().copied().filter(|port| *port != 0).collect();
+    ports.sort_unstable();
+    ports.dedup();
+    if ports.is_empty() || max_targets == 0 {
+        return Vec::new();
+    }
+
+    let mut targets = Vec::new();
+    let mut seen = HashSet::new();
+    for local in local_scan_interface_addresses(config) {
+        let octets = local.octets();
+        for host in 1..=254_u8 {
+            if host == octets[3] {
+                continue;
+            }
+            let candidate = Ipv4Addr::new(octets[0], octets[1], octets[2], host);
+            for port in &ports {
+                let target = SocketAddr::new(IpAddr::V4(candidate), *port);
+                if !seen.insert(target) {
+                    continue;
+                }
+                targets.push(target);
+                if targets.len() >= max_targets {
+                    return targets;
+                }
+            }
+        }
+    }
+    targets
+}
+
+/// Sweeping is limited to the address ranges a LAN peer can legitimately use, so a
+/// scan never reaches past the local network.
+fn is_scannable_ipv4(address: Ipv4Addr) -> bool {
+    !address.is_unspecified()
+        && !address.is_loopback()
+        && !address.is_broadcast()
+        && !address.is_multicast()
+        && (address.is_private() || address.is_link_local())
 }
 
 fn discovery_receiver_sockets(
@@ -3058,6 +3166,51 @@ mod tests {
         assert!(config.enable_lan_discovery);
         assert_eq!(config.discovery_port, 9737);
         assert_eq!(config.peer_timeout_seconds, 45);
+    }
+
+    #[test]
+    fn scan_targets_sweep_the_local_subnet_without_the_scanning_host() {
+        let config = SyncConfig::default();
+        let targets = local_scan_targets(&config, &[9467, 9738], 4_096);
+
+        let local_addresses = local_scan_interface_addresses(&config);
+        assert_eq!(targets.is_empty(), local_addresses.is_empty());
+        for target in &targets {
+            let IpAddr::V4(ip) = target.ip() else {
+                panic!("scan targets should be IPv4");
+            };
+            assert!(is_scannable_ipv4(ip), "{ip} should be a LAN address");
+            assert!(!local_addresses.contains(&ip), "{ip} is this host");
+            assert!(matches!(target.port(), 9467 | 9738));
+        }
+        for local in local_addresses {
+            let octets = local.octets();
+            assert!(targets.iter().any(|target| {
+                target.ip() == IpAddr::V4(Ipv4Addr::new(octets[0], octets[1], octets[2], 1))
+                    || octets[3] == 1
+            }));
+        }
+    }
+
+    #[test]
+    fn scan_targets_stay_within_the_requested_budget() {
+        let config = SyncConfig::default();
+        assert!(local_scan_targets(&config, &[9467], 12).len() <= 12);
+        assert!(local_scan_targets(&config, &[], 4_096).is_empty());
+        assert!(local_scan_targets(&config, &[0], 4_096).is_empty());
+        assert!(local_scan_targets(&config, &[9467], 0).is_empty());
+    }
+
+    #[test]
+    fn scan_targets_never_reach_past_the_local_network() {
+        assert!(is_scannable_ipv4(Ipv4Addr::new(192, 168, 1, 20)));
+        assert!(is_scannable_ipv4(Ipv4Addr::new(10, 4, 2, 9)));
+        assert!(is_scannable_ipv4(Ipv4Addr::new(169, 254, 3, 4)));
+        assert!(!is_scannable_ipv4(Ipv4Addr::new(8, 8, 8, 8)));
+        assert!(!is_scannable_ipv4(Ipv4Addr::LOCALHOST));
+        assert!(!is_scannable_ipv4(Ipv4Addr::UNSPECIFIED));
+        assert!(!is_scannable_ipv4(Ipv4Addr::BROADCAST));
+        assert!(!is_scannable_ipv4(Ipv4Addr::new(239, 73, 89, 71)));
     }
 
     #[test]
