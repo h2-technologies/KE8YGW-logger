@@ -457,7 +457,8 @@ function toggleMoreMenu(force) {
 
 function renderMenubarChips() {
   const rigState = state.rigStatus?.active_state;
-  const queued = state.uploads?.jobs?.filter((job) => job.status !== "completed").length || 0;
+  const outstanding = (state.uploads?.jobs || []).filter((job) => job.status !== "completed");
+  const failed = outstanding.filter((job) => job.status === "failed").length;
   const errors = state.runtimeStatus?.latest_error_count || 0;
   const peers = state.syncState?.peers?.length || 0;
   const chips = [
@@ -466,7 +467,12 @@ function renderMenubarChips() {
       label: rigState ? `${formatKhz(rigState.frequency_hz) || "?"} kHz ${rigState.mode || ""}`.trim() : "Rig idle",
     },
     { tone: peers ? "info" : "", label: `${peers} peer${peers === 1 ? "" : "s"}` },
-    { tone: queued ? "warn" : "ok", label: queued ? `${queued} queued` : "Uploads clear" },
+    failed
+      ? { tone: "danger", label: `${failed} upload${failed === 1 ? "" : "s"} failed` }
+      : {
+          tone: outstanding.length ? "warn" : "ok",
+          label: outstanding.length ? `${outstanding.length} queued` : "Uploads clear",
+        },
   ];
   if (errors) chips.push({ tone: "danger", label: `${errors} error${errors === 1 ? "" : "s"}` });
   byId("menubar-chips").innerHTML = chips
@@ -482,7 +488,10 @@ function render() {
   byId("workspace-description").textContent = state.appearanceError
     ? `Layout applied for this session only: ${state.appearanceError}`
     : workspace.description || "";
-  byId("brand-callsign").textContent = state.station?.active_profile?.station_callsign || "KE8YGW";
+  // The station payload carries `active_profile_id` plus a profile list, not an
+  // `active_profile` object, so resolve it the same way the rest of the shell
+  // does rather than silently falling back to a hard-coded callsign.
+  byId("brand-callsign").textContent = activeStationProfile()?.station_callsign || "No station";
   byId("brand-context").textContent = layout ? layout.title : "Local station";
   byId("status-workspace").textContent = `Workspace: ${workspace.title}`;
   byId("status-plugins").textContent = `Plugins: ${state.plugins.filter((plugin) => plugin.enabled).length} enabled`;

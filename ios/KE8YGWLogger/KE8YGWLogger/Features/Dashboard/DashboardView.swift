@@ -328,13 +328,18 @@ struct DashboardView: View {
     /// operator never scrolls to log a contact.
     private var mapSheetBody: some View {
         VStack(spacing: 0) {
-            MapContextCard(
-                grid: dashboardGrid,
-                location: activeProfile?.defaultQTH ?? bridge.dashboard.activeStation?.defaultQth ?? "Unknown",
-                contacts: qsos.count
-            )
-            .frame(maxWidth: .infinity)
-            .frame(minHeight: 180)
+            Button {
+                selection = .maps
+            } label: {
+                MapContextCard(
+                    grid: dashboardGrid,
+                    location: activeProfile?.defaultQTH ?? bridge.dashboard.activeStation?.defaultQth ?? "Unknown",
+                    contacts: qsos.count
+                )
+                .frame(maxWidth: .infinity)
+                .frame(minHeight: 180)
+            }
+            .buttonStyle(.plain)
 
             Divider()
 
@@ -477,14 +482,16 @@ struct MapContextCard: View {
                 Text(location)
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                Text("\(contacts) contacts mapped")
+                // This card is station context, not a plotted map: say what the
+                // numbers are and send the operator to the real map surface.
+                Text("\(contacts) contacts logged · tap for the map")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
             .padding()
         }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("Map context: \(grid), \(location), \(contacts) contacts")
+        .accessibilityLabel("Station context: \(grid), \(location), \(contacts) contacts logged. Opens the map.")
     }
 }
 
