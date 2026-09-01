@@ -315,7 +315,7 @@ enum SyncLanDiscoveryScannerError: LocalizedError, Equatable {
         case .noUsableMulticastGroup:
             return "LAN discovery could not join an IPv4 or IPv6 multicast group."
         case .discoveryPortUnavailable(let port):
-            return "LAN discovery port \(port) is already in use. Stop any other copy of the scan, then try again."
+            return "Another app on this device is using LAN discovery port \(port). Close it, or wait a few seconds and scan again."
         }
     }
 }

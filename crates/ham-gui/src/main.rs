@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     env, fs,
     io::{BufRead, BufReader, Read, Write},
     net::{IpAddr, SocketAddr, TcpListener, TcpStream},
@@ -5837,10 +5837,14 @@ fn handle_sync_discovery(state: &Arc<AppState>, running: bool) -> Vec<u8> {
 struct LanScanSummary {
     started_at: String,
     finished_at: String,
-    multicast_peers: usize,
+    /// Distinct instances seen by either pass. One instance announces repeatedly
+    /// and can answer on more than one address, so the counters below are
+    /// observation counts and always over-report the number of instances.
+    peers_found: usize,
+    multicast_observations: usize,
     multicast_error: Option<String>,
     probed_addresses: usize,
-    probed_peers: usize,
+    probed_responses: usize,
     scanned_ports: Vec<u16>,
     local_addresses: Vec<String>,
 }
@@ -5933,9 +5937,10 @@ fn start_lan_scan_worker(state: Arc<AppState>) {
             RuntimeEventSeverity::Info,
             "LAN network scan completed",
             Some(json!({
-                "multicast_peers": summary.multicast_peers,
+                "peers_found": summary.peers_found,
+                "multicast_observations": summary.multicast_observations,
                 "probed_addresses": summary.probed_addresses,
-                "probed_peers": summary.probed_peers,
+                "probed_responses": summary.probed_responses,
                 "scanned_ports": summary.scanned_ports
             })),
             summary.multicast_error.clone(),
@@ -5960,23 +5965,29 @@ fn run_lan_scan(
     let sweep_state = Arc::clone(state);
     let sweep = thread::spawn(move || run_lan_direct_sweep(&sweep_state, targets));
 
-    let (multicast_peers, multicast_error) =
+    let (multicast_observations, multicast_ids, multicast_error) =
         match run_lan_multicast_scan(state, config.clone(), identity) {
-            Ok(count) => (count, None),
+            Ok((observations, peer_ids)) => (observations, peer_ids, None),
             Err(error) => {
                 record_lan_discovery_error(state, "network.scan.multicast_failed", error.clone());
-                (0, Some(error))
+                (0, HashSet::new(), Some(error))
             }
         };
-    let (probed_addresses, probed_peers) = sweep.join().unwrap_or((0, 0));
+    let sweep_result = sweep.join().unwrap_or_default();
+
+    // Both passes can see the same instance, and either can see it more than
+    // once, so distinct peer ids are what "found" means.
+    let mut peer_ids = multicast_ids;
+    peer_ids.extend(sweep_result.peer_ids);
 
     LanScanSummary {
         started_at,
         finished_at: chrono::Utc::now().to_rfc3339(),
-        multicast_peers,
+        peers_found: peer_ids.len(),
+        multicast_observations,
         multicast_error,
-        probed_addresses,
-        probed_peers,
+        probed_addresses: sweep_result.probed_addresses,
+        probed_responses: sweep_result.probed_responses,
         scanned_ports: ports,
         local_addresses: local_addresses
             .into_iter()
@@ -5989,26 +6000,37 @@ fn run_lan_multicast_scan(
     state: &AppState,
     config: SyncConfig,
     identity: LocalPeerIdentity,
-) -> Result<usize, String> {
+) -> Result<(usize, HashSet<String>), String> {
     let service = LanDiscoveryService { config, identity };
     let observations = service
         .scan_once(LAN_SCAN_LISTEN_WINDOW)
         .map_err(|error| error.to_string())?;
     let mut observed_count = 0usize;
+    let mut peer_ids = HashSet::new();
     for observation in observations {
-        if observe_discovery_packet(state, observation.packet, observation.source) {
+        if let Some(peer_id) =
+            observe_discovery_packet(state, observation.packet, observation.source)
+        {
             observed_count += 1;
+            peer_ids.insert(peer_id);
         }
     }
-    Ok(observed_count)
+    Ok((observed_count, peer_ids))
+}
+
+#[derive(Debug, Default)]
+struct LanSweepResult {
+    probed_addresses: usize,
+    probed_responses: usize,
+    peer_ids: HashSet<String>,
 }
 
 /// Probes candidate addresses in parallel with short timeouts; a serial sweep of a
 /// /24 would take minutes, which is far longer than an operator will wait.
-fn run_lan_direct_sweep(state: &Arc<AppState>, targets: Vec<SocketAddr>) -> (usize, usize) {
+fn run_lan_direct_sweep(state: &Arc<AppState>, targets: Vec<SocketAddr>) -> LanSweepResult {
     let probed_addresses = targets.len();
     if probed_addresses == 0 {
-        return (0, 0);
+        return LanSweepResult::default();
     }
     let worker_count = LAN_SCAN_WORKER_COUNT.min(probed_addresses);
     let queue = Arc::new(Mutex::new(targets));
@@ -6017,7 +6039,8 @@ fn run_lan_direct_sweep(state: &Arc<AppState>, targets: Vec<SocketAddr>) -> (usi
         let queue = Arc::clone(&queue);
         let state = Arc::clone(state);
         handles.push(thread::spawn(move || {
-            let mut found = 0usize;
+            let mut responses = 0usize;
+            let mut peer_ids = HashSet::new();
             loop {
                 let Some(target) = queue
                     .lock()
@@ -6033,18 +6056,26 @@ fn run_lan_direct_sweep(state: &Arc<AppState>, targets: Vec<SocketAddr>) -> (usi
                 ) else {
                     continue;
                 };
-                if record_probed_lan_peer(&state, identity, target) {
-                    found += 1;
+                if let Some(peer_id) = record_probed_lan_peer(&state, identity, target) {
+                    responses += 1;
+                    peer_ids.insert(peer_id);
                 }
             }
-            found
+            (responses, peer_ids)
         }));
     }
-    let probed_peers = handles
-        .into_iter()
-        .map(|handle| handle.join().unwrap_or(0))
-        .sum();
-    (probed_addresses, probed_peers)
+    let mut result = LanSweepResult {
+        probed_addresses,
+        ..LanSweepResult::default()
+    };
+    for handle in handles {
+        let (responses, peer_ids) = handle.join().unwrap_or_default();
+        result.probed_responses += responses;
+        // A multi-homed instance answers on more than one swept address, so the
+        // response count is not an instance count.
+        result.peer_ids.extend(peer_ids);
+    }
+    result
 }
 
 /// Ports another instance is likely to serve its sync API on: whatever this
@@ -6078,7 +6109,7 @@ fn record_probed_lan_peer(
     state: &AppState,
     identity: LocalPeerIdentity,
     address: SocketAddr,
-) -> bool {
+) -> Option<String> {
     let packet = DiscoveryPacket::from_identity(&identity);
     let observation = {
         let mut sync = state
@@ -6089,10 +6120,7 @@ fn record_probed_lan_peer(
         sync.registry.observe(&local, packet, address)
     };
     publish_discovery_observation(state, &observation, address);
-    matches!(
-        observation,
-        PeerObservation::Discovered(_) | PeerObservation::Updated(_)
-    )
+    recorded_peer_id(&observation)
 }
 
 fn handle_sync_refresh(state: &AppState) -> Vec<u8> {
@@ -6239,7 +6267,7 @@ fn run_lan_discovery_cycle(
         .map_err(|error| error.to_string())?;
     let mut observed_count = 0usize;
     for observation in observations {
-        if observe_discovery_packet(state, observation.packet, observation.source) {
+        if observe_discovery_packet(state, observation.packet, observation.source).is_some() {
             observed_count += 1;
         }
     }
@@ -6247,13 +6275,19 @@ fn run_lan_discovery_cycle(
     Ok(observed_count)
 }
 
-fn observe_discovery_packet(state: &AppState, packet: DiscoveryPacket, source: SocketAddr) -> bool {
+/// Returns the recorded peer id so a caller can count distinct instances: one
+/// instance announces repeatedly, so counting observations over-reports it.
+fn observe_discovery_packet(
+    state: &AppState,
+    packet: DiscoveryPacket,
+    source: SocketAddr,
+) -> Option<String> {
     if !is_supported_discovery_packet(&packet) {
         publish_discovery_observation(state, &PeerObservation::IgnoredIncompatible, source);
-        return false;
+        return None;
     }
     if is_local_discovery_packet(state, &packet) {
-        return false;
+        return None;
     }
     let api_address = discovery_api_address(&packet, source);
     if !is_usable_discovery_source(api_address) {
@@ -6265,7 +6299,7 @@ fn observe_discovery_packet(state: &AppState, packet: DiscoveryPacket, source: S
             Some(json!({"source": source.to_string(), "api_address": api_address.to_string()})),
             None,
         );
-        return false;
+        return None;
     }
     let identity = match fetch_lan_peer_identity(api_address) {
         Ok(identity) => identity,
@@ -6278,7 +6312,7 @@ fn observe_discovery_packet(state: &AppState, packet: DiscoveryPacket, source: S
                 Some(json!({"api_address": api_address.to_string()})),
                 Some(error),
             );
-            return false;
+            return None;
         }
     };
     if identity.device_id != packet.device_id || identity.session_id != packet.session_id {
@@ -6294,7 +6328,7 @@ fn observe_discovery_packet(state: &AppState, packet: DiscoveryPacket, source: S
             })),
             None,
         );
-        return false;
+        return None;
     }
     let packet = DiscoveryPacket::from_identity(&identity);
     let observation = {
@@ -6306,10 +6340,19 @@ fn observe_discovery_packet(state: &AppState, packet: DiscoveryPacket, source: S
         sync.registry.observe(&local, packet, api_address)
     };
     publish_discovery_observation(state, &observation, api_address);
-    matches!(
-        observation,
-        PeerObservation::Discovered(_) | PeerObservation::Updated(_)
-    )
+    recorded_peer_id(&observation)
+}
+
+/// The peer id an observation recorded, or `None` when the packet was ignored.
+/// It is the registry's own dedup key, so the same instance always yields the
+/// same id however many times it is seen.
+fn recorded_peer_id(observation: &PeerObservation) -> Option<String> {
+    match observation {
+        PeerObservation::Discovered(peer_id) | PeerObservation::Updated(peer_id) => {
+            Some(peer_id.clone())
+        }
+        PeerObservation::IgnoredSelf | PeerObservation::IgnoredIncompatible => None,
+    }
 }
 
 fn is_local_discovery_packet(state: &AppState, packet: &DiscoveryPacket) -> bool {
@@ -9701,6 +9744,52 @@ mod tests {
             std::net::SocketAddrV6::new("fe80::272f:463d:a6b2:5af7".parse().unwrap(), 9737, 0, 12)
                 .into()
         ));
+    }
+
+    #[test]
+    fn repeated_sightings_of_one_instance_count_as_a_single_peer() {
+        let state = test_state("ham-gui-scan-dedup");
+        let identity = LocalPeerIdentity::new("Scanned Peer", Some(9467));
+        let first: SocketAddr = "192.168.1.20:9467".parse().unwrap();
+        // The same instance, seen again and on a second address it also answers on.
+        let second: SocketAddr = "10.0.0.20:9467".parse().unwrap();
+
+        let sightings: HashSet<String> = [
+            record_probed_lan_peer(&state, identity.clone(), first),
+            record_probed_lan_peer(&state, identity.clone(), first),
+            record_probed_lan_peer(&state, identity.clone(), second),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+
+        assert_eq!(
+            sightings.len(),
+            1,
+            "one instance is one peer: {sightings:?}"
+        );
+        assert_eq!(
+            sightings.into_iter().next().unwrap(),
+            format!("{}:{}", identity.device_id, identity.session_id)
+        );
+        assert_eq!(state.sync.lock().unwrap().registry.list().len(), 1);
+    }
+
+    #[test]
+    fn ignored_observations_record_no_peer() {
+        assert_eq!(recorded_peer_id(&PeerObservation::IgnoredSelf), None);
+        assert_eq!(
+            recorded_peer_id(&PeerObservation::IgnoredIncompatible),
+            None
+        );
+        assert_eq!(
+            recorded_peer_id(&PeerObservation::Discovered("peer-1".to_owned())),
+            Some("peer-1".to_owned())
+        );
+        assert_eq!(
+            recorded_peer_id(&PeerObservation::Updated("peer-1".to_owned())),
+            Some("peer-1".to_owned())
+        );
     }
 
     #[test]

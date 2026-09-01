@@ -885,7 +885,10 @@ reaches past the local network, and it records a peer only when the address
 serves a matching `/api/sync/state` identity - the same requirement multicast
 discovery applies. The scan runs in the background and reports peers as it finds
 them; `scan_running` and `last_scan` in `/api/sync/state` carry its progress and
-its last coverage summary. As with multicast discovery, a peer is only reachable
+its last coverage summary. `peers_found` in that summary counts distinct
+instances: one instance announces repeatedly and a multi-homed instance answers
+on more than one swept address, so `multicast_observations` and
+`probed_responses` are sighting counts, not instance counts. As with multicast discovery, a peer is only reachable
 if it bound its GUI API to a non-loopback address; the identity probe the scan
 uses (`GET /api/sync/state`) is one of the LAN read endpoints a non-loopback
 requester may reach. Starting a scan is a local control action, so

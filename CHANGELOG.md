@@ -46,7 +46,9 @@
   are found on networks that drop multicast and instances that never started
   discovery. Probed addresses are only recorded after serving a matching
   `/api/sync/state` identity, and `scan_running`/`last_scan` in
-  `/api/sync/state` report progress and coverage.
+  `/api/sync/state` report progress and coverage. The scan summary counts
+  distinct instances in `peers_found` and keeps sighting counts separate in
+  `multicast_observations` and `probed_responses`.
 - Added `ham_sync::LanDiscoveryService::scan_once`, `local_scan_targets`, and
   `local_scan_interface_addresses` for the shared scan primitives.
 - Added `network.scan.started`, `network.scan.completed`, and
@@ -117,8 +119,9 @@
 - Added `ham-sync` scan tests for local subnet target generation, the target
   budget, and the private/link-local-only sweep policy.
 - Added `ham-gui` scan tests for the probed port set, targets staying inside the
-  manual LAN peer address policy, and the short-timeout identity probe against a
-  responding and a closed address.
+  manual LAN peer address policy, the short-timeout identity probe against a
+  responding and a closed address, and repeated sightings of one instance
+  counting as a single peer.
 - Added iOS tests for the single-socket multicast bind candidates and the
   address-in-use failure message.
 - Added `ham-gui` tests for the LAN read allow-list, the loopback and opt-in

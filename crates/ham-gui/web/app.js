@@ -3572,10 +3572,9 @@ function renderScanSummary(sync) {
   if (sync.scan_running) return "scanning the local network for other instances...";
   const scan = sync.last_scan;
   if (!scan) return "never run";
-  const found = scan.multicast_peers + scan.probed_peers;
   const where = scan.local_addresses.length ? scan.local_addresses.join(", ") : "no LAN address";
   const error = scan.multicast_error ? ` / multicast: ${scan.multicast_error}` : "";
-  return `${found} instance(s) at ${scan.finished_at} / ${scan.probed_addresses} address(es) probed on ports ${scan.scanned_ports.join(", ")} from ${where}${error}`;
+  return `${scan.peers_found} instance(s) at ${scan.finished_at} / ${scan.multicast_observations} announcement(s), ${scan.probed_responses} of ${scan.probed_addresses} probed address(es) answered on ports ${scan.scanned_ports.join(", ")} from ${where}${error}`;
 }
 
 function startDiscovery() {
