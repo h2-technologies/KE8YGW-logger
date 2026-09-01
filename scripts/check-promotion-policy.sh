@@ -11,9 +11,10 @@
 # `promotion-policy` job in .github/workflows/branch-promotion-policy.yml call
 # this script so the two checks cannot drift apart.
 #
-# Callers MUST check out the pull request's base commit rather than the merge
-# ref. This script is the promotion gate, so running the head branch's copy of
-# it would let any pull request author edit the gate that judges them.
+# Callers check this script out at the pull request's merge ref, the same trust
+# level as the workflow file that invokes it: a pull_request event already runs
+# the workflow from the merge commit. A pull request that rewrites its own gate
+# is caught in review, like any other workflow change.
 #
 # Required environment:
 #   BASE_BRANCH      base branch of the pull request

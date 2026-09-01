@@ -14,13 +14,11 @@ jobs:
     name: promotion-policy
     runs-on: ubuntu-latest
     steps:
-      # Check out the base commit, never the merge ref: this job is the
-      # promotion gate, so the head branch must not supply the script that
-      # judges it.
-      - name: Checkout base commit
+      # Default (merge ref) checkout, matching the Main promotion policy job in
+      # ci.yml. See the comment there for why the base commit is not pinned.
+      - name: Checkout
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
-          ref: ${{ github.event.pull_request.base.sha }}
           persist-credentials: false
 
       - name: Validate branch promotion

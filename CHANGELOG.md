@@ -154,10 +154,9 @@
   policy` check rejected every head branch other than `dev`, so an emergency
   hotfix could not be merged by the route
   `docs/BRANCHING_AND_RELEASE_CHANNELS.md` prescribes. Both checks now call one
-  shared `scripts/check-promotion-policy.sh`, so they cannot drift apart again,
-  and both run it from the pull request's base commit so the branch under
-  judgement cannot supply its own gate. `Main promotion policy` also gained the
-  head-repository check it was missing, which the other check already had.
+  shared `scripts/check-promotion-policy.sh`, so they cannot drift apart again.
+  `Main promotion policy` also gained the head-repository check it was missing,
+  which the other check already had.
 - `Ubuntu preflight and policy` no longer reports "Only files outside CI
   validation scopes changed" when Tauri or container validation is running; its
   condition covered only the scopes checked inside that job.

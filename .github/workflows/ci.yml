@@ -33,13 +33,15 @@ jobs:
     permissions:
       contents: read
     steps:
-      # Check out the base commit, never the merge ref: this job is the
-      # promotion gate, so the head branch must not supply the script that
-      # judges it.
-      - name: Checkout base commit
+      # Default (merge ref) checkout. A pull_request event already runs the
+      # workflow file from the merge commit, so pinning the policy script to
+      # the base commit would add no protection the workflow itself lacks,
+      # while breaking every pull request that edits the policy — including
+      # the one that introduces it. A pull request that rewrites its own gate
+      # is caught in review, like any other workflow change.
+      - name: Checkout
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
-          ref: ${{ github.event.pull_request.base.sha }}
           persist-credentials: false
 
       - name: Require dev promotion or documented hotfix
