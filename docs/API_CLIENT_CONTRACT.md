@@ -285,7 +285,7 @@ Returns:
 {
   "ok": true,
   "service": "ke8ygw-sync-server",
-  "version": "0.4.0",
+  "version": "0.5.1",
   "mode": "self_hosted"
 }
 ```

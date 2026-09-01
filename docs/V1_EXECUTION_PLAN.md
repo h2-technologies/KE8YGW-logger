@@ -1,6 +1,6 @@
 # v1 Execution Plan
 
-Last audited: 2026-07-22
+Last audited: 2026-08-31
 
 This plan converts the remaining issue #2 scope into a dependency-ordered
 critical path for the November 24, 2026 v1 release. It does not add features
@@ -24,12 +24,18 @@ outside issue #2.
      durable rate limits.
    - Client surfaces: the v0.4 milestone wired hosted web, desktop, native iOS,
      and the CLI to the account, session, recovery, and device routes through
-     the shared `ham_sync::account` contract. See
-     [V0_4_RELEASE_PLAN.md](V0_4_RELEASE_PLAN.md).
-   - Remaining: server administration UX (hosting mode, invitations, audits);
-     production email provider/domain validation; Turnstile site/secret keys;
-     privacy/support URLs; infrastructure sizing; retention/monitoring; and
-     deployment secrets.
+     the shared `ham_sync::account` contract. The v0.5 milestone wired the same
+     four surfaces to the administration routes through `ham_sync::admin`:
+     hosting configuration read/update, invitation
+     create/list/inspect/resend/expire/revoke, audit review, and one-time
+     instance-administrator bootstrap. See
+     [V0_4_RELEASE_PLAN.md](V0_4_RELEASE_PLAN.md) and
+     [V0_5_RELEASE_PLAN.md](V0_5_RELEASE_PLAN.md).
+   - Remaining: production email provider/domain validation; Turnstile
+     site/secret keys; privacy/support URLs; infrastructure sizing;
+     retention/monitoring; and deployment secrets. Editing the hosted email and
+     Turnstile blocks from a client is deliberately deferred with that
+     operations work, because those blocks carry secrets.
 
 3. Offline-first sync and reconciliation
    - Implemented foundation: durable versioned mutation queue, deterministic
@@ -161,8 +167,9 @@ outside issue #2.
   on top of the shared hosted account client delivered in v0.4.
 - Desktop signing/updater can proceed in parallel with iOS signing/TestFlight
   after version/artifact validation is stable.
-- Maps/provider licensing can proceed in parallel with contesting and EmComm
-  domain modeling.
+- Contesting and EmComm domain modeling completed in v0.5.1. The contest
+  session/logging engine (#68) and the ICS 211 workflow (#73) can now proceed in
+  parallel with maps/provider licensing.
 - Browser/iOS UI coverage can proceed in parallel after account, sync, and
   provider contracts stop changing.
 - Operations docs and runbooks can proceed continuously, but final values depend
@@ -184,13 +191,19 @@ outside issue #2.
 
 ## Next Three Goals
 
-1. Finish sync/reconciliation hardening: release-device cross-client branch
-   review/reconciliation workflow qualification,
-   physical-device LAN/iOS local-network validation, and iOS background task
-   execution plus poor-network validation on release devices.
-2. Complete production provider qualification and release-runner live validation
-   for the issue #2 provider set.
-3. Wire hosted web, desktop, and iOS UI flows to the implemented server
-   administration APIs (hosting mode, invitations, audits). Account, session,
-   recovery, and device flows are done across hosted web, desktop, native iOS,
-   and the CLI.
+1. Build the offline-safe contest session and logging engine (#68) on the
+   versioned rule/exchange schema shipped in v0.5.1, then the Field Day and
+   Winter Field Day templates (#69), the December/January definition packs
+   (#70), and Cabrillo export (#71).
+2. Build the ICS 211 check-in workflow (#73) on the EmComm record model shipped
+   in v0.5.1, then ICS 213/213RR (#74) and ICS 214 (#75).
+3. Finish sync/reconciliation hardening: release-device cross-client branch
+   review/reconciliation workflow qualification, physical-device LAN/iOS
+   local-network validation, and iOS background task execution plus
+   poor-network validation on release devices. Complete production provider
+   qualification and release-runner live validation for the issue #2 provider
+   set as credentials allow.
+
+Hosted web, desktop, and iOS server-administration UX shipped in v0.5, and the
+account, session, recovery, and device flows shipped in v0.4, so the
+account-area client work in earlier revisions of this plan is complete.
