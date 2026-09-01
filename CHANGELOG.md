@@ -38,6 +38,19 @@
   `assignment.manage`, `message.manage`, `activity.log`).
 - Added `docs/CONTEST_RULE_SCHEMA.md`, `docs/EMCOMM_RECORD_MODEL.md`, and
   `docs/V0_5_1_RELEASE_PLAN.md`.
+- Added a desktop network scan: `POST /api/sync/discovery/scan`, a `Scan Network`
+  button in the Sync Status panel, and the `sync.discovery.scan` command. One
+  scan announces and listens for longer than a peer discovery interval and, in
+  parallel, probes the local private/link-local IPv4 subnets on the bound GUI
+  port, the default GUI port, and the configured local sync port, so instances
+  are found on networks that drop multicast and instances that never started
+  discovery. Probed addresses are only recorded after serving a matching
+  `/api/sync/state` identity, and `scan_running`/`last_scan` in
+  `/api/sync/state` report progress and coverage.
+- Added `ham_sync::LanDiscoveryService::scan_once`, `local_scan_targets`, and
+  `local_scan_interface_addresses` for the shared scan primitives.
+- Added `network.scan.started`, `network.scan.completed`, and
+  `network.scan.multicast_failed` runtime events.
 
 ### Changed
 
@@ -81,8 +94,33 @@
   contract, and hosting-modes epic (#4) after auditing their remaining child
   issues against the shipped code.
 
+### Fixed
+
+- iOS LAN discovery no longer fails with `Network.NWError error 48 - Address
+  already in use`. The scanner bound one `NWConnectionGroup` per address family,
+  so the IPv4 and IPv6 groups fought over the same UDP discovery port, and a
+  stop/start toggle rebound the port before the cancelled group had released it.
+  A single group now joins both multicast endpoints on one socket, single-family
+  groups are only a fallback, a restart waits for the outgoing group to report
+  `cancelled`, and an address-in-use failure is reported as an actionable
+  message instead of the raw `NWError`.
+- iOS Sync `Issue Code`, `Accept Code`, `Pair With URL`, `Trust Peer`,
+  `Rotate Auth`, and `Revoke` no longer fire together. A SwiftUI `List` row makes
+  its whole area one tap target, so every button sharing a row ran from a single
+  tap and `Pair With URL` or `Trust Peer` reissued a pairing code instead. The
+  rows now use the borderless button style, which gives each button its own hit
+  region, and the LAN actions are split across rows so the labels are reachable
+  on a phone.
+
 ### Testing
 
+- Added `ham-sync` scan tests for local subnet target generation, the target
+  budget, and the private/link-local-only sweep policy.
+- Added `ham-gui` scan tests for the probed port set, targets staying inside the
+  manual LAN peer address policy, and the short-timeout identity probe against a
+  responding and a closed address.
+- Added iOS tests for the single-socket multicast bind candidates and the
+  address-in-use failure message.
 - Added `ham-gui` tests for the LAN read allow-list, the loopback and opt-in
   decision matrix, and the redacted `403` rejection for non-loopback control
   requests.
@@ -252,19 +290,6 @@
 - Added SwiftData station equipment cache model.
 - Added a recoverable iOS projection cache: a SwiftData store that cannot be opened is quarantined and rebuilt from the Rust event store, with an in-memory fallback and a recovery screen instead of a launch crash.
 - Added `ProjectionStoreTests` covering the projection cache recovery ladder, quarantine, and quarantine pruning.
-- Added a desktop network scan: `POST /api/sync/discovery/scan`, a `Scan Network`
-  button in the Sync Status panel, and the `sync.discovery.scan` command. One
-  scan announces and listens for longer than a peer discovery interval and, in
-  parallel, probes the local private/link-local IPv4 subnets on the bound GUI
-  port, the default GUI port, and the configured local sync port, so instances
-  are found on networks that drop multicast and instances that never started
-  discovery. Probed addresses are only recorded after serving a matching
-  `/api/sync/state` identity, and `scan_running`/`last_scan` in
-  `/api/sync/state` report progress and coverage.
-- Added `ham_sync::LanDiscoveryService::scan_once`, `local_scan_targets`, and
-  `local_scan_interface_addresses` for the shared scan primitives.
-- Added `network.scan.started`, `network.scan.completed`, and
-  `network.scan.multicast_failed` runtime events.
 
 ### Changed
 
@@ -302,33 +327,8 @@
   status, and content type. The startup failure screen escapes the error text
   so markup in a message is no longer swallowed by `innerHTML`.
 
-### Fixed
-
-- iOS LAN discovery no longer fails with `Network.NWError error 48 - Address
-  already in use`. The scanner bound one `NWConnectionGroup` per address family,
-  so the IPv4 and IPv6 groups fought over the same UDP discovery port, and a
-  stop/start toggle rebound the port before the cancelled group had released it.
-  A single group now joins both multicast endpoints on one socket, single-family
-  groups are only a fallback, a restart waits for the outgoing group to report
-  `cancelled`, and an address-in-use failure is reported as an actionable
-  message instead of the raw `NWError`.
-- iOS Sync `Issue Code`, `Accept Code`, `Pair With URL`, `Trust Peer`,
-  `Rotate Auth`, and `Revoke` no longer fire together. A SwiftUI `List` row makes
-  its whole area one tap target, so every button sharing a row ran from a single
-  tap and `Pair With URL` or `Trust Peer` reissued a pairing code instead. The
-  rows now use the borderless button style, which gives each button its own hit
-  region, and the LAN actions are split across rows so the labels are reachable
-  on a phone.
-
 ### Testing
 
-- Added `ham-sync` scan tests for local subnet target generation, the target
-  budget, and the private/link-local-only sweep policy.
-- Added `ham-gui` scan tests for the probed port set, targets staying inside the
-  manual LAN peer address policy, and the short-timeout identity probe against a
-  responding and a closed address.
-- Added iOS tests for the single-socket multicast bind candidates and the
-  address-in-use failure message.
 - Added `ham-sync` hosted account tests for URL/email normalization, request
   planning, session-required rejection, accepted sign-in with credential-id-only
   persistence, refresh-token rotation, remote session revocation recovery,

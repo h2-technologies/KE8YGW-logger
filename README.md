@@ -886,7 +886,10 @@ serves a matching `/api/sync/state` identity - the same requirement multicast
 discovery applies. The scan runs in the background and reports peers as it finds
 them; `scan_running` and `last_scan` in `/api/sync/state` carry its progress and
 its last coverage summary. As with multicast discovery, a peer is only reachable
-if it bound its GUI API to a non-loopback address.
+if it bound its GUI API to a non-loopback address; the identity probe the scan
+uses (`GET /api/sync/state`) is one of the LAN read endpoints a non-loopback
+requester may reach. Starting a scan is a local control action, so
+`POST /api/sync/discovery/scan` itself is served to loopback requesters only.
 
 Reciprocal browser pairing stores a generated LAN endpoint auth code through
 the Rust credential path instead of reusing the one-time pairing code. Durable
