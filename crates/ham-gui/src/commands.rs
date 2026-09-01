@@ -28,6 +28,22 @@ impl CommandRegistry {
             ),
             command("open.plugins", "Open Plugin Manager", "Shell", None, None),
             command(
+                "shell.layout.cycle",
+                "Switch Shell Layout",
+                "Shell",
+                Some("Ctrl/Cmd+Shift+L"),
+                None,
+            ),
+            command("shell.theme.light", "Use Light Theme", "Shell", None, None),
+            command("shell.theme.dark", "Use Dark Theme", "Shell", None, None),
+            command(
+                "shell.theme.system",
+                "Match System Theme",
+                "Shell",
+                None,
+                None,
+            ),
+            command(
                 "open.diagnostics",
                 "Open Diagnostic Report",
                 "Diagnostics",
@@ -859,6 +875,10 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert!(ids.contains(&"open.settings"));
+        assert!(ids.contains(&"shell.layout.cycle"));
+        assert!(ids.contains(&"shell.theme.light"));
+        assert!(ids.contains(&"shell.theme.dark"));
+        assert!(ids.contains(&"shell.theme.system"));
         assert!(ids.contains(&"open.plugins"));
         assert!(ids.contains(&"focus.callsign-entry"));
         assert!(ids.contains(&"toggle.event-bus-monitor"));

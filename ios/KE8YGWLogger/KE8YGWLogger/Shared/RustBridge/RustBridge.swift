@@ -2087,6 +2087,8 @@ private enum FallbackSettingsMemory {
             ],
             "display": [
                 "appearance": "system",
+                "desktop_shell_layout": "operating-deck",
+                "mobile_dashboard_layout": "liquid-glass",
                 "accent_color_name": "blue",
                 "map_default_layer": "Stations",
                 "show_qso_map_objects": true,
@@ -4793,6 +4795,10 @@ struct RustNetControlSettings: Codable, Equatable {
 struct RustDisplaySettings: Codable, Equatable {
     var appearance: String
     var accentColorName: String
+    /// Present from schema 1 onward but written by newer clients only, so a
+    /// settings file saved before layout switching shipped still decodes.
+    var desktopShellLayout: String?
+    var mobileDashboardLayout: String?
     var mapDefaultLayer: String
     var showQsoMapObjects: Bool
     var showStationMapMarkers: Bool

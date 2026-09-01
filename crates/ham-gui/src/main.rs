@@ -31,6 +31,7 @@ use ham_core::{
 };
 use ham_gui::{
     mock::{capability_labels, mock_plugins},
+    shell::{ShellAppearance, ShellLayoutId, ThemeMode},
     CommandRegistry, GuiRuntimeBridge, GuiShellState, RuntimeBridgeStatus, RuntimeEventInput,
 };
 use ham_plugin_sdk::{
@@ -120,6 +121,8 @@ fn main() {
     let permission_store =
         JsonPermissionGrantStore::new(support_dir.join("plugin-permissions.json"));
     let station_store = JsonStationBookStore::new(support_dir.join("station-book.json"));
+    let appearance_store =
+        JsonSupportStore::<ShellAppearance>::new(support_dir.join("shell-appearance.json"));
     let service_registry_store =
         JsonSupportStore::<ServiceRegistry>::new(support_dir.join("service-registry.json"));
     let service_cache_store =
@@ -339,6 +342,12 @@ fn main() {
             loaded
         }
     };
+    let appearance = load_support_or(
+        &bridge,
+        &appearance_store,
+        ShellAppearance::default(),
+        "shell appearance",
+    );
     let lookup_config = load_support_or(
         &bridge,
         &lookup_config_store,
@@ -409,6 +418,8 @@ fn main() {
         rig_config: Mutex::new(rig_config),
         station_store,
         station_book: Mutex::new(station_book),
+        appearance: Mutex::new(appearance),
+        appearance_store,
         credential_store: Mutex::new(credential_store),
         upload_queue: Mutex::new(upload_queue),
         online_support: Mutex::new(online_support),
@@ -455,6 +466,8 @@ struct AppState {
     rig_config: Mutex<RigUiConfig>,
     station_store: JsonStationBookStore,
     station_book: Mutex<StationBook>,
+    appearance: Mutex<ShellAppearance>,
+    appearance_store: JsonSupportStore<ShellAppearance>,
     credential_store: Mutex<Box<dyn CredentialStore>>,
     upload_queue: Mutex<UploadQueue>,
     online_support: Mutex<OnlineSupportState>,
@@ -660,7 +673,7 @@ fn handle_client(state: Arc<AppState>, mut stream: TcpStream) {
         ("GET", "/styles.css") => response(200, "text/css; charset=utf-8", APP_CSS.as_bytes()),
         ("GET", "/app.js") => response(200, "text/javascript; charset=utf-8", APP_JS.as_bytes()),
         ("GET", "/api/shell") => json_response(&ApiShellPayload {
-            shell: GuiShellState::default_shell(),
+            shell: shell_state(&state),
             commands: CommandRegistry::default_registry(),
             plugins: mock_plugins(),
             runtime_events: state.bridge.replay(RuntimeEventFilter::default(), 100),
@@ -668,6 +681,7 @@ fn handle_client(state: Arc<AppState>, mut stream: TcpStream) {
             known_core_capabilities: capability_labels(),
             service_providers: service_registry_snapshot(&state),
         }),
+        ("POST", "/api/shell/appearance") => handle_shell_appearance(&state, &request.body),
         ("GET", "/api/runtime-events") => {
             let params = parse_query(query);
             let filter = runtime_filter_from_query(&params);
@@ -1949,6 +1963,93 @@ fn lookup_provider_status(state: &AppState) -> LookupProviderStatus {
         },
         rate_limited: false,
     }
+}
+
+/// The shell the client renders, with the operator's saved layout and theme
+/// applied. Everything else about the shell is static, so this is the only
+/// place the two settings enter the payload.
+fn shell_state(state: &AppState) -> GuiShellState {
+    let appearance = *state
+        .appearance
+        .lock()
+        .expect("shell appearance mutex should not be poisoned");
+    let mut shell = GuiShellState::default_shell();
+    shell.appearance = appearance;
+    shell
+}
+
+fn handle_shell_appearance(state: &AppState, body: &[u8]) -> Vec<u8> {
+    #[derive(Deserialize)]
+    struct AppearanceRequest {
+        layout: Option<String>,
+        theme: Option<String>,
+    }
+
+    let request: AppearanceRequest = match serde_json::from_slice(body) {
+        Ok(value) => value,
+        Err(error) => return json_error(400, format!("invalid appearance payload: {error}")),
+    };
+
+    // An unknown slug is a client/server version skew, not an operator mistake.
+    // Reject it loudly here rather than silently storing something the shell
+    // cannot render.
+    let layout = match request.layout.as_deref() {
+        Some(value) => match ShellLayoutId::from_slug(value) {
+            Some(layout) => Some(layout),
+            None => return json_error(400, format!("unknown shell layout `{value}`")),
+        },
+        None => None,
+    };
+    let theme = match request.theme.as_deref() {
+        Some(value) => match ThemeMode::from_slug(value) {
+            Some(theme) => Some(theme),
+            None => return json_error(400, format!("unknown theme mode `{value}`")),
+        },
+        None => None,
+    };
+
+    let updated = {
+        let mut current = state
+            .appearance
+            .lock()
+            .expect("shell appearance mutex should not be poisoned");
+        if let Some(layout) = layout {
+            current.layout = layout;
+        }
+        if let Some(theme) = theme {
+            current.theme = theme;
+        }
+        *current
+    };
+
+    if let Err(error) = state.appearance_store.save(&updated) {
+        publish_support_storage_event(
+            &state.bridge,
+            "support.storage.save_failed",
+            RuntimeEventSeverity::Warn,
+            format!("Failed to save shell appearance: {error}"),
+            None,
+        );
+    }
+    let _ = state.bridge.publish(RuntimeEventInput {
+        event_type: "shell.appearance.changed".to_owned(),
+        severity: RuntimeEventSeverity::Info,
+        source: "ham-gui".to_owned(),
+        source_plugin_id: Some("core.gui".to_owned()),
+        workspace_id: Some("dashboard".to_owned()),
+        payload_summary: format!(
+            "Shell layout set to {} with {} theme",
+            updated.layout.title(),
+            updated.theme.title()
+        ),
+        redacted_payload: Some(json!({
+            "layout": updated.layout.slug(),
+            "theme": updated.theme.slug()
+        })),
+        error: None,
+    });
+
+    json_response(&json!({ "appearance": updated }))
 }
 
 fn handle_lookup_status(state: &AppState) -> Vec<u8> {
@@ -8715,6 +8816,10 @@ mod tests {
             rig_config: Mutex::new(RigUiConfig::default()),
             station_store,
             station_book: Mutex::new(StationBook::default()),
+            appearance: Mutex::new(ShellAppearance::default()),
+            appearance_store: JsonSupportStore::<ShellAppearance>::new(
+                support_dir.join("shell-appearance.json"),
+            ),
             credential_store: Mutex::new(Box::new(
                 InsecureDevCredentialStore::open(support_dir.join("dev-credentials.json"), true)
                     .unwrap(),
@@ -8756,6 +8861,52 @@ mod tests {
             .unwrap()
             .as_slice(),
         ))
+    }
+
+    #[test]
+    fn shell_appearance_is_saved_and_served_back_with_the_shell() {
+        let state = test_state("ke8ygw-ham-gui-shell-appearance");
+        assert_eq!(
+            shell_state(&state).appearance,
+            ShellAppearance::default(),
+            "a fresh install starts on the default layout"
+        );
+
+        let payload = response_json(handle_shell_appearance(
+            &state,
+            br#"{"layout":"field-notebook","theme":"light"}"#,
+        ));
+        assert_eq!(payload["appearance"]["layout"], json!("field-notebook"));
+        assert_eq!(payload["appearance"]["theme"], json!("light"));
+
+        let shell = shell_state(&state);
+        assert_eq!(shell.appearance.layout, ShellLayoutId::FieldNotebook);
+        assert_eq!(shell.appearance.theme, ThemeMode::Light);
+        assert_eq!(
+            shell.layouts.len(),
+            ShellLayoutId::ALL.len(),
+            "the switcher needs every layout to choose from"
+        );
+
+        // Changing only the theme must leave the chosen layout alone.
+        let payload = response_json(handle_shell_appearance(&state, br#"{"theme":"dark"}"#));
+        assert_eq!(payload["appearance"]["layout"], json!("field-notebook"));
+        assert_eq!(payload["appearance"]["theme"], json!("dark"));
+    }
+
+    #[test]
+    fn unknown_shell_appearance_choices_are_rejected_without_changing_state() {
+        let state = test_state("ke8ygw-ham-gui-shell-appearance-reject");
+        let _ = handle_shell_appearance(&state, br#"{"layout":"focus-console"}"#);
+
+        let rejected = handle_shell_appearance(&state, br#"{"layout":"holodeck"}"#);
+        let text = String::from_utf8(rejected).unwrap();
+        assert!(text.starts_with("HTTP/1.1 400"), "{text}");
+        assert_eq!(
+            shell_state(&state).appearance.layout,
+            ShellLayoutId::FocusConsole,
+            "a rejected request must not clobber the saved layout"
+        );
     }
 
     #[test]
