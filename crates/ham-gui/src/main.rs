@@ -54,8 +54,11 @@ use ham_sync::{
     DiagnosticReportUploadRequest, DiagnosticReportUploadResponse, DiagnosticReportUploadType,
     DiscoveryPacket, GetEventMetadataResponse, GetEventRangeResponse, HandshakeRequest,
     HostedAccountAction, HostedAccountClient, HostedAccountConfig, HostedAccountError,
-    HostedAccountResult, HostedAccountSecrets, HttpHostedAccountTransport, InMemoryCloudSyncServer,
-    JsonConflictReviewStore, JsonHostedAccountStore, JsonLanTrustStore, JsonLocalSyncIdentityStore,
+    HostedAccountResult, HostedAccountSecrets, HostedAdminAction, HostedAdminClient,
+    HostedAdminHostingUpdate, HostedAdminLogbookRole, HostedAdminOperationMode,
+    HostedAdminRegistrationMode, HostedAdminResult, HttpHostedAccountTransport,
+    HttpHostedAdminTransport, InMemoryCloudSyncServer, JsonConflictReviewStore,
+    JsonHostedAccountStore, JsonHostedAdminStore, JsonLanTrustStore, JsonLocalSyncIdentityStore,
     JsonOfflineMutationQueue, LanDiscoveryService, LanPairingAcceptance, LanPeerTrustUpdate,
     LanTrustSnapshot, ListLogbooksResponse, LocalPeerIdentity, LogbookHeadSummary,
     ManualConflictResolution, ManualConflictResolutionChoice, OfflineMutationEnvelope,
@@ -150,6 +153,9 @@ fn main() {
     let hosted_account = HostedAccountClient::new(JsonHostedAccountStore::new(
         support_dir.join("hosted-account.json"),
     ));
+    let hosted_admin = HostedAdminClient::new(JsonHostedAdminStore::new(
+        support_dir.join("hosted-admin.json"),
+    ));
     let local_sync_identity_store =
         JsonLocalSyncIdentityStore::new(support_dir.join("local-sync-identity.json"));
     let local_api_port = local_api_port_from_bound_addr(&bound_addr);
@@ -184,6 +190,8 @@ fn main() {
         .ok()
         .as_deref()
         == Some("1");
+    let allow_remote_control_api =
+        env::var("HAM_GUI_ALLOW_REMOTE_CONTROL_API").ok().as_deref() == Some("1");
     let credential_store: Box<dyn CredentialStore> =
         default_credential_store(&support_dir, allow_insecure_dev_credentials);
     let permission_registry = PermissionRegistry::mvp_default();
@@ -402,6 +410,7 @@ fn main() {
         conflict_review_store,
         lan_trust_store,
         hosted_account,
+        hosted_admin,
         cloud_server: InMemoryCloudSyncServer::new(CloudServerConfig::default()),
         lookup_cache: LookupCache::new(),
         lookup_config: Mutex::new(lookup_config),
@@ -424,6 +433,7 @@ fn main() {
         upload_queue_store,
         permission_grants: Mutex::new(permission_grants),
         permission_settings: Mutex::new(permission_settings),
+        allow_remote_control_api,
     });
 
     println!("ham-gui listening on http://{bound_addr}");
@@ -446,6 +456,7 @@ struct AppState {
     conflict_review_store: JsonConflictReviewStore,
     lan_trust_store: JsonLanTrustStore,
     hosted_account: HostedAccountClient,
+    hosted_admin: HostedAdminClient,
     cloud_server: InMemoryCloudSyncServer,
     lookup_cache: LookupCache,
     lookup_config: Mutex<LookupUiConfig>,
@@ -468,6 +479,7 @@ struct AppState {
     upload_queue_store: JsonSupportStore<UploadQueue>,
     permission_grants: Mutex<PermissionGrantSet>,
     permission_settings: Mutex<PermissionSettings>,
+    allow_remote_control_api: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -644,6 +656,19 @@ fn handle_client(state: Arc<AppState>, mut stream: TcpStream) {
     let target = request.target.as_str();
     let (path, query) = split_target(target);
 
+    if !remote_request_is_permitted(
+        state.allow_remote_control_api,
+        requester_is_loopback(&stream),
+        request.method.as_str(),
+        path,
+    ) {
+        let denied = reject_remote_control_request(&state, request.method.as_str(), path);
+        if let Err(error) = stream.write_all(&denied) {
+            eprintln!("failed to write response: {error}");
+        }
+        return;
+    }
+
     let response = match (request.method.as_str(), path) {
         ("GET", "/") | ("GET", "/index.html") => {
             response(200, "text/html; charset=utf-8", INDEX_HTML.as_bytes())
@@ -797,6 +822,7 @@ fn handle_client(state: Arc<AppState>, mut stream: TcpStream) {
         ("POST", "/api/account/recovery/complete") => {
             handle_account_recovery_complete(&state, &request.body)
         }
+        ("POST", "/api/account/bootstrap") => handle_account_bootstrap(&state, &request.body),
         ("POST", "/api/account/login") => handle_account_login(&state, &request.body),
         ("POST", "/api/account/session/refresh") => {
             run_account_action(&state, HostedAccountAction::Session)
@@ -816,6 +842,32 @@ fn handle_client(state: Arc<AppState>, mut stream: TcpStream) {
         }
         ("POST", "/api/account/devices/revoke") => {
             handle_account_device_revoke(&state, &request.body)
+        }
+        ("GET", "/api/admin/state") => handle_admin_state(&state),
+        ("POST", "/api/admin/hosting/refresh") => {
+            run_admin_action(&state, HostedAdminAction::HostingRead)
+        }
+        ("POST", "/api/admin/hosting/update") => handle_admin_hosting_update(&state, &request.body),
+        ("POST", "/api/admin/invitations/refresh") => {
+            run_admin_action(&state, HostedAdminAction::InvitationList)
+        }
+        ("POST", "/api/admin/invitations/create") => {
+            handle_admin_invitation_create(&state, &request.body)
+        }
+        ("POST", "/api/admin/invitations/inspect") => {
+            handle_admin_invitation_action(&state, &request.body, AdminInvitationVerb::Inspect)
+        }
+        ("POST", "/api/admin/invitations/resend") => {
+            handle_admin_invitation_action(&state, &request.body, AdminInvitationVerb::Resend)
+        }
+        ("POST", "/api/admin/invitations/expire") => {
+            handle_admin_invitation_action(&state, &request.body, AdminInvitationVerb::Expire)
+        }
+        ("POST", "/api/admin/invitations/revoke") => {
+            handle_admin_invitation_action(&state, &request.body, AdminInvitationVerb::Revoke)
+        }
+        ("POST", "/api/admin/audits/refresh") => {
+            run_admin_action(&state, HostedAdminAction::AuditList)
         }
         ("POST", "/api/account/devices/revoke-all") => {
             run_account_action(&state, HostedAccountAction::DeviceRevokeAll)
@@ -848,6 +900,69 @@ fn handle_client(state: Arc<AppState>, mut stream: TcpStream) {
     if let Err(error) = stream.write_all(&response) {
         eprintln!("failed to write response: {error}");
     }
+}
+
+/// LAN sync peers only ever issue these requests: unauthenticated identity
+/// probes, signed trust-gated reads, and reciprocal pairing carried by a
+/// one-time pairing token. Everything else on the GUI listener is local
+/// control-plane surface with no request authentication, so it must not be
+/// served to a non-loopback requester.
+fn is_lan_peer_endpoint(method: &str, path: &str) -> bool {
+    matches!(
+        (method, path),
+        (
+            "GET",
+            "/api/sync/state"
+                | "/api/sync/list-logbooks"
+                | "/api/sync/get-head"
+                | "/api/sync/events-since"
+                | "/api/sync/event-metadata"
+        ) | ("POST", "/api/sync/lan/pairing-accept")
+    )
+}
+
+/// A request may reach the local control plane only from loopback, or when the
+/// operator explicitly opted in through `HAM_GUI_ALLOW_REMOTE_CONTROL_API=1`.
+/// LAN peers keep their own signed, trust-gated read endpoints.
+fn remote_request_is_permitted(
+    allow_remote_control_api: bool,
+    requester_is_loopback: bool,
+    method: &str,
+    path: &str,
+) -> bool {
+    allow_remote_control_api || requester_is_loopback || is_lan_peer_endpoint(method, path)
+}
+
+fn requester_is_loopback(stream: &TcpStream) -> bool {
+    stream
+        .peer_addr()
+        .map(|address| address.ip().is_loopback())
+        .unwrap_or(false)
+}
+
+fn reject_remote_control_request(state: &AppState, method: &str, path: &str) -> Vec<u8> {
+    {
+        let mut sync = state
+            .sync
+            .lock()
+            .expect("sync state mutex should not be poisoned");
+        sync.warning_count += 1;
+    }
+    let _ = publish_gui_runtime(
+        state,
+        "sync.lan.control_api.rejected",
+        RuntimeEventSeverity::Warn,
+        "Rejected a non-loopback request for a local control endpoint",
+        Some(json!({"method": method, "path": path})),
+        None,
+    );
+    json_response_with_status(
+        403,
+        &json!({
+            "ok": false,
+            "error": "local control endpoints are served to loopback requesters only"
+        }),
+    )
 }
 
 #[derive(Debug)]
@@ -8411,6 +8526,21 @@ fn handle_account_recovery_complete(state: &AppState, body: &[u8]) -> Vec<u8> {
     )
 }
 
+/// Claims the one-time instance-administrator bootstrap on a fresh server.
+fn handle_account_bootstrap(state: &AppState, body: &[u8]) -> Vec<u8> {
+    let request = match serde_json::from_slice::<AccountLoginRequest>(body) {
+        Ok(request) => request,
+        Err(_) => return json_error(400, "invalid bootstrap JSON"),
+    };
+    run_account_action(
+        state,
+        HostedAccountAction::Bootstrap {
+            email: request.email,
+            display_name: request.display_name,
+        },
+    )
+}
+
 fn handle_account_login(state: &AppState, body: &[u8]) -> Vec<u8> {
     let request = match serde_json::from_slice::<AccountLoginRequest>(body) {
         Ok(request) => request,
@@ -8436,6 +8566,275 @@ fn handle_account_device_revoke(state: &AppState, body: &[u8]) -> Vec<u8> {
             device_id: request.device_id,
         },
     )
+}
+
+/// Which invitation route a request targets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AdminInvitationVerb {
+    Inspect,
+    Resend,
+    Expire,
+    Revoke,
+}
+
+#[derive(Debug, Deserialize)]
+struct AdminHostingUpdateRequest {
+    #[serde(default)]
+    operation_mode: Option<String>,
+    #[serde(default)]
+    registration_mode: Option<String>,
+    #[serde(default)]
+    session_ttl_seconds: Option<i64>,
+    #[serde(default)]
+    refresh_ttl_seconds: Option<i64>,
+    #[serde(default)]
+    invitation_ttl_seconds: Option<i64>,
+    #[serde(default)]
+    verification_ttl_seconds: Option<i64>,
+    #[serde(default)]
+    recovery_ttl_seconds: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AdminInvitationCreateRequest {
+    logbook_id: uuid::Uuid,
+    email: String,
+    role: String,
+    #[serde(default)]
+    expires_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AdminInvitationRequest {
+    invite_id: uuid::Uuid,
+    #[serde(default)]
+    expires_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+fn publish_admin_runtime(
+    state: &AppState,
+    event_type: &str,
+    severity: RuntimeEventSeverity,
+    summary: &str,
+    redacted_payload: Option<Value>,
+    error: Option<String>,
+) -> std::io::Result<ham_core::RuntimeEventEnvelope> {
+    state.bridge.publish(RuntimeEventInput {
+        event_type: event_type.to_owned(),
+        severity,
+        source: "ham-admin".to_owned(),
+        source_plugin_id: None,
+        workspace_id: Some("dashboard".to_owned()),
+        payload_summary: summary.to_owned(),
+        redacted_payload,
+        error,
+    })
+}
+
+/// Publishes a redacted runtime event for one administration result.
+///
+/// The invitation token is never part of the runtime event, only the fact that
+/// one was issued.
+fn publish_admin_result(state: &AppState, result: &HostedAdminResult) {
+    let severity = if result.outcome.is_accepted() {
+        RuntimeEventSeverity::Info
+    } else if result.retryable {
+        RuntimeEventSeverity::Warn
+    } else {
+        RuntimeEventSeverity::Error
+    };
+    let _ = publish_admin_runtime(
+        state,
+        &format!("{}.result", result.action),
+        severity,
+        &result.message,
+        Some(json!({
+            "action": result.action,
+            "outcome": result.outcome,
+            "status": result.status,
+            "retryable": result.retryable,
+            "user_action_required": result.user_action_required,
+            "administrator": result.snapshot.administrator,
+            "request_id": result.request_id,
+        })),
+        result.error_code.clone(),
+    );
+}
+
+fn hosted_account_snapshot_for_admin(
+    state: &AppState,
+) -> Result<ham_sync::HostedAccountSnapshot, Vec<u8>> {
+    state
+        .hosted_account
+        .snapshot(&hosted_account_config(state), chrono::Utc::now())
+        .map_err(|error| json_error(500, format!("failed to read hosted account state: {error}")))
+}
+
+fn handle_admin_state(state: &AppState) -> Vec<u8> {
+    if let Err(response) = ensure_gui_permission(
+        state,
+        &core_gui_manifest(),
+        PluginCapability::SyncCloudConnect,
+        "Hosted administration state permission check",
+    ) {
+        return response;
+    }
+    let account = match hosted_account_snapshot_for_admin(state) {
+        Ok(account) => account,
+        Err(response) => return response,
+    };
+    match state.hosted_admin.snapshot(&account, chrono::Utc::now()) {
+        Ok(snapshot) => json_response(&json!({
+            "ok": true,
+            "admin": snapshot,
+            "signed_in": account.connection_state.is_signed_in(),
+            "account_email": account.email,
+        })),
+        Err(error) => json_error(
+            500,
+            format!("failed to read hosted administration state: {error}"),
+        ),
+    }
+}
+
+/// Executes one administration action against the signed-in hosted server.
+///
+/// The single-use invitation token is returned in this response and nowhere
+/// else: it is not persisted, logged, or published as a runtime event.
+fn run_admin_action(state: &AppState, action: HostedAdminAction) -> Vec<u8> {
+    if let Err(response) = ensure_gui_permission(
+        state,
+        &core_gui_manifest(),
+        PluginCapability::SyncCloudConnect,
+        "Hosted administration permission check",
+    ) {
+        return response;
+    }
+    let account = match hosted_account_snapshot_for_admin(state) {
+        Ok(account) => account,
+        Err(response) => return response,
+    };
+    let executed = {
+        let mut credential_store = state
+            .credential_store
+            .lock()
+            .expect("credential store mutex should not be poisoned");
+        let mut secrets = GuiHostedAccountSecrets {
+            store: credential_store.as_mut(),
+        };
+        state.hosted_admin.execute(
+            &action,
+            &account,
+            &HttpHostedAdminTransport::new(),
+            &mut secrets,
+            chrono::Utc::now(),
+        )
+    };
+    match executed {
+        Ok(mut result) => {
+            publish_admin_result(state, &result);
+            let invitation_token = result.take_invitation_token();
+            json_response(&json!({
+                "ok": result.outcome.is_accepted(),
+                "admin_result": result,
+                "invitation_token": invitation_token,
+            }))
+        }
+        Err(error) => {
+            let _ = publish_admin_runtime(
+                state,
+                "admin.request.rejected",
+                RuntimeEventSeverity::Warn,
+                "Hosted administration request was rejected before it was sent",
+                Some(json!({"action": action.name()})),
+                Some(error.to_string()),
+            );
+            json_error(
+                400,
+                format!("hosted administration request rejected: {error}"),
+            )
+        }
+    }
+}
+
+fn handle_admin_hosting_update(state: &AppState, body: &[u8]) -> Vec<u8> {
+    let request = match serde_json::from_slice::<AdminHostingUpdateRequest>(body) {
+        Ok(request) => request,
+        Err(_) => return json_error(400, "invalid hosting update JSON"),
+    };
+    let operation_mode = match request
+        .operation_mode
+        .as_deref()
+        .map(str::parse::<HostedAdminOperationMode>)
+        .transpose()
+    {
+        Ok(mode) => mode,
+        Err(error) => return json_error(400, error.to_string()),
+    };
+    let registration_mode = match request
+        .registration_mode
+        .as_deref()
+        .map(str::parse::<HostedAdminRegistrationMode>)
+        .transpose()
+    {
+        Ok(mode) => mode,
+        Err(error) => return json_error(400, error.to_string()),
+    };
+    let update = HostedAdminHostingUpdate {
+        operation_mode,
+        registration_mode,
+        session_ttl_seconds: request.session_ttl_seconds,
+        refresh_ttl_seconds: request.refresh_ttl_seconds,
+        invitation_ttl_seconds: request.invitation_ttl_seconds,
+        verification_ttl_seconds: request.verification_ttl_seconds,
+        recovery_ttl_seconds: request.recovery_ttl_seconds,
+    };
+    if let Err(error) = update.to_body() {
+        return json_error(400, error.to_string());
+    }
+    run_admin_action(state, HostedAdminAction::HostingUpdate { update })
+}
+
+fn handle_admin_invitation_create(state: &AppState, body: &[u8]) -> Vec<u8> {
+    let request = match serde_json::from_slice::<AdminInvitationCreateRequest>(body) {
+        Ok(request) => request,
+        Err(_) => return json_error(400, "invalid invitation JSON"),
+    };
+    let role = match request.role.parse::<HostedAdminLogbookRole>() {
+        Ok(role) => role,
+        Err(error) => return json_error(400, error.to_string()),
+    };
+    run_admin_action(
+        state,
+        HostedAdminAction::InvitationCreate {
+            logbook_id: request.logbook_id,
+            email: request.email,
+            role,
+            expires_at: request.expires_at,
+        },
+    )
+}
+
+fn handle_admin_invitation_action(
+    state: &AppState,
+    body: &[u8],
+    verb: AdminInvitationVerb,
+) -> Vec<u8> {
+    let request = match serde_json::from_slice::<AdminInvitationRequest>(body) {
+        Ok(request) => request,
+        Err(_) => return json_error(400, "invalid invitation action JSON"),
+    };
+    let invite_id = request.invite_id;
+    let action = match verb {
+        AdminInvitationVerb::Inspect => HostedAdminAction::InvitationGet { invite_id },
+        AdminInvitationVerb::Resend => HostedAdminAction::InvitationResend { invite_id },
+        AdminInvitationVerb::Expire => HostedAdminAction::InvitationExpire {
+            invite_id,
+            expires_at: request.expires_at,
+        },
+        AdminInvitationVerb::Revoke => HostedAdminAction::InvitationRevoke { invite_id },
+    };
+    run_admin_action(state, action)
 }
 
 fn publish_cloud_runtime(
@@ -8621,6 +9020,9 @@ mod tests {
             hosted_account: HostedAccountClient::new(JsonHostedAccountStore::new(
                 support_dir.join("hosted-account.json"),
             )),
+            hosted_admin: HostedAdminClient::new(JsonHostedAdminStore::new(
+                support_dir.join("hosted-admin.json"),
+            )),
             cloud_server: InMemoryCloudSyncServer::new(CloudServerConfig::default()),
             lookup_cache: LookupCache::new(),
             lookup_config: Mutex::new(LookupUiConfig::default()),
@@ -8646,6 +9048,7 @@ mod tests {
             upload_queue_store,
             permission_grants: Mutex::new(permission_grants),
             permission_settings: Mutex::new(permission_settings),
+            allow_remote_control_api: false,
         }
     }
 
@@ -8742,6 +9145,88 @@ mod tests {
                 .unwrap_or_default()
                 .contains("hosted account request rejected"));
         }
+    }
+
+    #[test]
+    fn admin_state_reports_a_signed_out_operator_without_contacting_the_server() {
+        let state = test_state("ke8ygw-ham-gui-admin-state");
+        let payload = response_json(handle_admin_state(&state));
+        assert_eq!(payload["ok"], true);
+        assert_eq!(payload["signed_in"], json!(false));
+        // No administration call has been made, so rights are unknown rather
+        // than denied.
+        assert_eq!(payload["admin"]["administrator"], json!(null));
+        assert_eq!(payload["admin"]["hosting"], json!(null));
+        assert_eq!(payload["admin"]["invitations"], json!([]));
+    }
+
+    #[test]
+    fn admin_routes_are_rejected_before_a_request_is_planned_without_a_session() {
+        let state = test_state("ke8ygw-ham-gui-admin-session");
+        for response in [
+            run_admin_action(&state, HostedAdminAction::HostingRead),
+            run_admin_action(&state, HostedAdminAction::InvitationList),
+            run_admin_action(&state, HostedAdminAction::AuditList),
+        ] {
+            let payload = response_json_any_status(response);
+            assert!(payload["error"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("hosted administration request rejected"));
+        }
+    }
+
+    #[test]
+    fn admin_hosting_updates_reject_unknown_modes_and_empty_patches() {
+        let state = test_state("ke8ygw-ham-gui-admin-hosting");
+
+        let payload = response_json_any_status(handle_admin_hosting_update(
+            &state,
+            br#"{"registration_mode":"wide_open"}"#,
+        ));
+        assert!(payload["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("registration_mode"));
+
+        let payload = response_json_any_status(handle_admin_hosting_update(&state, b"{}"));
+        assert!(payload["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("must change at least one field"));
+
+        let payload = response_json_any_status(handle_admin_hosting_update(
+            &state,
+            br#"{"session_ttl_seconds":0}"#,
+        ));
+        assert!(payload["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("session_ttl_seconds"));
+    }
+
+    #[test]
+    fn admin_invitation_requests_reject_unknown_roles_and_malformed_json() {
+        let state = test_state("ke8ygw-ham-gui-admin-invite");
+
+        let payload = response_json_any_status(handle_admin_invitation_create(
+            &state,
+            br#"{"logbook_id":"00000000-0000-4000-8000-000000000001","email":"a@b.test","role":"superuser"}"#,
+        ));
+        assert!(payload["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("role"));
+
+        let payload = response_json_any_status(handle_admin_invitation_create(&state, b"{"));
+        assert_eq!(payload["error"], json!("invalid invitation JSON"));
+
+        let payload = response_json_any_status(handle_admin_invitation_action(
+            &state,
+            b"{",
+            AdminInvitationVerb::Revoke,
+        ));
+        assert_eq!(payload["error"], json!("invalid invitation action JSON"));
     }
 
     #[test]
@@ -8878,6 +9363,97 @@ mod tests {
         assert!(parse_lan_peer_address("8.8.8.8:9468").is_err());
         assert!(parse_lan_peer_address("[2001:4860:4860::8888]:9468").is_err());
         assert!(parse_lan_peer_address("127.0.0.1:0").is_err());
+    }
+
+    #[test]
+    fn lan_peers_reach_signed_read_endpoints_but_not_the_local_control_plane() {
+        for (method, path) in [
+            ("GET", "/api/sync/state"),
+            ("GET", "/api/sync/list-logbooks"),
+            ("GET", "/api/sync/get-head"),
+            ("GET", "/api/sync/events-since"),
+            ("GET", "/api/sync/event-metadata"),
+            ("POST", "/api/sync/lan/pairing-accept"),
+        ] {
+            assert!(
+                is_lan_peer_endpoint(method, path),
+                "{method} {path} is part of the LAN read surface"
+            );
+            assert!(remote_request_is_permitted(false, false, method, path));
+        }
+
+        for (method, path) in [
+            ("POST", "/api/qso/create"),
+            ("POST", "/api/qso/delete"),
+            ("POST", "/api/net/session/start"),
+            ("POST", "/api/backup/import"),
+            ("POST", "/api/credentials/create"),
+            ("POST", "/api/sync/lan/pairing-token"),
+            ("POST", "/api/sync/lan/pairing-complete"),
+            ("GET", "/api/sync/lan/pairing-accept"),
+            ("POST", "/api/sync/lan/revoke"),
+            ("POST", "/api/sync/cloud/connect"),
+            ("POST", "/api/sync/pull-events"),
+            ("GET", "/api/qsos"),
+            ("GET", "/api/credentials"),
+            ("GET", "/"),
+            ("POST", "/api/sync/state"),
+            ("GET", "/api/sync/state/extra"),
+        ] {
+            assert!(
+                !is_lan_peer_endpoint(method, path),
+                "{method} {path} is local control surface, not a LAN read"
+            );
+            assert!(
+                !remote_request_is_permitted(false, false, method, path),
+                "{method} {path} must be refused for a non-loopback requester"
+            );
+            assert!(
+                remote_request_is_permitted(false, true, method, path),
+                "{method} {path} must stay available to the local UI"
+            );
+            assert!(
+                remote_request_is_permitted(true, false, method, path),
+                "{method} {path} must be reachable after the explicit remote opt-in"
+            );
+        }
+    }
+
+    #[test]
+    fn rejected_remote_control_requests_return_403_and_record_a_redacted_warning() {
+        let state = test_state("remote-control-guard");
+        let response = reject_remote_control_request(&state, "POST", "/api/qso/create");
+        assert!(
+            http_response_body(&response).is_err(),
+            "the guard must not return a success status"
+        );
+        let body = response_json_any_status(response);
+        assert_eq!(body["ok"], false);
+        assert_eq!(
+            body["error"],
+            "local control endpoints are served to loopback requesters only"
+        );
+
+        let events = state.bridge.replay(RuntimeEventFilter::default(), 10);
+        let rejection = events
+            .iter()
+            .find(|event| event.event_type == "sync.lan.control_api.rejected")
+            .expect("a rejected remote control request should publish a runtime warning");
+        assert_eq!(rejection.severity, RuntimeEventSeverity::Warn);
+        let payload = rejection
+            .redacted_payload
+            .as_ref()
+            .expect("the rejection should carry a redacted payload");
+        assert_eq!(payload["method"], "POST");
+        assert_eq!(payload["path"], "/api/qso/create");
+        assert_eq!(
+            state
+                .sync
+                .lock()
+                .expect("sync state mutex should not be poisoned")
+                .warning_count,
+            1
+        );
     }
 
     #[test]

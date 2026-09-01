@@ -3,10 +3,16 @@
 pub mod account;
 #[cfg(feature = "hosted-http")]
 pub mod account_http;
+pub mod admin;
+#[cfg(feature = "hosted-http")]
+pub mod admin_http;
 pub mod offline;
 pub use account::*;
 #[cfg(feature = "hosted-http")]
 pub use account_http::*;
+pub use admin::*;
+#[cfg(feature = "hosted-http")]
+pub use admin_http::*;
 pub use offline::*;
 
 use std::{
@@ -748,6 +754,24 @@ pub fn verify_incoming_chain(
         expected_previous_hash = Some(event.event_hash.clone());
     }
     Ok(())
+}
+
+/// Classifies a push outcome identically for every sync transport.
+///
+/// Clients branch on [`ReplicationStatus::Diverged`] to stop unattended retry
+/// and open a manual conflict review, so hosted, self-hosted, and LAN pushes
+/// must agree on when a rejection is a divergence.
+pub fn push_replication_status(errors: &[String]) -> ReplicationStatus {
+    if errors.is_empty() {
+        ReplicationStatus::Pulled
+    } else if errors
+        .iter()
+        .any(|error| error.contains("does not connect") || error.contains("previous hash"))
+    {
+        ReplicationStatus::Diverged
+    } else {
+        ReplicationStatus::Rejected
+    }
 }
 
 impl PullEventsResponse {
@@ -1967,16 +1991,7 @@ impl InMemoryCloudSyncServer {
             .get_head(request.logbook_id)
             .await
             .map_err(cloud_store_error)?;
-        let status = if errors.is_empty() {
-            ReplicationStatus::Pulled
-        } else if errors
-            .iter()
-            .any(|error| error.contains("does not connect") || error.contains("previous hash"))
-        {
-            ReplicationStatus::Diverged
-        } else {
-            ReplicationStatus::Rejected
-        };
+        let status = push_replication_status(&errors);
         Ok(CloudPushEventsResponse {
             status,
             accepted_count,
@@ -2353,16 +2368,7 @@ impl DurableCloudSyncServer {
             server_head_hash.clone(),
             event_count,
         )?;
-        let status = if errors.is_empty() {
-            ReplicationStatus::Pulled
-        } else if errors
-            .iter()
-            .any(|error| error.contains("does not connect") || error.contains("previous hash"))
-        {
-            ReplicationStatus::Diverged
-        } else {
-            ReplicationStatus::Rejected
-        };
+        let status = push_replication_status(&errors);
         Ok(CloudPushEventsResponse {
             status,
             accepted_count,

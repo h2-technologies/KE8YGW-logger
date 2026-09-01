@@ -739,6 +739,34 @@ impl CommandRegistry {
                 None,
             ),
             command(
+                "admin.open",
+                "Open Server Administration",
+                "Administration",
+                None,
+                None,
+            ),
+            command(
+                "admin.hosting.refresh",
+                "Refresh Hosting Configuration",
+                "Administration",
+                None,
+                None,
+            ),
+            command(
+                "admin.invitations.open",
+                "Open Server Invitations",
+                "Administration",
+                None,
+                None,
+            ),
+            command(
+                "admin.audits.refresh",
+                "Refresh Server Audit Log",
+                "Administration",
+                None,
+                None,
+            ),
+            command(
                 "sync.cloud.diagnostics.copy",
                 "Copy Cloud Sync Diagnostic Summary",
                 "Sync",
@@ -850,6 +878,10 @@ mod tests {
         assert!(ids.contains(&"account.session.refresh"));
         assert!(ids.contains(&"account.sign-out"));
         assert!(ids.contains(&"account.devices.open"));
+        assert!(ids.contains(&"admin.open"));
+        assert!(ids.contains(&"admin.hosting.refresh"));
+        assert!(ids.contains(&"admin.invitations.open"));
+        assert!(ids.contains(&"admin.audits.refresh"));
         assert!(ids.contains(&"diagnostics.report.upload"));
         assert!(ids.contains(&"diagnostics.report.copy-last-id"));
         assert!(ids.contains(&"backup.open"));

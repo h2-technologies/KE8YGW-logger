@@ -32,6 +32,24 @@ pub const PROPOSAL_NET_CHECKIN_DELETE: &str = "proposal.net.checkin.delete";
 pub const PROPOSAL_NET_TRAFFIC_CREATE: &str = "proposal.net.traffic.create";
 pub const PROPOSAL_NET_TRAFFIC_UPDATE: &str = "proposal.net.traffic.update";
 pub const PROPOSAL_NET_REPORT_EXPORT: &str = "proposal.net.report.export";
+pub const PROPOSAL_EMCOMM_INCIDENT_OPEN: &str = "proposal.emcomm.incident.open";
+pub const PROPOSAL_EMCOMM_INCIDENT_UPDATE: &str = "proposal.emcomm.incident.update";
+pub const PROPOSAL_EMCOMM_INCIDENT_CLOSE: &str = "proposal.emcomm.incident.close";
+pub const PROPOSAL_EMCOMM_PERIOD_OPEN: &str = "proposal.emcomm.period.open";
+pub const PROPOSAL_EMCOMM_PERIOD_CLOSE: &str = "proposal.emcomm.period.close";
+pub const PROPOSAL_EMCOMM_PERSON_CHECK_IN: &str = "proposal.emcomm.person.check_in";
+pub const PROPOSAL_EMCOMM_PERSON_UPDATE: &str = "proposal.emcomm.person.update";
+pub const PROPOSAL_EMCOMM_PERSON_CHECK_OUT: &str = "proposal.emcomm.person.check_out";
+pub const PROPOSAL_EMCOMM_ASSIGNMENT_CREATE: &str = "proposal.emcomm.assignment.create";
+pub const PROPOSAL_EMCOMM_ASSIGNMENT_UPDATE: &str = "proposal.emcomm.assignment.update";
+pub const PROPOSAL_EMCOMM_ASSIGNMENT_RELEASE: &str = "proposal.emcomm.assignment.release";
+pub const PROPOSAL_EMCOMM_MESSAGE_CREATE: &str = "proposal.emcomm.message.create";
+pub const PROPOSAL_EMCOMM_MESSAGE_UPDATE: &str = "proposal.emcomm.message.update";
+pub const PROPOSAL_EMCOMM_MESSAGE_TRANSMIT: &str = "proposal.emcomm.message.transmit";
+pub const PROPOSAL_EMCOMM_MESSAGE_RECEIVE: &str = "proposal.emcomm.message.receive";
+pub const PROPOSAL_EMCOMM_MESSAGE_ACKNOWLEDGE: &str = "proposal.emcomm.message.acknowledge";
+pub const PROPOSAL_EMCOMM_MESSAGE_CANCEL: &str = "proposal.emcomm.message.cancel";
+pub const PROPOSAL_EMCOMM_ACTIVITY_LOG: &str = "proposal.emcomm.activity.log";
 
 pub const OFFICIAL_LOG_QSO_CREATED: &str = "official.log.qso.created";
 pub const OFFICIAL_LOG_QSO_CORRECTED: &str = "official.log.qso.corrected";
@@ -60,6 +78,25 @@ pub const OFFICIAL_LOG_NET_CHECKIN_DELETED: &str = "official.log.net.checkin.del
 pub const OFFICIAL_LOG_NET_TRAFFIC_CREATED: &str = "official.log.net.traffic.created";
 pub const OFFICIAL_LOG_NET_TRAFFIC_UPDATED: &str = "official.log.net.traffic.updated";
 pub const OFFICIAL_LOG_NET_REPORT_EXPORTED: &str = "official.log.net.report.exported";
+pub const OFFICIAL_LOG_EMCOMM_INCIDENT_OPENED: &str = "official.log.emcomm.incident.opened";
+pub const OFFICIAL_LOG_EMCOMM_INCIDENT_UPDATED: &str = "official.log.emcomm.incident.updated";
+pub const OFFICIAL_LOG_EMCOMM_INCIDENT_CLOSED: &str = "official.log.emcomm.incident.closed";
+pub const OFFICIAL_LOG_EMCOMM_PERIOD_OPENED: &str = "official.log.emcomm.period.opened";
+pub const OFFICIAL_LOG_EMCOMM_PERIOD_CLOSED: &str = "official.log.emcomm.period.closed";
+pub const OFFICIAL_LOG_EMCOMM_PERSON_CHECKED_IN: &str = "official.log.emcomm.person.checked_in";
+pub const OFFICIAL_LOG_EMCOMM_PERSON_UPDATED: &str = "official.log.emcomm.person.updated";
+pub const OFFICIAL_LOG_EMCOMM_PERSON_CHECKED_OUT: &str = "official.log.emcomm.person.checked_out";
+pub const OFFICIAL_LOG_EMCOMM_ASSIGNMENT_CREATED: &str = "official.log.emcomm.assignment.created";
+pub const OFFICIAL_LOG_EMCOMM_ASSIGNMENT_UPDATED: &str = "official.log.emcomm.assignment.updated";
+pub const OFFICIAL_LOG_EMCOMM_ASSIGNMENT_RELEASED: &str = "official.log.emcomm.assignment.released";
+pub const OFFICIAL_LOG_EMCOMM_MESSAGE_CREATED: &str = "official.log.emcomm.message.created";
+pub const OFFICIAL_LOG_EMCOMM_MESSAGE_UPDATED: &str = "official.log.emcomm.message.updated";
+pub const OFFICIAL_LOG_EMCOMM_MESSAGE_TRANSMITTED: &str = "official.log.emcomm.message.transmitted";
+pub const OFFICIAL_LOG_EMCOMM_MESSAGE_RECEIVED: &str = "official.log.emcomm.message.received";
+pub const OFFICIAL_LOG_EMCOMM_MESSAGE_ACKNOWLEDGED: &str =
+    "official.log.emcomm.message.acknowledged";
+pub const OFFICIAL_LOG_EMCOMM_MESSAGE_CANCELLED: &str = "official.log.emcomm.message.cancelled";
+pub const OFFICIAL_LOG_EMCOMM_ACTIVITY_LOGGED: &str = "official.log.emcomm.activity.logged";
 
 /// A capability granted to a plugin by the host application.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -146,6 +183,13 @@ pub enum PluginCapability {
     NetCheckinDelete,
     NetTrafficManage,
     NetReportExport,
+    EmCommView,
+    EmCommIncidentManage,
+    EmCommPeriodManage,
+    EmCommPersonManage,
+    EmCommAssignmentManage,
+    EmCommMessageManage,
+    EmCommActivityLog,
     UiPanelRegister,
     UiCommandRegister,
     SettingsRead,
@@ -238,6 +282,13 @@ impl PluginCapability {
             Self::NetCheckinDelete => "net.checkin.delete",
             Self::NetTrafficManage => "net.traffic.manage",
             Self::NetReportExport => "net.report.export",
+            Self::EmCommView => "emcomm.view",
+            Self::EmCommIncidentManage => "emcomm.incident.manage",
+            Self::EmCommPeriodManage => "emcomm.period.manage",
+            Self::EmCommPersonManage => "emcomm.person.manage",
+            Self::EmCommAssignmentManage => "emcomm.assignment.manage",
+            Self::EmCommMessageManage => "emcomm.message.manage",
+            Self::EmCommActivityLog => "emcomm.activity.log",
             Self::UiPanelRegister => "ui.panel.register",
             Self::UiCommandRegister => "ui.command.register",
             Self::SettingsRead => "settings.read",
@@ -345,6 +396,13 @@ impl<'de> Deserialize<'de> for PluginCapability {
             "net.checkin.delete" => Self::NetCheckinDelete,
             "net.traffic.manage" => Self::NetTrafficManage,
             "net.report.export" => Self::NetReportExport,
+            "emcomm.view" => Self::EmCommView,
+            "emcomm.incident.manage" => Self::EmCommIncidentManage,
+            "emcomm.period.manage" => Self::EmCommPeriodManage,
+            "emcomm.person.manage" => Self::EmCommPersonManage,
+            "emcomm.assignment.manage" => Self::EmCommAssignmentManage,
+            "emcomm.message.manage" => Self::EmCommMessageManage,
+            "emcomm.activity.log" => Self::EmCommActivityLog,
             "ui.panel.register" => Self::UiPanelRegister,
             "ui.command.register" => Self::UiCommandRegister,
             "settings.read" => Self::SettingsRead,

@@ -38,11 +38,27 @@ This root roadmap summarizes the current implementation plan. Detailed architect
   sign-out-everywhere, device listing/revocation, and account deletion; and
   session/refresh tokens held only in the OS credential backend or iOS Keychain
   under Rust-assigned credential identifiers.
+- Server Administration v0.5: shared Rust hosted administration client scoped to
+  the signed-in server, with recorded administrator rights, cached hosting
+  configuration, invitations, and audit records; hosted web, desktop, native
+  iOS, and CLI flows for hosting read/update, invitation
+  create/list/inspect/resend/expire/revoke, audit review, and one-time
+  instance-administrator bootstrap; single-use invitation tokens returned once
+  and never persisted; and hosting updates that send only the fields the
+  operator changed.
+- Contest and EmComm foundations v0.5.1: a versioned, signed contest rule and
+  exchange schema with a definition catalog that can be updated without an
+  application release, and an append-only EmComm incident, operational period,
+  personnel, assignment, message, and activity-log model with per-record
+  correction history and station-scoped offline message numbering. See
+  [docs/V0_5_1_RELEASE_PLAN.md](docs/V0_5_1_RELEASE_PLAN.md).
 
 ## Current Milestone
 
-The current `0.4.0` workspace carries the offline-sync v1 foundation plus the
-account and session milestone. It is not the complete v1 product. The locked v1 release ships on November 24, 2026 with hosted web,
+The current `0.5.1` workspace carries the offline-sync v1 foundation, the
+account, session, and server administration milestones, and the contest and
+EmComm domain foundations. It is not the complete
+v1 product. The locked v1 release ships on November 24, 2026 with hosted web,
 native iOS, and Windows/macOS/Linux desktop. A PWA, pinned hosted website, or
 thin web wrapper is not the iOS client. v1.1 adds a TUI.
 
@@ -58,8 +74,15 @@ legacy queue migration, restore replay, and LAN revocation, plus a guided browse
 conflict-review surface for saved review selection, structured
 conflict summaries, explicit recovery choices, and corrective QSO note events.
 
-Partial or incomplete v1 areas include hosted web/desktop/iOS server
-administration UX, production email/Turnstile deployment configuration, production iOS reciprocal
+Contesting and EmComm now have their shared domain foundations: the contest
+rule/exchange schema with signed definition packs, and the append-only EmComm
+record model with its proposal and projection surfaces. The contest session and
+logging engine, the Field Day/Winter Field Day templates, the
+December/January definition packs, Cabrillo export, the ICS 211/213/213RR/214
+form workflows, and every contest and EmComm client surface remain open.
+
+Partial or incomplete v1 areas include production email/Turnstile deployment
+configuration, production iOS reciprocal
 LAN transport qualification, end-to-end cross-client branch
 review/reconciliation workflow qualification, physical-device LAN/iOS
 local-network validation, release-device iOS background task/poor-network qualification, production provider
@@ -79,10 +102,14 @@ dependency-ordered critical path. The next three implementation goals are:
   task/poor-network qualification.
 - Production provider qualification for QRZ, QRZ Logbook, LoTW, eQSL, Club
   Log, POTA, SOTAWatch, DX Cluster/RBN, maps, and propagation.
-- Hosted web, desktop, and iOS UI flows for the implemented server
-  administration APIs: hosting mode, invitation management, and audit review.
-  The account/session, recovery, and device flows shipped in the v0.4
-  milestone; see [docs/V0_4_RELEASE_PLAN.md](docs/V0_4_RELEASE_PLAN.md).
+- Production operations configuration for the hosted server: email
+  deliverability, Turnstile site/secret keys, privacy/support URLs,
+  infrastructure sizing, retention, and monitoring. The account/session,
+  recovery, and device flows shipped in the v0.4 milestone, the hosting,
+  invitation, and audit flows shipped in v0.5, and the contest and EmComm
+  domain foundations shipped in v0.5.1; see
+  [docs/V0_4_RELEASE_PLAN.md](docs/V0_4_RELEASE_PLAN.md) and
+  [docs/V0_5_RELEASE_PLAN.md](docs/V0_5_RELEASE_PLAN.md).
 
 ## Future Milestones
 

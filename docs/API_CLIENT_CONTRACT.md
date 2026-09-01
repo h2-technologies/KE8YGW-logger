@@ -285,7 +285,7 @@ Returns:
 {
   "ok": true,
   "service": "ke8ygw-sync-server",
-  "version": "0.4.0",
+  "version": "0.5.1",
   "mode": "self_hosted"
 }
 ```
@@ -433,6 +433,12 @@ Returns:
 }
 ```
 
+`status` is `pulled` when nothing was rejected, `diverged` when a rejection came
+from a branch that does not continue the receiver head, and `rejected` for other
+validation failures. Hosted `POST /api/v1/sync/push` returns the same shape and
+the same status values. Clients must treat `diverged` as a manual-review stop
+rather than a retryable failure.
+
 ### Sync Status
 
 `GET /api/v1/sync/status?token=<sync_token>`
@@ -493,7 +499,11 @@ The hosted `/api/v1` surface uses bearer sessions and currently implements:
   skips exact duplicate replay, restores scoped support metadata, strips
   provider credential references, and blocks divergent targets.
 - Sync status/preview/push/pull routes. Pull returns only events missing after
-  the requested local head for logbooks the bearer session may read.
+  the requested local head for logbooks the bearer session may read. Push
+  refuses any request whose event envelopes carry a `logbook_id` other than the
+  authorized request `logbook_id` with `403 forbidden`, and reports the same
+  `pulled`/`diverged`/`rejected` status vocabulary as the self-hosted push
+  route so clients can tell divergence apart from other rejections.
 - Sync divergence review routes. Reviews report local/client head,
   remote/server head, missing local/remote events, safe pull/push booleans, and
   recommended action. The server does not auto-merge divergent histories.
@@ -577,7 +587,8 @@ v1 acceptance requires tests that cover:
 - Authentication rejects missing, invalid, expired, and unauthorized tokens.
 - Logbook authorization is enforced.
 - Push rejects invalid hashes, unsupported schemas, wrong logbook IDs,
-  duplicate IDs with different content, and divergent chains.
+  duplicate IDs with different content, and divergent chains. Hosted and
+  self-hosted push report divergence with the same status value.
 - Pull returns only events missing after the requested local head.
 - Error responses keep a stable JSON shape.
 - Future-client proposal endpoints preserve the same validation rules as local

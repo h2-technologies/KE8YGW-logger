@@ -4,8 +4,10 @@ pub mod adif;
 pub mod application_settings;
 pub mod awards;
 pub mod bus;
+pub mod contest;
 pub mod credential;
 pub mod diagnostics;
+pub mod emcomm;
 pub mod event;
 pub mod lookup;
 pub mod map;
@@ -39,6 +41,16 @@ pub use bus::{
     redact_payload, BusEvent, EventBus, EventBusError, InMemoryEventBus, RuntimeDiagnosticEvent,
     RuntimeEventEnvelope, RuntimeEventFilter, RuntimeEventSeverity,
 };
+pub use contest::{
+    builtin_definition_pack, load_definition_pack, load_signed_definition_pack,
+    sign_canonical_bytes, sign_definition_pack, ContestCatalogEntry, ContestCategories,
+    ContestDefinition, ContestDefinitionCatalog, ContestDefinitionOrigin, ContestDefinitionPack,
+    ContestExchange, ContestExportProfile, ContestPackEnvelope, ContestPackSignature,
+    ContestPackTrustStore, ContestSchemaError, ContestScoring, ContestTimeWindow, DuplicateRule,
+    DuplicateScope, ExchangeDirection, ExchangeField, ExchangeFieldKind, MultiplierRule,
+    MultiplierScope, MultiplierSource, PackSignatureAlgorithm, PointRule, SerialPolicy,
+    CONTEST_DEFINITION_PACK_KIND, CONTEST_RULE_SCHEMA_VERSION,
+};
 pub use credential::{
     authorize_credential_action, credential_runtime_payload, default_credential_store,
     os_backend_name, required_credentials_satisfied, CredentialBackendStatus, CredentialError,
@@ -50,6 +62,12 @@ pub use diagnostics::{
     redact_for_report, ActionTimelineEntry, DiagnosticBundle, DiagnosticBundleFile,
     DiagnosticBundleInput, DiagnosticBundleManifest, DiagnosticBundlePreview, DiagnosticReportType,
     RedactionSummary, REPORT_FORMAT_VERSION,
+};
+pub use emcomm::{
+    ActivityLogEntry, AssignmentRecord, AssignmentStatus, EmCommProjection, EmCommProjectionError,
+    EmCommRecord, IcsForm, IncidentRecord, IncidentStatus, MessageNumber, MessagePrecedence,
+    MessageRecord, MessageStatus, OperationalPeriodRecord, OperationalPeriodStatus, PersonRecord,
+    PersonStatus, RecordChange, EMCOMM_SCHEMA_VERSION,
 };
 pub use event::{CoreEventEnvelope, NewLogbookEvent};
 pub use lookup::lookup_callsign_with_service_framework;

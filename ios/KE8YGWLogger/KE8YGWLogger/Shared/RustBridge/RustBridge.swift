@@ -115,6 +115,7 @@ final class RustBridgeStore: ObservableObject {
     @Published var sync = SyncSnapshot.placeholder
     @Published var diagnostics = DiagnosticsSnapshot.placeholder
     @Published var account = HostedAccountSnapshot.placeholder
+    @Published var admin = HostedAdminSnapshot.placeholder
     @Published var lastError: String?
 
     let client: RustBridgeClient
@@ -1051,7 +1052,7 @@ struct FallbackRustBridgeClient: RustBridgeClient {
         case .version:
             data = [
                 "app": "KE8YGW Logger",
-                "core_version": "0.4.0",
+                "core_version": "0.5.1",
                 "bridge_version": 1,
                 "rust_modules": ["ham-core", "ham-sync", "ham-plugin-sdk"],
                 "contract": "ffi_unavailable_in_this_build"
@@ -1405,7 +1406,7 @@ struct FallbackRustBridgeClient: RustBridgeClient {
                 "library_linked": false,
                 "abi_version": 1,
                 "bridge_schema_version": 1,
-                "core_version": "0.4.0",
+                "core_version": "0.5.1",
                 "sync_protocol_version": 1,
                 "backup_schema_version": 1,
                 "build_target": ["os": "fallback", "arch": "fallback"],
@@ -2354,8 +2355,8 @@ enum FallbackBridgeData {
     }
 
     static let diagnostics: [String: Any] = [
-        "rust_version": "0.4.0",
-        "core_version": "0.4.0",
+        "rust_version": "0.5.1",
+        "core_version": "0.5.1",
         "bridge_loaded": false,
         "abi_version": 1,
         "bridge_schema_version": 1,
@@ -5394,3 +5395,445 @@ extension RustBridgeStore {
 }
 
 let hostedAccountCredentialProviderId = "hosted-account"
+
+// MARK: - Hosted server administration
+//
+// Administration reuses the hosted account session. Rust plans the request and
+// names the Keychain credential to read; Swift carries the bytes; Rust
+// interprets the response and owns the durable record. The single-use
+// invitation token is handed back once and is never stored.
+
+struct HostedAdminEmailConfig: Decodable, Equatable {
+    let mode: String?
+    let fromAddress: String?
+    let verificationBaseUrl: String?
+    let recoveryBaseUrl: String?
+    let webhookConfigured: Bool
+    let credentialReferenceConfigured: Bool
+}
+
+struct HostedAdminTurnstileConfig: Decodable, Equatable {
+    let enabledForOpenRegistration: Bool
+    let siteKey: String?
+    let secretConfigured: Bool
+    let siteverifyUrl: String?
+    let timeoutSeconds: Int?
+}
+
+struct HostedAdminHostingConfig: Decodable, Equatable {
+    let operationMode: String?
+    let registrationMode: String?
+    let bootstrapAdminCompleted: Bool
+    let sessionTtlSeconds: Int?
+    let refreshTtlSeconds: Int?
+    let invitationTtlSeconds: Int?
+    let verificationTtlSeconds: Int?
+    let recoveryTtlSeconds: Int?
+    let email: HostedAdminEmailConfig?
+    let turnstile: HostedAdminTurnstileConfig?
+    let updatedAt: String?
+}
+
+struct HostedAdminInvitation: Decodable, Equatable, Identifiable {
+    let inviteId: String
+    let accountId: String?
+    let logbookId: String?
+    let invitedEmail: String?
+    let role: String?
+    let createdByUserId: String?
+    let createdAt: String?
+    let expiresAt: String?
+    let acceptedAt: String?
+    let revokedAt: String?
+    let lastSentAt: String?
+    let resendCount: Int
+
+    var id: String { inviteId }
+
+    /// Mirrors the Rust lifecycle rules: acceptance and revocation are terminal
+    /// and are reported ahead of expiry.
+    func status(now: Date = Date()) -> String {
+        if acceptedAt != nil { return "accepted" }
+        if revokedAt != nil { return "revoked" }
+        if let expiresAt, let expiry = HostedAdminTimestamp.date(from: expiresAt), expiry <= now {
+            return "expired"
+        }
+        return "pending"
+    }
+
+    func canResend(now: Date = Date()) -> Bool {
+        let state = status(now: now)
+        return state == "pending" || state == "expired"
+    }
+}
+
+struct HostedAdminAuditRecord: Decodable, Equatable, Identifiable {
+    let auditId: String
+    let occurredAt: String?
+    let requestId: String?
+    let actorAccountId: String?
+    let actorUserId: String?
+    let action: String?
+    let outcome: String?
+    let target: String?
+
+    var id: String { auditId }
+}
+
+struct HostedAdminSnapshot: Decodable, Equatable {
+    let schemaVersion: Int
+    let baseUrl: String
+    let administrator: Bool?
+    let hosting: HostedAdminHostingConfig?
+    let invitations: [HostedAdminInvitation]
+    let audits: [HostedAdminAuditRecord]
+    let lastAction: String?
+    let lastOutcome: String?
+    let lastErrorCode: String?
+    let lastMessage: String?
+    let lastRequestId: String?
+    let lastUpdatedAt: String?
+
+    var isAdministrator: Bool { administrator == true }
+
+    static let placeholder = HostedAdminSnapshot(
+        schemaVersion: 1,
+        baseUrl: "http://127.0.0.1:9750",
+        administrator: nil,
+        hosting: nil,
+        invitations: [],
+        audits: [],
+        lastAction: nil,
+        lastOutcome: nil,
+        lastErrorCode: nil,
+        lastMessage: nil,
+        lastRequestId: nil,
+        lastUpdatedAt: nil
+    )
+}
+
+/// Rust-owned interpretation of one hosted administration call.
+struct HostedAdminActionResult: Decodable, Equatable {
+    let action: String
+    let outcome: String
+    let status: Int
+    let message: String
+    let errorCode: String?
+    let requestId: String?
+    let retryable: Bool
+    let userActionRequired: Bool
+    let snapshot: HostedAdminSnapshot
+    let invitation: HostedAdminInvitation?
+
+    var isAccepted: Bool { outcome == "accepted" }
+}
+
+/// Transport-only description of a Rust-planned administration request.
+struct HostedAdminPlannedRequest: Decodable, Equatable {
+    let action: String
+    let method: String
+    let url: String
+    let path: String
+    let bodyJson: String?
+    let sessionTokenCredentialId: String
+    let requestId: String
+    let timeoutSeconds: Int
+    let maxResponseBytes: Int
+}
+
+struct HostedAdminPlanResult: Decodable {
+    let admin: HostedAdminSnapshot
+    let planToken: String
+    let request: HostedAdminPlannedRequest
+}
+
+struct HostedAdminApplyResult: Decodable {
+    let result: HostedAdminActionResult
+    let admin: HostedAdminSnapshot
+    let invitation: HostedAdminInvitation?
+    /// Present only on invitation create and resend, and only once.
+    let invitationToken: String?
+}
+
+struct HostedAdminSnapshotResult: Decodable {
+    let admin: HostedAdminSnapshot
+    let signedIn: Bool
+    let accountEmail: String?
+}
+
+/// Hosting fields an operator chose to change.
+///
+/// Only the fields set here are encoded, so an update never rewrites a hosting
+/// value the operator did not look at.
+struct HostedAdminHostingUpdateRequest: Encodable, Equatable {
+    var operationMode: String? = nil
+    var registrationMode: String? = nil
+    var sessionTtlSeconds: Int? = nil
+    var refreshTtlSeconds: Int? = nil
+    var invitationTtlSeconds: Int? = nil
+    var verificationTtlSeconds: Int? = nil
+    var recoveryTtlSeconds: Int? = nil
+
+    var isEmpty: Bool {
+        operationMode == nil
+            && registrationMode == nil
+            && sessionTtlSeconds == nil
+            && refreshTtlSeconds == nil
+            && invitationTtlSeconds == nil
+            && verificationTtlSeconds == nil
+            && recoveryTtlSeconds == nil
+    }
+}
+
+/// Hosted administration operation requested by the UI.
+///
+/// The shape mirrors the Rust `HostedAdminAction` tagged enum; Rust remains the
+/// only place that turns an action into a hosted route.
+struct HostedAdminActionRequest: Encodable, Equatable {
+    let action: String
+    var update: HostedAdminHostingUpdateRequest? = nil
+    var logbookId: String? = nil
+    var email: String? = nil
+    var role: String? = nil
+    var inviteId: String? = nil
+    var expiresAt: String? = nil
+
+    static let hostingRead = Self(action: "hosting_read")
+    static func hostingUpdate(_ update: HostedAdminHostingUpdateRequest) -> Self {
+        Self(action: "hosting_update", update: update)
+    }
+    static let invitationList = Self(action: "invitation_list")
+    static func invitationCreate(logbookId: String, email: String, role: String) -> Self {
+        Self(action: "invitation_create", logbookId: logbookId, email: email, role: role)
+    }
+    static func invitationGet(inviteId: String) -> Self {
+        Self(action: "invitation_get", inviteId: inviteId)
+    }
+    static func invitationResend(inviteId: String) -> Self {
+        Self(action: "invitation_resend", inviteId: inviteId)
+    }
+    static func invitationExpire(inviteId: String) -> Self {
+        Self(action: "invitation_expire", inviteId: inviteId)
+    }
+    static func invitationRevoke(inviteId: String) -> Self {
+        Self(action: "invitation_revoke", inviteId: inviteId)
+    }
+    static let auditList = Self(action: "audit_list")
+}
+
+struct HostedAdminBridgeRequest: Encodable {
+    let appSupportDir: String
+    let action: HostedAdminActionRequest
+}
+
+struct HostedAdminApplyBridgeRequest: Encodable {
+    let appSupportDir: String
+    let action: HostedAdminActionRequest
+    let planToken: String
+    let status: Int
+    let bodyJson: String?
+}
+
+struct HostedAdminTransportFailureBridgeRequest: Encodable {
+    let appSupportDir: String
+    let action: HostedAdminActionRequest
+    let planToken: String
+    let message: String
+}
+
+protocol HostedAdminTransporting {
+    func execute(
+        request: HostedAdminPlannedRequest,
+        body: Data?,
+        sessionToken: String
+    ) async throws -> HostedAccountTransportResponse
+}
+
+/// URLSession transport for hosted administration requests.
+struct HostedAdminHTTPTransport: HostedAdminTransporting {
+    func execute(
+        request: HostedAdminPlannedRequest,
+        body: Data?,
+        sessionToken: String
+    ) async throws -> HostedAccountTransportResponse {
+        guard let url = URL(string: request.url),
+              let scheme = url.scheme?.lowercased(),
+              scheme == "http" || scheme == "https"
+        else {
+            throw HostedAccountTransportError.invalidURL
+        }
+        var urlRequest = URLRequest(url: url)
+        urlRequest.httpMethod = request.method
+        urlRequest.timeoutInterval = TimeInterval(max(1, min(request.timeoutSeconds, 120)))
+        urlRequest.setValue("application/json", forHTTPHeaderField: "accept")
+        urlRequest.setValue(request.requestId, forHTTPHeaderField: "x-request-id")
+        urlRequest.setValue("Bearer \(sessionToken)", forHTTPHeaderField: "authorization")
+        if let body {
+            urlRequest.setValue("application/json", forHTTPHeaderField: "content-type")
+            urlRequest.httpBody = body
+        }
+
+        let (data, response) = try await URLSession.shared.data(for: urlRequest)
+        guard let http = response as? HTTPURLResponse else {
+            throw HostedAccountTransportError.invalidHTTPResponse
+        }
+        guard data.count <= request.maxResponseBytes else {
+            throw HostedAccountTransportError.responseTooLarge(limit: request.maxResponseBytes)
+        }
+        return HostedAccountTransportResponse(
+            status: http.statusCode,
+            bodyJson: data.isEmpty ? nil : String(data: data, encoding: .utf8)
+        )
+    }
+}
+
+/// One administration outcome plus the token that must be shown exactly once.
+struct HostedAdminExecution: Equatable {
+    let result: HostedAdminActionResult
+    let invitationToken: String?
+}
+
+extension RustBridgeStore {
+    /// Loads the Rust-owned hosted administration record.
+    @discardableResult
+    func refreshHostedAdmin() async throws -> HostedAdminSnapshotResult {
+        let supportURL = try RustBridgePaths.applicationSupportDirectory()
+        let result = try await command(
+            "admin.snapshot",
+            payload: AppSupportBridgeRequest(appSupportDir: supportURL.path),
+            as: HostedAdminSnapshotResult.self
+        )
+        admin = result.admin
+        lastError = nil
+        return result
+    }
+
+    /// Plans one administration action in Rust.
+    func planHostedAdminRequest(
+        _ action: HostedAdminActionRequest
+    ) async throws -> HostedAdminPlanResult {
+        let supportURL = try RustBridgePaths.applicationSupportDirectory()
+        let result = try await command(
+            "admin.plan",
+            payload: HostedAdminBridgeRequest(
+                appSupportDir: supportURL.path,
+                action: action
+            ),
+            as: HostedAdminPlanResult.self
+        )
+        admin = result.admin
+        return result
+    }
+
+    /// Runs one administration action through Rust planning, a Swift transport,
+    /// and Rust interpretation.
+    ///
+    /// The returned invitation token, when present, is shown once by the caller
+    /// and is never written to the Keychain or the durable record.
+    @discardableResult
+    func executeHostedAdminAction<T: HostedAdminTransporting>(
+        _ action: HostedAdminActionRequest,
+        transport: T,
+        vault: CredentialVault,
+        networkAvailable: Bool = true
+    ) async throws -> HostedAdminExecution {
+        let plan = try await planHostedAdminRequest(action)
+        guard networkAvailable else {
+            let result = try await recordHostedAdminTransportFailure(
+                action,
+                planToken: plan.planToken,
+                message: HostedAccountTransportError.networkUnavailable.localizedDescription
+            )
+            return HostedAdminExecution(result: result, invitationToken: nil)
+        }
+
+        guard let sessionToken = try vault.read(
+            account: plan.request.sessionTokenCredentialId,
+            providerId: hostedAccountCredentialProviderId
+        ) else {
+            throw RustBridgeError.unavailable(
+                "No stored hosted session token; sign in again before administering this server."
+            )
+        }
+
+        let body = plan.request.bodyJson.flatMap { $0.data(using: .utf8) }
+        let response: HostedAccountTransportResponse
+        do {
+            response = try await transport.execute(
+                request: plan.request,
+                body: body,
+                sessionToken: sessionToken
+            )
+        } catch {
+            let result = try await recordHostedAdminTransportFailure(
+                action,
+                planToken: plan.planToken,
+                message: error.localizedDescription
+            )
+            return HostedAdminExecution(result: result, invitationToken: nil)
+        }
+
+        let supportURL = try RustBridgePaths.applicationSupportDirectory()
+        let applied = try await command(
+            "admin.apply",
+            payload: HostedAdminApplyBridgeRequest(
+                appSupportDir: supportURL.path,
+                action: action,
+                planToken: plan.planToken,
+                status: response.status,
+                bodyJson: response.bodyJson
+            ),
+            as: HostedAdminApplyResult.self
+        )
+        admin = applied.admin
+        lastError = applied.result.isAccepted ? nil : applied.result.message
+        return HostedAdminExecution(
+            result: applied.result,
+            invitationToken: applied.invitationToken
+        )
+    }
+
+    private func recordHostedAdminTransportFailure(
+        _ action: HostedAdminActionRequest,
+        planToken: String,
+        message: String
+    ) async throws -> HostedAdminActionResult {
+        let supportURL = try RustBridgePaths.applicationSupportDirectory()
+        let applied = try await command(
+            "admin.transport_failure",
+            payload: HostedAdminTransportFailureBridgeRequest(
+                appSupportDir: supportURL.path,
+                action: action,
+                planToken: planToken,
+                message: message
+            ),
+            as: HostedAdminApplyResult.self
+        )
+        admin = applied.admin
+        lastError = applied.result.message
+        return applied.result
+    }
+}
+
+/// Parses hosted RFC 3339 timestamps.
+///
+/// Rust omits fractional seconds when they are zero and includes them
+/// otherwise, so both forms have to parse or an invitation with a whole-second
+/// expiry would be read as still pending.
+enum HostedAdminTimestamp {
+    private static let fractional: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter
+    }()
+
+    private static let whole: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter
+    }()
+
+    static func date(from value: String) -> Date? {
+        fractional.date(from: value) ?? whole.date(from: value)
+    }
+}

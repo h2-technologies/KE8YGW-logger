@@ -1,5 +1,212 @@
 # Changelog
 
+## 0.5.1
+
+### Added
+
+- Added `ham_sync::push_replication_status`, the single classifier that hosted,
+  self-hosted, and in-memory sync servers use to report a push as `pulled`,
+  `diverged`, or `rejected`.
+- Added `ham_core::contest`, the versioned contest rule and exchange schema:
+  contest definitions, bands and modes, sent/received exchange fields, entry
+  categories, duplicate scope, serial policy, multipliers, ordered scoring
+  rules, time windows, and export identity. Definitions are data, so a
+  corrected or newly published rule set can reach operators without an
+  application build.
+- Added signed contest definition packs. A distributed pack carries a detached
+  HMAC-SHA256 signature over its canonical bytes; `ContestPackTrustStore`
+  accepts only packs signed by a key it holds, and an unsigned pack, an unknown
+  key id, a changed digest, and a bad signature are each a distinct error.
+- Added `ContestDefinitionCatalog`, which starts from the compiled-in
+  definitions, applies installed packs, keeps the highest `rule_version` per
+  contest, and records each definition's provenance.
+- Added the built-in generic serial and generic grid definitions in
+  `crates/ham-core/assets/contest-definitions-v1.json`, loaded through the same
+  path as an operator-installed pack.
+- Added `ham_core::emcomm`, the append-only incident, operational period,
+  personnel, assignment, message, and activity-log model behind ICS 211, 213,
+  213RR, and 214, with a rebuildable `EmCommProjection`, per-record event
+  history, precedence ordering, unacknowledged-traffic lookup, and a complete
+  incident package export.
+- Added station-scoped EmComm message numbers (`PREFIX-NNNN`) that two
+  disconnected stations can allocate without coordinating, plus
+  `next_message_number`, which counts only numbers minted by the asking
+  station.
+- Added `official.log.emcomm.*` official events, `proposal.emcomm.*` proposals
+  with payload validation, and the `emcomm.*` plugin capabilities
+  (`view`, `incident.manage`, `period.manage`, `person.manage`,
+  `assignment.manage`, `message.manage`, `activity.log`).
+- Added `docs/CONTEST_RULE_SCHEMA.md`, `docs/EMCOMM_RECORD_MODEL.md`, and
+  `docs/V0_5_1_RELEASE_PLAN.md`.
+
+### Changed
+
+- The `ham-gui` listener now serves only the LAN sync read endpoints
+  (`GET /api/sync/state`, `/api/sync/list-logbooks`, `/api/sync/get-head`,
+  `/api/sync/events-since`, `/api/sync/event-metadata`) and reciprocal
+  `POST /api/sync/lan/pairing-accept` to non-loopback requesters. The browser
+  UI and every unauthenticated control endpoint,
+  including QSO/Net Control writes, credential, backup, LAN pairing, and cloud
+  controls, now require a loopback requester or the explicit
+  `HAM_GUI_ALLOW_REMOTE_CONTROL_API=1` opt-in. Automatic LAN discovery needs a
+  LAN-reachable bind, which previously exposed all of that surface to the
+  network. Rejections return `403` and publish a redacted
+  `sync.lan.control_api.rejected` runtime event.
+- Hosted `POST /api/v1/sync/push` now rejects a push whose event envelopes carry
+  a `logbook_id` other than the authorized request `logbook_id` with
+  `403 forbidden`. The route previously authorized only the request field, so a
+  session with write access to one logbook could append official events into
+  another logbook.
+- Hosted `POST /api/v1/sync/push` now reports a branch that does not continue the
+  server head as `diverged` instead of `rejected`, matching the self-hosted push
+  route so desktop and iOS clients stop unattended retry and open a manual
+  conflict review on every transport.
+- Contest definition documents reject unknown fields. A pack that carries a
+  rule concept this build does not implement fails to load rather than loading
+  with that rule silently ignored, and a pack written against a newer
+  `schema_version` is rejected whole.
+- An older contest definition pack can no longer downgrade a contest that has
+  already been updated to a higher `rule_version`.
+- EmComm corrections append rather than overwrite: each record keeps the merged
+  current payload and the ordered history of every event that produced it, so a
+  transmitted message keeps its transmission entry after it is cancelled. An
+  empty correction is rejected, and a message number is assigned once and
+  cannot be changed by a correction.
+- Unified every release surface on product version `0.5.1`: Cargo workspace
+  metadata, Tauri configuration, iOS marketing version, OpenAPI product
+  metadata, the CLI version assertion, iOS Rust-bridge fallback payloads, the
+  governance version pin, and documentation. The iOS build number moves to `3`
+  and the frozen `/api/v1` `info.version` is unchanged.
+- Closed the repository/architecture baseline (#3) and the accounts, API
+  contract, and hosting-modes epic (#4) after auditing their remaining child
+  issues against the shipped code.
+
+### Testing
+
+- Added `ham-gui` tests for the LAN read allow-list, the loopback and opt-in
+  decision matrix, and the redacted `403` rejection for non-loopback control
+  requests.
+- Added `ham-server` regression tests for cross-logbook sync push rejection and
+  for hosted divergence reporting plus pull-then-reapply reconciliation.
+- Added a `ham-sync-server` loopback HTTP test proving the durable self-hosted
+  surface refuses a divergent branch without changing the head or official log,
+  reports a `diverged` preview for an unknown local head, reconciles after a
+  pull, and ignores duplicate replay of the reconciled chain.
+- Added `ham-ios-ffi` tests for `sync.offline_queue.recover`: first-launch queue
+  initialization, legacy `version: 0` migration, corrupt-queue quarantine with
+  the original bytes preserved, and interrupted atomic-write promotion.
+- Added 22 `ham-core` contest schema tests covering built-in pack loading,
+  newer-schema and unknown-kind rejection, unknown-field rejection, serial and
+  multiplier consistency, duplicate contest ids, signed and tampered packs,
+  unsigned and unknown-key refusal, rule-version upgrade and downgrade
+  protection, exchange validation and normalization, duplicate keys, serial
+  sequences, scoring precedence, time windows, and digest stability.
+- Added 10 `ham-core` EmComm tests covering the incident/period/person/
+  assignment lifecycle, corrections that append history, message delivery
+  states, message-number assignment and malformed-number rejection, offline
+  station-scoped numbering, precedence ordering and unacknowledged traffic, the
+  ICS 214 activity log, the incident package and its per-record history, and
+  capability enforcement.
+
+## 0.5.0
+
+### Added
+
+- Added `ham_sync::admin`, the shared hosted server administration client used by
+  every platform: bounded action vocabulary, hosted request planning, response
+  interpretation, and a versioned JSON support store with atomic writes and
+  corrupt-file quarantine. Administration is scoped to the server the hosted
+  account is signed in to, so the endpoint and the session credential both come
+  from the account record and there is no second endpoint setting to drift.
+- Added a shared blocking HTTPS hosted administration transport behind the
+  existing `ham-sync` `hosted-http` feature, used by the desktop/hosted web GUI
+  and the CLI. Native iOS keeps its own URLSession transport.
+- Added `/api/admin/*` GUI endpoints for administration state, hosting
+  read/update, invitation list/create/inspect/resend/expire/revoke, and audit
+  review.
+- Added a browser Admin screen, an Admin toolbar entry, and `admin.*`
+  command-palette commands for hosted web and desktop.
+- Added redacted `admin.*` runtime events for every hosted administration action.
+- Added `admin.snapshot`, `admin.plan`, `admin.apply`, and
+  `admin.transport_failure` iOS bridge commands.
+- Added typed Swift hosted administration bridge methods, a URLSession
+  administration transport, and an iOS Admin workspace with a dashboard quick
+  action.
+- Added `ham-cli admin` subcommands with stable `--json` output for status,
+  hosting, set-hosting, invitations, invite, invitation, resend, expire, revoke,
+  and audits.
+- Added a one-time instance-administrator bootstrap on every surface:
+  the `account.bootstrap` shared action, `ham-cli account bootstrap`, a
+  `POST /api/account/bootstrap` GUI endpoint, and a browser "Claim server
+  administrator" form. An operator can now create the first administrator on a
+  fresh server from a client instead of by hand.
+- Added `docs/V0_5_RELEASE_PLAN.md`.
+
+### Changed
+
+- Hosted administration records whether the signed-in account is a server
+  administrator rather than assuming it. An accepted response on any admin-gated
+  route proves rights, a `forbidden` response records that the account is not an
+  administrator and drops the cached hosting/invitation/audit state, and an
+  authentication failure returns rights to unknown. A transport failure keeps
+  what the operator already loaded.
+- Hosting configuration updates send only the fields the operator set, so an
+  update never rewrites a hosting value they did not look at. Empty updates and
+  non-positive lifetimes are rejected before a request is sent.
+- The single-use invitation token issued by invitation create and resend is
+  returned exactly once and is excluded from every serialized form of the result
+  and the durable record. It is never written to the support record, to platform
+  secure storage, or to a runtime event.
+- Changing the hosted account endpoint resets the cached administration record,
+  so hosting, invitation, and audit state cannot be shown for the wrong server.
+- Invitations and audit records retained in the durable administration record
+  are stored newest-first and bounded, so a long-lived server cannot grow the
+  support file without limit.
+- Unified every release surface on product version `0.5.0`: Cargo workspace
+  metadata, Tauri configuration, iOS marketing version, OpenAPI product
+  metadata, the CLI version assertion, iOS Rust-bridge fallback payloads, the
+  governance version pin, and documentation. The iOS build number and the frozen
+  `/api/v1` `info.version` are unchanged.
+- Updated `ROADMAP.md`, `RELEASE.md`, `PROJECT_STATE.md`,
+  `docs/V1_EXECUTION_PLAN.md`, and `docs/CLI_REFERENCE.md` for the server
+  administration milestone.
+
+### Testing
+
+- Added `ham-sync` hosted administration tests for session-scoped planning,
+  admin route construction, partial and rejected hosting updates, mode/role
+  parsing, accepted hosting reads, invitation-token single-use handling and
+  non-persistence, invitation lifecycle status, cached-invitation replacement,
+  `forbidden` and revoked-session handling, missing stored secrets, transport
+  failures, bounded newest-first audit listings, endpoint-change resets, corrupt
+  record quarantine, and unsupported record versions.
+- Added `ham-gui` tests for administration state defaults, session-scoped
+  request rejection, unknown hosting modes, empty and non-positive hosting
+  updates, unknown invitation roles, and malformed client JSON.
+- Added `ham-ios-ffi` tests for admin plan/apply round-trips, invitation-token
+  handover without persistence, session-required rejection, `forbidden`
+  classification, and persisted transport failures.
+- Added Swift `RustBridgeTests` cases for administration snapshots, bearer-token
+  use, missing stored tokens, single-use invitation-token handling, offline
+  transport classification, invitation lifecycle rules, and partial hosting
+  update encoding.
+- Ran `cargo fmt --all -- --check`.
+- Ran `cargo clippy` with `-D warnings` across every crate that builds in this
+  workspace.
+- Ran the Rust test suite with 363 tests passing.
+- Ran a live `ham-cli admin` flow against a local `ham-server` binary: bootstrap,
+  hosting read, two single-field hosting updates, invitation create, list,
+  inspect, resend, expire, revoke, a server-refused resend after revocation, and
+  audit review; then read the same durable record back through the `ham-gui`
+  `/api/admin/state` endpoint and created an invitation and a hosting update
+  through the browser endpoints.
+- Verified no invitation token reaches any support file or runtime log.
+- Xcode/iOS simulator tests were not run because this workspace does not provide
+  macOS/Xcode tooling.
+- `cargo clippy --workspace --all-targets` and `cargo test --workspace` could not
+  include `ham-desktop`: this container has no `gdk-3.0`, so its `gdk-sys` build
+  script fails. That failure reproduces unchanged on `dev` without these changes.
+
 ## 0.4.0
 
 ### Added
@@ -84,6 +291,16 @@
 - Hardened iOS Rust build scripts to load Rust/Homebrew paths in Xcode archive shells and removed a developer-specific Xcode run script path.
 - iOS no longer calls `fatalError` when the SwiftData model container cannot be created, which crashed the app at launch (TestFlight 0.3.0 build 149, `EXC_BREAKPOINT` in `App.main()`); the container is now created with staged recovery.
 - iOS Diagnostics now reports projection cache health and includes it in the exported diagnostics report.
+- The Tauri desktop app now sets `app.withGlobalTauri`, which injects
+  `window.__TAURI__`. Without it the web UI never found `invoke`, so its
+  desktop `/api/*` bridge and native file dialogs were never installed and
+  `/api/shell` fell through to Tauri's `index.html` asset fallback; the app
+  opened on "GUI failed to start" with `SyntaxError: Unexpected token '<'`.
+  The bridge now also accepts `window.__TAURI_INTERNALS__.invoke`, falls back
+  to the default `http://127.0.0.1:9467` API when `desktop_runtime` reports no
+  server URL, and reports a non-JSON `/api/shell` response by endpoint,
+  status, and content type. The startup failure screen escapes the error text
+  so markup in a message is no longer swallowed by `innerHTML`.
 
 ### Fixed
 
