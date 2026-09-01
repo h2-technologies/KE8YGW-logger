@@ -56,6 +56,8 @@ const state = {
   syncState: null,
   selectedPeerId: null,
   activeWorkspace: "dashboard",
+  appearance: { layout: "operating-deck", theme: "system" },
+  moreMenuOpen: false,
   busConnected: false,
   streamPaused: false,
   selectedEventId: null,
@@ -235,10 +237,15 @@ async function boot() {
   state.runtimeEvents = payload.runtime_events;
   state.runtimeStatus = payload.runtime_status;
   state.activeWorkspace = payload.shell.active_workspace;
+  state.appearance = payload.shell.appearance || state.appearance;
   state.busConnected = payload.runtime_status.connected;
 
   bindShellControls();
   renderWorkspaceSelector();
+  renderModeButtons();
+  renderThemeToggle();
+  renderLayoutSelect();
+  applyAppearance();
   await refreshQsos();
   await refreshStation();
   await refreshAwards();
@@ -257,10 +264,20 @@ async function boot() {
 }
 
 function bindShellControls() {
-  document.querySelectorAll(".activity-item").forEach((button) => {
-    button.addEventListener("click", () => switchWorkspace(button.dataset.workspace));
-  });
   byId("workspace-selector").addEventListener("change", (event) => switchWorkspace(event.target.value));
+  byId("layout-select").addEventListener("change", (event) => setShellLayout(event.target.value));
+  byId("theme-toggle").addEventListener("click", (event) => {
+    const option = event.target.closest("[data-theme-option]");
+    if (option) setThemeMode(option.dataset.themeOption);
+  });
+  byId("workspace-modes").addEventListener("click", (event) => {
+    const button = event.target.closest("[data-workspace]");
+    if (button) switchWorkspace(button.dataset.workspace);
+  });
+  byId("more-button").addEventListener("click", () => toggleMoreMenu());
+  document.addEventListener("click", (event) => {
+    if (state.moreMenuOpen && !event.target.closest(".menu-more")) toggleMoreMenu(false);
+  });
   byId("command-button").addEventListener("click", openCommandPalette);
   byId("import-adif-button").addEventListener("click", importAdifFromPrompt);
   byId("export-adif-button").addEventListener("click", exportAdifFromPrompt);
@@ -271,6 +288,9 @@ function bindShellControls() {
   byId("admin-button")?.addEventListener("click", openAdminScreen);
   byId("close-screen").addEventListener("click", closeScreen);
   byId("command-search").addEventListener("input", renderCommandResults);
+  document.querySelectorAll(".more-item").forEach((item) => {
+    item.addEventListener("click", () => toggleMoreMenu(false));
+  });
 
   document.addEventListener("keydown", (event) => {
     const key = event.key.toLowerCase();
@@ -282,6 +302,11 @@ function bindShellControls() {
       event.preventDefault();
       runCommand("focus.callsign-entry");
     }
+    // Shift+Ctrl/Cmd+L steps through the shell layouts without leaving the log.
+    if ((event.ctrlKey || event.metaKey) && event.shiftKey && key === "l") {
+      event.preventDefault();
+      cycleShellLayout();
+    }
     if (event.key === "Enter" && document.activeElement?.id === "callsign-entry-input") {
       const form = byId("qso-create-form");
       if (form?.checkValidity()) {
@@ -292,6 +317,7 @@ function bindShellControls() {
     if (event.key === "Escape") {
       closeScreen();
       closeCommandPalette();
+      toggleMoreMenu(false);
     }
   });
 }
@@ -299,14 +325,165 @@ function bindShellControls() {
 function renderWorkspaceSelector() {
   const selector = byId("workspace-selector");
   selector.innerHTML = state.shell.workspaces
-    .map((workspace) => `<option value="${workspace.id}">${workspace.title}</option>`)
+    .map((workspace) => `<option value="${workspace.id}">${escapeHtml(workspace.title)}</option>`)
+    .join("");
+}
+
+// ---------------------------------------------------------------------------
+// Appearance: shell layout and theme.
+//
+// The layouts rearrange the same regions rather than swapping in different
+// screens, so switching one never loses the operator's place, their draft QSO,
+// or their panel customization.
+// ---------------------------------------------------------------------------
+
+// Panels a layout prefers to pull out of the centre and into the left context
+// rail. A layout only gets a rail if the active workspace actually offers one
+// of these panels, so the rail never appears empty.
+const LAYOUT_RAIL_PANELS = {
+  "operating-deck": ["dx-cluster", "spots-alerts", "rig-control"],
+  "tabbed-workbench": ["global-search", "recent-qsos"],
+};
+
+// Regions a layout does not render. Their panels fold into the centre instead
+// of disappearing, because a layout choice must never hide data.
+const LAYOUT_FOLDED_REGIONS = {
+  "focus-console": ["bottom"],
+};
+
+function shellLayouts() {
+  return state.shell?.layouts || [];
+}
+
+function activeLayoutId() {
+  const layouts = shellLayouts();
+  const current = state.appearance?.layout;
+  if (layouts.some((layout) => layout.slug === current)) return current;
+  return layouts[0]?.slug || "operating-deck";
+}
+
+function activeLayoutDefinition() {
+  return shellLayouts().find((layout) => layout.slug === activeLayoutId()) || null;
+}
+
+function renderModeButtons() {
+  byId("workspace-modes").innerHTML = state.shell.workspaces
+    .map(
+      (workspace) =>
+        `<button class="mode-button" type="button" data-workspace="${workspace.id}">${escapeHtml(workspace.title)}</button>`,
+    )
+    .join("");
+}
+
+function renderThemeToggle() {
+  const themes = state.shell?.themes || [
+    { slug: "system", title: "Match system" },
+    { slug: "light", title: "Light" },
+    { slug: "dark", title: "Dark" },
+  ];
+  const glyphs = { system: "\u25D1", light: "\u2600", dark: "\u263E" };
+  byId("theme-toggle").innerHTML = themes
+    .map(
+      (theme) =>
+        `<button class="theme-option" type="button" data-theme-option="${theme.slug}" title="${escapeHtml(theme.title)}" aria-label="${escapeHtml(theme.title)}">${glyphs[theme.slug] || "?"}</button>`,
+    )
+    .join("");
+}
+
+function renderLayoutSelect() {
+  byId("layout-select").innerHTML = shellLayouts()
+    .map((layout) => `<option value="${layout.slug}">${escapeHtml(layout.title)}</option>`)
+    .join("");
+}
+
+/// Push the chosen layout and theme onto the document. Theme lives on <html> so
+/// the tokens resolve before anything inside the shell paints.
+function applyAppearance() {
+  const layout = activeLayoutId();
+  const theme = state.appearance?.theme || "system";
+  document.documentElement.dataset.theme = theme;
+  byId("app").dataset.layout = layout;
+  byId("layout-select").value = layout;
+  document.querySelectorAll("[data-theme-option]").forEach((option) => {
+    const active = option.dataset.themeOption === theme;
+    option.setAttribute("aria-pressed", active ? "true" : "false");
+  });
+}
+
+async function persistAppearance(patch) {
+  state.appearance = { ...state.appearance, ...patch };
+  applyAppearance();
+  render();
+  try {
+    const result = await fetchJson("/api/shell/appearance", {
+      method: "POST",
+      body: JSON.stringify(patch),
+    });
+    if (result?.appearance) {
+      state.appearance = result.appearance;
+      applyAppearance();
+    }
+  } catch (error) {
+    // The shell already switched locally; say so rather than silently reverting,
+    // because losing the choice on the next launch is the surprising part.
+    console.warn("shell appearance not persisted", error);
+    state.appearanceError = error.message;
+    render();
+  }
+}
+
+function setShellLayout(layout) {
+  if (!layout || layout === state.appearance?.layout) return Promise.resolve();
+  return persistAppearance({ layout });
+}
+
+function setThemeMode(theme) {
+  if (!theme || theme === state.appearance?.theme) return Promise.resolve();
+  return persistAppearance({ theme });
+}
+
+function cycleShellLayout() {
+  const layouts = shellLayouts();
+  if (!layouts.length) return;
+  const index = layouts.findIndex((layout) => layout.slug === activeLayoutId());
+  setShellLayout(layouts[(index + 1) % layouts.length].slug);
+}
+
+function toggleMoreMenu(force) {
+  state.moreMenuOpen = typeof force === "boolean" ? force : !state.moreMenuOpen;
+  byId("more-menu").hidden = !state.moreMenuOpen;
+  byId("more-button").setAttribute("aria-expanded", state.moreMenuOpen ? "true" : "false");
+}
+
+function renderMenubarChips() {
+  const rigState = state.rigStatus?.active_state;
+  const queued = state.uploads?.jobs?.filter((job) => job.status !== "completed").length || 0;
+  const errors = state.runtimeStatus?.latest_error_count || 0;
+  const peers = state.syncState?.peers?.length || 0;
+  const chips = [
+    {
+      tone: rigState ? "ok" : "",
+      label: rigState ? `${formatKhz(rigState.frequency_hz) || "?"} kHz ${rigState.mode || ""}`.trim() : "Rig idle",
+    },
+    { tone: peers ? "info" : "", label: `${peers} peer${peers === 1 ? "" : "s"}` },
+    { tone: queued ? "warn" : "ok", label: queued ? `${queued} queued` : "Uploads clear" },
+  ];
+  if (errors) chips.push({ tone: "danger", label: `${errors} error${errors === 1 ? "" : "s"}` });
+  byId("menubar-chips").innerHTML = chips
+    .map((chip) => `<span class="chip"><span class="dot ${chip.tone}"></span>${escapeHtml(chip.label)}</span>`)
     .join("");
 }
 
 function render() {
   const workspace = currentWorkspace();
+  const layout = activeLayoutDefinition();
   byId("workspace-title").textContent = workspace.title;
   byId("workspace-selector").value = state.activeWorkspace;
+  byId("workspace-description").textContent = state.appearanceError
+    ? `Layout applied for this session only: ${state.appearanceError}`
+    : workspace.description || "";
+  byId("brand-callsign").textContent = state.station?.active_profile?.station_callsign || "KE8YGW";
+  byId("brand-context").textContent = layout ? layout.title : "Local station";
   byId("status-workspace").textContent = `Workspace: ${workspace.title}`;
   byId("status-plugins").textContent = `Plugins: ${state.plugins.filter((plugin) => plugin.enabled).length} enabled`;
   byId("status-bus").textContent = `Event bus: ${state.busConnected ? "connected" : "disconnected"}`;
@@ -324,22 +501,54 @@ function render() {
   byId("status-map-zoom").textContent = `Zoom: ${mapStatus.zoom || "n/a"}`;
   byId("status-map-layer").textContent = `Layer: ${mapStatus.selected_layer || "none"}`;
 
-  document.querySelectorAll(".activity-item").forEach((button) => {
+  document.querySelectorAll(".mode-button").forEach((button) => {
     button.classList.toggle("is-active", button.dataset.workspace === state.activeWorkspace);
   });
 
+  // Map cursor readouts only earn status bar space where a map is on screen.
+  const showsMap = panelsAvailableForWorkspace(workspace).some((panel) =>
+    ["interactive-map", "map-placeholder"].includes(panel.id),
+  );
+  byId("app").dataset.showMapStatus = showsMap ? "true" : "false";
+
+  renderMenubarChips();
+  renderRegion("rail-panels", "rail");
   renderRegion("center-panels", "center");
   renderRegion("right-panels", "right-inspector");
   renderRegion("bottom-panels", "bottom");
   bindPanelControls();
 }
 
+/// Where a placement actually lands once the active layout has had its say.
+///
+/// The workspace definitions from the server describe the canonical arrangement;
+/// a layout may pull spotting panels into its context rail, or fold a region it
+/// does not draw back into the centre. Panels are never dropped.
+function resolvedRegion(placement, layoutId = activeLayoutId()) {
+  const railPanels = LAYOUT_RAIL_PANELS[layoutId] || [];
+  if (railPanels.includes(placement.panel_id) && placement.region === "center") return "rail";
+  const folded = LAYOUT_FOLDED_REGIONS[layoutId] || [];
+  if (folded.includes(placement.region)) return "center";
+  return placement.region;
+}
+
 function renderRegion(elementId, region) {
   const workspace = currentWorkspace();
   const placements = effectivePlacements(workspace)
-    .filter((placement) => placement.region === region)
+    .filter((placement) => resolvedRegion(placement) === region)
     .sort((left, right) => left.order - right.order);
-  byId(elementId).innerHTML = `${renderPanelOpener(region)}${placements.map((placement) => renderPanel(placement.panel_id, region)).join("")}`;
+  const host = byId(elementId);
+  if (!host) return;
+  // The rail is layout-driven, so it hides itself rather than showing an empty
+  // column when the workspace has nothing to put there.
+  if (region === "rail") {
+    const railHost = host.closest(".rail-region");
+    if (railHost) railHost.hidden = placements.length === 0;
+    byId("app").dataset.rail = placements.length ? "visible" : "empty";
+    host.innerHTML = placements.map((placement) => renderPanel(placement.panel_id, region)).join("");
+    return;
+  }
+  host.innerHTML = `${renderPanelOpener(region)}${placements.map((placement) => renderPanel(placement.panel_id, region)).join("")}`;
 }
 
 function layoutKey(workspace = currentWorkspace()) {
@@ -568,6 +777,10 @@ function runCommand(commandId) {
 
   if (command.target_workspace) switchWorkspace(command.target_workspace);
   if (command.id === "open.settings") openScreen("settings");
+  if (command.id === "shell.layout.cycle") cycleShellLayout();
+  if (command.id === "shell.theme.light") setThemeMode("light");
+  if (command.id === "shell.theme.dark") setThemeMode("dark");
+  if (command.id === "shell.theme.system") setThemeMode("system");
   if (command.id === "open.plugins") openScreen("plugins");
   if (command.id === "account.open" || command.id === "account.sign-in" || command.id === "account.devices.open") openAccountScreen();
   if (command.id === "account.session.refresh") accountRequest("/api/account/session/refresh", {});
@@ -808,6 +1021,7 @@ function openScreen(kind) {
   title.textContent = "Settings";
   body.innerHTML = renderSettings();
   byId("cloud-connect-settings")?.addEventListener("click", connectCloudSyncFromSettings);
+  bindAppearanceControls();
 }
 
 function closeScreen() {
@@ -900,7 +1114,9 @@ function renderSettings() {
   return `<div class="settings-grid">
     ${sections
       .map((section) =>
-        section === "Account"
+        section === "Appearance"
+          ? `<article class="settings-card" style="grid-column: 1 / -1"><h3>${section}</h3>${renderAppearanceSettings()}</article>`
+        : section === "Account"
           ? `<article class="settings-card"><h3>${section}</h3>${renderAccountSummary()}</article>`
           : section === "Sync"
             ? `<article class="settings-card"><h3>${section}</h3>${renderCloudSettings()}</article>`
@@ -918,6 +1134,63 @@ function renderSettings() {
       )
       .join("")}
   </div>`;
+}
+
+/// The layout switcher. Every layout arranges the same workspaces and panels,
+/// so the copy focuses on what changes for the operator rather than on visual
+/// styling, and flags the one layout without a permanent entry field.
+function renderAppearanceSettings() {
+  const layouts = shellLayouts();
+  const current = activeLayoutId();
+  const theme = state.appearance?.theme || "system";
+  const themes = state.shell?.themes || [];
+  const warning = state.appearanceError
+    ? `<p class="event-warn">This device kept the change, but it was not saved for next launch: ${escapeHtml(state.appearanceError)}</p>`
+    : "";
+  return `
+    <p class="muted">Layout and theme apply to this desktop or browser. Switching keeps your workspace, draft contact, and card arrangement.</p>
+    <div class="theme-choices" role="group" aria-label="Theme">
+      ${themes
+        .map(
+          (mode) =>
+            `<button class="theme-choice ${mode.slug === theme ? "is-active" : ""}" type="button" data-appearance-theme="${mode.slug}">${escapeHtml(mode.title)}</button>`,
+        )
+        .join("")}
+    </div>
+    <div class="layout-choices" role="group" aria-label="Shell layout">
+      ${layouts
+        .map(
+          (layout) => `
+        <button class="layout-choice ${layout.slug === current ? "is-active" : ""}" type="button" data-appearance-layout="${layout.slug}">
+          <b>${escapeHtml(layout.title)}</b>
+          <small>${escapeHtml(layout.description)}</small>
+          <span class="layout-flags">
+            <span class="layout-flag">${escapeHtml(layout.density)}</span>
+            <span class="layout-flag ${layout.has_persistent_entry ? "entry" : "no-entry"}">${layout.has_persistent_entry ? "Always-on entry" : "No permanent entry field"}</span>
+          </span>
+        </button>`,
+        )
+        .join("")}
+    </div>
+    <p class="muted">Shortcut: Ctrl/Cmd + Shift + L steps through the layouts.</p>
+    ${warning}`;
+}
+
+function bindAppearanceControls() {
+  document.querySelectorAll("[data-appearance-layout]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      await setShellLayout(button.dataset.appearanceLayout);
+      byId("screen-body").innerHTML = renderSettings();
+      bindAppearanceControls();
+    });
+  });
+  document.querySelectorAll("[data-appearance-theme]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      await setThemeMode(button.dataset.appearanceTheme);
+      byId("screen-body").innerHTML = renderSettings();
+      bindAppearanceControls();
+    });
+  });
 }
 
 function renderServiceProviders() {

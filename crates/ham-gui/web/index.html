@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="system">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -7,39 +7,65 @@
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
-    <div id="app" class="app-shell" data-theme="dark">
-      <aside class="activity-bar" aria-label="Primary workspaces">
-        <button class="activity-item is-active" data-workspace="dashboard" aria-label="Dashboard">DB</button>
-        <button class="activity-item" data-workspace="casual-logger" aria-label="Casual Logger">CL</button>
-        <button class="activity-item" data-workspace="pota-sota" aria-label="POTA/SOTA">PS</button>
-        <button class="activity-item" data-workspace="awards" aria-label="Awards">AW</button>
-        <button class="activity-item" data-workspace="maps" aria-label="Maps">MP</button>
-        <button class="activity-item" data-workspace="online-services" aria-label="Online Services">OS</button>
-        <button class="activity-item" data-workspace="net-control" aria-label="Net Control">NC</button>
-        <button class="activity-item" data-workspace="em-comm" aria-label="EmComm">EC</button>
-        <button class="activity-item" data-workspace="contesting" aria-label="Contesting">CT</button>
-      </aside>
-
-      <header class="top-toolbar">
-        <div>
-          <p class="eyebrow">KE8YGW Logger</p>
-          <h1 id="workspace-title">Dashboard</h1>
+    <div id="app" class="app-shell" data-layout="operating-deck">
+      <header class="menubar">
+        <div class="brand">
+          <span class="brand-mark" aria-hidden="true">K8</span>
+          <span class="brand-text">
+            <b id="brand-callsign">KE8YGW</b>
+            <span id="brand-context">Local station</span>
+          </span>
         </div>
-        <label class="workspace-select">
-          <span>Workspace</span>
-          <select id="workspace-selector" aria-label="Workspace selector"></select>
-        </label>
-        <button id="command-button" class="toolbar-button" type="button">Command Palette</button>
-        <button id="import-adif-button" class="toolbar-button" type="button">Import ADIF</button>
-        <button id="export-adif-button" class="toolbar-button" type="button">Export ADIF</button>
-        <button id="backup-button" class="toolbar-button" type="button">Backups</button>
-        <button id="plugins-button" class="toolbar-button" type="button">Plugins</button>
-        <button id="account-button" class="toolbar-button" type="button">Account</button>
-        <button id="admin-button" class="toolbar-button" type="button">Admin</button>
-        <button id="settings-button" class="toolbar-button" type="button">Settings</button>
+
+        <nav class="modes" id="workspace-modes" aria-label="Workspaces"></nav>
+
+        <div class="menubar-right">
+          <button id="command-button" class="omni" type="button">
+            <span aria-hidden="true">⌘</span>
+            <span>Search or run a command</span>
+            <kbd>Ctrl K</kbd>
+          </button>
+
+          <div class="theme-toggle" id="theme-toggle" role="group" aria-label="Theme"></div>
+
+          <label class="menubar-select">
+            <span class="visually-hidden">Layout</span>
+            <select id="layout-select" aria-label="Shell layout"></select>
+          </label>
+
+          <label class="menubar-select">
+            <span class="visually-hidden">Workspace</span>
+            <select id="workspace-selector" aria-label="Workspace selector"></select>
+          </label>
+
+          <div class="chip-row" id="menubar-chips" aria-live="polite"></div>
+
+          <div class="menu-more">
+            <button id="more-button" class="toolbar-button" type="button" aria-expanded="false" aria-controls="more-menu">More</button>
+            <div id="more-menu" class="more-menu" hidden>
+              <button id="import-adif-button" class="more-item" type="button">Import ADIF</button>
+              <button id="export-adif-button" class="more-item" type="button">Export ADIF</button>
+              <button id="backup-button" class="more-item" type="button">Backups</button>
+              <button id="plugins-button" class="more-item" type="button">Plugins</button>
+              <button id="account-button" class="more-item" type="button">Account</button>
+              <button id="admin-button" class="more-item" type="button">Admin</button>
+              <button id="settings-button" class="more-item" type="button">Settings</button>
+            </div>
+          </div>
+        </div>
       </header>
 
+      <div class="workspace-title-row">
+        <p class="eyebrow">KE8YGW Logger</p>
+        <h1 id="workspace-title">Dashboard</h1>
+        <p class="workspace-description" id="workspace-description"></p>
+      </div>
+
       <main class="workspace-shell">
+        <aside class="panel-region rail-region" aria-label="Context rail">
+          <div class="region-heading">Context</div>
+          <div id="rail-panels" class="stack"></div>
+        </aside>
         <section class="panel-region center-region" aria-label="Workspace panels">
           <div id="center-panels" class="panel-grid"></div>
         </section>
@@ -54,19 +80,19 @@
       </section>
 
       <footer class="status-bar" aria-label="Status bar">
-        <span id="status-sync">Sync: Local only</span>
-        <span id="status-workspace">Workspace: Dashboard</span>
-        <span id="status-plugins">Plugins: 0 enabled</span>
-        <span id="status-bus">Event bus: disconnected</span>
-        <span id="status-events">Runtime events: 0</span>
-        <span id="status-errors">Errors: 0</span>
-        <span id="status-sync-peers">Discovery: stopped / 0 peers</span>
-        <span id="status-map-grid">Grid: unknown</span>
-        <span id="status-map-coordinates">Coords: unknown</span>
-        <span id="status-map-distance">Distance: n/a</span>
-        <span id="status-map-bearing">Bearing: n/a</span>
-        <span id="status-map-zoom">Zoom: n/a</span>
-        <span id="status-map-layer">Layer: none</span>
+        <span class="status-primary" id="status-sync">Sync: Local only</span>
+        <span class="status-primary" id="status-sync-peers">Discovery: stopped / 0 peers</span>
+        <span class="status-primary" id="status-events">Runtime events: 0</span>
+        <span class="status-primary" id="status-errors">Errors: 0</span>
+        <span class="status-secondary" id="status-workspace">Workspace: Dashboard</span>
+        <span class="status-secondary" id="status-plugins">Plugins: 0 enabled</span>
+        <span class="status-secondary" id="status-bus">Event bus: disconnected</span>
+        <span class="status-map" id="status-map-grid">Grid: unknown</span>
+        <span class="status-map" id="status-map-coordinates">Coords: unknown</span>
+        <span class="status-map" id="status-map-distance">Distance: n/a</span>
+        <span class="status-map" id="status-map-bearing">Bearing: n/a</span>
+        <span class="status-map" id="status-map-zoom">Zoom: n/a</span>
+        <span class="status-map" id="status-map-layer">Layer: none</span>
       </footer>
 
       <dialog id="command-palette" class="command-palette" aria-label="Command palette">

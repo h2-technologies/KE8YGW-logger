@@ -30,8 +30,9 @@ pub use adif::{
     AdifImportSummary, DuplicatePolicy,
 };
 pub use application_settings::{
-    ApplicationSettings, ApplicationSettingsError, ProviderValidationSettings,
-    APPLICATION_SETTINGS_SCHEMA_VERSION,
+    ApplicationSettings, ApplicationSettingsError, ProviderValidationSettings, APPEARANCE_MODES,
+    APPLICATION_SETTINGS_SCHEMA_VERSION, DEFAULT_APPEARANCE_MODE, DEFAULT_DESKTOP_SHELL_LAYOUT,
+    DEFAULT_MOBILE_DASHBOARD_LAYOUT, DESKTOP_SHELL_LAYOUTS, MOBILE_DASHBOARD_LAYOUTS,
 };
 pub use awards::{
     compute_award_progress, default_award_definitions, AwardCredit, AwardDefinition, AwardEngine,
