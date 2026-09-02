@@ -81,6 +81,9 @@
 
 ### Changed
 
+- Dropped the unused `ios` output from CI's `Detect changed areas` job. Nothing
+  consumed it: iOS validation runs in its own workflow, which cannot read
+  another workflow's job outputs. The other seven scopes are unchanged.
 - Replaced the GUI's left activity rail with a top menu bar. Navigation now
   costs vertical space, which the shell has, instead of the horizontal space the
   log, band map, and context panels compete for, and the modes carry readable
@@ -131,6 +134,32 @@
 
 ### Fixed
 
+- CI no longer reports success when change detection fails. The `CI result`
+  gate did not depend on the `Detect changed areas` job, and every validation
+  job does. A failure there — an unreachable `github.event.before` after a force
+  push is enough — skipped all of them, and the gate counted those skips as
+  passes, so a run that validated nothing reported green and still published an
+  internal or beta artifact. The gate now requires change detection to succeed
+  outright, while genuine skips from an unaffected scope still pass.
+- CI, iOS Native, and Security scanning no longer cancel in-progress runs for
+  pushes to `dev` and `main`. `cancel-in-progress` applied to every event, so
+  merging two pull requests in quick succession killed the first commit's run
+  and left that commit on a shared branch with no verdict; three commits on
+  `dev` are in that state today. It would also have blocked the production
+  release of such a commit, because `Release` only publishes a tag whose commit
+  has a completed successful `main` CI run. Superseded pull request runs are
+  still cancelled.
+- The documented `hotfix/*` exception for pull requests into `main` works
+  again. `Main promotion policy` honored it, but the separate `Branch promotion
+  policy` check rejected every head branch other than `dev`, so an emergency
+  hotfix could not be merged by the route
+  `docs/BRANCHING_AND_RELEASE_CHANNELS.md` prescribes. Both checks now call one
+  shared `scripts/check-promotion-policy.sh`, so they cannot drift apart again.
+  `Main promotion policy` also gained the head-repository check it was missing,
+  which the other check already had.
+- `Ubuntu preflight and policy` no longer reports "Only files outside CI
+  validation scopes changed" when Tauri or container validation is running; its
+  condition covered only the scopes checked inside that job.
 - iOS LAN discovery no longer fails with `Network.NWError error 48 - Address
   already in use`. The scanner bound one `NWConnectionGroup` per address family,
   so the IPv4 and IPv6 groups fought over the same UDP discovery port, and a

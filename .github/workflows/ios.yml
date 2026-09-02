@@ -15,7 +15,9 @@ permissions: {}
 
 concurrency:
   group: ios-${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  # Cancel superseded pull request runs only. Every commit pushed to dev and
+  # main keeps its own verdict.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   ios:
