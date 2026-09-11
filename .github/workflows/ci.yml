@@ -128,9 +128,6 @@ jobs:
             if [[ "$file" == src-tauri/* || "$file" == crates/ham-client/* || "$file" == crates/ham-core/* ]]; then
               tauri=true
             fi
-            if [[ "$file" == ios/* || "$file" == scripts/ios/* || "$file" == crates/ham-ios-ffi/* || "$file" == crates/ham-core/* || "$file" == Cargo.toml || "$file" == Cargo.lock || "$file" == rust-toolchain.toml ]]; then
-              ios=true
-            fi
             if [[ "$file" == Dockerfile.server || "$file" == .dockerignore || "$file" == crates/ham-server/* || "$file" == crates/ham-core/* || "$file" == Cargo.toml || "$file" == Cargo.lock || "$file" == rust-toolchain.toml ]]; then
               container=true
             fi
