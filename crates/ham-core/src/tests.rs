@@ -7,20 +7,32 @@ use ham_plugin_sdk::{
     OFFICIAL_LOG_QSO_ACTIVATION_LINKED, OFFICIAL_LOG_QSO_ACTIVATION_UNLINKED,
     OFFICIAL_LOG_QSO_CORRECTED, OFFICIAL_LOG_QSO_CREATED, OFFICIAL_LOG_QSO_DELETED,
     OFFICIAL_LOG_QSO_NOTE_ADDED, OFFICIAL_LOG_QSO_RESTORED, PROPOSAL_ACTIVATION_END,
-    PROPOSAL_ACTIVATION_START, PROPOSAL_NET_CHECKIN_CREATE, PROPOSAL_NET_CHECKIN_DELETE,
-    PROPOSAL_NET_REPORT_EXPORT, PROPOSAL_NET_SESSION_END, PROPOSAL_NET_SESSION_START,
-    PROPOSAL_NET_TRAFFIC_CREATE, PROPOSAL_QSO_ACTIVATION_LINK, PROPOSAL_QSO_CREATE,
-    PROPOSAL_QSO_DELETE, PROPOSAL_QSO_RESTORE,
+    PROPOSAL_ACTIVATION_START, PROPOSAL_EMCOMM_ACTIVITY_LOG, PROPOSAL_EMCOMM_ASSIGNMENT_CREATE,
+    PROPOSAL_EMCOMM_INCIDENT_CLOSE, PROPOSAL_EMCOMM_INCIDENT_OPEN, PROPOSAL_EMCOMM_INCIDENT_UPDATE,
+    PROPOSAL_EMCOMM_MESSAGE_ACKNOWLEDGE, PROPOSAL_EMCOMM_MESSAGE_CREATE,
+    PROPOSAL_EMCOMM_MESSAGE_TRANSMIT, PROPOSAL_EMCOMM_MESSAGE_UPDATE, PROPOSAL_EMCOMM_PERIOD_OPEN,
+    PROPOSAL_EMCOMM_PERSON_CHECK_IN, PROPOSAL_EMCOMM_PERSON_CHECK_OUT, PROPOSAL_NET_CHECKIN_CREATE,
+    PROPOSAL_NET_CHECKIN_DELETE, PROPOSAL_NET_REPORT_EXPORT, PROPOSAL_NET_SESSION_END,
+    PROPOSAL_NET_SESSION_START, PROPOSAL_NET_TRAFFIC_CREATE, PROPOSAL_QSO_ACTIVATION_LINK,
+    PROPOSAL_QSO_CREATE, PROPOSAL_QSO_DELETE, PROPOSAL_QSO_RESTORE,
 };
 use serde_json::json;
 use std::{fs, path::PathBuf};
 use uuid::Uuid;
 
 use crate::{
-    export_net_report_markdown, submit_proposal, ActivationProjection, BusEvent, CoreEventEnvelope,
-    EventBus, InMemoryEventBus, InMemoryLogbookEventStore, LogbookEventStore, NetControlProjection,
-    NewLogbookEvent, OperatorRole, PermissionGrantSet, PermissionGrantStatus, Projection,
-    ProposalContext, ProposalValidationError, QsoCurrentStateProjection,
+    export_net_report_markdown, submit_proposal, BusEvent, EmCommProjection, EventBus, IcsForm,
+    InMemoryEventBus, IncidentStatus, MessageNumber, MessagePrecedence, MessageStatus,
+    EMCOMM_SCHEMA_VERSION,
+};
+use crate::{
+    ActivationProjection, CoreEventEnvelope, InMemoryLogbookEventStore, LogbookEventStore,
+    NetControlProjection, NewLogbookEvent, OperatorRole, PermissionGrantSet, PermissionGrantStatus,
+    Projection, ProposalContext, ProposalValidationError, QsoCurrentStateProjection,
+};
+use crate::{
+    ApplicationSettings, APPEARANCE_MODES, DEFAULT_APPEARANCE_MODE, DEFAULT_DESKTOP_SHELL_LAYOUT,
+    DEFAULT_MOBILE_DASHBOARD_LAYOUT, DESKTOP_SHELL_LAYOUTS, MOBILE_DASHBOARD_LAYOUTS,
 };
 
 fn activation_payload(kind: &str) -> serde_json::Value {
@@ -1351,5 +1363,739 @@ async fn activation_projection_incremental_counters_match_full_recompute() {
     assert_eq!(
         activations.activations_for_qso(qso_ids[1]),
         Vec::<Uuid>::new()
+    );
+}
+
+fn emcomm_context() -> ProposalContext {
+    ProposalContext::local_admin(
+        plugin_manifest(vec![
+            PluginCapability::EmCommView,
+            PluginCapability::EmCommIncidentManage,
+            PluginCapability::EmCommPeriodManage,
+            PluginCapability::EmCommPersonManage,
+            PluginCapability::EmCommAssignmentManage,
+            PluginCapability::EmCommMessageManage,
+            PluginCapability::EmCommActivityLog,
+        ]),
+        OperatorRole::Admin,
+    )
+}
+
+fn emcomm_proposal(
+    proposal_type: &str,
+    logbook_id: Uuid,
+    entity_id: Option<Uuid>,
+    payload: serde_json::Value,
+) -> ProposalEnvelope {
+    ProposalEnvelope::new(
+        proposal_type,
+        logbook_id,
+        entity_id,
+        Some(Uuid::new_v4()),
+        Uuid::new_v4(),
+        "test-plugin",
+        1,
+        payload,
+    )
+}
+
+async fn open_test_incident(
+    store: &InMemoryLogbookEventStore,
+    bus: &InMemoryEventBus,
+    logbook_id: Uuid,
+) -> Uuid {
+    let outcome = submit_proposal(
+        store,
+        bus,
+        &emcomm_context(),
+        emcomm_proposal(
+            PROPOSAL_EMCOMM_INCIDENT_OPEN,
+            logbook_id,
+            None,
+            json!({
+                "station_callsign": "KE8YGW",
+                "incident_name": "County Exercise",
+                "incident_number": "2026-EX-01",
+                "opened_at": "2026-11-24T12:00:00Z"
+            }),
+        ),
+    )
+    .await
+    .expect("incident opens");
+    outcome.official_event.entity_id.expect("incident id")
+}
+
+#[tokio::test]
+async fn emcomm_incident_lifecycle_projects_from_official_events_only() {
+    let store = InMemoryLogbookEventStore::new();
+    let bus = InMemoryEventBus::new(64);
+    let logbook_id = Uuid::new_v4();
+
+    let incident_id = open_test_incident(&store, &bus, logbook_id).await;
+
+    let period = submit_proposal(
+        &store,
+        &bus,
+        &emcomm_context(),
+        emcomm_proposal(
+            PROPOSAL_EMCOMM_PERIOD_OPEN,
+            logbook_id,
+            None,
+            json!({
+                "station_callsign": "KE8YGW",
+                "incident_id": incident_id.to_string(),
+                "period_number": 1,
+                "started_at": "2026-11-24T12:05:00Z"
+            }),
+        ),
+    )
+    .await
+    .expect("period opens");
+    let period_id = period.official_event.entity_id.expect("period id");
+
+    let person = submit_proposal(
+        &store,
+        &bus,
+        &emcomm_context(),
+        emcomm_proposal(
+            PROPOSAL_EMCOMM_PERSON_CHECK_IN,
+            logbook_id,
+            None,
+            json!({
+                "station_callsign": "KE8YGW",
+                "incident_id": incident_id.to_string(),
+                "period_id": period_id.to_string(),
+                "name": "A. Operator",
+                "callsign": "KE8YGW",
+                "ics_position": "Radio Operator",
+                "checked_in_at": "2026-11-24T12:10:00Z"
+            }),
+        ),
+    )
+    .await
+    .expect("check-in appends");
+    let person_id = person.official_event.entity_id.expect("person id");
+
+    submit_proposal(
+        &store,
+        &bus,
+        &emcomm_context(),
+        emcomm_proposal(
+            PROPOSAL_EMCOMM_ASSIGNMENT_CREATE,
+            logbook_id,
+            None,
+            json!({
+                "station_callsign": "KE8YGW",
+                "incident_id": incident_id.to_string(),
+                "person_id": person_id.to_string(),
+                "assignment": "Net Control, primary repeater"
+            }),
+        ),
+    )
+    .await
+    .expect("assignment appends");
+
+    let mut projection = EmCommProjection::new();
+    let events = store.list_events(logbook_id).await.expect("events");
+    projection
+        .rebuild(events.iter())
+        .expect("projection rebuilds");
+
+    let incident = projection.incident(incident_id).expect("incident");
+    assert_eq!(incident.record.status, IncidentStatus::Open);
+    assert_eq!(incident.record.text("incident_number"), Some("2026-EX-01"));
+    assert_eq!(projection.periods_for_incident(incident_id).len(), 1);
+    assert_eq!(
+        projection
+            .open_period(incident_id)
+            .map(|period| period.period_id),
+        Some(period_id)
+    );
+    assert_eq!(projection.people_for_incident(incident_id, false).len(), 1);
+    assert_eq!(projection.assignments_for_person(person_id).len(), 1);
+}
+
+#[tokio::test]
+async fn emcomm_corrections_append_history_and_never_rewrite_it() {
+    let store = InMemoryLogbookEventStore::new();
+    let bus = InMemoryEventBus::new(64);
+    let logbook_id = Uuid::new_v4();
+    let incident_id = open_test_incident(&store, &bus, logbook_id).await;
+
+    submit_proposal(
+        &store,
+        &bus,
+        &emcomm_context(),
+        emcomm_proposal(
+            PROPOSAL_EMCOMM_INCIDENT_UPDATE,
+            logbook_id,
+            Some(incident_id),
+            json!({
+                "station_callsign": "KE8YGW",
+                "incident_name": "County Exercise (corrected)"
+            }),
+        ),
+    )
+    .await
+    .expect("correction appends");
+
+    let mut projection = EmCommProjection::new();
+    let events = store.list_events(logbook_id).await.expect("events");
+    projection
+        .rebuild(events.iter())
+        .expect("projection rebuilds");
+
+    let incident = projection.incident(incident_id).expect("incident");
+    assert_eq!(
+        incident.record.text("incident_name"),
+        Some("County Exercise (corrected)")
+    );
+    assert_eq!(incident.record.history().len(), 2);
+    assert_eq!(
+        incident.record.history()[0].payload["incident_name"],
+        json!("County Exercise")
+    );
+    assert_eq!(incident.record.status, IncidentStatus::Open);
+
+    let error = submit_proposal(
+        &store,
+        &bus,
+        &emcomm_context(),
+        emcomm_proposal(
+            PROPOSAL_EMCOMM_INCIDENT_UPDATE,
+            logbook_id,
+            Some(incident_id),
+            json!({}),
+        ),
+    )
+    .await
+    .expect_err("an empty correction is rejected");
+    assert!(matches!(error, ProposalValidationError::InvalidSchema(_)));
+}
+
+#[tokio::test]
+async fn emcomm_message_lifecycle_keeps_every_delivery_state() {
+    let store = InMemoryLogbookEventStore::new();
+    let bus = InMemoryEventBus::new(64);
+    let logbook_id = Uuid::new_v4();
+    let incident_id = open_test_incident(&store, &bus, logbook_id).await;
+
+    let message = submit_proposal(
+        &store,
+        &bus,
+        &emcomm_context(),
+        emcomm_proposal(
+            PROPOSAL_EMCOMM_MESSAGE_CREATE,
+            logbook_id,
+            None,
+            json!({
+                "station_callsign": "KE8YGW",
+                "incident_id": incident_id.to_string(),
+                "message_number": "KE8YGW-0001",
+                "form": "ICS-213",
+                "precedence": "priority",
+                "from": "Net Control",
+                "to": "Shelter 1",
+                "body": "Report current occupancy."
+            }),
+        ),
+    )
+    .await
+    .expect("message drafts");
+    let message_id = message.official_event.entity_id.expect("message id");
+
+    for (proposal_type, payload) in [
+        (
+            PROPOSAL_EMCOMM_MESSAGE_TRANSMIT,
+            json!({ "station_callsign": "KE8YGW", "transmitted_at": "2026-11-24T12:20:00Z" }),
+        ),
+        (
+            PROPOSAL_EMCOMM_MESSAGE_ACKNOWLEDGE,
+            json!({ "station_callsign": "KE8YGW", "acknowledged_at": "2026-11-24T12:22:00Z" }),
+        ),
+    ] {
+        submit_proposal(
+            &store,
+            &bus,
+            &emcomm_context(),
+            emcomm_proposal(proposal_type, logbook_id, Some(message_id), payload),
+        )
+        .await
+        .expect("delivery state appends");
+    }
+
+    let mut projection = EmCommProjection::new();
+    let events = store.list_events(logbook_id).await.expect("events");
+    projection
+        .rebuild(events.iter())
+        .expect("projection rebuilds");
+
+    let message = projection.message(message_id).expect("message");
+    assert_eq!(message.record.status, MessageStatus::Acknowledged);
+    assert_eq!(message.precedence, MessagePrecedence::Priority);
+    assert_eq!(message.form, IcsForm::Ics213);
+    assert_eq!(message.record.history().len(), 3);
+    assert_eq!(
+        message.record.history()[1].payload["transmitted_at"],
+        json!("2026-11-24T12:20:00Z")
+    );
+    assert!(projection.unacknowledged_messages(incident_id).is_empty());
+}
+
+#[tokio::test]
+async fn emcomm_message_numbers_cannot_be_reassigned_or_malformed() {
+    let store = InMemoryLogbookEventStore::new();
+    let bus = InMemoryEventBus::new(64);
+    let logbook_id = Uuid::new_v4();
+    let incident_id = open_test_incident(&store, &bus, logbook_id).await;
+
+    let error = submit_proposal(
+        &store,
+        &bus,
+        &emcomm_context(),
+        emcomm_proposal(
+            PROPOSAL_EMCOMM_MESSAGE_CREATE,
+            logbook_id,
+            None,
+            json!({
+                "station_callsign": "KE8YGW",
+                "incident_id": incident_id.to_string(),
+                "message_number": "7",
+                "from": "Net Control",
+                "to": "Shelter 1",
+                "body": "Report current occupancy."
+            }),
+        ),
+    )
+    .await
+    .expect_err("an unscoped message number is rejected");
+    assert!(matches!(error, ProposalValidationError::InvalidSchema(_)));
+
+    let message = submit_proposal(
+        &store,
+        &bus,
+        &emcomm_context(),
+        emcomm_proposal(
+            PROPOSAL_EMCOMM_MESSAGE_CREATE,
+            logbook_id,
+            None,
+            json!({
+                "station_callsign": "KE8YGW",
+                "incident_id": incident_id.to_string(),
+                "message_number": "KE8YGW-0001",
+                "from": "Net Control",
+                "to": "Shelter 1",
+                "body": "Report current occupancy."
+            }),
+        ),
+    )
+    .await
+    .expect("message drafts");
+    let message_id = message.official_event.entity_id.expect("message id");
+
+    let error = submit_proposal(
+        &store,
+        &bus,
+        &emcomm_context(),
+        emcomm_proposal(
+            PROPOSAL_EMCOMM_MESSAGE_UPDATE,
+            logbook_id,
+            Some(message_id),
+            json!({ "station_callsign": "KE8YGW", "message_number": "KE8YGW-0002" }),
+        ),
+    )
+    .await
+    .expect_err("a message number is assigned once");
+    assert!(matches!(error, ProposalValidationError::InvalidSchema(_)));
+}
+
+#[tokio::test]
+async fn emcomm_offline_message_numbers_are_scoped_to_the_originating_station() {
+    let store = InMemoryLogbookEventStore::new();
+    let bus = InMemoryEventBus::new(64);
+    let logbook_id = Uuid::new_v4();
+    let incident_id = open_test_incident(&store, &bus, logbook_id).await;
+
+    for number in ["KE8YGW-0001", "W8ABC-0001", "KE8YGW-0002"] {
+        submit_proposal(
+            &store,
+            &bus,
+            &emcomm_context(),
+            emcomm_proposal(
+                PROPOSAL_EMCOMM_MESSAGE_CREATE,
+                logbook_id,
+                None,
+                json!({
+                    "station_callsign": "KE8YGW",
+                    "incident_id": incident_id.to_string(),
+                    "message_number": number,
+                    "from": "Net Control",
+                    "to": "Shelter 1",
+                    "body": "Traffic."
+                }),
+            ),
+        )
+        .await
+        .expect("message drafts");
+    }
+
+    let mut projection = EmCommProjection::new();
+    let events = store.list_events(logbook_id).await.expect("events");
+    projection
+        .rebuild(events.iter())
+        .expect("projection rebuilds");
+
+    assert_eq!(projection.messages_for_incident(incident_id).len(), 3);
+    assert_eq!(
+        projection
+            .next_message_number(incident_id, "KE8YGW")
+            .to_string(),
+        "KE8YGW-0003"
+    );
+    assert_eq!(
+        projection
+            .next_message_number(incident_id, "W8ABC")
+            .to_string(),
+        "W8ABC-0002"
+    );
+    assert_eq!(
+        projection
+            .next_message_number(incident_id, "N0CALL")
+            .to_string(),
+        "N0CALL-0001"
+    );
+}
+
+#[tokio::test]
+async fn emcomm_messages_sort_by_precedence_and_expose_unacknowledged_traffic() {
+    let store = InMemoryLogbookEventStore::new();
+    let bus = InMemoryEventBus::new(64);
+    let logbook_id = Uuid::new_v4();
+    let incident_id = open_test_incident(&store, &bus, logbook_id).await;
+
+    let mut transmitted = Vec::new();
+    for (number, precedence) in [
+        ("KE8YGW-0001", "routine"),
+        ("KE8YGW-0002", "emergency"),
+        ("KE8YGW-0003", "priority"),
+    ] {
+        let outcome = submit_proposal(
+            &store,
+            &bus,
+            &emcomm_context(),
+            emcomm_proposal(
+                PROPOSAL_EMCOMM_MESSAGE_CREATE,
+                logbook_id,
+                None,
+                json!({
+                    "station_callsign": "KE8YGW",
+                    "incident_id": incident_id.to_string(),
+                    "message_number": number,
+                    "precedence": precedence,
+                    "from": "Net Control",
+                    "to": "Shelter 1",
+                    "body": "Traffic."
+                }),
+            ),
+        )
+        .await
+        .expect("message drafts");
+        transmitted.push(outcome.official_event.entity_id.expect("message id"));
+    }
+
+    submit_proposal(
+        &store,
+        &bus,
+        &emcomm_context(),
+        emcomm_proposal(
+            PROPOSAL_EMCOMM_MESSAGE_TRANSMIT,
+            logbook_id,
+            Some(transmitted[1]),
+            json!({ "station_callsign": "KE8YGW", "transmitted_at": "2026-11-24T12:20:00Z" }),
+        ),
+    )
+    .await
+    .expect("transmission appends");
+
+    let mut projection = EmCommProjection::new();
+    let events = store.list_events(logbook_id).await.expect("events");
+    projection
+        .rebuild(events.iter())
+        .expect("projection rebuilds");
+
+    let ordered = projection.messages_for_incident(incident_id);
+    assert_eq!(ordered[0].precedence, MessagePrecedence::Emergency);
+    assert_eq!(ordered[1].precedence, MessagePrecedence::Priority);
+    assert_eq!(ordered[2].precedence, MessagePrecedence::Routine);
+
+    let waiting = projection.unacknowledged_messages(incident_id);
+    assert_eq!(waiting.len(), 1);
+    assert_eq!(waiting[0].message_id, transmitted[1]);
+}
+
+#[tokio::test]
+async fn emcomm_activity_log_links_entries_to_incidents_and_periods() {
+    let store = InMemoryLogbookEventStore::new();
+    let bus = InMemoryEventBus::new(64);
+    let logbook_id = Uuid::new_v4();
+    let incident_id = open_test_incident(&store, &bus, logbook_id).await;
+
+    let period = submit_proposal(
+        &store,
+        &bus,
+        &emcomm_context(),
+        emcomm_proposal(
+            PROPOSAL_EMCOMM_PERIOD_OPEN,
+            logbook_id,
+            None,
+            json!({
+                "station_callsign": "KE8YGW",
+                "incident_id": incident_id.to_string(),
+                "period_number": 1,
+                "started_at": "2026-11-24T12:05:00Z"
+            }),
+        ),
+    )
+    .await
+    .expect("period opens");
+    let period_id = period.official_event.entity_id.expect("period id");
+
+    for summary in ["Net opened on 146.940", "Shelter 1 reports 42 occupants"] {
+        submit_proposal(
+            &store,
+            &bus,
+            &emcomm_context(),
+            emcomm_proposal(
+                PROPOSAL_EMCOMM_ACTIVITY_LOG,
+                logbook_id,
+                None,
+                json!({
+                    "station_callsign": "KE8YGW",
+                    "incident_id": incident_id.to_string(),
+                    "period_id": period_id.to_string(),
+                    "occurred_at": "2026-11-24T12:30:00Z",
+                    "summary": summary
+                }),
+            ),
+        )
+        .await
+        .expect("activity appends");
+    }
+
+    let mut projection = EmCommProjection::new();
+    let events = store.list_events(logbook_id).await.expect("events");
+    projection
+        .rebuild(events.iter())
+        .expect("projection rebuilds");
+
+    assert_eq!(projection.activity_for_incident(incident_id).len(), 2);
+    assert_eq!(projection.activity_for_period(period_id).len(), 2);
+    assert_eq!(
+        projection.activity_for_incident(incident_id)[0].payload["summary"],
+        json!("Net opened on 146.940")
+    );
+}
+
+#[tokio::test]
+async fn emcomm_incident_package_carries_every_record_and_its_history() {
+    let store = InMemoryLogbookEventStore::new();
+    let bus = InMemoryEventBus::new(64);
+    let logbook_id = Uuid::new_v4();
+    let incident_id = open_test_incident(&store, &bus, logbook_id).await;
+
+    let person = submit_proposal(
+        &store,
+        &bus,
+        &emcomm_context(),
+        emcomm_proposal(
+            PROPOSAL_EMCOMM_PERSON_CHECK_IN,
+            logbook_id,
+            None,
+            json!({
+                "station_callsign": "KE8YGW",
+                "incident_id": incident_id.to_string(),
+                "name": "A. Operator",
+                "checked_in_at": "2026-11-24T12:10:00Z"
+            }),
+        ),
+    )
+    .await
+    .expect("check-in appends");
+    let person_id = person.official_event.entity_id.expect("person id");
+
+    submit_proposal(
+        &store,
+        &bus,
+        &emcomm_context(),
+        emcomm_proposal(
+            PROPOSAL_EMCOMM_PERSON_CHECK_OUT,
+            logbook_id,
+            Some(person_id),
+            json!({ "station_callsign": "KE8YGW", "checked_out_at": "2026-11-24T18:00:00Z" }),
+        ),
+    )
+    .await
+    .expect("check-out appends");
+
+    submit_proposal(
+        &store,
+        &bus,
+        &emcomm_context(),
+        emcomm_proposal(
+            PROPOSAL_EMCOMM_INCIDENT_CLOSE,
+            logbook_id,
+            Some(incident_id),
+            json!({ "station_callsign": "KE8YGW", "closed_at": "2026-11-24T20:00:00Z" }),
+        ),
+    )
+    .await
+    .expect("incident closes");
+
+    let mut projection = EmCommProjection::new();
+    let events = store.list_events(logbook_id).await.expect("events");
+    projection
+        .rebuild(events.iter())
+        .expect("projection rebuilds");
+
+    assert!(projection.incidents(false).is_empty());
+    assert_eq!(projection.incidents(true).len(), 1);
+
+    let package = projection
+        .incident_package(incident_id)
+        .expect("incident package");
+    assert_eq!(package["schema_version"], json!(EMCOMM_SCHEMA_VERSION));
+    assert_eq!(package["personnel"].as_array().map(Vec::len), Some(1));
+    assert_eq!(
+        package["personnel"][0]["history"].as_array().map(Vec::len),
+        Some(2)
+    );
+    assert_eq!(package["incident"]["status"], json!("closed"));
+    assert_eq!(
+        package["forms"],
+        json!(["ICS-211", "ICS-213", "ICS-213RR", "ICS-214"])
+    );
+
+    let summary = projection.summary(incident_id);
+    assert_eq!(summary["roster"], json!(1));
+    assert_eq!(summary["checked_in"], json!(0));
+}
+
+#[tokio::test]
+async fn emcomm_proposals_require_their_own_capability() {
+    let store = InMemoryLogbookEventStore::new();
+    let bus = InMemoryEventBus::new(64);
+    let context = ProposalContext::local_admin(
+        plugin_manifest(vec![PluginCapability::EmCommView]),
+        OperatorRole::Admin,
+    );
+
+    let error = submit_proposal(
+        &store,
+        &bus,
+        &context,
+        emcomm_proposal(
+            PROPOSAL_EMCOMM_INCIDENT_OPEN,
+            Uuid::new_v4(),
+            None,
+            json!({
+                "station_callsign": "KE8YGW",
+                "incident_name": "County Exercise",
+                "opened_at": "2026-11-24T12:00:00Z"
+            }),
+        ),
+    )
+    .await
+    .expect_err("view alone cannot open an incident");
+    assert!(matches!(
+        error,
+        ProposalValidationError::PermissionDenied { .. }
+            | ProposalValidationError::MissingPluginCapability(_)
+            | ProposalValidationError::PluginPermissionDenied(_)
+    ));
+}
+
+#[test]
+fn emcomm_message_numbers_round_trip_and_reject_bad_input() {
+    let number = MessageNumber::new("ke8ygw", 7);
+    assert_eq!(number.to_string(), "KE8YGW-0007");
+    assert_eq!(
+        MessageNumber::parse("KE8YGW-0007").expect("parses"),
+        MessageNumber {
+            station_prefix: "KE8YGW".to_owned(),
+            sequence: 7
+        }
+    );
+    for bad in ["", "7", "KE8YGW-", "KE8YGW-0000", "-0007", "KE8YGW-abc"] {
+        assert!(
+            MessageNumber::parse(bad).is_err(),
+            "`{bad}` must not parse as a message number"
+        );
+    }
+}
+
+#[test]
+fn display_settings_default_to_the_first_shipped_layouts() {
+    let settings = ApplicationSettings::default();
+    assert_eq!(settings.display.appearance, DEFAULT_APPEARANCE_MODE);
+    assert_eq!(
+        settings.display.desktop_shell_layout,
+        DEFAULT_DESKTOP_SHELL_LAYOUT
+    );
+    assert_eq!(
+        settings.display.mobile_dashboard_layout,
+        DEFAULT_MOBILE_DASHBOARD_LAYOUT
+    );
+    assert!(DESKTOP_SHELL_LAYOUTS.contains(&DEFAULT_DESKTOP_SHELL_LAYOUT));
+    assert!(MOBILE_DASHBOARD_LAYOUTS.contains(&DEFAULT_MOBILE_DASHBOARD_LAYOUT));
+    assert!(APPEARANCE_MODES.contains(&DEFAULT_APPEARANCE_MODE));
+}
+
+#[test]
+fn normalizing_accepts_known_layouts_and_falls_back_for_unknown_ones() {
+    let mut settings = ApplicationSettings::default();
+    settings.display.appearance = "  DARK ".to_owned();
+    settings.display.desktop_shell_layout = "Tabbed-Workbench".to_owned();
+    settings.display.mobile_dashboard_layout = "map-sheet".to_owned();
+    let settings = settings.normalized().expect("known choices normalize");
+    assert_eq!(settings.display.appearance, "dark");
+    assert_eq!(settings.display.desktop_shell_layout, "tabbed-workbench");
+    assert_eq!(settings.display.mobile_dashboard_layout, "map-sheet");
+
+    let mut stale = ApplicationSettings::default();
+    stale.display.appearance = "solarized".to_owned();
+    stale.display.desktop_shell_layout = "holodeck".to_owned();
+    stale.display.mobile_dashboard_layout = "carousel".to_owned();
+    // A client from a different build must not fail the whole save and lose the
+    // operator's other edits just because it named a layout we do not ship.
+    let stale = stale.normalized().expect("unknown choices fall back");
+    assert_eq!(stale.display.appearance, DEFAULT_APPEARANCE_MODE);
+    assert_eq!(
+        stale.display.desktop_shell_layout,
+        DEFAULT_DESKTOP_SHELL_LAYOUT
+    );
+    assert_eq!(
+        stale.display.mobile_dashboard_layout,
+        DEFAULT_MOBILE_DASHBOARD_LAYOUT
+    );
+}
+
+#[test]
+fn settings_saved_before_layout_choice_existed_still_deserialize() {
+    let mut value = serde_json::to_value(ApplicationSettings::default()).expect("serializes");
+    let display = value
+        .get_mut("display")
+        .and_then(|display| display.as_object_mut())
+        .expect("display object");
+    display.remove("desktop_shell_layout");
+    display.remove("mobile_dashboard_layout");
+
+    let restored: ApplicationSettings = serde_json::from_value(value).expect("older payload loads");
+    assert_eq!(
+        restored.display.desktop_shell_layout,
+        DEFAULT_DESKTOP_SHELL_LAYOUT
+    );
+    assert_eq!(
+        restored.display.mobile_dashboard_layout,
+        DEFAULT_MOBILE_DASHBOARD_LAYOUT
     );
 }

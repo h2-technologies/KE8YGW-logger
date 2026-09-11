@@ -56,6 +56,7 @@ pub const ACCOUNT_ACTION_REGISTER: &str = "account.register";
 pub const ACCOUNT_ACTION_VERIFY_EMAIL: &str = "account.verify_email";
 pub const ACCOUNT_ACTION_RECOVERY_START: &str = "account.recovery.start";
 pub const ACCOUNT_ACTION_RECOVERY_COMPLETE: &str = "account.recovery.complete";
+pub const ACCOUNT_ACTION_BOOTSTRAP: &str = "account.bootstrap";
 pub const ACCOUNT_ACTION_LOGIN: &str = "account.login";
 pub const ACCOUNT_ACTION_SESSION: &str = "account.session";
 pub const ACCOUNT_ACTION_SESSION_ROTATE: &str = "account.session.rotate";
@@ -376,6 +377,16 @@ pub enum HostedAccountAction {
     RecoveryComplete {
         token: String,
     },
+    /// Claims the one-time instance-administrator bootstrap on a fresh server.
+    ///
+    /// The hosted route refuses once any account exists, so this succeeds
+    /// exactly once per server and issues a normal session for the new
+    /// administrator.
+    Bootstrap {
+        email: String,
+        #[serde(default)]
+        display_name: Option<String>,
+    },
     Login {
         email: String,
         #[serde(default)]
@@ -403,6 +414,7 @@ impl HostedAccountAction {
             Self::VerifyEmail { .. } => ACCOUNT_ACTION_VERIFY_EMAIL,
             Self::RecoveryStart { .. } => ACCOUNT_ACTION_RECOVERY_START,
             Self::RecoveryComplete { .. } => ACCOUNT_ACTION_RECOVERY_COMPLETE,
+            Self::Bootstrap { .. } => ACCOUNT_ACTION_BOOTSTRAP,
             Self::Login { .. } => ACCOUNT_ACTION_LOGIN,
             Self::Session => ACCOUNT_ACTION_SESSION,
             Self::SessionRotate => ACCOUNT_ACTION_SESSION_ROTATE,
@@ -826,6 +838,23 @@ pub fn plan_hosted_account_request(
                 "device_name": device_name,
             })),
         ),
+        HostedAccountAction::Bootstrap {
+            email,
+            display_name,
+        } => {
+            let mut body = json!({
+                "email": normalize_email(email)?,
+                "device_name": device_name,
+            });
+            insert_optional_string(
+                &mut body,
+                "display_name",
+                display_name.as_deref(),
+                "display_name",
+                MAX_DISPLAY_NAME_BYTES,
+            )?;
+            ("POST", "/api/v1/admin/bootstrap".to_owned(), Some(body))
+        }
         HostedAccountAction::Login {
             email,
             display_name,
@@ -1083,6 +1112,7 @@ fn accepted_result(
                     .to_owned();
         }
         HostedAccountAction::RecoveryComplete { .. }
+        | HostedAccountAction::Bootstrap { .. }
         | HostedAccountAction::Login { .. }
         | HostedAccountAction::SessionRotate => {
             let (issued_session, issued_refresh) = apply_session(&mut snapshot, body, now);
@@ -1091,6 +1121,9 @@ fn accepted_result(
             snapshot.pending_recovery_for = None;
             message = match action {
                 HostedAccountAction::SessionRotate => "Hosted session rotated.".to_owned(),
+                HostedAccountAction::Bootstrap { .. } => {
+                    "Claimed the server administrator bootstrap and signed in.".to_owned()
+                }
                 _ => "Signed in to the hosted account.".to_owned(),
             };
         }

@@ -1,3 +1,6 @@
+// Mirrors the desktop proxy default in src-tauri/src/main.rs.
+const DEFAULT_DESKTOP_SERVER_URL = "http://127.0.0.1:9467";
+
 const state = {
   shell: null,
   commands: [],
@@ -37,6 +40,13 @@ const state = {
   accountResult: null,
   accountError: null,
   accountBusy: false,
+  admin: null,
+  adminResult: null,
+  adminError: null,
+  adminBusy: false,
+  adminSignedIn: false,
+  adminAccountEmail: null,
+  adminInvitationToken: null,
   divergenceReview: null,
   conflictReview: null,
   selectedConflictReviewId: null,
@@ -46,6 +56,8 @@ const state = {
   syncState: null,
   selectedPeerId: null,
   activeWorkspace: "dashboard",
+  appearance: { layout: "operating-deck", theme: "system" },
+  moreMenuOpen: false,
   busConnected: false,
   streamPaused: false,
   selectedEventId: null,
@@ -90,24 +102,74 @@ function savePanelLayouts() {
 }
 
 function tauriInvoke() {
-  return window.__TAURI__?.core?.invoke || window.__TAURI__?.tauri?.invoke || null;
+  return (
+    window.__TAURI__?.core?.invoke ||
+    window.__TAURI__?.tauri?.invoke ||
+    window.__TAURI_INTERNALS__?.invoke ||
+    null
+  );
+}
+
+// Tauri serves the bundled assets from tauri://localhost (http://tauri.localhost on
+// Windows) and answers unknown paths with index.html, so an unbridged /api/* fetch
+// silently returns the shell markup instead of JSON.
+function isTauriWebview() {
+  if (window.__TAURI__ || window.__TAURI_INTERNALS__) return true;
+  return window.location.protocol === "tauri:" || window.location.hostname === "tauri.localhost";
+}
+
+// localStorage access throws outright where site data is blocked, so guard it the
+// way loadPanelLayouts already does.
+function readStoredServerUrl() {
+  try {
+    return localStorage.getItem("ham.desktopServerUrl") || "";
+  } catch (_) {
+    return "";
+  }
+}
+
+function storeServerUrl(serverUrl) {
+  try {
+    localStorage.setItem("ham.desktopServerUrl", serverUrl);
+  } catch (_) {
+    // Caching only saves one desktop_runtime round trip; the bridge works without it.
+  }
+}
+
+// Which API a diagnostic should point at: the desktop bridge target on desktop, and
+// the origin actually serving the page in browser and hosted web mode.
+function apiOriginLabel() {
+  const stored = readStoredServerUrl();
+  if (stored) return stored;
+  return isTauriWebview() ? DEFAULT_DESKTOP_SERVER_URL : window.location.origin;
 }
 
 async function configureDesktopFetchBridge() {
   const invoke = tauriInvoke();
-  if (!invoke) return;
+  if (!invoke) {
+    if (isTauriWebview()) {
+      throw new Error(
+        "Desktop bridge unavailable: the Tauri API was not injected into this webview, " +
+          "so /api requests cannot reach the local server. Enable app.withGlobalTauri in " +
+          "src-tauri/tauri.conf.json and rebuild the desktop app.",
+      );
+    }
+    return;
+  }
 
-  let serverUrl = localStorage.getItem("ham.desktopServerUrl") || "";
+  let serverUrl = readStoredServerUrl();
   if (!serverUrl) {
     try {
       const runtime = await invoke("desktop_runtime");
       serverUrl = runtime?.server_url || "";
-      if (serverUrl) localStorage.setItem("ham.desktopServerUrl", serverUrl);
+      if (serverUrl) storeServerUrl(serverUrl);
     } catch (_) {
       serverUrl = "";
     }
   }
-  if (!serverUrl) return;
+  // The proxy command applies the same default, so keep routing through it rather
+  // than letting relative /api requests fall back to the bundled index.html.
+  if (!serverUrl) serverUrl = DEFAULT_DESKTOP_SERVER_URL;
 
   const browserFetch = window.fetch.bind(window);
   window.fetch = async (input, init = {}) => {
@@ -148,9 +210,26 @@ function khzToHz(value) {
   return Number.isFinite(khz) && khz > 0 ? Math.round(khz * 1000) : null;
 }
 
+// response.json() on the shell markup reports only "Unexpected token '<'", which hides
+// the fact that the API never answered. Say which endpoint failed and what came back.
+async function fetchJson(path, init) {
+  const response = await fetch(path, init);
+  const body = await response.text();
+  try {
+    return JSON.parse(body);
+  } catch (_) {
+    const contentType = response.headers.get("content-type") || "unknown content type";
+    throw new Error(
+      `${path} returned ${response.status} ${contentType} instead of JSON. ` +
+        `Confirm the API is reachable at ${apiOriginLabel()}. ` +
+        `First bytes: ${body.slice(0, 120)}`,
+    );
+  }
+}
+
 async function boot() {
   await configureDesktopFetchBridge();
-  const payload = await fetch("/api/shell").then((response) => response.json());
+  const payload = await fetchJson("/api/shell");
   state.shell = payload.shell;
   state.commands = payload.commands.commands;
   state.plugins = payload.plugins;
@@ -158,10 +237,15 @@ async function boot() {
   state.runtimeEvents = payload.runtime_events;
   state.runtimeStatus = payload.runtime_status;
   state.activeWorkspace = payload.shell.active_workspace;
+  state.appearance = payload.shell.appearance || state.appearance;
   state.busConnected = payload.runtime_status.connected;
 
   bindShellControls();
   renderWorkspaceSelector();
+  renderModeButtons();
+  renderThemeToggle();
+  renderLayoutSelect();
+  applyAppearance();
   await refreshQsos();
   await refreshStation();
   await refreshAwards();
@@ -180,10 +264,20 @@ async function boot() {
 }
 
 function bindShellControls() {
-  document.querySelectorAll(".activity-item").forEach((button) => {
-    button.addEventListener("click", () => switchWorkspace(button.dataset.workspace));
-  });
   byId("workspace-selector").addEventListener("change", (event) => switchWorkspace(event.target.value));
+  byId("layout-select").addEventListener("change", (event) => setShellLayout(event.target.value));
+  byId("theme-toggle").addEventListener("click", (event) => {
+    const option = event.target.closest("[data-theme-option]");
+    if (option) setThemeMode(option.dataset.themeOption);
+  });
+  byId("workspace-modes").addEventListener("click", (event) => {
+    const button = event.target.closest("[data-workspace]");
+    if (button) switchWorkspace(button.dataset.workspace);
+  });
+  byId("more-button").addEventListener("click", () => toggleMoreMenu());
+  document.addEventListener("click", (event) => {
+    if (state.moreMenuOpen && !event.target.closest(".menu-more")) toggleMoreMenu(false);
+  });
   byId("command-button").addEventListener("click", openCommandPalette);
   byId("import-adif-button").addEventListener("click", importAdifFromPrompt);
   byId("export-adif-button").addEventListener("click", exportAdifFromPrompt);
@@ -191,8 +285,12 @@ function bindShellControls() {
   byId("settings-button").addEventListener("click", () => openScreen("settings"));
   byId("plugins-button").addEventListener("click", () => openScreen("plugins"));
   byId("account-button").addEventListener("click", openAccountScreen);
+  byId("admin-button")?.addEventListener("click", openAdminScreen);
   byId("close-screen").addEventListener("click", closeScreen);
   byId("command-search").addEventListener("input", renderCommandResults);
+  document.querySelectorAll(".more-item").forEach((item) => {
+    item.addEventListener("click", () => toggleMoreMenu(false));
+  });
 
   document.addEventListener("keydown", (event) => {
     const key = event.key.toLowerCase();
@@ -204,6 +302,11 @@ function bindShellControls() {
       event.preventDefault();
       runCommand("focus.callsign-entry");
     }
+    // Shift+Ctrl/Cmd+L steps through the shell layouts without leaving the log.
+    if ((event.ctrlKey || event.metaKey) && event.shiftKey && key === "l") {
+      event.preventDefault();
+      cycleShellLayout();
+    }
     if (event.key === "Enter" && document.activeElement?.id === "callsign-entry-input") {
       const form = byId("qso-create-form");
       if (form?.checkValidity()) {
@@ -214,6 +317,7 @@ function bindShellControls() {
     if (event.key === "Escape") {
       closeScreen();
       closeCommandPalette();
+      toggleMoreMenu(false);
     }
   });
 }
@@ -221,14 +325,174 @@ function bindShellControls() {
 function renderWorkspaceSelector() {
   const selector = byId("workspace-selector");
   selector.innerHTML = state.shell.workspaces
-    .map((workspace) => `<option value="${workspace.id}">${workspace.title}</option>`)
+    .map((workspace) => `<option value="${workspace.id}">${escapeHtml(workspace.title)}</option>`)
+    .join("");
+}
+
+// ---------------------------------------------------------------------------
+// Appearance: shell layout and theme.
+//
+// The layouts rearrange the same regions rather than swapping in different
+// screens, so switching one never loses the operator's place, their draft QSO,
+// or their panel customization.
+// ---------------------------------------------------------------------------
+
+// Panels a layout prefers to pull out of the centre and into the left context
+// rail. A layout only gets a rail if the active workspace actually offers one
+// of these panels, so the rail never appears empty.
+const LAYOUT_RAIL_PANELS = {
+  "operating-deck": ["dx-cluster", "spots-alerts", "rig-control"],
+  "tabbed-workbench": ["global-search", "recent-qsos"],
+};
+
+// Regions a layout does not render. Their panels fold into the centre instead
+// of disappearing, because a layout choice must never hide data.
+const LAYOUT_FOLDED_REGIONS = {
+  "focus-console": ["bottom"],
+};
+
+function shellLayouts() {
+  return state.shell?.layouts || [];
+}
+
+function activeLayoutId() {
+  const layouts = shellLayouts();
+  const current = state.appearance?.layout;
+  if (layouts.some((layout) => layout.slug === current)) return current;
+  return layouts[0]?.slug || "operating-deck";
+}
+
+function activeLayoutDefinition() {
+  return shellLayouts().find((layout) => layout.slug === activeLayoutId()) || null;
+}
+
+function renderModeButtons() {
+  byId("workspace-modes").innerHTML = state.shell.workspaces
+    .map(
+      (workspace) =>
+        `<button class="mode-button" type="button" data-workspace="${workspace.id}">${escapeHtml(workspace.title)}</button>`,
+    )
+    .join("");
+}
+
+function renderThemeToggle() {
+  const themes = state.shell?.themes || [
+    { slug: "system", title: "Match system" },
+    { slug: "light", title: "Light" },
+    { slug: "dark", title: "Dark" },
+  ];
+  const glyphs = { system: "\u25D1", light: "\u2600", dark: "\u263E" };
+  byId("theme-toggle").innerHTML = themes
+    .map(
+      (theme) =>
+        `<button class="theme-option" type="button" data-theme-option="${theme.slug}" title="${escapeHtml(theme.title)}" aria-label="${escapeHtml(theme.title)}">${glyphs[theme.slug] || "?"}</button>`,
+    )
+    .join("");
+}
+
+function renderLayoutSelect() {
+  byId("layout-select").innerHTML = shellLayouts()
+    .map((layout) => `<option value="${layout.slug}">${escapeHtml(layout.title)}</option>`)
+    .join("");
+}
+
+/// Push the chosen layout and theme onto the document. Theme lives on <html> so
+/// the tokens resolve before anything inside the shell paints.
+function applyAppearance() {
+  const layout = activeLayoutId();
+  const theme = state.appearance?.theme || "system";
+  document.documentElement.dataset.theme = theme;
+  byId("app").dataset.layout = layout;
+  byId("layout-select").value = layout;
+  document.querySelectorAll("[data-theme-option]").forEach((option) => {
+    const active = option.dataset.themeOption === theme;
+    option.setAttribute("aria-pressed", active ? "true" : "false");
+  });
+}
+
+async function persistAppearance(patch) {
+  state.appearance = { ...state.appearance, ...patch };
+  applyAppearance();
+  render();
+  try {
+    const result = await fetchJson("/api/shell/appearance", {
+      method: "POST",
+      body: JSON.stringify(patch),
+    });
+    if (result?.appearance) {
+      state.appearance = result.appearance;
+      applyAppearance();
+    }
+  } catch (error) {
+    // The shell already switched locally; say so rather than silently reverting,
+    // because losing the choice on the next launch is the surprising part.
+    console.warn("shell appearance not persisted", error);
+    state.appearanceError = error.message;
+    render();
+  }
+}
+
+function setShellLayout(layout) {
+  if (!layout || layout === state.appearance?.layout) return Promise.resolve();
+  return persistAppearance({ layout });
+}
+
+function setThemeMode(theme) {
+  if (!theme || theme === state.appearance?.theme) return Promise.resolve();
+  return persistAppearance({ theme });
+}
+
+function cycleShellLayout() {
+  const layouts = shellLayouts();
+  if (!layouts.length) return;
+  const index = layouts.findIndex((layout) => layout.slug === activeLayoutId());
+  setShellLayout(layouts[(index + 1) % layouts.length].slug);
+}
+
+function toggleMoreMenu(force) {
+  state.moreMenuOpen = typeof force === "boolean" ? force : !state.moreMenuOpen;
+  byId("more-menu").hidden = !state.moreMenuOpen;
+  byId("more-button").setAttribute("aria-expanded", state.moreMenuOpen ? "true" : "false");
+}
+
+function renderMenubarChips() {
+  const rigState = state.rigStatus?.active_state;
+  const outstanding = (state.uploads?.jobs || []).filter((job) => job.status !== "completed");
+  const failed = outstanding.filter((job) => job.status === "failed").length;
+  const errors = state.runtimeStatus?.latest_error_count || 0;
+  const peers = state.syncState?.peers?.length || 0;
+  const chips = [
+    {
+      tone: rigState ? "ok" : "",
+      label: rigState ? `${formatKhz(rigState.frequency_hz) || "?"} kHz ${rigState.mode || ""}`.trim() : "Rig idle",
+    },
+    { tone: peers ? "info" : "", label: `${peers} peer${peers === 1 ? "" : "s"}` },
+    failed
+      ? { tone: "danger", label: `${failed} upload${failed === 1 ? "" : "s"} failed` }
+      : {
+          tone: outstanding.length ? "warn" : "ok",
+          label: outstanding.length ? `${outstanding.length} queued` : "Uploads clear",
+        },
+  ];
+  if (errors) chips.push({ tone: "danger", label: `${errors} error${errors === 1 ? "" : "s"}` });
+  byId("menubar-chips").innerHTML = chips
+    .map((chip) => `<span class="chip"><span class="dot ${chip.tone}"></span>${escapeHtml(chip.label)}</span>`)
     .join("");
 }
 
 function render() {
   const workspace = currentWorkspace();
+  const layout = activeLayoutDefinition();
   byId("workspace-title").textContent = workspace.title;
   byId("workspace-selector").value = state.activeWorkspace;
+  byId("workspace-description").textContent = state.appearanceError
+    ? `Layout applied for this session only: ${state.appearanceError}`
+    : workspace.description || "";
+  // The station payload carries `active_profile_id` plus a profile list, not an
+  // `active_profile` object, so resolve it the same way the rest of the shell
+  // does rather than silently falling back to a hard-coded callsign.
+  byId("brand-callsign").textContent = activeStationProfile()?.station_callsign || "No station";
+  byId("brand-context").textContent = layout ? layout.title : "Local station";
   byId("status-workspace").textContent = `Workspace: ${workspace.title}`;
   byId("status-plugins").textContent = `Plugins: ${state.plugins.filter((plugin) => plugin.enabled).length} enabled`;
   byId("status-bus").textContent = `Event bus: ${state.busConnected ? "connected" : "disconnected"}`;
@@ -237,7 +501,7 @@ function render() {
   byId("status-sync").textContent = `Sync: ${state.runtimeStatus?.sync_state || "Local only"} / Rig: ${rigLabel}`;
   byId("status-events").textContent = `Runtime events: ${state.runtimeStatus?.runtime_event_count || state.runtimeEvents.length}`;
   byId("status-errors").textContent = `Errors: ${state.runtimeStatus?.latest_error_count || 0}`;
-  byId("status-sync-peers").textContent = `Discovery: ${state.syncState?.discovery_running ? "running" : "stopped"} / ${state.syncState?.peers?.length || 0} peers / ${state.syncState?.warning_count || 0} warnings`;
+  byId("status-sync-peers").textContent = `Discovery: ${state.syncState?.scan_running ? "scanning" : state.syncState?.discovery_running ? "running" : "stopped"} / ${state.syncState?.peers?.length || 0} peers / ${state.syncState?.warning_count || 0} warnings`;
   const mapStatus = state.mapState?.status || {};
   byId("status-map-grid").textContent = `Grid: ${mapStatus.grid || "unknown"}`;
   byId("status-map-coordinates").textContent = `Coords: ${formatCoordinate(mapStatus.coordinates)}`;
@@ -246,22 +510,54 @@ function render() {
   byId("status-map-zoom").textContent = `Zoom: ${mapStatus.zoom || "n/a"}`;
   byId("status-map-layer").textContent = `Layer: ${mapStatus.selected_layer || "none"}`;
 
-  document.querySelectorAll(".activity-item").forEach((button) => {
+  document.querySelectorAll(".mode-button").forEach((button) => {
     button.classList.toggle("is-active", button.dataset.workspace === state.activeWorkspace);
   });
 
+  // Map cursor readouts only earn status bar space where a map is on screen.
+  const showsMap = panelsAvailableForWorkspace(workspace).some((panel) =>
+    ["interactive-map", "map-placeholder"].includes(panel.id),
+  );
+  byId("app").dataset.showMapStatus = showsMap ? "true" : "false";
+
+  renderMenubarChips();
+  renderRegion("rail-panels", "rail");
   renderRegion("center-panels", "center");
   renderRegion("right-panels", "right-inspector");
   renderRegion("bottom-panels", "bottom");
   bindPanelControls();
 }
 
+/// Where a placement actually lands once the active layout has had its say.
+///
+/// The workspace definitions from the server describe the canonical arrangement;
+/// a layout may pull spotting panels into its context rail, or fold a region it
+/// does not draw back into the centre. Panels are never dropped.
+function resolvedRegion(placement, layoutId = activeLayoutId()) {
+  const railPanels = LAYOUT_RAIL_PANELS[layoutId] || [];
+  if (railPanels.includes(placement.panel_id) && placement.region === "center") return "rail";
+  const folded = LAYOUT_FOLDED_REGIONS[layoutId] || [];
+  if (folded.includes(placement.region)) return "center";
+  return placement.region;
+}
+
 function renderRegion(elementId, region) {
   const workspace = currentWorkspace();
   const placements = effectivePlacements(workspace)
-    .filter((placement) => placement.region === region)
+    .filter((placement) => resolvedRegion(placement) === region)
     .sort((left, right) => left.order - right.order);
-  byId(elementId).innerHTML = `${renderPanelOpener(region)}${placements.map((placement) => renderPanel(placement.panel_id, region)).join("")}`;
+  const host = byId(elementId);
+  if (!host) return;
+  // The rail is layout-driven, so it hides itself rather than showing an empty
+  // column when the workspace has nothing to put there.
+  if (region === "rail") {
+    const railHost = host.closest(".rail-region");
+    if (railHost) railHost.hidden = placements.length === 0;
+    byId("app").dataset.rail = placements.length ? "visible" : "empty";
+    host.innerHTML = placements.map((placement) => renderPanel(placement.panel_id, region)).join("");
+    return;
+  }
+  host.innerHTML = `${renderPanelOpener(region)}${placements.map((placement) => renderPanel(placement.panel_id, region)).join("")}`;
 }
 
 function layoutKey(workspace = currentWorkspace()) {
@@ -490,10 +786,17 @@ function runCommand(commandId) {
 
   if (command.target_workspace) switchWorkspace(command.target_workspace);
   if (command.id === "open.settings") openScreen("settings");
+  if (command.id === "shell.layout.cycle") cycleShellLayout();
+  if (command.id === "shell.theme.light") setThemeMode("light");
+  if (command.id === "shell.theme.dark") setThemeMode("dark");
+  if (command.id === "shell.theme.system") setThemeMode("system");
   if (command.id === "open.plugins") openScreen("plugins");
   if (command.id === "account.open" || command.id === "account.sign-in" || command.id === "account.devices.open") openAccountScreen();
   if (command.id === "account.session.refresh") accountRequest("/api/account/session/refresh", {});
   if (command.id === "account.sign-out") accountRequest("/api/account/logout", {});
+  if (command.id === "admin.open" || command.id === "admin.invitations.open") openAdminScreen();
+  if (command.id === "admin.hosting.refresh") adminRequest("/api/admin/hosting/refresh", {});
+  if (command.id === "admin.audits.refresh") adminRequest("/api/admin/audits/refresh", {});
   if (command.id === "services.open") openScreen("services");
   if (command.id === "services.cache.clear") clearServiceCache();
   if (command.id === "services.lookup.test") lookupCallsignFromPrompt();
@@ -571,6 +874,7 @@ function runCommand(commandId) {
   if (command.id === "projection.rebuild") rebuildProjections();
   if (command.id === "sync.discovery.start") startDiscovery();
   if (command.id === "sync.discovery.stop") stopDiscovery();
+  if (command.id === "sync.discovery.scan") scanNetwork();
   if (command.id === "sync.peers.refresh") refreshPeers();
   if (command.id === "sync.handshake.selected") handshakeSelectedPeer();
   if (command.id === "sync.preview-pull.selected") previewPullSelectedPeer();
@@ -624,6 +928,14 @@ function openScreen(kind) {
     title.textContent = "Hosted Account";
     body.innerHTML = renderAccountScreen();
     bindAccountControls();
+    return;
+  }
+
+  if (kind === "admin") {
+    eyebrow.textContent = "Administration";
+    title.textContent = "Server Administration";
+    body.innerHTML = renderAdminScreen();
+    bindAdminControls();
     return;
   }
 
@@ -719,6 +1031,7 @@ function openScreen(kind) {
   title.textContent = "Settings";
   body.innerHTML = renderSettings();
   byId("cloud-connect-settings")?.addEventListener("click", connectCloudSyncFromSettings);
+  bindAppearanceControls();
 }
 
 function closeScreen() {
@@ -811,7 +1124,9 @@ function renderSettings() {
   return `<div class="settings-grid">
     ${sections
       .map((section) =>
-        section === "Account"
+        section === "Appearance"
+          ? `<article class="settings-card" style="grid-column: 1 / -1"><h3>${section}</h3>${renderAppearanceSettings()}</article>`
+        : section === "Account"
           ? `<article class="settings-card"><h3>${section}</h3>${renderAccountSummary()}</article>`
           : section === "Sync"
             ? `<article class="settings-card"><h3>${section}</h3>${renderCloudSettings()}</article>`
@@ -829,6 +1144,63 @@ function renderSettings() {
       )
       .join("")}
   </div>`;
+}
+
+/// The layout switcher. Every layout arranges the same workspaces and panels,
+/// so the copy focuses on what changes for the operator rather than on visual
+/// styling, and flags the one layout without a permanent entry field.
+function renderAppearanceSettings() {
+  const layouts = shellLayouts();
+  const current = activeLayoutId();
+  const theme = state.appearance?.theme || "system";
+  const themes = state.shell?.themes || [];
+  const warning = state.appearanceError
+    ? `<p class="event-warn">This device kept the change, but it was not saved for next launch: ${escapeHtml(state.appearanceError)}</p>`
+    : "";
+  return `
+    <p class="muted">Layout and theme apply to this desktop or browser. Switching keeps your workspace, draft contact, and card arrangement.</p>
+    <div class="theme-choices" role="group" aria-label="Theme">
+      ${themes
+        .map(
+          (mode) =>
+            `<button class="theme-choice ${mode.slug === theme ? "is-active" : ""}" type="button" data-appearance-theme="${mode.slug}">${escapeHtml(mode.title)}</button>`,
+        )
+        .join("")}
+    </div>
+    <div class="layout-choices" role="group" aria-label="Shell layout">
+      ${layouts
+        .map(
+          (layout) => `
+        <button class="layout-choice ${layout.slug === current ? "is-active" : ""}" type="button" data-appearance-layout="${layout.slug}">
+          <b>${escapeHtml(layout.title)}</b>
+          <small>${escapeHtml(layout.description)}</small>
+          <span class="layout-flags">
+            <span class="layout-flag">${escapeHtml(layout.density)}</span>
+            <span class="layout-flag ${layout.has_persistent_entry ? "entry" : "no-entry"}">${layout.has_persistent_entry ? "Always-on entry" : "No permanent entry field"}</span>
+          </span>
+        </button>`,
+        )
+        .join("")}
+    </div>
+    <p class="muted">Shortcut: Ctrl/Cmd + Shift + L steps through the layouts.</p>
+    ${warning}`;
+}
+
+function bindAppearanceControls() {
+  document.querySelectorAll("[data-appearance-layout]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      await setShellLayout(button.dataset.appearanceLayout);
+      byId("screen-body").innerHTML = renderSettings();
+      bindAppearanceControls();
+    });
+  });
+  document.querySelectorAll("[data-appearance-theme]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      await setThemeMode(button.dataset.appearanceTheme);
+      byId("screen-body").innerHTML = renderSettings();
+      bindAppearanceControls();
+    });
+  });
 }
 
 function renderServiceProviders() {
@@ -1483,6 +1855,7 @@ function bindPanelControls() {
   if (start) {
     start.addEventListener("click", startDiscovery);
     byId("sync-stop-discovery").addEventListener("click", stopDiscovery);
+    byId("sync-scan-network").addEventListener("click", scanNetwork);
     byId("sync-refresh-peers").addEventListener("click", refreshPeers);
     byId("sync-add-peer").addEventListener("click", addManualPeer);
     byId("sync-handshake").addEventListener("click", handshakeSelectedPeer);
@@ -3315,6 +3688,7 @@ function renderSyncStatus() {
   const trustedCount = trustedDevices.filter((device) => !device.revoked_at).length;
   return `<div class="sync-panel">
     <p><strong>LAN discovery:</strong> ${sync.discovery_running ? "running" : "stopped"}</p>
+    <p><strong>Network scan:</strong> ${renderScanSummary(sync)}</p>
     <p><strong>Local identity:</strong> ${sync.identity.display_name}<br /><small>${sync.identity.device_id}</small></p>
     <div class="qso-form">
       <label>Peer HTTP URL
@@ -3325,6 +3699,7 @@ function renderSyncStatus() {
     <div class="monitor-actions">
       <button id="sync-start-discovery" class="toolbar-button" type="button">Start</button>
       <button id="sync-stop-discovery" class="toolbar-button" type="button">Stop</button>
+      <button id="sync-scan-network" class="toolbar-button" type="button"${sync.scan_running ? " disabled" : ""}>${sync.scan_running ? "Scanning..." : "Scan Network"}</button>
       <button id="sync-refresh-peers" class="toolbar-button" type="button">Refresh Peers</button>
       <button id="sync-handshake" class="toolbar-button" type="button">Handshake</button>
       <button id="sync-preview-pull" class="toolbar-button" type="button">Preview Pull</button>
@@ -3475,8 +3850,28 @@ async function syncPost(path, body = {}) {
   return result;
 }
 
+function renderScanSummary(sync) {
+  if (sync.scan_running) return "scanning the local network for other instances...";
+  const scan = sync.last_scan;
+  if (!scan) return "never run";
+  const where = scan.local_addresses.length ? scan.local_addresses.join(", ") : "no LAN address";
+  const error = scan.multicast_error ? ` / multicast: ${scan.multicast_error}` : "";
+  return `${scan.peers_found} instance(s) at ${scan.finished_at} / ${scan.multicast_observations} announcement(s), ${scan.probed_responses} of ${scan.probed_addresses} probed address(es) answered on ports ${scan.scanned_ports.join(", ")} from ${where}${error}`;
+}
+
 function startDiscovery() {
   syncPost("/api/sync/discovery/start");
+}
+
+// The scan runs on the desktop side and reports peers as it finds them, so poll the
+// sync state until it reports the scan finished instead of blocking on one request.
+async function scanNetwork() {
+  await syncPost("/api/sync/discovery/scan");
+  while (state.syncState?.scan_running) {
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    await refreshSyncState();
+    render();
+  }
 }
 
 function stopDiscovery() {
@@ -3679,7 +4074,11 @@ function copySyncDiagnosticSummary() {
 
 boot().catch((error) => {
   state.busConnected = false;
-  document.body.innerHTML = `<main class="screen"><div class="screen-body"><h1>GUI failed to start</h1><pre>${error}</pre></div></main>`;
+  // escapeHtml keeps markup inside the message (an HTML error body, for example) from
+  // being parsed away by innerHTML and truncating the report.
+  document.body.innerHTML = `<main class="screen"><div class="screen-body"><h1>GUI failed to start</h1><pre>${escapeHtml(
+    error,
+  )}</pre></div></main>`;
 });
 // ---------------------------------------------------------------------------
 // Hosted account and session screen
@@ -3852,6 +4251,16 @@ function renderAccountScreen() {
     </details>
 
     <details>
+      <summary>Claim server administrator (first run)</summary>
+      <form id="account-bootstrap-form" class="qso-form">
+        <label>Email <input name="email" class="placeholder-control" type="email" autocomplete="username" required /></label>
+        <label>Display name <input name="display_name" class="placeholder-control" autocomplete="name" /></label>
+        <button class="toolbar-button" type="submit" ${busy}>Claim Administrator</button>
+      </form>
+      <p class="muted">Works once, on a server with no accounts yet. It creates the first administrator and signs in. Use the Admin screen afterwards.</p>
+    </details>
+
+    <details>
       <summary>Create an account</summary>
       <form id="account-register-form" class="qso-form">
         <label>Email <input name="email" class="placeholder-control" type="email" autocomplete="username" required /></label>
@@ -3920,6 +4329,7 @@ function bindAccountControls() {
   const forms = [
     ["account-configure-form", "/api/account/configure"],
     ["account-login-form", "/api/account/login"],
+    ["account-bootstrap-form", "/api/account/bootstrap"],
     ["account-register-form", "/api/account/register"],
     ["account-verify-form", "/api/account/verify-email"],
     ["account-recovery-start-form", "/api/account/recovery/start"],
@@ -3953,4 +4363,315 @@ function bindAccountControls() {
 async function openAccountScreen() {
   await refreshAccount();
   openScreen("account");
+}
+
+// ---------------------------------------------------------------------------
+// Hosted server administration screen
+// ---------------------------------------------------------------------------
+
+const ADMIN_OPERATION_MODES = [
+  ["personal_hosted", "Personal hosted"],
+  ["public_hosted", "Public hosted"],
+  ["self_hosted", "Self hosted"],
+];
+
+const ADMIN_REGISTRATION_MODES = [
+  ["invite_only", "Invite only"],
+  ["open", "Open"],
+  ["disabled", "Disabled"],
+];
+
+const ADMIN_ROLES = [
+  ["viewer", "Viewer"],
+  ["operator", "Operator"],
+  ["admin", "Admin"],
+  ["owner", "Owner"],
+];
+
+const ADMIN_INVITATION_STATUS_LABELS = {
+  pending: "Pending",
+  accepted: "Accepted",
+  revoked: "Revoked",
+  expired: "Expired",
+};
+
+async function refreshAdmin() {
+  try {
+    const payload = await fetch("/api/admin/state").then((response) => response.json());
+    state.admin = payload.admin || null;
+    state.adminSignedIn = payload.signed_in === true;
+    state.adminAccountEmail = payload.account_email || null;
+    state.adminError = payload.error || null;
+  } catch (error) {
+    state.adminError = String(error);
+  }
+}
+
+function adminSnapshot() {
+  return state.admin || null;
+}
+
+function adminIsAdministrator() {
+  return adminSnapshot()?.administrator === true;
+}
+
+// Mirrors the Rust invitation status so the list reads the same on every surface.
+function adminInvitationStatus(invitation) {
+  if (!invitation) return "pending";
+  if (invitation.accepted_at) return "accepted";
+  if (invitation.revoked_at) return "revoked";
+  if (invitation.expires_at && new Date(invitation.expires_at) <= new Date()) return "expired";
+  return "pending";
+}
+
+async function adminRequest(path, body) {
+  if (state.adminBusy) return;
+  state.adminBusy = true;
+  state.adminError = null;
+  // A new request always clears the previously issued one-time token so it is
+  // never left on screen next to an unrelated result.
+  state.adminInvitationToken = null;
+  renderAdminScreenBody();
+  try {
+    const response = await fetch(path, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body || {}),
+    });
+    const payload = await response.json();
+    if (payload.admin_result) {
+      state.adminResult = payload.admin_result;
+      state.admin = payload.admin_result.snapshot;
+    }
+    if (payload.invitation_token) {
+      state.adminInvitationToken = payload.invitation_token;
+    }
+    if (payload.error) {
+      state.adminError = payload.error;
+    }
+  } catch (error) {
+    state.adminError = String(error);
+  } finally {
+    state.adminBusy = false;
+    renderAdminScreenBody();
+    render();
+  }
+}
+
+function renderAdminScreenBody() {
+  const body = byId("screen-body");
+  if (!body || byId("overlay").hidden) return;
+  if (byId("admin-screen")) {
+    body.innerHTML = renderAdminScreen();
+    bindAdminControls();
+  }
+}
+
+function renderAdminStatusBanner() {
+  const snapshot = adminSnapshot();
+  const result = state.adminResult;
+  let rights = "Administrator rights have not been checked yet.";
+  if (snapshot?.administrator === true) {
+    rights = "Signed in as a server administrator.";
+  } else if (snapshot?.administrator === false) {
+    rights = "The signed-in account is not a server administrator.";
+  }
+  return `<div class="sync-summary">
+    <p><strong>${escapeHtml(rights)}</strong></p>
+    <p>Server: ${escapeHtml(snapshot?.base_url || "not configured")}</p>
+    <p>Account: ${escapeHtml(state.adminAccountEmail || "not signed in")}</p>
+    ${!state.adminSignedIn ? `<p class="event-error">Sign in on the Hosted Account screen before administering this server.</p>` : ""}
+    ${state.adminBusy ? `<p class="muted">Contacting the hosted server&hellip;</p>` : ""}
+    ${state.adminError ? `<p class="event-error">${escapeHtml(state.adminError)}</p>` : ""}
+    ${result ? `<p class="${result.outcome === "accepted" ? "muted" : "event-error"}">${escapeHtml(ACCOUNT_OUTCOME_LABELS[result.outcome] || result.outcome)}: ${escapeHtml(result.message)}${result.request_id ? ` (request ${escapeHtml(result.request_id)})` : ""}</p>` : ""}
+    ${result && result.retryable ? `<p class="muted">This request can be retried without any server changes.</p>` : ""}
+  </div>`;
+}
+
+// Renders the single-use invitation token exactly once. The token is not stored
+// by Rust, the browser, or the support record, so it disappears as soon as
+// another administration request runs.
+function renderAdminInvitationToken() {
+  if (!state.adminInvitationToken) return "";
+  return `<div class="sync-summary">
+    <p><strong>Single-use invitation token</strong></p>
+    <p><code>${escapeHtml(state.adminInvitationToken)}</code></p>
+    <p class="muted">Shown once and never stored. The hosted server also emailed it to the invitee. Copy it now if you need to deliver it yourself.</p>
+  </div>`;
+}
+
+function renderAdminHosting() {
+  const hosting = adminSnapshot()?.hosting;
+  if (!hosting) {
+    return `<p class="muted">No hosting configuration loaded yet. Refresh to read it from the server.</p>`;
+  }
+  return `<div class="sync-summary">
+    <p>Operation mode: ${escapeHtml(hosting.operation_mode || "unknown")}</p>
+    <p>Registration mode: ${escapeHtml(hosting.registration_mode || "unknown")}</p>
+    <p>Bootstrap administrator: ${hosting.bootstrap_admin_completed ? "completed" : "not completed"}</p>
+    <p>Session lifetime: ${escapeHtml(String(hosting.session_ttl_seconds ?? "unset"))}s &middot; refresh ${escapeHtml(String(hosting.refresh_ttl_seconds ?? "unset"))}s</p>
+    <p>Invitation lifetime: ${escapeHtml(String(hosting.invitation_ttl_seconds ?? "unset"))}s</p>
+    <p>Verification lifetime: ${escapeHtml(String(hosting.verification_ttl_seconds ?? "unset"))}s &middot; recovery ${escapeHtml(String(hosting.recovery_ttl_seconds ?? "unset"))}s</p>
+    <p>Email delivery: ${escapeHtml(hosting.email?.mode || "unknown")}${hosting.email?.from_address ? ` from ${escapeHtml(hosting.email.from_address)}` : ""}</p>
+    <p>Email webhook configured: ${hosting.email?.webhook_configured ? "yes" : "no"} &middot; credential configured: ${hosting.email?.credential_reference_configured ? "yes" : "no"}</p>
+    <p>Turnstile on open registration: ${hosting.turnstile?.enabled_for_open_registration ? "enabled" : "disabled"} &middot; secret configured: ${hosting.turnstile?.secret_configured ? "yes" : "no"}</p>
+    ${hosting.updated_at ? `<p>Last updated: ${escapeHtml(hosting.updated_at)}</p>` : ""}
+  </div>`;
+}
+
+function renderAdminOptions(options, selected) {
+  return [`<option value="">Leave unchanged</option>`]
+    .concat(
+      options.map(
+        ([value, label]) =>
+          `<option value="${escapeHtml(value)}"${value === selected ? " selected" : ""}>${escapeHtml(label)}</option>`,
+      ),
+    )
+    .join("");
+}
+
+function renderAdminInvitations() {
+  const invitations = adminSnapshot()?.invitations || [];
+  if (invitations.length === 0) {
+    return `<p class="muted">No invitations loaded yet. Refresh to read them from the server.</p>`;
+  }
+  return `<div class="qso-list">${invitations
+    .map((invitation) => {
+      const status = adminInvitationStatus(invitation);
+      const canResend = status === "pending" || status === "expired";
+      const canChange = status === "pending";
+      return `<article class="qso-row">
+        <strong>${escapeHtml(invitation.invited_email || "unknown")}</strong>
+        <span>${escapeHtml(invitation.role || "unknown")} &middot; ${escapeHtml(ADMIN_INVITATION_STATUS_LABELS[status] || status)}</span>
+        <small>Expires ${escapeHtml(invitation.expires_at || "never")} / resent ${escapeHtml(String(invitation.resend_count ?? 0))} times</small>
+        <div class="monitor-actions">
+          <button class="toolbar-button" type="button" data-admin-invitation="inspect" data-invite-id="${escapeHtml(invitation.invite_id)}">Inspect</button>
+          <button class="toolbar-button" type="button" data-admin-invitation="resend" data-invite-id="${escapeHtml(invitation.invite_id)}" ${canResend ? "" : "disabled"}>Resend</button>
+          <button class="toolbar-button" type="button" data-admin-invitation="expire" data-invite-id="${escapeHtml(invitation.invite_id)}" ${canChange ? "" : "disabled"}>Expire</button>
+          <button class="toolbar-button" type="button" data-admin-confirm="revoke" data-invite-id="${escapeHtml(invitation.invite_id)}" ${canChange ? "" : "disabled"}>Revoke</button>
+        </div>
+      </article>`;
+    })
+    .join("")}</div>`;
+}
+
+function renderAdminAudits() {
+  const audits = adminSnapshot()?.audits || [];
+  if (audits.length === 0) {
+    return `<p class="muted">No audit records loaded yet. Refresh to read them from the server.</p>`;
+  }
+  return `<div class="stack">
+    ${audits.length > 100 ? `<p class="muted">Showing the 100 most recent of ${escapeHtml(String(audits.length))} loaded records.</p>` : ""}
+    <div class="qso-list">${audits
+      .slice(0, 100)
+      .map(
+        (audit) => `<article class="qso-row">
+          <strong>${escapeHtml(audit.action || "unknown")}</strong>
+          <span>${escapeHtml(audit.outcome || "unknown")}${audit.target ? ` &middot; ${escapeHtml(audit.target)}` : ""}</span>
+          <small>${escapeHtml(audit.occurred_at || "unknown time")}${audit.request_id ? ` / request ${escapeHtml(audit.request_id)}` : ""}</small>
+        </article>`,
+      )
+      .join("")}</div>
+  </div>`;
+}
+
+function renderAdminScreen() {
+  const hosting = adminSnapshot()?.hosting;
+  const busy = state.adminBusy ? "disabled" : "";
+  return `<div id="admin-screen" class="stack">
+    ${renderAdminStatusBanner()}
+    ${renderAdminInvitationToken()}
+
+    <details open>
+      <summary>Hosting configuration</summary>
+      <div class="stack">
+        ${renderAdminHosting()}
+        <button type="button" data-admin-action="/api/admin/hosting/refresh" ${busy}>Refresh Hosting Configuration</button>
+        <form id="admin-hosting-form" class="stack">
+          <label>Operation mode
+            <select name="operation_mode">${renderAdminOptions(ADMIN_OPERATION_MODES, hosting?.operation_mode)}</select>
+          </label>
+          <label>Registration mode
+            <select name="registration_mode">${renderAdminOptions(ADMIN_REGISTRATION_MODES, hosting?.registration_mode)}</select>
+          </label>
+          <label>Session lifetime seconds <input name="session_ttl_seconds" type="number" min="1" class="placeholder-control" placeholder="leave blank to keep" /></label>
+          <label>Refresh lifetime seconds <input name="refresh_ttl_seconds" type="number" min="1" class="placeholder-control" placeholder="leave blank to keep" /></label>
+          <label>Invitation lifetime seconds <input name="invitation_ttl_seconds" type="number" min="1" class="placeholder-control" placeholder="leave blank to keep" /></label>
+          <label>Verification lifetime seconds <input name="verification_ttl_seconds" type="number" min="1" class="placeholder-control" placeholder="leave blank to keep" /></label>
+          <label>Recovery lifetime seconds <input name="recovery_ttl_seconds" type="number" min="1" class="placeholder-control" placeholder="leave blank to keep" /></label>
+          <button type="submit" ${busy}>Update Hosting Configuration</button>
+          <p class="muted">Only the fields you change are sent. Blank fields are left exactly as the server has them.</p>
+        </form>
+      </div>
+    </details>
+
+    <details open>
+      <summary>Invitations</summary>
+      <div class="stack">
+        ${renderAdminInvitations()}
+        <button type="button" data-admin-action="/api/admin/invitations/refresh" ${busy}>Refresh Invitations</button>
+        <form id="admin-invitation-form" class="stack">
+          <label>Logbook ID <input name="logbook_id" class="placeholder-control" placeholder="00000000-0000-4000-8000-000000000001" required /></label>
+          <label>Invited email <input name="email" type="email" class="placeholder-control" placeholder="operator@example.test" required /></label>
+          <label>Role
+            <select name="role">${ADMIN_ROLES.map(([value, label]) => `<option value="${escapeHtml(value)}">${escapeHtml(label)}</option>`).join("")}</select>
+          </label>
+          <button type="submit" ${busy}>Create Invitation</button>
+          <p class="muted">The server emails the invitee and returns a single-use token that is shown here once and never stored.</p>
+        </form>
+      </div>
+    </details>
+
+    <details>
+      <summary>Audit log</summary>
+      <div class="stack">
+        ${renderAdminAudits()}
+        <button type="button" data-admin-action="/api/admin/audits/refresh" ${busy}>Refresh Audit Log</button>
+      </div>
+    </details>
+  </div>`;
+}
+
+function adminFormValues(form) {
+  const values = {};
+  new FormData(form).forEach((value, key) => {
+    const text = String(value).trim();
+    if (!text) return;
+    values[key] = key.endsWith("_seconds") ? Number(text) : text;
+  });
+  return values;
+}
+
+function bindAdminControls() {
+  byId("admin-hosting-form")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    await adminRequest("/api/admin/hosting/update", adminFormValues(event.target));
+  });
+  byId("admin-invitation-form")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    await adminRequest("/api/admin/invitations/create", adminFormValues(event.target));
+  });
+  document.querySelectorAll("[data-admin-action]").forEach((button) => {
+    button.addEventListener("click", () => adminRequest(button.dataset.adminAction, {}));
+  });
+  document.querySelectorAll("[data-admin-invitation]").forEach((button) => {
+    button.addEventListener("click", () =>
+      adminRequest(`/api/admin/invitations/${button.dataset.adminInvitation}`, {
+        invite_id: button.dataset.inviteId,
+      }),
+    );
+  });
+  document.querySelectorAll("[data-admin-confirm]").forEach((button) => {
+    button.addEventListener("click", () => {
+      if (!window.confirm("Revoking an invitation cannot be undone on the hosted server. Continue?")) return;
+      adminRequest(`/api/admin/invitations/${button.dataset.adminConfirm}`, {
+        invite_id: button.dataset.inviteId,
+      });
+    });
+  });
+}
+
+async function openAdminScreen() {
+  await refreshAdmin();
+  openScreen("admin");
 }

@@ -28,6 +28,22 @@ impl CommandRegistry {
             ),
             command("open.plugins", "Open Plugin Manager", "Shell", None, None),
             command(
+                "shell.layout.cycle",
+                "Switch Shell Layout",
+                "Shell",
+                Some("Ctrl/Cmd+Shift+L"),
+                None,
+            ),
+            command("shell.theme.light", "Use Light Theme", "Shell", None, None),
+            command("shell.theme.dark", "Use Dark Theme", "Shell", None, None),
+            command(
+                "shell.theme.system",
+                "Match System Theme",
+                "Shell",
+                None,
+                None,
+            ),
+            command(
                 "open.diagnostics",
                 "Open Diagnostic Report",
                 "Diagnostics",
@@ -624,6 +640,13 @@ impl CommandRegistry {
                 None,
                 None,
             ),
+            command(
+                "sync.discovery.scan",
+                "Scan Network For Instances",
+                "Sync",
+                None,
+                None,
+            ),
             command("sync.peers.refresh", "Refresh Peers", "Sync", None, None),
             command(
                 "sync.handshake.selected",
@@ -732,6 +755,34 @@ impl CommandRegistry {
                 None,
             ),
             command(
+                "admin.open",
+                "Open Server Administration",
+                "Administration",
+                None,
+                None,
+            ),
+            command(
+                "admin.hosting.refresh",
+                "Refresh Hosting Configuration",
+                "Administration",
+                None,
+                None,
+            ),
+            command(
+                "admin.invitations.open",
+                "Open Server Invitations",
+                "Administration",
+                None,
+                None,
+            ),
+            command(
+                "admin.audits.refresh",
+                "Refresh Server Audit Log",
+                "Administration",
+                None,
+                None,
+            ),
+            command(
                 "sync.cloud.diagnostics.copy",
                 "Copy Cloud Sync Diagnostic Summary",
                 "Sync",
@@ -831,6 +882,10 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert!(ids.contains(&"open.settings"));
+        assert!(ids.contains(&"shell.layout.cycle"));
+        assert!(ids.contains(&"shell.theme.light"));
+        assert!(ids.contains(&"shell.theme.dark"));
+        assert!(ids.contains(&"shell.theme.system"));
         assert!(ids.contains(&"open.plugins"));
         assert!(ids.contains(&"focus.callsign-entry"));
         assert!(ids.contains(&"toggle.event-bus-monitor"));
@@ -843,6 +898,10 @@ mod tests {
         assert!(ids.contains(&"account.session.refresh"));
         assert!(ids.contains(&"account.sign-out"));
         assert!(ids.contains(&"account.devices.open"));
+        assert!(ids.contains(&"admin.open"));
+        assert!(ids.contains(&"admin.hosting.refresh"));
+        assert!(ids.contains(&"admin.invitations.open"));
+        assert!(ids.contains(&"admin.audits.refresh"));
         assert!(ids.contains(&"diagnostics.report.upload"));
         assert!(ids.contains(&"diagnostics.report.copy-last-id"));
         assert!(ids.contains(&"backup.open"));
@@ -869,6 +928,7 @@ mod tests {
         assert!(ids.contains(&"official-log.verify-chain"));
         assert!(ids.contains(&"projection.rebuild"));
         assert!(ids.contains(&"sync.discovery.start"));
+        assert!(ids.contains(&"sync.discovery.scan"));
         assert!(ids.contains(&"sync.preview-pull.selected"));
         assert!(ids.contains(&"sync.pull.selected"));
         assert!(ids.contains(&"sync.diagnostics.copy"));

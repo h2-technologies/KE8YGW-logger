@@ -108,6 +108,21 @@ impl ApplicationSettings {
         self.logging.default_mode = self.logging.default_mode.trim().to_ascii_uppercase();
         self.logging.default_band = self.logging.default_band.trim().to_owned();
         self.net_control.default_mode = self.net_control.default_mode.trim().to_ascii_uppercase();
+        self.display.appearance = normalize_choice(
+            &self.display.appearance,
+            &APPEARANCE_MODES,
+            DEFAULT_APPEARANCE_MODE,
+        );
+        self.display.desktop_shell_layout = normalize_choice(
+            &self.display.desktop_shell_layout,
+            &DESKTOP_SHELL_LAYOUTS,
+            DEFAULT_DESKTOP_SHELL_LAYOUT,
+        );
+        self.display.mobile_dashboard_layout = normalize_choice(
+            &self.display.mobile_dashboard_layout,
+            &MOBILE_DASHBOARD_LAYOUTS,
+            DEFAULT_MOBILE_DASHBOARD_LAYOUT,
+        );
         self.updated_at = Utc::now();
         Ok(self)
     }
@@ -296,6 +311,14 @@ impl Default for NetControlSettings {
 pub struct DisplaySettings {
     pub appearance: String,
     pub accent_color_name: String,
+    /// Which desktop and web shell layout the operator has chosen. One of
+    /// [`DESKTOP_SHELL_LAYOUTS`].
+    #[serde(default = "default_desktop_shell_layout")]
+    pub desktop_shell_layout: String,
+    /// Which phone dashboard layout the operator has chosen. One of
+    /// [`MOBILE_DASHBOARD_LAYOUTS`].
+    #[serde(default = "default_mobile_dashboard_layout")]
+    pub mobile_dashboard_layout: String,
     pub map_default_layer: String,
     pub show_qso_map_objects: bool,
     pub show_station_map_markers: bool,
@@ -304,12 +327,54 @@ pub struct DisplaySettings {
 impl Default for DisplaySettings {
     fn default() -> Self {
         Self {
-            appearance: "system".to_owned(),
+            appearance: DEFAULT_APPEARANCE_MODE.to_owned(),
             accent_color_name: "blue".to_owned(),
+            desktop_shell_layout: default_desktop_shell_layout(),
+            mobile_dashboard_layout: default_mobile_dashboard_layout(),
             map_default_layer: "Stations".to_owned(),
             show_qso_map_objects: true,
             show_station_map_markers: true,
         }
+    }
+}
+
+/// Appearance modes shared by every client surface.
+pub const APPEARANCE_MODES: [&str; 3] = ["system", "light", "dark"];
+pub const DEFAULT_APPEARANCE_MODE: &str = "system";
+
+/// Shell layouts offered by the desktop app and the hosted web client. The
+/// identifiers are stable; the human-readable titles live in the GUI shell
+/// catalog so the clients stay the single source of presentation copy.
+pub const DESKTOP_SHELL_LAYOUTS: [&str; 5] = [
+    "operating-deck",
+    "command-center",
+    "field-notebook",
+    "focus-console",
+    "tabbed-workbench",
+];
+pub const DEFAULT_DESKTOP_SHELL_LAYOUT: &str = "operating-deck";
+
+/// Dashboard layouts offered by the iOS app.
+pub const MOBILE_DASHBOARD_LAYOUTS: [&str; 3] = ["liquid-glass", "grouped-logbook", "map-sheet"];
+pub const DEFAULT_MOBILE_DASHBOARD_LAYOUT: &str = "liquid-glass";
+
+fn default_desktop_shell_layout() -> String {
+    DEFAULT_DESKTOP_SHELL_LAYOUT.to_owned()
+}
+
+fn default_mobile_dashboard_layout() -> String {
+    DEFAULT_MOBILE_DASHBOARD_LAYOUT.to_owned()
+}
+
+/// Settings arrive from clients that may be older or newer than this build, so
+/// an unrecognized appearance or layout falls back to the default instead of
+/// failing the whole save and losing every other edit in the same payload.
+fn normalize_choice(value: &str, allowed: &[&str], fallback: &str) -> String {
+    let candidate = value.trim().to_ascii_lowercase();
+    if allowed.contains(&candidate.as_str()) {
+        candidate
+    } else {
+        fallback.to_owned()
     }
 }
 

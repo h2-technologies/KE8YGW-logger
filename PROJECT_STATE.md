@@ -1,5 +1,70 @@
 # Project State
 
+## Contest and EmComm foundation milestone (August 31, 2026)
+
+- Contesting and EmComm now have their shared domain foundations in
+  `ham-core`. Neither has a client surface yet; both are the data and event
+  contracts the platform workflows will be built on.
+- `ham_core::contest` is the versioned contest rule and exchange schema.
+  Contest definitions are data, so a corrected or newly published rule set
+  reaches operators through a signed definition pack rather than an application
+  build. A pack written against a newer `schema_version` is rejected whole, a
+  definition carrying an unimplemented rule concept fails to load rather than
+  loading with that rule ignored, and an older pack cannot downgrade a contest
+  that already has a higher `rule_version`. See
+  [docs/CONTEST_RULE_SCHEMA.md](docs/CONTEST_RULE_SCHEMA.md).
+- `ham_core::emcomm` is the append-only incident, operational period,
+  personnel, assignment, message, and activity-log model behind ICS 211, 213,
+  213RR, and 214. Corrections append: every record keeps its merged current
+  payload and the ordered history of the events that produced it, so an
+  exported incident package shows how the incident unfolded. Message numbers
+  are station-scoped (`PREFIX-NNNN`) so disconnected stations can allocate them
+  without coordinating, and a message number is assigned once. See
+  [docs/EMCOMM_RECORD_MODEL.md](docs/EMCOMM_RECORD_MODEL.md).
+- Release scope, closed issues, and validation for this milestone are recorded
+  in [docs/V0_5_1_RELEASE_PLAN.md](docs/V0_5_1_RELEASE_PLAN.md).
+- Every release surface is unified on product version `0.5.1`. The iOS build
+  number moves to `3`; the frozen `/api/v1` `info.version` is unchanged.
+- Baseline epic #3 and accounts epic #4 are closed after auditing their
+  remaining child issues (#15, #16, #17, #19, #21, #22, #23, #24, #25) against
+  the shipped code.
+
+## Offline sync reconciliation hardening (August 31, 2026)
+
+- Hosted `POST /api/v1/sync/push` now authorizes every pushed envelope against
+  the request logbook. Before this change the route authorized only the request
+  `logbook_id`, so a session with write access to one logbook could append
+  official events into another account's logbook by declaring a different
+  `logbook_id` inside the event envelopes.
+  `sync_push_rejects_events_scoped_to_another_logbook` is the regression test.
+- Hosted push previously reported every rejection as `rejected`. It now shares
+  `ham_sync::push_replication_status` with the self-hosted and in-memory sync
+  servers, so a branch that does not continue the receiver head is reported as
+  `diverged` on every transport. Desktop and iOS branch on that status to stop
+  unattended retry and open a manual conflict review, so the hosted transport
+  previously degraded divergence into an ordinary retryable failure.
+- New deterministic coverage: a self-hosted loopback HTTP test that refuses a
+  divergent branch, keeps the durable head and official log unchanged, reports a
+  `diverged` preview for an unknown local head, and recovers by pulling the real
+  head and re-applying the offline work; and iOS FFI tests for first-launch
+  queue initialization, legacy `version: 0` queue migration, corrupt-queue
+  quarantine, and interrupted atomic-write promotion through
+  `sync.offline_queue.recover`.
+- The `ham-gui` listener now serves only the LAN sync peer endpoints (identity
+  probe, signed trust-gated reads, and reciprocal pairing accept) to
+  non-loopback requesters. Automatic LAN discovery requires a LAN-reachable
+  bind, which previously also exposed the unauthenticated browser UI and every
+  local control endpoint, including QSO and Net Control writes, credential
+  management, backup import, LAN pairing, and cloud connect, to any host on
+  that network. Non-loopback control requests now return `403` with a redacted
+  `sync.lan.control_api.rejected` runtime event unless the operator sets
+  `HAM_GUI_ALLOW_REMOTE_CONTROL_API=1`.
+- Still incomplete: every physical-device row in
+  [docs/V0_3_SYNC_QUALIFICATION.md](docs/V0_3_SYNC_QUALIFICATION.md). The
+  durable self-hosted metadata store holds its SurrealKV lock for the life of
+  the process, so server restart, upgrade, and restore rows cannot be exercised
+  in-process and still need a real process restart.
+
 ## Account and session milestone (August 31, 2026)
 
 - The hosted account, session, recovery, and device routes now have a client
@@ -11,34 +76,39 @@
 - Session and refresh tokens live only in the OS credential backend or the iOS
   Keychain under Rust-assigned credential identifiers. The durable record, GUI
   responses, CLI output, and runtime events are token-free.
-- Server administration UX (hosting mode, invitations, audits) is the remaining
-  account-area client gap and is the next increment. See
-  [docs/V0_4_RELEASE_PLAN.md](docs/V0_4_RELEASE_PLAN.md).
-- Every release surface is unified on product version `0.4.0`: Cargo workspace
+- Server administration UX (hosting mode, invitations, audits) shipped in the
+  v0.5 milestone on hosted web, desktop, native iOS, and the CLI, together with
+  one-time instance-administrator bootstrap. Administration is scoped to the
+  server the hosted account is signed in to, and the single-use invitation token
+  is returned once and never persisted. See
+  [docs/V0_5_RELEASE_PLAN.md](docs/V0_5_RELEASE_PLAN.md). The remaining
+  account-area work is operations configuration: production email
+  deliverability, Turnstile keys, privacy/support URLs, sizing, retention, and
+  monitoring.
+- Every release surface is unified on product version `0.5.1`: Cargo workspace
   metadata, Tauri, iOS marketing version, API product metadata, the CLI version
-  assertion, and documentation. Publishing a `v0.4.0` tag remains a separate
-  release action governed by `RELEASE.md`.
+  assertion, the governance version pin, and documentation. Publishing a
+  `v0.5.1` tag remains a separate release action governed by `RELEASE.md`.
 
 ## Desktop and CLI 0.3 preparation (July 30, 2026)
 
 - Desktop/Tauri, CLI, shared Rust package metadata, and native iOS marketing
-  metadata are all `0.4.0`, inherited from `[workspace.package].version`.
+  metadata are all `0.5.1`, inherited from `[workspace.package].version`.
 - Version validation rejects any drift from that single canonical version
   across Cargo, Tauri, iOS, API metadata, release artifacts, and tags.
 - The existing CLI commands now expose stable `--json` success output,
   deterministic usage errors, help, and version/build output.
 - The CLI is still incomplete for v1: logbook/QSO/support-state CRUD, dry-run
-  ADIF, backups, sync/conflict operations, hosted server administration,
-  provider diagnostics, diagnostic bundles, and shell completions remain
-  blockers. Hosted account, session, recovery, and device commands are
-  implemented.
+  ADIF, backups, sync/conflict operations, provider diagnostics, diagnostic
+  bundles, and shell completions remain blockers. Hosted account, session,
+  recovery, device, and server administration commands are implemented.
 - Desktop packaging/signing, signed updater behavior, offline maps, and
   production cross-platform install/recovery evidence remain open; no signing,
   notarization, or clean-machine result is claimed by this update.
 
-Last audited: 2026-08-28, against `dev` at 09418f4.
+Last audited: 2026-08-31, against `dev` at 394a8e5.
 
-Canonical product version: `0.4.0` from `Cargo.toml`
+Canonical product version: `0.5.1` from `Cargo.toml`
 `[workspace.package].version`.
 
 Locked v1 release target: November 24, 2026 with hosted web, native iOS, and
@@ -127,6 +197,21 @@ operations, and release qualification.
   HMAC-SHA256 signed LAN read endpoint authorization for logbook/head/event
   APIs, plus durable local sync identity support files that persist stable
   device IDs while rotating session IDs.
+- Versioned contest rule and exchange schema in `ham_core::contest`: contest
+  definitions, exchange field kinds with shared validation and normalization,
+  entry categories, duplicate scope, serial policy, multipliers, ordered
+  scoring rules, time windows, and export identity; signed definition-pack
+  envelopes verified against a trust store before the pack is parsed; and a
+  definition catalog that keeps the highest `rule_version` per contest and
+  records each definition's provenance. The bundled generic serial and generic
+  grid definitions load through the same path as an installed pack.
+- Append-only EmComm record model in `ham_core::emcomm`: incidents,
+  operational periods, ICS 211 personnel, assignments, ICS 213/213RR messages,
+  and ICS 214 activity entries, with `official.log.emcomm.*` events,
+  `proposal.emcomm.*` proposals and payload validation, `emcomm.*` plugin
+  capabilities, a rebuildable projection, per-record correction history,
+  precedence ordering, unacknowledged-traffic lookup, station-scoped offline
+  message numbering, and a complete incident package export.
 - Tauri v2 desktop wrapper with bundled web assets, native dialog commands, and
   restricted `/api/*` proxying.
 - Native iOS SwiftUI project, SwiftData cache/projection models, Rust FFI bridge,
@@ -193,7 +278,12 @@ operations, and release qualification.
   HMAC-SHA256 proof-of-possession for protected LAN read endpoints, explicit
   LAN auth credential rotation/recovery through the GUI trust endpoint, and
   automatic IPv4/IPv6 multicast discovery that probes peer identity before
-  recording reachable peers. A guided browser LAN pairing/trust panel issues
+  recording reachable peers. The desktop GUI also runs an on-demand network
+  scan that pairs a longer multicast listen window with a parallel direct sweep
+  of the local private/link-local IPv4 subnets, so instances are found on
+  networks that drop multicast and instances that never started discovery;
+  swept addresses are recorded under the same `/api/sync/state` identity probe.
+  A guided browser LAN pairing/trust panel issues
   one-time codes, completes reciprocal pairing with generated endpoint auth
   secrets distinct from one-time pairing codes, rotates LAN auth credentials,
   and revokes trusted peers without prompt-only handling; the GUI LAN accept
@@ -271,11 +361,13 @@ operations, and release qualification.
 - LoTW/TQSL managed certificate/signing mode, SOTAWatch approved live access,
   RBN/DX background lifecycle, production maps/offline caching, and propagation
   provider qualification.
-- Contesting: Field Day, Winter Field Day, generic serial/grid templates,
-  release-adjacent December/January contest packs, scoring, dupes, multipliers,
-  and Cabrillo export.
-- EmComm: ICS 211, 213, 213RR, 214, personnel, assignments, and
-  message/communications records.
+- Contesting beyond the rule/exchange schema: the offline-safe contest session
+  and logging engine, Field Day and Winter Field Day templates, the
+  release-adjacent December/January definition packs, Cabrillo export, and
+  every contest client surface.
+- EmComm beyond the record model: the ICS 211, 213, 213RR, and 214 form
+  workflows, the cross-platform incident UI, PDF/JSON export, and multi-device
+  exercise qualification.
 - Signed desktop updater, package signing/notarization, TestFlight/App Store
   release, production infrastructure, operations runbooks, and release-candidate
   soak.
@@ -339,7 +431,7 @@ Known manual repository/external settings remain in
 | #21 Registration and hosting modes | Satisfied for server foundation | `HostingConfig`, `RegistrationMode`, one-time `POST /api/v1/admin/bootstrap`, `GET/PATCH /api/v1/admin/hosting`, invitation create/list/inspect/resend/expire/revoke routes, Surreal `hosting_config`, `server_admins`, `server_invites`, `tests::bootstrap_admin_is_single_use_and_stores_only_token_hashes`, `tests::invite_only_registration_requires_single_use_invite_and_email_verification` |
 | #22 Verified email and Turnstile | Satisfied for server foundation | `EmailDeliveryConfig`, deterministic test outbox, webhook boundary, `EmailVerificationRecord`, `verify_turnstile_token`, Turnstile Siteverify path with official test-key behavior, `tests::open_registration_turnstile_fails_closed_and_replays_tokens` |
 | #23 Session/token/device hardening | Satisfied for server foundation | Hashed session/refresh/API token persistence, session/refresh expiry fields, secure cookie header, logout/logout-all/session rotate/account delete/device revoke/revoke-all routes, reload tests in `tests::sessions_rotate_revoke_and_survive_reload_with_hashes_only` |
-| #24 Hosted authorization boundaries | Satisfied for server foundation | Central `authorize`, `require_instance_admin`, `require_logbook_role`, cross-account/logbook negative tests, provider/backup/sync scoping tests in `crates/ham-server/src/lib.rs` |
+| #24 Hosted authorization boundaries | Satisfied for server foundation | Central `authorize`, `require_instance_admin`, `require_logbook_role`, cross-account/logbook negative tests, provider/backup/sync scoping tests in `crates/ham-server/src/lib.rs`, and `sync_push_rejects_events_scoped_to_another_logbook`, which proves sync push authorizes every pushed event envelope against the request logbook instead of the request field alone |
 | #25 Operational limits, request IDs, audits, safe errors | Satisfied for server foundation | `HostedLimitConfig`, `RateLimitRecord`, request ID success/error propagation, `AuditRecord`, provider/sync/account limit enforcement, stable error codes in `ham-api-contract`, `tests::request_ids_limits_and_audits_are_durable_and_redacted` |
 
 ## v0.3 Offline Sync Issue Audit
@@ -348,26 +440,34 @@ Known manual repository/external settings remain in
 | --- | --- | --- |
 | #26 Durable idempotent offline mutation envelopes | Satisfied for shared contract | `crates/ham-sync/src/offline.rs`, `JsonOfflineMutationQueue`, schema-version rejection, idempotent enqueue, deterministic sequence tests, retry/recovery tests, `docs/SYNC_PROTOCOL.md`, `docs/V0_3_RELEASE_PLAN.md` |
 | #27 Persistent desktop offline queue | Satisfied | GUI persists queue entries before QSO/activation/Net Control/station support mutations, recovers/interprets queue state at startup, exposes queue state/recovery, and cloud push acknowledges queued official event hashes. `desktop_queue_recovers_restart_and_drains_to_cloud_without_duplicates` proves a desktop-style restart/reconnect drain path recovers a `sending` operation, drains queued official events in order, marks accepted entries by event hash, and ignores duplicate cloud replay without creating local duplicates. `cloud_connect_auto_push_drains_recovered_desktop_queue` proves the GUI reconnect path with `auto_push_enabled` recovers an interrupted desktop queue, drains ready queued QSO events to cloud, marks the queue accepted, and does not duplicate local official history. `cloud_connect_auto_push_skips_unqueued_local_history` proves reconnect auto-drain is queue-only and does not push unrelated accepted local history when no offline mutation is ready. Shared recovery initializes v0.2 absent queues, migrates legacy `version: 0` records, promotes interrupted atomic writes, and quarantines corrupt queue JSON. |
-| #28 Persistent iOS offline queue | Partially satisfied | `ham-ios-ffi` queues QSO/activation/Net Control/station/equipment commands and exposes queue snapshots/recovery plus Rust-owned conflict-review create/resolve commands. The iOS recovery command uses the shared migration/quarantine recovery report. `sync.offline_queue.retry_plan` and `sync.offline_queue.retry_result` give Swift a Rust-owned background retry contract: bounded batches, sending-state recovery, accepted-hash acknowledgment, transient-failure backoff, and user-action stops for auth, validation, divergence, missing-local-event, and permanent failures. `sync_retry_plan_recovers_terminated_send_and_blocks_without_network` proves a terminated `sending` operation is recovered to retrying and no network attempt is planned while native network state is unavailable. Native Swift now has typed retry-plan/retry-result bridge methods, decodes queue health/mutations, durable local sync identity, and Rust-planned official-event envelopes in the Sync workspace, can build and execute the configured self-hosted/logbook-scoped or hosted `/api/v1/sync/*` endpoint style without creating events in Swift, executes the configured sync-token push path through a Rust-plan -> Swift-transport -> Rust-result coordinator, splits accepted server prefixes from rejected tails, builds self-hosted/logbook-scoped and hosted pull requests, executes native pull fetch -> Rust apply coordinators for hosted/self-hosted and trusted LAN peers, completes reciprocal pairing against an operator-entered peer URL, discovers LAN peer URLs from multicast packets only after `/api/sync/state` identity probing, probes `/api/sync/state` to verify the selected trusted peer identity before sending signed LAN reads, signs protected LAN `get-head`/`events-since` requests with Keychain-backed auth secrets, applies pulled official envelopes through `sync.remote_events.apply`, surfaces no-network retry/pull plans, exposes LAN trust support state without raw secrets, and registers a permitted `BGProcessingTask` retry identifier whose eligibility policy requires enabled Rust settings, a valid sync URL, a Keychain sync token, and either pending Rust queue work or Auto Pull before scheduling. The task handler delegates to the same Rust-plan -> Swift-transport -> Rust-result executor and runs configured Auto Pull only after a clean accepted push or no-ready-events push plan, with pulled envelopes applied through `sync.remote_events.apply`. Simulator-safe Swift tests cover no-network planning, auth-failure user-action classification without token leakage, event-envelope decoding, push/pull request construction, pull fetch/apply coordination, hosted endpoint-style routing, background retry scheduling policy boundaries, background Auto Pull sequencing after a clean push, pull suppression after user-action push failures, unsigned LAN state request construction, iOS LAN discovery packet decoding/peer-URL derivation/identity-probe matching, reciprocal LAN pairing request construction and remote-accept validation, LAN peer identity mismatch rejection, signed LAN request construction, LAN revoked-peer gating, pulled-event apply decoding, accepted retry execution, partial-divergence retry-result recording, durable local identity decoding, and LAN trust snapshot/issue/accept/trust/rotate/revoke decoding. `cross_client_golden_partial_push_accepts_prefix_and_blocks_rejected_tail` proves the shared Rust cloud/queue contract accepts a valid pushed prefix, blocks the rejected tail as user-action-required, avoids local duplicates, and can complete the reviewed tail by accepted event hash. `cross_client_golden_revoked_cloud_auth_blocks_queue_until_repaired` and `cross_client_golden_expired_cloud_auth_blocks_queue_until_repaired` prove revoked and expired cloud auth append nothing remotely, stop queued work as user-action-required, plan no unattended retry, and drain only after re-pairing plus accepted-hash acknowledgment. Release-device BGTask execution, release-device hosted/self-hosted native endpoint qualification, physical Local Network prompt behavior, and physical poor-network validation remain. |
-| #29 Push/pull/divergence/manual conflict review | Partially satisfied | Existing verified preview/pull/push remains, shared pull apply now accepts either a full remote chain or a verified missing tail that directly follows the actual local head, queue-aware cloud push was added, structured conflict reports classify divergent heads, missing dependencies, unsupported remote schemas, concurrent QSO corrections, and tombstone/restore overlaps, durable manual conflict-review create/resolve commands reject unsafe divergent pulls, desktop/iOS corrective-event commands submit explicit proposals through the normal proposal pipeline before resolving reviews with generated event hashes, and the browser divergence screen now lists saved reviews, summarizes conflicts, records explicit recovery choices, and submits corrective QSO note events through Rust endpoints without prompt-only handling. Native iOS Swift decodes saved review records, displays open-review status, recommended actions, peer IDs, and structured conflict messages in the Sync workspace, can fetch self-hosted/logbook-scoped pull responses and trusted LAN peer event ranges after verifying the peer identity from `/api/sync/state`, can call `sync.remote_events.apply` to apply pulled official envelopes through shared Rust verification, and simulator-safe fallback tests cover review creation/decoding plus selected recovery-path resolution, pull request/coordinator behavior, unsigned LAN state request construction, LAN peer identity mismatch rejection, signed LAN request construction, LAN revoked-peer gating, and pulled-event apply decoding. `cross_client_golden_divergence_revocation_and_upgrade_review_path` now proves the same server-derived conflict report round-trips through JSON, is accepted by both desktop and iOS review stores, rejects unsafe pull-after-review, marks related queued work as user-action-required, and leaves the iOS local store unchanged when a divergent remote branch is pulled through shared verification. Real end-to-end web/server, desktop, and iOS branch review/reconciliation workflow qualification remains. |
-| #30 Device pairing/trust/revocation/LAN transport decision | Partially satisfied | `JsonLanTrustStore` provides explicit approval, hashed expiring single-use tokens, logbook-scoped trusted devices, auth credential references, auth credential rotation, replay nonce rejection, and immediate revocation; `JsonLocalSyncIdentityStore` persists stable local device IDs without persisting discovery sessions; GUI exposes trust endpoints, guided browser pairing/trust controls for issuing one-time local codes, entering peer token/code/fingerprint values, completing reciprocal pairing with generated endpoint auth codes distinct from one-time pairing codes, rejecting missing endpoint auth codes or attempts to reuse the one-time pairing code as long-lived LAN auth, generating replacement auth codes, rotating LAN auth, and revoking selected trusted peers, manual direct LAN HTTP peer add/preview/pull, automatic IPv4/IPv6 multicast discovery with reachable identity probing, advertised API-port normalization, HMAC-SHA256 signed LAN list/head/event read endpoints, LAN auth rotation/recovery, and LAN pull rejects untrusted/revoked/replayed peers before local append. iOS FFI now exposes durable local identity through `sync.snapshot` plus LAN trust snapshot, issue-pairing-token, accept-pairing-token with required auth credential ID, trust-peer, rotate-auth, and revoke commands; the Sync workspace can issue and accept local codes, complete reciprocal pairing against an operator-entered peer URL with the generated LAN auth secret stored only in Keychain and only a credential ID persisted by Rust, scan IPv4/IPv6 LAN discovery packets, derive candidate peer URLs from sender plus advertised API port, require `/api/sync/state` identity matches before listing a peer, trust a peer, rotate Keychain-backed LAN auth credentials, revoke trust while Rust persists only credential IDs, and pull from a trusted peer URL by first verifying the peer's published sync identity, then using signed protected LAN reads followed by Rust event-chain verification; `Info.plist` declares Local Network usage and allows local networking, and the app target declares the approved and provisioned multicast entitlement. Physical LAN/iOS Local Network validation remains. |
-| #31 Cross-client sync recovery/migration test suite | Partially satisfied | New deterministic `ham-sync` golden scenarios cover desktop-style crash recovery, transient network retry, accepted-by-hash drain, duplicate replay, reordered delivery rejection, iOS-style pull/projection replay, verified missing-tail pull apply, partial push accepted-prefix/rejected-tail queue recovery, revoked and expired cloud-auth user-action recovery, clock-skewed event timestamps ordered by hashes, divergent heads, concurrent correction and tombstone/restore conflict reports, client-ready conflict-report JSON portability across desktop and iOS review stores, unsafe-resolution rejection, user-action queue marking, no-mutation divergent pull rejection, manual corrective-event review resolution, v0.2 legacy queue migration, and LAN revocation. `ham-sync-server` route and loopback TCP wire tests prove the self-hosted HTTP compatibility surface can pair a device, list scoped logbooks, push a canonical official event through durable storage, ignore duplicate replay, pull the missing remote event, and reject invalid or expired sync tokens with stable API errors. `ham-server` binary loopback TCP wire tests prove the hosted HTTP compatibility surface can bootstrap hosted auth, create a QSO through the proposal pipeline, pull missing hosted sync events, ignore duplicate hosted sync push, and persist the official event hash exactly once in durable JSONL storage. Existing queue/trust/recovery/conflict-review tests, desktop restart/reconnect drain coverage, queued target-entity persistence/backfill tests, unsupported-schema tests, corrupt queue quarantine tests, interrupted atomic-write promotion tests, and iOS FFI queue/conflict-review/remote-event-apply plus Swift hosted/self-hosted, background scheduling policy, and LAN pull-transport/coordinator assertions remain in place. Release-device hosted web/desktop/iOS/self-hosted end-to-end qualification, physical-device tests, and full migration matrix remain. |
+| #28 Persistent iOS offline queue | Partially satisfied | `ham-ios-ffi` queues QSO/activation/Net Control/station/equipment commands and exposes queue snapshots/recovery plus Rust-owned conflict-review create/resolve commands. The iOS recovery command uses the shared migration/quarantine recovery report. `sync.offline_queue.retry_plan` and `sync.offline_queue.retry_result` give Swift a Rust-owned background retry contract: bounded batches, sending-state recovery, accepted-hash acknowledgment, transient-failure backoff, and user-action stops for auth, validation, divergence, missing-local-event, and permanent failures. `sync_retry_plan_recovers_terminated_send_and_blocks_without_network` proves a terminated `sending` operation is recovered to retrying and no network attempt is planned while native network state is unavailable. Native Swift now has typed retry-plan/retry-result bridge methods, decodes queue health/mutations, durable local sync identity, and Rust-planned official-event envelopes in the Sync workspace, can build and execute the configured self-hosted/logbook-scoped or hosted `/api/v1/sync/*` endpoint style without creating events in Swift, executes the configured sync-token push path through a Rust-plan -> Swift-transport -> Rust-result coordinator, splits accepted server prefixes from rejected tails, builds self-hosted/logbook-scoped and hosted pull requests, executes native pull fetch -> Rust apply coordinators for hosted/self-hosted and trusted LAN peers, completes reciprocal pairing against an operator-entered peer URL, discovers LAN peer URLs from multicast packets only after `/api/sync/state` identity probing, probes `/api/sync/state` to verify the selected trusted peer identity before sending signed LAN reads, signs protected LAN `get-head`/`events-since` requests with Keychain-backed auth secrets, applies pulled official envelopes through `sync.remote_events.apply`, surfaces no-network retry/pull plans, exposes LAN trust support state without raw secrets, and registers a permitted `BGProcessingTask` retry identifier whose eligibility policy requires enabled Rust settings, a valid sync URL, a Keychain sync token, and either pending Rust queue work or Auto Pull before scheduling. The task handler delegates to the same Rust-plan -> Swift-transport -> Rust-result executor and runs configured Auto Pull only after a clean accepted push or no-ready-events push plan, with pulled envelopes applied through `sync.remote_events.apply`. Simulator-safe Swift tests cover no-network planning, auth-failure user-action classification without token leakage, event-envelope decoding, push/pull request construction, pull fetch/apply coordination, hosted endpoint-style routing, background retry scheduling policy boundaries, background Auto Pull sequencing after a clean push, pull suppression after user-action push failures, unsigned LAN state request construction, iOS LAN discovery packet decoding/peer-URL derivation/identity-probe matching, reciprocal LAN pairing request construction and remote-accept validation, LAN peer identity mismatch rejection, signed LAN request construction, LAN revoked-peer gating, pulled-event apply decoding, accepted retry execution, partial-divergence retry-result recording, durable local identity decoding, and LAN trust snapshot/issue/accept/trust/rotate/revoke decoding. `cross_client_golden_partial_push_accepts_prefix_and_blocks_rejected_tail` proves the shared Rust cloud/queue contract accepts a valid pushed prefix, blocks the rejected tail as user-action-required, avoids local duplicates, and can complete the reviewed tail by accepted event hash. `cross_client_golden_revoked_cloud_auth_blocks_queue_until_repaired` and `cross_client_golden_expired_cloud_auth_blocks_queue_until_repaired` prove revoked and expired cloud auth append nothing remotely, stop queued work as user-action-required, plan no unattended retry, and drain only after re-pairing plus accepted-hash acknowledgment. Release-device BGTask execution, release-device hosted/self-hosted native endpoint qualification, physical Local Network prompt behavior, and physical poor-network validation remain. `sync_offline_queue_recover_initializes_absent_ios_queue_and_stays_stable`, `sync_offline_queue_recover_migrates_legacy_v0_2_ios_queue_records`, `sync_offline_queue_recover_quarantines_corrupt_ios_queue_without_discarding_bytes`, and `sync_offline_queue_recover_promotes_interrupted_ios_atomic_write` prove the native recovery command initializes a first-launch queue once, migrates legacy `version: 0` records (resuming as retrying with a local event and pending without one), quarantines corrupt queue JSON beside the queue with the original bytes intact, and promotes an atomic write interrupted by app termination without losing queued work. |
+| #29 Push/pull/divergence/manual conflict review | Partially satisfied | Existing verified preview/pull/push remains, shared pull apply now accepts either a full remote chain or a verified missing tail that directly follows the actual local head, queue-aware cloud push was added, structured conflict reports classify divergent heads, missing dependencies, unsupported remote schemas, concurrent QSO corrections, and tombstone/restore overlaps, durable manual conflict-review create/resolve commands reject unsafe divergent pulls, desktop/iOS corrective-event commands submit explicit proposals through the normal proposal pipeline before resolving reviews with generated event hashes, and the browser divergence screen now lists saved reviews, summarizes conflicts, records explicit recovery choices, and submits corrective QSO note events through Rust endpoints without prompt-only handling. Native iOS Swift decodes saved review records, displays open-review status, recommended actions, peer IDs, and structured conflict messages in the Sync workspace, can fetch self-hosted/logbook-scoped pull responses and trusted LAN peer event ranges after verifying the peer identity from `/api/sync/state`, can call `sync.remote_events.apply` to apply pulled official envelopes through shared Rust verification, and simulator-safe fallback tests cover review creation/decoding plus selected recovery-path resolution, pull request/coordinator behavior, unsigned LAN state request construction, LAN peer identity mismatch rejection, signed LAN request construction, LAN revoked-peer gating, and pulled-event apply decoding. `cross_client_golden_divergence_revocation_and_upgrade_review_path` now proves the same server-derived conflict report round-trips through JSON, is accepted by both desktop and iOS review stores, rejects unsafe pull-after-review, marks related queued work as user-action-required, and leaves the iOS local store unchanged when a divergent remote branch is pulled through shared verification. `sync_push_reports_divergence_with_the_shared_replication_vocabulary` and `self_hosted_wire_endpoint_rejects_divergent_branch_and_reconciles_after_pull` prove hosted and self-hosted push now share one `pulled`/`diverged`/`rejected` vocabulary through `ham_sync::push_replication_status`, that a divergent branch changes neither the head nor durable storage, and that the safe recovery path is pull-then-reapply. Real end-to-end web/server, desktop, and iOS branch review/reconciliation workflow qualification remains. |
+| #30 Device pairing/trust/revocation/LAN transport decision | Partially satisfied | `JsonLanTrustStore` provides explicit approval, hashed expiring single-use tokens, logbook-scoped trusted devices, auth credential references, auth credential rotation, replay nonce rejection, and immediate revocation; `JsonLocalSyncIdentityStore` persists stable local device IDs without persisting discovery sessions; GUI exposes trust endpoints, guided browser pairing/trust controls for issuing one-time local codes, entering peer token/code/fingerprint values, completing reciprocal pairing with generated endpoint auth codes distinct from one-time pairing codes, rejecting missing endpoint auth codes or attempts to reuse the one-time pairing code as long-lived LAN auth, generating replacement auth codes, rotating LAN auth, and revoking selected trusted peers, manual direct LAN HTTP peer add/preview/pull, automatic IPv4/IPv6 multicast discovery with reachable identity probing, advertised API-port normalization, HMAC-SHA256 signed LAN list/head/event read endpoints, LAN auth rotation/recovery, and LAN pull rejects untrusted/revoked/replayed peers before local append. iOS FFI now exposes durable local identity through `sync.snapshot` plus LAN trust snapshot, issue-pairing-token, accept-pairing-token with required auth credential ID, trust-peer, rotate-auth, and revoke commands; the Sync workspace can issue and accept local codes, complete reciprocal pairing against an operator-entered peer URL with the generated LAN auth secret stored only in Keychain and only a credential ID persisted by Rust, scan IPv4/IPv6 LAN discovery packets, derive candidate peer URLs from sender plus advertised API port, require `/api/sync/state` identity matches before listing a peer, trust a peer, rotate Keychain-backed LAN auth credentials, revoke trust while Rust persists only credential IDs, and pull from a trusted peer URL by first verifying the peer's published sync identity, then using signed protected LAN reads followed by Rust event-chain verification; `Info.plist` declares Local Network usage and allows local networking, and the app target declares the approved and provisioned multicast entitlement. The GUI listener now serves only the LAN sync peer endpoints (identity probe, signed trust-gated reads, and reciprocal pairing accept) to non-loopback requesters, so a LAN-reachable bind no longer exposes the unauthenticated browser UI and local control plane; `lan_peers_reach_signed_read_endpoints_but_not_the_local_control_plane` and `rejected_remote_control_requests_return_403_and_record_a_redacted_warning` cover the allow-list, the loopback/opt-in decision matrix, and the redacted rejection. Physical LAN/iOS Local Network validation remains. |
+| #31 Cross-client sync recovery/migration test suite | Partially satisfied | New deterministic `ham-sync` golden scenarios cover desktop-style crash recovery, transient network retry, accepted-by-hash drain, duplicate replay, reordered delivery rejection, iOS-style pull/projection replay, verified missing-tail pull apply, partial push accepted-prefix/rejected-tail queue recovery, revoked and expired cloud-auth user-action recovery, clock-skewed event timestamps ordered by hashes, divergent heads, concurrent correction and tombstone/restore conflict reports, client-ready conflict-report JSON portability across desktop and iOS review stores, unsafe-resolution rejection, user-action queue marking, no-mutation divergent pull rejection, manual corrective-event review resolution, v0.2 legacy queue migration, and LAN revocation. `ham-sync-server` route and loopback TCP wire tests prove the self-hosted HTTP compatibility surface can pair a device, list scoped logbooks, push a canonical official event through durable storage, ignore duplicate replay, pull the missing remote event, and reject invalid or expired sync tokens with stable API errors. `ham-server` binary loopback TCP wire tests prove the hosted HTTP compatibility surface can bootstrap hosted auth, create a QSO through the proposal pipeline, pull missing hosted sync events, ignore duplicate hosted sync push, and persist the official event hash exactly once in durable JSONL storage. Existing queue/trust/recovery/conflict-review tests, desktop restart/reconnect drain coverage, queued target-entity persistence/backfill tests, unsupported-schema tests, corrupt queue quarantine tests, interrupted atomic-write promotion tests, and iOS FFI queue/conflict-review/remote-event-apply plus Swift hosted/self-hosted, background scheduling policy, and LAN pull-transport/coordinator assertions remain in place. Loopback HTTP wire coverage now also proves the self-hosted surface refuses a divergent branch without changing the durable head or official log, reports a `diverged` preview for an unknown local head, reconciles by pull-then-reapply, and ignores duplicate replay of the reconciled chain, and the hosted surface refuses cross-logbook event batches and reports divergence with the shared status vocabulary. iOS FFI recovery tests cover first-launch initialization, legacy `version: 0` migration, corrupt-queue quarantine, and interrupted atomic-write promotion. Release-device hosted web/desktop/iOS/self-hosted end-to-end qualification, physical-device tests, and full migration matrix remain; the durable metadata store holds its SurrealKV lock for the life of the process, so restart rows need a real process restart. |
+
+## v0.5.1 Contest And EmComm Foundation Issue Audit
+
+| Issue | Status | Evidence |
+| --- | --- | --- |
+| #67 Versioned contest rule and exchange schema | Satisfied | `crates/ham-core/src/contest.rs`, `crates/ham-core/assets/contest-definitions-v1.json`, `docs/CONTEST_RULE_SCHEMA.md`. `newer_schema_versions_are_rejected_whole`, `unknown_definition_fields_fail_instead_of_being_ignored`, and `unknown_pack_kinds_are_rejected` prove an unknown or incompatible rule version fails safely and is never partially loaded. `a_newer_rule_version_replaces_an_older_one_without_an_app_release` and `an_older_pack_cannot_downgrade_an_updated_contest` prove definitions update without an application release and cannot be silently rolled back. `signed_packs_load_and_tampered_packs_do_not` and `unsigned_and_unknown_key_packs_are_refused_by_default` prove the signed-update path. |
+| #72 Append-only EmComm incident, period, people, assignment, and message model | Satisfied for the shared domain | `crates/ham-core/src/emcomm.rs`, `official.log.emcomm.*` and `proposal.emcomm.*` in `ham-plugin-sdk`, proposal validation and capability enforcement in `crates/ham-core/src/proposal.rs` and `permissions.rs`, `docs/EMCOMM_RECORD_MODEL.md`. `emcomm_corrections_append_history_and_never_rewrite_it` and `emcomm_message_lifecycle_keeps_every_delivery_state` prove corrections and delivery state append instead of mutating. `emcomm_offline_message_numbers_are_scoped_to_the_originating_station` and `emcomm_message_numbers_cannot_be_reassigned_or_malformed` prove offline numbering is collision-free and assigned once. `emcomm_incident_package_carries_every_record_and_its_history` proves the export preserves per-record history. The ICS form workflows and client surfaces (#73-#76) remain open. |
 
 ## Next Recommended Goal
 
-Wire hosted web, desktop, and native iOS to the implemented server
-administration routes: hosting-mode configuration, invitation
-create/list/inspect/resend/expire/revoke, and audit review. That is the only
-remaining account-area client gap and, like the account milestone, it has no
-external blocker. `ham_sync::account` already provides the planning,
-classification, and secret-handling contract to extend.
+Build the offline-safe contest session and logging engine (#68) on the schema
+shipped here: sessions, keyboard-first entry, exchange validation, duplicate
+detection, serial allocation, running score and progress, corrections, and
+reconciliation of conflicting offline serials. It has no external blocker, and
+it is the dependency the Field Day and Winter Field Day templates (#69), the
+December/January definition packs (#70), and Cabrillo export (#71) all wait on.
 
-After that, or in parallel where hardware and credentials allow, finish the
-remaining sync/reconciliation hardening: App Store Connect archive
-confirmation for the newly provisioned multicast entitlement, release-device
-cross-client branch review and reconciliation workflow qualification, physical
-LAN/iOS local-network validation, release-device hosted/self-hosted native
-endpoint qualification, and release-device iOS background task and
-poor-network qualification. Use `docs/V0_3_SYNC_QUALIFICATION.md` as the evidence checklist
-for #28-#31. That goal unblocks unattended desktop/iOS operation, cached
-map/offline work, contesting, EmComm, and release qualification.
+The equivalent EmComm step is the ICS 211 check-in workflow (#73), followed by
+ICS 213/213RR (#74) and ICS 214 (#75) on the record model shipped here.
+
+In parallel where hardware and credentials allow, finish the remaining
+sync/reconciliation hardening: App Store Connect archive confirmation for the
+provisioned multicast entitlement, release-device cross-client branch review
+and reconciliation workflow qualification, physical LAN/iOS local-network
+validation, release-device hosted/self-hosted native endpoint qualification,
+and release-device iOS background task and poor-network qualification. Use
+`docs/V0_3_SYNC_QUALIFICATION.md` as the evidence checklist for #28-#31.

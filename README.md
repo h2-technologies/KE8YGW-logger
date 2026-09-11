@@ -8,7 +8,7 @@ sync, with room for emergency communications, net control, and contesting.
 
 The locked v1 release target is November 24, 2026. v1 includes hosted web,
 native iOS, and signed desktop clients for Windows, macOS, and broad Linux
-distribution support. The current product version is `0.4.0` across shared
+distribution support. The current product version is `0.5.1` across shared
 Rust, the desktop application, the CLI, and native iOS. That value in
 `Cargo.toml` is the canonical product version until a release branch or tag
 updates it, and CI enforces it with `scripts/check_versions.py`.
@@ -53,6 +53,11 @@ passes should start with these documents:
   cloud relay, and divergence behavior.
 - [Security Model](docs/SECURITY_MODEL.md): plugin permissions, operator roles,
   scopes, diagnostics, and auth posture.
+- [Contest Rule Schema](docs/CONTEST_RULE_SCHEMA.md): versioned contest rule and
+  exchange definitions, signed definition packs, and the definition catalog.
+- [EmComm Record Model](docs/EMCOMM_RECORD_MODEL.md): append-only incidents,
+  operational periods, ICS 211 personnel, assignments, ICS 213/213RR messages,
+  and ICS 214 activity logs.
 - [Service Framework](docs/architecture/service-framework.md): shared provider
   registry, provider selection, service cache, and integration skeletons.
 - [Support Storage](docs/architecture/support-storage.md): durable sidecar
@@ -130,8 +135,8 @@ passes should start with these documents:
 
 ## v0.2 Almost-v1 Beta Status
 
-The current `0.4.0` workspace carries the offline-sync v1 foundation plus the account
-and session milestone. It is not the complete
+The current `0.5.1` workspace carries the offline-sync v1 foundation plus the
+account, session, and server administration milestones. It is not the complete
 v1 product. The `ham-server` crate exposes `/api/v1` hosted routes, one-time
 server-admin bootstrap, personal/public/self-hosted configuration, invite-only
 registration by default, administrator open/disabled registration switches,
@@ -847,7 +852,8 @@ Event counts are hints only. If head hashes differ and ancestry has not been
 exchanged, the MVP treats the result as unknown or diverged until the later
 replication protocol can compare event ancestry safely.
 
-The GUI Sync Status panel can start/stop discovery, refresh peers, handshake
+The GUI Sync Status panel can start/stop discovery, scan the network for other
+instances, refresh peers, handshake
 with a selected peer, manually add a direct LAN HTTP peer, preview a pull, issue
 local one-time pairing codes, enter peer token/code/fingerprint values,
 complete reciprocal pairing with a generated endpoint auth code, generate
@@ -859,6 +865,34 @@ over IPv4/IPv6 multicast or preview/pull from a manually entered numeric
 loopback/private/link-local `http://ip:port`.
 Discovered peers are recorded only after their advertised API port serves a
 matching `/api/sync/state` identity.
+
+### Desktop Network Scan
+
+`Scan Network` (`POST /api/sync/discovery/scan`, command palette
+`sync.discovery.scan`) runs a one-shot scan without leaving continuous discovery
+enabled. It combines two passes that fail in different ways:
+
+- A multicast pass that announces once per second and listens for six seconds,
+  which is longer than the five-second peer discovery interval, so one scan sees
+  at least one announcement from every instance that is already broadcasting.
+- A direct pass that probes the local IPv4 `/24`s in parallel on the port this
+  instance bound, the default GUI port `9467`, and the configured local sync
+  port `9738`. This finds instances on networks that drop multicast between
+  clients and instances that have discovery switched off.
+
+The direct pass only sweeps private and link-local IPv4 subnets, so a scan never
+reaches past the local network, and it records a peer only when the address
+serves a matching `/api/sync/state` identity - the same requirement multicast
+discovery applies. The scan runs in the background and reports peers as it finds
+them; `scan_running` and `last_scan` in `/api/sync/state` carry its progress and
+its last coverage summary. `peers_found` in that summary counts distinct
+instances: one instance announces repeatedly and a multi-homed instance answers
+on more than one swept address, so `multicast_observations` and
+`probed_responses` are sighting counts, not instance counts. As with multicast discovery, a peer is only reachable
+if it bound its GUI API to a non-loopback address; the identity probe the scan
+uses (`GET /api/sync/state`) is one of the LAN read endpoints a non-loopback
+requester may reach. Starting a scan is a local control action, so
+`POST /api/sync/discovery/scan` itself is served to loopback requesters only.
 
 Reciprocal browser pairing stores a generated LAN endpoint auth code through
 the Rust credential path instead of reusing the one-time pairing code. Durable
@@ -877,6 +911,9 @@ Runtime events include:
 
 - `network.discovery.started`
 - `network.discovery.stopped`
+- `network.scan.started`
+- `network.scan.completed`
+- `network.scan.multicast_failed`
 - `network.peer.discovered`
 - `network.peer.updated`
 - `network.peer.expired`
@@ -1101,9 +1138,24 @@ preview and pull. For automatic LAN discovery, both GUI instances must have
 discovery running and the peer being discovered must bind its GUI API to a
 LAN-reachable address such as
 `0.0.0.0:<port>` or a specific private interface; loopback-only peers can still
-use manual loopback URLs. Mutating LAN pull also requires the explicit
+use manual loopback URLs. `Scan Network` needs only the peer to be
+LAN-reachable: its direct pass finds an instance that never started discovery,
+so the other instance does not have to be broadcasting. Mutating LAN pull also requires the explicit
 `sync.lan.pull` permission, durable peer trust, a matching peer identity probe,
 and signed remote read requests.
+
+Binding the GUI API to a LAN address exposes only the LAN sync peer surface to
+the network: `GET /api/sync/state`, `/api/sync/list-logbooks`,
+`/api/sync/get-head`, `/api/sync/events-since`, `/api/sync/event-metadata`, and
+`POST /api/sync/lan/pairing-accept`, which requires a one-time pairing token.
+Every other endpoint, including the browser UI and all logging, credential,
+backup, pairing, and cloud controls, has no request authentication and is
+served to loopback requesters only; a non-loopback request for one is refused
+with `403` and a redacted `sync.lan.control_api.rejected` runtime event. Open
+the UI at `http://127.0.0.1:<port>` even when the listener is bound wider. If
+you deliberately want the unauthenticated control plane reachable from your
+network, set `HAM_GUI_ALLOW_REMOTE_CONTROL_API=1`; only do that on a network
+you fully control.
 Native iOS can scan the same discovery packets, probe `/api/sync/state`, and
 fill the existing peer URL fields only when the probed device/session identity
 matches the packet. The Apple multicast entitlement is approved, provisioned,
@@ -1325,20 +1377,53 @@ Desktop release mode bundles `crates/ham-gui/web` and does not require a
 frontend dev server. The local GUI HTTP backend is not embedded in-process yet;
 for local desktop development, run `cargo run -p ham-gui --bin ham-gui` and then
 `cargo tauri dev`. The desktop API base defaults to `http://127.0.0.1:9467` and
-can be set with `HAM_DESKTOP_SERVER_URL`.
+can be set with `HAM_DESKTOP_SERVER_URL`. Pointing it at a non-loopback
+`ham-gui` instance requires that instance to run with
+`HAM_GUI_ALLOW_REMOTE_CONTROL_API=1`, because the GUI control plane has no
+request authentication and is loopback-only by default.
 
-The default shell includes:
+The shell includes:
 
-- Left activity navigation
-- Top toolbar and workspace selector
+- Top menu bar carrying the workspace switcher, command search, the theme
+  switch, the layout switch, and live rig/sync/upload status chips
+- Left context rail, used by the layouts that call for one
 - Central workspace panel region
 - Right inspector/context region
 - Bottom panel region
-- Bottom status bar
+- Bottom status bar, with sync, discovery, runtime events, and errors first and
+  the map cursor readouts shown only where a map panel is on screen
 - Command palette with `Ctrl+K` or `Cmd+K`
 - Hosted account screen
-- Settings placeholder
+- Settings, including the appearance picker
 - Plugin manager placeholder
+
+### Shell layouts and theme
+
+The shell ships five layouts. Each one arranges the same workspaces and panels
+differently; none of them changes what data is available, and switching keeps
+the current workspace, any draft contact, and the operator's own card
+arrangement:
+
+| Layout | Density | Permanent entry field | Best for |
+| --- | --- | --- | --- |
+| Operating Deck | Dense | Yes | Live operating: entry deck across the bottom, context rail on the left |
+| Command Center | Balanced | Yes | Map-led work: propagation, parks, summits, net geography |
+| Field Notebook | Relaxed | Yes | New operators and bright rooms: calm card board |
+| Focus Console | Relaxed | Yes | Field and low-distraction operating: one centred column |
+| Tabbed Workbench | Dense | No | Bulk work: imports, awards, conflict review, admin |
+
+Theme is `system`, `light`, or `dark`. Every colour resolves through tokens on
+`:root[data-theme]`, so a layout never has to know which theme is active.
+
+Layout and theme are chosen from the menu bar or from Settings, cycled with
+`Ctrl/Cmd+Shift+L`, and available in the command palette as *Switch Shell
+Layout*, *Use Light Theme*, *Use Dark Theme*, and *Match System Theme*. The
+choice is served with the shell from `/api/shell` and saved through
+`POST /api/shell/appearance` into `support/shell-appearance.json`, so it
+survives a restart. `ham_core::DisplaySettings` carries the same vocabulary
+(`desktop_shell_layout`, `mobile_dashboard_layout`, `appearance`) so the desktop
+and iOS choices are described by one shared model. An unrecognized layout or
+theme falls back to the default rather than failing the save.
 
 The default workspaces are Dashboard, Casual Logger, POTA/SOTA, Net Control,
 EmComm, and Contesting. Panels have stable IDs, titles, plugin/source labels,
@@ -1472,8 +1557,8 @@ just release
 Tagged releases are automated from git tags matching `v*.*.*`, for example:
 
 ```powershell
-git tag v0.4.0
-git push origin v0.4.0
+git tag v0.5.1
+git push origin v0.5.1
 ```
 
 The release workflow validates that the production tag matches the workspace
