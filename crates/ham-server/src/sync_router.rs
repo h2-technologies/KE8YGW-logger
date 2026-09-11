@@ -273,7 +273,7 @@ mod tests {
 
     fn durable_paths(label: &str) -> DurableCloudSyncPaths {
         let root =
-            std::env::temp_dir().join(format!("ke8ygw-ham-sync-server-{label}-{}", Uuid::new_v4()));
+            std::env::temp_dir().join(format!("ke8ygw-ham-server-sync-{label}-{}", Uuid::new_v4()));
         DurableCloudSyncPaths {
             metadata_store_path: root.join("surrealdb"),
             official_event_log_path: root.join("official-events.jsonl"),

@@ -24,7 +24,7 @@ outside issue #2.
      durable rate limits.
    - Client surfaces: the v0.4 milestone wired hosted web, desktop, native iOS,
      and the CLI to the account, session, recovery, and device routes through
-     the shared `ham_sync::account` contract. See
+     the shared `ham_core::sync::account` contract. See
      [V0_4_RELEASE_PLAN.md](V0_4_RELEASE_PLAN.md).
    - Remaining: server administration UX (hosting mode, invitations, audits);
      production email provider/domain validation; Turnstile site/secret keys;

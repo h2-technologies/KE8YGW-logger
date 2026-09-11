@@ -43,7 +43,7 @@ pub async fn run(args: Vec<String>) {
                 })
             );
         } else {
-            println!("ham-cli {}", env!("CARGO_PKG_VERSION"));
+            println!("ham-client {}", env!("CARGO_PKG_VERSION"));
         }
         return;
     }
@@ -88,7 +88,7 @@ pub async fn run(args: Vec<String>) {
                 &proposal_context(),
                 logbook_id,
                 &input,
-                &AdifImportOptions::mvp_default("KE8YGW", "ham-cli", Uuid::new_v4()),
+                &AdifImportOptions::mvp_default("KE8YGW", "ham-client", Uuid::new_v4()),
             )
             .await;
             if json {
@@ -192,8 +192,8 @@ fn usage_error(message: &str) -> ! {
 fn proposal_context() -> ProposalContext {
     ProposalContext::local_admin(
         PluginManifest::new(
-            "ham-cli",
-            "Ham CLI",
+            "ham-client",
+            "Ham Client",
             env!("CARGO_PKG_VERSION"),
             vec![PluginCapability::QsoCreate],
         ),

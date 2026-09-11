@@ -39,7 +39,7 @@ Emergency hotfixes may branch from `main` and target `main` only when the pull
 request documents the follow-up synchronization back into `dev`.
 
 The existing GitHub release workflow runs on tags matching `v*.*.*` and builds
-release binaries for Linux, Windows, and macOS. It packages the `ham-gui` binary
+release binaries for Linux, Windows, and macOS. It packages the `ham-client` binary
 and uploads archives to the GitHub Release after validating that the tagged
 commit is contained in `main` and that the workspace version matches the tag.
 

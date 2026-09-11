@@ -1053,7 +1053,7 @@ struct FallbackRustBridgeClient: RustBridgeClient {
                 "app": "KE8YGW Logger",
                 "core_version": "0.4.0",
                 "bridge_version": 1,
-                "rust_modules": ["ham-core", "ham-sync", "ham-plugin-sdk"],
+                "rust_modules": ["ham-core", "ham-ios-ffi"],
                 "contract": "ffi_unavailable_in_this_build"
             ]
         case .dashboard:

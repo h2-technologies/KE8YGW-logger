@@ -19,7 +19,7 @@ the affected package version.
 
 | Advisory | Package | Path | Classification | Reason and next review |
 | --- | --- | --- | --- | --- |
-| RUSTSEC-2023-0071 | `rsa 0.9.10` | `rsa -> jsonwebtoken -> surrealdb-core -> surrealdb -> ham-server`; also through optional `ham-sync` `surreal-storage` and crates that depend on `ham-sync`. | Actual vulnerability with no upstream fix. | The repository does not directly perform RSA private-key operations; the crate is transitive through SurrealDB's authentication/JWT dependency stack while preserving required `kv-surrealkv`, `kv-mem`, `protocol-ws`, and `rustls` features. Review by 2026-10-18 or when SurrealDB/jsonwebtoken removes RustCrypto `rsa`. |
+| RUSTSEC-2023-0071 | `rsa 0.9.10` | `rsa -> jsonwebtoken -> surrealdb-core -> surrealdb -> ham-server`. SurrealDB is reached only by `ham-server`; `ham-core`, `ham-client`, and `ham-ios-ffi` do not link it. | Actual vulnerability with no upstream fix. | The repository does not directly perform RSA private-key operations; the crate is transitive through SurrealDB's authentication/JWT dependency stack while preserving required `kv-surrealkv`, `kv-mem`, `protocol-ws`, and `rustls` features. Review by 2026-10-18 or when SurrealDB/jsonwebtoken removes RustCrypto `rsa`. |
 
 `cargo audit` is run with `--ignore RUSTSEC-2023-0071` in CI because the
 advisory has no patched release. The advisory remains documented here and in

@@ -73,7 +73,7 @@ Event counts are hints only. A matching head hash means the logbook heads match.
 
 ### Offline Mutation Queue
 
-The v0.3 queue contract is implemented in `ham-sync::offline` and persisted as
+The v0.3 queue contract is implemented in `ham_core::sync::offline` and persisted as
 versioned JSON support state named `offline-mutations.json` by desktop and iOS
 clients.
 
@@ -215,7 +215,7 @@ poor-network state returns a blocked no-op plan without losing queued work.
 
 ### Manual Conflict Review
 
-`ham-sync::offline` defines durable conflict-review records persisted as
+`ham_core::sync::offline` defines durable conflict-review records persisted as
 `conflict-reviews.json` by desktop and exposed through the iOS FFI bridge.
 Review records capture the structured conflict report, a stable fingerprint,
 open/resolved status, timestamps, and the operator-selected recovery path.
@@ -251,7 +251,7 @@ conflict details without owning merge or validation rules.
 
 ## LAN Trust
 
-`ham-sync::offline` includes durable LAN trust records persisted as
+`ham_core::sync::offline` includes durable LAN trust records persisted as
 `lan-trust.json` by GUI and iOS bridge clients. The trust model includes:
 
 - explicit operator approval before issuing a pairing token
@@ -398,13 +398,13 @@ sync-server compatibility surface used by sync-token clients.
 `ham-server` binary loopback TCP wire tests cover hosted admin bootstrap,
 proposal-backed QSO creation, hosted sync pull, duplicate hosted sync push, and
 durable JSONL official-event storage without duplicate replay.
-`ham-sync-server` route and loopback TCP wire tests cover device pairing, scoped
+`ham-server` self-hosted route and loopback TCP wire tests cover device pairing, scoped
 logbook listing, canonical official-event push, duplicate replay handling, pull
 of missing events, invalid-token rejection, and expired-token rejection against
 the durable self-hosted backend.
 
 Pull application uses the same Rust verification path for hosted, self-hosted,
-LAN, desktop, and iOS clients. `ham-sync::pull_missing_events` accepts either a
+LAN, desktop, and iOS clients. `ham_core::sync::pull_missing_events` accepts either a
 full remote chain that contains the local head or a verified missing tail whose
 first event directly follows the actual local store head. In both cases, every
 accepted event is appended through `append_verified_remote_event`; divergent
@@ -420,7 +420,7 @@ accepts remote events, manual iOS pull, trusted LAN pull, and background Auto
 Pull refresh the native SwiftData QSO cache from the Rust `qso.list` projection;
 SwiftData remains a projection cache, not an official state owner.
 
-The current self-hosted server uses durable local storage by default: embedded SurrealDB metadata/support state, append-only JSONL official-event storage, and filesystem-backed diagnostic report payloads. Durable SurrealDB storage is exposed through the `ham-sync` `surreal-storage` feature so GUI, iOS, and other protocol-only clients can avoid the database dependency. The in-memory backend remains for deterministic tests.
+The current self-hosted server uses durable local storage by default: embedded SurrealDB metadata/support state, append-only JSONL official-event storage, and filesystem-backed diagnostic report payloads. Durable SurrealDB storage lives in `ham-server`, so the client, iOS, and other protocol-only consumers of `ham_core::sync` never link the database dependency. The in-memory backend remains for deterministic tests.
 
 ## Deferred Work
 

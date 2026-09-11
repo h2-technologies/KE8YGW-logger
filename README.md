@@ -109,22 +109,39 @@ passes should start with these documents:
 
 ## Workspace
 
-- `ham-core`: append-only logbook events, event bus, proposal validation, event store, and projections.
-- `ham-plugin-sdk`: public plugin manifest, capability, proposal, and event constant types.
-- `ham-sync`: local-first discovery, handshake, head comparison, and safe pull replication models.
-- `ham-sync-server`: self-hostable cloud relay/sync service binary using the shared safe replication protocol.
-- `ham-server`: hosted web/server API boundary with server-admin bootstrap,
-  hosting modes, registration, verified email, recovery, session/device,
-  logbook, QSO, station/equipment, ADIF, provider, upload, sync, and audit
-  routes.
-- `ham-cli`: offline scriptable ADIF import/export, chain verification,
-  projection rebuild, hosted account/session/device commands, and
-  machine-readable version/build reporting. See the
-  [CLI command reference](docs/CLI_REFERENCE.md) for the implemented v1 slice
-  and the commands that remain release blockers.
-- `ham-gui`: initial GUI shell, workspace model, panel registry, command registry,
-  and static web shell served by a small Rust binary.
+The workspace is one library and two binaries, plus two platform shells.
+
+**Library**
+
+- `ham-core`: everything identical across platforms. Append-only logbook
+  events, event bus, proposal validation, event store, and projections;
+  the `plugin_sdk` module's public plugin manifest, capability, proposal,
+  and event constant types; the `api_contract` module's stable error codes
+  and route catalogs; the `sync` module's local-first discovery, handshake,
+  head comparison, safe pull replication, and hosted account contract; the
+  `desktop` module's native dialog contract; and the `gui` module's
+  workspace model, panel registry, and command registry. It depends on no
+  other workspace crate and never links SurrealDB.
+
+**Binaries**
+
+- `ham-server`: the hosted web/server API boundary with server-admin
+  bootstrap, hosting modes, registration, verified email, recovery,
+  session/device, logbook, QSO, station/equipment, ADIF, provider, upload,
+  sync, and audit routes — plus the self-hostable sync/relay service and
+  its durable SurrealDB storage. Both route trees are served by one process
+  on one port; the self-hosted sync routes live under `/api/v1/self-hosted`.
+- `ham-client`: `ham-client serve` runs the local web UI shell and its
+  static web bundle; the same binary provides offline scriptable ADIF
+  import/export, chain verification, projection rebuild, hosted
+  account/session/device commands, and machine-readable version/build
+  reporting. See the [CLI command reference](docs/CLI_REFERENCE.md) for the
+  implemented v1 slice and the commands that remain release blockers.
+
+**Platform shells**
+
 - `ham-ios-ffi`: Rust FFI bridge used by the native iOS client.
+- `src-tauri`: Tauri v2 desktop packaging wrapper.
 - `ios/KE8YGWLogger`: native iOS SwiftUI/SwiftData app with Rust bridge,
   feature workspaces, Keychain/local-notification plumbing, and Xcode tests.
 
@@ -163,7 +180,7 @@ failures. SOTAWatch live access is deferred pending explicit
 API approval/terms handling, and LoTW live upload remains deferred until a
 safe TQSL/certificate-signing flow is modeled. A real `src-tauri`
 Tauri runtime now wraps the shared web UI, delegates native
-dialog flows to `ham-desktop`, and bundles static assets for release mode.
+dialog flows to `ham_core::desktop`, and bundles static assets for release mode.
 Installer/package validation on clean release runners, signed updates, hosted
 production hardening, native iOS release hardening, maps, contesting, EmComm,
 and full provider coverage remain v1 work tracked in the roadmap and execution
@@ -269,7 +286,7 @@ Unified Service Framework:
   clear form, use rig frequency, accept lookup suggestions, open recent QSOs,
   and open advanced search.
 
-Run the GUI with `cargo run -p ham-gui`, open the local URL printed by the
+Run the client with `cargo run -p ham-client -- serve`, open the local URL printed by the
 process, choose the Casual Logger workspace, and use the Station Summary,
 Callsign Entry, Recent QSOs, Advanced Search, Awards, and Uploads panels.
 
@@ -317,7 +334,7 @@ Implemented foundations:
 - Maps workspace panels for Interactive Map, Layers, Selected Object,
   Propagation, Weather, Search, Filters, and Station Summary.
 
-Run `cargo run -p ham-gui`, open the printed local URL, and choose the Maps
+Run `cargo run -p ham-client -- serve`, open the printed local URL, and choose the Maps
 workspace. The status bar shows current grid, coordinates, distance, bearing,
 zoom, and selected layer.
 
@@ -768,9 +785,9 @@ store.verify_chain(logbook_id).await?;
 From the CLI:
 
 ```powershell
-cargo run -p ham-cli -- verify-chain
-cargo run -p ham-cli -- rebuild-projections
-cargo run -p ham-cli -- account status --json
+cargo run -p ham-client -- verify-chain
+cargo run -p ham-client -- rebuild-projections
+cargo run -p ham-client -- account status --json
 ```
 
 ## ADIF Import And Export
@@ -804,13 +821,13 @@ desktop-native dialog bridge when the Tauri commands are available:
 CLI commands:
 
 ```powershell
-cargo run -p ham-cli -- import-adif path\to\log.adi
-cargo run -p ham-cli -- export-adif path\to\export.adi
+cargo run -p ham-client -- import-adif path\to\log.adi
+cargo run -p ham-client -- export-adif path\to\export.adi
 ```
 
 ## LAN Discovery And Sync Handshake
 
-`ham-sync` defines the first local-first LAN sync layer. The MVP supports
+`ham_core::sync` defines the first local-first LAN sync layer. The MVP supports
 discovery packets, an in-memory peer registry, handshake request/response
 models, logbook head comparison, and user-initiated pull replication.
 
@@ -965,7 +982,7 @@ exchange beyond the current endpoint-auth/HMAC model are still deferred.
 
 ## Durable Offline Queue And LAN Trust
 
-`ham-sync` now defines the v0.3 offline mutation queue used by desktop and iOS
+`ham_core::sync` now defines the v0.3 offline mutation queue used by desktop and iOS
 mutation paths. Queue entries are persisted before local acknowledgment and
 record operation/device/client/logbook IDs, optional target entity IDs,
 deterministic per-logbook order, idempotency keys, dependencies, retry/backoff
@@ -980,7 +997,7 @@ support state rather than official synced history.
 The GUI cloud push path uses queued official events when available and marks
 queue entries accepted only after the cloud/self-hosted sync receiver accepts or
 ignores the matching event hashes. Interrupted sends recover to retrying on
-startup or through the Sync panel recovery action. A deterministic `ham-sync`
+startup or through the Sync panel recovery action. A deterministic `ham_core::sync`
 regression test covers a desktop-style restart/reconnect drain path, including
 ordered queued official events, accepted-by-hash cleanup, duplicate cloud replay,
 and local official-log duplicate prevention.
@@ -1084,7 +1101,7 @@ Replication runtime events include:
 
 To try the current GUI workflow locally:
 
-1. Run the GUI with `just gui`.
+1. Run the client with `just client`.
 2. Open the Dashboard Sync Status panel.
 3. Click `Refresh Peers` to add the demo LAN peer.
 4. Click `Preview Pull` to inspect available remote events.
@@ -1114,7 +1131,7 @@ validation remains a release gate documented in
 ## Hosted Account And Session
 
 Hosted accounts, sessions, recovery, and devices are driven from every client
-through one shared Rust contract in `ham_sync::account`. Rust plans each hosted
+through one shared Rust contract in `ham_core::sync::account`. Rust plans each hosted
 `/api/v1` request, interprets the response, classifies the outcome from the
 stable hosted error code before the HTTP status, and owns the durable
 non-secret account record. Platform layers carry bytes and store secrets only.
@@ -1129,10 +1146,10 @@ Available on every platform:
 Surfaces:
 
 - Hosted web and desktop: the `Account` toolbar screen and the `Account`
-  settings card, backed by `/api/account/*` endpoints in `ham-gui`.
+  settings card, backed by `/api/account/*` endpoints in `ham-client`.
 - Native iOS: the `Account` workspace and dashboard quick action, backed by the
   `account.*` Rust bridge commands and a URLSession transport.
-- CLI: `ham-cli account ...`, documented in the
+- CLI: `ham-client account ...`, documented in the
   [CLI command reference](docs/CLI_REFERENCE.md).
 
 Session and refresh tokens are stored only in the operating-system credential
@@ -1152,7 +1169,7 @@ envelopes and safe replication rules as LAN sync; it does not sync runtime
 diagnostic logs, credentials, API keys, private plugin config, or mutable UI
 state.
 
-The shared `ham-sync` crate now defines cloud API messages, an MVP pairing
+The shared `ham_core::sync` module now defines cloud API messages, an MVP pairing
 session model, a cloud client abstraction, an in-memory server backend used by
 tests, and a durable server backend used by the self-hosted binary. Hosted and
 self-hosted deployments use the same API semantics.
@@ -1185,7 +1202,7 @@ sync-server compatibility surface used by sync-token clients.
 `ham-server` binary loopback TCP wire tests cover hosted admin bootstrap,
 proposal-backed QSO creation, hosted sync pull, duplicate hosted sync push, and
 durable JSONL official-event storage without duplicate replay.
-`ham-sync-server` route and loopback TCP wire tests cover pairing, scoped
+`ham-server` self-hosted route and loopback TCP wire tests cover pairing, scoped
 logbook listing, durable canonical-event push, duplicate replay handling,
 missing-event pull, invalid tokens, and expired sync-token sessions.
 
@@ -1226,17 +1243,19 @@ Cloud runtime events include:
 - `sync.cloud.pull.failed`
 - `sync.cloud.divergence.detected`
 
-Run the self-hosted sync server:
+Run the server. One binary serves the hosted API and the self-hosted sync
+routes on the same port; the self-hosted routes live under
+`/api/v1/self-hosted`:
 
 ```powershell
-just sync-server
+just server
 ```
 
 Default server settings:
 
 ```text
-HAM_SYNC_SERVER_BIND=127.0.0.1:9740
-HAM_SYNC_PUBLIC_URL=http://127.0.0.1:9740
+HAM_SERVER_BIND=127.0.0.1:9750
+HAM_SYNC_PUBLIC_URL=http://127.0.0.1:9750
 HAM_SYNC_SERVICE_MODE=self_hosted
 HAM_SYNC_PAIRING_CODE=local-dev-pairing-code
 HAM_SYNC_SESSION_TTL_SECONDS=2592000
@@ -1255,7 +1274,7 @@ report payloads. Set `HAM_SYNC_SURREAL_ENDPOINT`, `HAM_SYNC_SURREAL_USER`,
 Docker build:
 
 ```powershell
-docker build -f Dockerfile.sync-server -t ke8ygw-sync-server .
+docker build -f Dockerfile.server -t ke8ygw-server .
 docker run --rm -p 9740:9740 -e HAM_SYNC_PAIRING_CODE=change-me ke8ygw-sync-server
 ```
 
@@ -1293,22 +1312,22 @@ model.
 
 ## GUI Architecture
 
-The GUI shell is implemented in `ham-gui`. It is intentionally a client of the
+The GUI shell is implemented in `ham-client`. It is intentionally a client of the
 shared core rather than an owner of logging rules. The Rust side defines
 JSON-serializable workspace layouts, panel registrations, command definitions,
 mock plugin data, and a small local web server. The web side renders the shell
 using static HTML, CSS, and JavaScript.
 
 This is a web-first foundation with a real Tauri desktop wrapper: the current
-`ham-gui` binary serves the same assets the `src-tauri` desktop shell embeds.
-The `ham-desktop` crate owns desktop runtime metadata and native dialog command
+`ham-client` binary serves the same assets the `src-tauri` desktop shell embeds.
+The `ham_core::desktop` module owns desktop runtime metadata and native dialog command
 helpers, including cancellation handling and path redaction. The desktop wrapper
 adds Tauri commands for dialogs plus a restricted `/api/*` proxy to the
 configured hosted/self-hosted API base.
 
-Desktop release mode bundles `crates/ham-gui/web` and does not require a
+Desktop release mode bundles `crates/ham-client/web` and does not require a
 frontend dev server. The local GUI HTTP backend is not embedded in-process yet;
-for local desktop development, run `cargo run -p ham-gui --bin ham-gui` and then
+for local desktop development, run `cargo run -p ham-client --bin ham-client -- serve` and then
 `cargo tauri dev`. The desktop API base defaults to `http://127.0.0.1:9467` and
 can be set with `HAM_DESKTOP_SERVER_URL`.
 
@@ -1369,7 +1388,7 @@ events, copy the latest error, and show the diagnostics folder path.
 To run the GUI locally:
 
 ```powershell
-cargo run -p ham-gui --bin ham-gui
+cargo run -p ham-client --bin ham-client -- serve
 ```
 
 Then open:
@@ -1403,8 +1422,8 @@ just release  # release build for all workspace crates
 just version-check # product version consistency across Cargo, Tauri, iOS, API metadata, artifacts, and tags
 just docs-link-check # local Markdown link validation
 just governance-check # repository governance, templates, metadata, license, secrets, and link checks
-just gui      # run the local GUI shell at http://127.0.0.1:9467
-just sync-server # run the self-hosted sync server at http://127.0.0.1:9740
+just client   # run the local client shell at http://127.0.0.1:9467
+just server   # run the server at http://127.0.0.1:9750
 cargo run -p ham-server --bin ham-server # run hosted beta API at http://127.0.0.1:9750
 cargo tauri dev   # run the Tauri desktop wrapper
 cargo tauri build # package the Tauri desktop wrapper
@@ -1423,8 +1442,8 @@ cargo build --release --workspace
 python scripts/check_versions.py
 python scripts/check_docs_links.py
 pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/governance-check.ps1
-cargo run -p ham-gui --bin ham-gui
-cargo run -p ham-sync-server --bin ham-sync-server
+cargo run -p ham-client --bin ham-client -- serve
+cargo run -p ham-server --bin ham-server
 cargo run -p ham-server --bin ham-server
 ```
 
@@ -1434,9 +1453,9 @@ GitHub Actions runs on pull requests and pushes to `dev` and `main`. Feature
 and fix PRs target `dev`; `dev` is the internal channel, `main` is beta, and
 production releases come only from validated semantic-version tags contained in
 `main`. The change-aware CI baseline covers formatting, Clippy, Rust tests,
-feature-matrix checks, API contract validation, version consistency, Markdown
+API contract validation, version consistency, Markdown
 links, governance/license checks, JavaScript syntax, Tauri validation,
-Windows/macOS platform checks, and sync-server container smoke validation.
+Windows/macOS platform checks, and server container smoke validation.
 
 ```powershell
 just ci
@@ -1462,7 +1481,7 @@ git push origin v0.4.0
 ```
 
 The release workflow validates that the production tag matches the workspace
-version and points to a commit contained in `main`, then builds `ham-gui` in
+version and points to a commit contained in `main`, then builds `ham-client` in
 release mode on:
 
 - `ubuntu-latest`

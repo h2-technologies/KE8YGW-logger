@@ -44,7 +44,7 @@ The runtime exposes:
 - `export_divergence_report_dialog`
 - `select_app_data_directory_dialog`
 
-Dialog commands call `ham-desktop` helper functions and return typed
+Dialog commands call `ham_core::desktop` helper functions and return typed
 `DesktopDialogResult` values. Cancellation is non-fatal. Browser/server mode
 continues to use path prompts when Tauri commands are unavailable.
 

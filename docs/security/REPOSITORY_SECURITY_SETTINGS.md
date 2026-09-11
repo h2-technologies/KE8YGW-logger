@@ -12,7 +12,7 @@ Maintainers should configure them in GitHub repository or organization settings.
 - Require approval of the most recent push.
 - Require CODEOWNERS review for protected and security-sensitive paths,
   including `.github/**`, `Cargo.toml`, `Cargo.lock`, `deny.toml`,
-  `Dockerfile.sync-server`, `ios/**`, `src-tauri/**`, `crates/**`, and
+  `Dockerfile.server`, `ios/**`, `src-tauri/**`, `crates/**`, and
   `docs/security/**`.
 - Require the CI, iOS Native, Branch promotion policy, and Security scanning
   checks that apply to the changed paths.

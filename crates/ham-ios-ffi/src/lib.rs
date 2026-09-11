@@ -745,8 +745,7 @@ fn version_payload() -> Result<Value, BridgeFault> {
         "backup_schema_version": BACKUP_SCHEMA_VERSION,
         "rust_modules": [
             "ham-core",
-            "ham-sync",
-            "ham-plugin-sdk"
+            "ham-ios-ffi"
         ],
         "contract": "swiftui -> observable view models -> rust ffi -> ham-core",
         "build_target": build_target()

@@ -196,13 +196,13 @@ cargo run -p ham-server --bin ham-server
 Self-hosted sync/report service:
 
 ```powershell
-cargo run -p ham-sync-server --bin ham-sync-server
+cargo run -p ham-server --bin ham-server
 ```
 
 Default local addresses:
 
 - `ham-server`: `127.0.0.1:9750`
-- `ham-sync-server`: `127.0.0.1:9740`
+- `ham-server`: `127.0.0.1:9750` (hosted API and self-hosted sync routes)
 
 ## Storage Paths
 
@@ -239,8 +239,9 @@ the path.
 - `HAM_SERVER_SURREAL_USER`, `HAM_SERVER_SURREAL_PASS`,
   `HAM_SERVER_SURREAL_NAMESPACE`, `HAM_SERVER_SURREAL_DATABASE`: remote/local
   SurrealDB credentials and namespace/database settings.
-- `HAM_SYNC_SERVER_BIND`: sync/report service bind address, default
-  `127.0.0.1:9740`.
+- `HAM_SERVER_BIND`: bind address for the whole server, serving both the hosted
+  API and the self-hosted sync routes, default `127.0.0.1:9750`. It replaces the
+  former `HAM_SYNC_SERVER_BIND`.
 - `HAM_SYNC_PUBLIC_URL`: public sync service URL returned to clients.
 - `HAM_SYNC_SERVICE_MODE`: `self_hosted` or `hosted`.
 - `HAM_SYNC_PAIRING_CODE`: development pairing code.
