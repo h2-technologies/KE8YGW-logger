@@ -1,5 +1,4 @@
-use chrono::Utc;
-use ham_plugin_sdk::{
+use crate::plugin_sdk::{
     PluginCapability, PluginManifest, ProposalEnvelope, OFFICIAL_LOG_ACTIVATION_STARTED,
     OFFICIAL_LOG_NET_CHECKIN_CREATED, OFFICIAL_LOG_NET_CHECKIN_DELETED,
     OFFICIAL_LOG_NET_REPORT_EXPORTED, OFFICIAL_LOG_NET_SESSION_ENDED,
@@ -11,6 +10,7 @@ use ham_plugin_sdk::{
     PROPOSAL_NET_SESSION_START, PROPOSAL_NET_TRAFFIC_CREATE, PROPOSAL_QSO_ACTIVATION_LINK,
     PROPOSAL_QSO_CREATE, PROPOSAL_QSO_DELETE, PROPOSAL_QSO_RESTORE,
 };
+use chrono::Utc;
 use serde_json::json;
 use std::{fs, path::PathBuf};
 use uuid::Uuid;
@@ -442,7 +442,7 @@ async fn qso_deleted_hides_projection_without_removing_event() {
         .await
         .unwrap();
     let mut delete_event = new_log_event(
-        ham_plugin_sdk::OFFICIAL_LOG_QSO_DELETED,
+        crate::plugin_sdk::OFFICIAL_LOG_QSO_DELETED,
         logbook_id,
         Some(qso_id),
     );

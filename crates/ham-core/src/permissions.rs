@@ -4,8 +4,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use crate::plugin_sdk::{PluginCapability, PluginManifest};
 use chrono::{DateTime, Utc};
-use ham_plugin_sdk::{PluginCapability, PluginManifest};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use uuid::Uuid;
@@ -1115,7 +1115,7 @@ pub fn grant_builtin_defaults(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ham_plugin_sdk::PluginManifest;
+    use crate::plugin_sdk::PluginManifest;
 
     #[test]
     fn permission_registry_contains_required_permissions() {

@@ -6,14 +6,11 @@ version.workspace = true
 
 [dependencies]
 chrono.workspace = true
-ham-api-contract = { path = "../ham-api-contract" }
 ham-core = { path = "../ham-core" }
-ham-plugin-sdk = { path = "../ham-plugin-sdk" }
-ham-sync = { path = "../ham-sync" }
-surrealdb.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
+surrealdb.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 ureq.workspace = true

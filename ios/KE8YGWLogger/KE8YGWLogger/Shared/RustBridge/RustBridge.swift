@@ -3246,7 +3246,7 @@ enum SyncPushEndpointStyle: Equatable {
     func path(logbookId: String) -> String {
         switch self {
         case .logbookScoped:
-            return "api/v1/logbooks/\(logbookId)/push"
+            return "api/v1/self-hosted/logbooks/\(logbookId)/push"
         case .hostedSync:
             return "api/v1/sync/push"
         }
@@ -3269,7 +3269,7 @@ enum SyncPullEndpointStyle: Equatable {
     func path(logbookId: String) -> String {
         switch self {
         case .logbookScoped:
-            return "api/v1/logbooks/\(logbookId)/pull"
+            return "api/v1/self-hosted/logbooks/\(logbookId)/pull"
         case .hostedSync:
             return "api/v1/sync/pull"
         }

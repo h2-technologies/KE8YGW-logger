@@ -1,23 +1,23 @@
 use std::{env, fs, process};
 
+use ham_core::plugin_sdk::{PluginCapability, PluginManifest, ServiceType};
+use ham_core::sync::{
+    HostedAccountAction, HostedAccountClient, HostedAccountConfig, HostedAccountError,
+    HostedAccountResult, HostedAccountSecrets, HostedAccountSnapshot, HttpHostedAccountTransport,
+    JsonHostedAccountStore, HOSTED_ACCOUNT_CREDENTIAL_PROVIDER_ID,
+};
 use ham_core::{
     default_credential_store, default_official_event_log_path, export_adif, import_adif,
     AdifImportOptions, CredentialError, CredentialMetadata, CredentialStore, InMemoryEventBus,
     JsonlLogbookEventStore, LogbookEventStore, OperatorRole, ProposalContext, RuntimeLogConfig,
 };
-use ham_plugin_sdk::{PluginCapability, PluginManifest, ServiceType};
-use ham_sync::{
-    HostedAccountAction, HostedAccountClient, HostedAccountConfig, HostedAccountError,
-    HostedAccountResult, HostedAccountSecrets, HostedAccountSnapshot, HttpHostedAccountTransport,
-    JsonHostedAccountStore, HOSTED_ACCOUNT_CREDENTIAL_PROVIDER_ID,
-};
 use uuid::Uuid;
 
 const DEFAULT_LOGBOOK_ID: &str = "00000000-0000-4000-8000-000000000001";
 
-#[tokio::main]
-async fn main() {
-    let mut args = env::args().skip(1).collect::<Vec<_>>();
+/// Runs a one-shot command-line operation.
+pub async fn run(args: Vec<String>) {
+    let mut args = args;
     let json = args.iter().any(|arg| arg == "--json");
     args.retain(|arg| arg != "--json");
     let Some(command) = args.first().map(String::as_str) else {
@@ -204,32 +204,34 @@ fn proposal_context() -> ProposalContext {
 fn print_usage() {
     eprintln!(
         "usage:
-  ham-cli import-adif <file> [--json]
-  ham-cli export-adif <file> [--json]
-  ham-cli verify-chain [--json]
-  ham-cli rebuild-projections [--json]
-  ham-cli version [--json]
-  ham-cli account status [--json]
-  ham-cli account configure <server-url> [device-name] [--json]
-  ham-cli account register <email> [display-name] [invitation-token] [--json]
-  ham-cli account verify-email <token> [--json]
-  ham-cli account recovery-start <email> [--json]
-  ham-cli account recovery-complete <token> [--json]
-  ham-cli account login <email> [display-name] [--json]
-  ham-cli account session [--json]
-  ham-cli account rotate [--json]
-  ham-cli account logout [--json]
-  ham-cli account logout-all [--json]
-  ham-cli account devices [--json]
-  ham-cli account revoke-device <device-id> [--json]
-  ham-cli account revoke-all-devices [--json]
-  ham-cli account delete --confirm [--json]
+  ham-client serve [bind-address]
+  ham-client import-adif <file> [--json]
+  ham-client export-adif <file> [--json]
+  ham-client verify-chain [--json]
+  ham-client rebuild-projections [--json]
+  ham-client version [--json]
+  ham-client account status [--json]
+  ham-client account configure <server-url> [device-name] [--json]
+  ham-client account register <email> [display-name] [invitation-token] [--json]
+  ham-client account verify-email <token> [--json]
+  ham-client account recovery-start <email> [--json]
+  ham-client account recovery-complete <token> [--json]
+  ham-client account login <email> [display-name] [--json]
+  ham-client account session [--json]
+  ham-client account rotate [--json]
+  ham-client account logout [--json]
+  ham-client account logout-all [--json]
+  ham-client account devices [--json]
+  ham-client account revoke-device <device-id> [--json]
+  ham-client account revoke-all-devices [--json]
+  ham-client account delete --confirm [--json]
 
 Options:
   --json       emit one stable JSON object on stdout
   -h, --help   show this help
-  -V, --version show CLI and build version
+  -V, --version show client and build version
 
+`serve` starts the local web UI server (default 127.0.0.1:9467).
 The logging commands are offline-first and never prompt. The `account` commands
 contact the configured hosted server, store session and refresh tokens in the
 operating-system credential backend, and never print or persist those tokens.

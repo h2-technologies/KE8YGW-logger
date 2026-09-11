@@ -57,7 +57,7 @@ function Assert-PlistBooleanTrue($dictNode, $keyName, $fileName) {
 function Get-TextFiles {
     git ls-files | Where-Object {
         $_ -match '\.(md|yml|yaml|toml|rs|js|css|html|json|plist|entitlements|ps1)$' -or
-        $_ -in @('LICENSE', 'justfile', 'Dockerfile.sync-server')
+        $_ -in @('LICENSE', 'justfile', 'Dockerfile.server')
     }
 }
 

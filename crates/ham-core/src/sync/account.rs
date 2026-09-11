@@ -24,7 +24,7 @@ use serde_json::{json, Value as JsonValue};
 use thiserror::Error;
 use uuid::Uuid;
 
-use crate::offline::{quarantine_file, write_json_atomically};
+use crate::sync::offline::{quarantine_file, write_json_atomically};
 
 /// Support-file schema version for the durable hosted account record.
 pub const HOSTED_ACCOUNT_FILE_VERSION: u32 = 1;

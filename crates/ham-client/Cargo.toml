@@ -1,17 +1,17 @@
 [package]
-name = "ham-desktop"
+name = "ham-client"
 edition.workspace = true
 license.workspace = true
 version.workspace = true
 
 [dependencies]
+chrono.workspace = true
+ham-core = { path = "../ham-core" }
 serde.workspace = true
 serde_json.workspace = true
-
-[lib]
-name = "ham_desktop"
-path = "src/lib.rs"
+tokio.workspace = true
+uuid.workspace = true
 
 [[bin]]
-name = "ham-desktop"
+name = "ham-client"
 path = "src/main.rs"

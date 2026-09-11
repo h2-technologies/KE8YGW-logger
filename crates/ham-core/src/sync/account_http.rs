@@ -4,13 +4,15 @@
 //! hosted server and returns the observed status and JSON body. It never
 //! interprets outcomes, mutates the durable account record, or persists
 //! secrets. Native iOS keeps using its own URLSession transport against the
-//! same [`crate::account`] planning and interpretation functions.
+//! same [`crate::sync::account`] planning and interpretation functions.
 
 use std::{io::Read, time::Duration};
 
 use serde_json::Value as JsonValue;
 
-use crate::account::{HostedAccountHttpResponse, HostedAccountRequestPlan, HostedAccountTransport};
+use crate::sync::account::{
+    HostedAccountHttpResponse, HostedAccountRequestPlan, HostedAccountTransport,
+};
 
 /// `ureq`-backed hosted account transport for desktop, hosted web, and CLI.
 #[derive(Debug, Clone, Default)]

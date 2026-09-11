@@ -560,7 +560,7 @@ final class RustBridgeTests: XCTestCase {
         XCTAssertEqual(request.httpMethod, "POST")
         XCTAssertEqual(
             request.url?.absoluteString,
-            "https://sync.example.test/root/api/v1/logbooks/\(event.logbookId)/push"
+            "https://sync.example.test/root/api/v1/self-hosted/logbooks/\(event.logbookId)/push"
         )
         XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer secret-bearer")
         XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
@@ -608,7 +608,7 @@ final class RustBridgeTests: XCTestCase {
         XCTAssertEqual(request.httpMethod, "POST")
         XCTAssertEqual(
             request.url?.absoluteString,
-            "https://sync.example.test/root/api/v1/logbooks/\(logbookID)/pull"
+            "https://sync.example.test/root/api/v1/self-hosted/logbooks/\(logbookID)/pull"
         )
         XCTAssertEqual(auth?["sync_token"] as? String, "sync-secret")
         XCTAssertEqual(object?["logbook_id"] as? String, logbookID)

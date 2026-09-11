@@ -261,20 +261,34 @@ pub const HOSTED_ROUTE_STRINGS: &[&str] = &[
     "POST /api/v1/devices/:id/revoke",
 ];
 
+/// Path prefix that separates self-hosted sync routes from the hosted API.
+///
+/// The hosted and self-hosted contracts are served by the same binary on the
+/// same port, so the self-hosted routes carry this prefix to keep both route
+/// trees unambiguous.
+pub const SELF_HOSTED_ROUTE_PREFIX: &str = "/api/v1/self-hosted";
+
 #[rustfmt::skip]
 pub const SELF_HOSTED_ROUTE_STRINGS: &[&str] = &[
     "GET /health",
-    "POST /api/v1/auth/pair",
-    "GET /api/v1/logbooks",
-    "GET /api/v1/logbooks/:logbook_id/head",
-    "GET /api/v1/logbooks/:logbook_id/events",
-    "POST /api/v1/logbooks/:logbook_id/preview-pull",
-    "POST /api/v1/logbooks/:logbook_id/pull",
-    "POST /api/v1/logbooks/:logbook_id/push",
-    "GET /api/v1/sync/status",
-    "POST /api/v1/reports",
-    "GET /api/v1/reports/:report_id",
+    "POST /api/v1/self-hosted/auth/pair",
+    "GET /api/v1/self-hosted/logbooks",
+    "GET /api/v1/self-hosted/logbooks/:logbook_id/head",
+    "GET /api/v1/self-hosted/logbooks/:logbook_id/events",
+    "POST /api/v1/self-hosted/logbooks/:logbook_id/preview-pull",
+    "POST /api/v1/self-hosted/logbooks/:logbook_id/pull",
+    "POST /api/v1/self-hosted/logbooks/:logbook_id/push",
+    "GET /api/v1/self-hosted/sync/status",
+    "POST /api/v1/self-hosted/reports",
+    "GET /api/v1/self-hosted/reports/:report_id",
 ];
+
+pub fn self_hosted_route_strings() -> Vec<String> {
+    SELF_HOSTED_ROUTE_STRINGS
+        .iter()
+        .map(|route| (*route).to_owned())
+        .collect()
+}
 
 pub fn hosted_route_strings() -> Vec<String> {
     HOSTED_ROUTE_STRINGS
@@ -293,6 +307,34 @@ mod tests {
         routes.sort();
         routes.dedup();
         assert_eq!(routes.len(), HOSTED_ROUTE_STRINGS.len());
+    }
+
+    #[test]
+    fn hosted_and_self_hosted_routes_do_not_collide() {
+        let hosted = hosted_route_strings();
+        for route in self_hosted_route_strings() {
+            if route == "GET /health" {
+                continue;
+            }
+            assert!(
+                !hosted.contains(&route),
+                "self-hosted route {route} collides with the hosted contract"
+            );
+        }
+    }
+
+    #[test]
+    fn self_hosted_routes_carry_the_self_hosted_prefix() {
+        for route in SELF_HOSTED_ROUTE_STRINGS {
+            if *route == "GET /health" {
+                continue;
+            }
+            let (_, path) = route.split_once(' ').expect("route should have a method");
+            assert!(
+                path.starts_with(SELF_HOSTED_ROUTE_PREFIX),
+                "{route} should start with {SELF_HOSTED_ROUTE_PREFIX}"
+            );
+        }
     }
 
     #[test]

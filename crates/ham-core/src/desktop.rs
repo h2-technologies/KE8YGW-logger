@@ -145,7 +145,7 @@ pub trait NativeDialogBackend {
 pub fn desktop_runtime_config() -> DesktopRuntimeConfig {
     DesktopRuntimeConfig {
         app_name: "KE8YGW Logger".to_owned(),
-        frontend_dist_dir: PathBuf::from("crates/ham-gui/web"),
+        frontend_dist_dir: PathBuf::from("crates/ham-client/web"),
         app_data_dir_env: "HAM_DESKTOP_APP_DATA_DIR".to_owned(),
         hosted_server_url_env: "HAM_DESKTOP_SERVER_URL".to_owned(),
         release_requires_dev_server: false,

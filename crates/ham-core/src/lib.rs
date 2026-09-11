@@ -1,17 +1,21 @@
 //! Shared core for the local-first amateur radio operations platform.
 
 pub mod adif;
+pub mod api_contract;
 pub mod application_settings;
 pub mod awards;
 pub mod bus;
 pub mod credential;
+pub mod desktop;
 pub mod diagnostics;
 pub mod event;
+pub mod gui;
 pub mod lookup;
 pub mod map;
 pub mod net;
 pub mod online;
 pub mod permissions;
+pub mod plugin_sdk;
 pub mod projection;
 pub mod proposal;
 pub mod rig;
@@ -21,6 +25,7 @@ pub mod service;
 pub mod station;
 pub mod store;
 pub mod support;
+pub mod sync;
 pub mod upload;
 
 pub use adif::{

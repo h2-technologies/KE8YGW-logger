@@ -4,11 +4,11 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use async_trait::async_trait;
-use ham_core::{
+use crate::{
     BusEvent, EventBus, EventBusError, InMemoryEventBus, RuntimeEventEnvelope, RuntimeEventFilter,
     RuntimeEventSeverity, RuntimeJsonlLogWriter, RuntimeLogConfig,
 };
+use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tokio::runtime::Runtime;
@@ -139,7 +139,7 @@ impl GuiRuntimeBridge {
         self.publish(RuntimeEventInput {
             event_type: "app.started".to_owned(),
             severity: RuntimeEventSeverity::Info,
-            source: "ham-gui".to_owned(),
+            source: "ham-client".to_owned(),
             source_plugin_id: None,
             workspace_id: Some("dashboard".to_owned()),
             payload_summary: "GUI runtime bridge started".to_owned(),
@@ -149,7 +149,7 @@ impl GuiRuntimeBridge {
         self.publish(RuntimeEventInput {
             event_type: "diagnostics.logs.ready".to_owned(),
             severity: RuntimeEventSeverity::Info,
-            source: "ham-gui".to_owned(),
+            source: "ham-client".to_owned(),
             source_plugin_id: None,
             workspace_id: None,
             payload_summary: "Runtime JSONL log writer initialized".to_owned(),

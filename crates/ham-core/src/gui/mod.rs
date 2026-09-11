@@ -1,13 +1,12 @@
 //! GUI shell models for the ham radio platform.
 //!
-//! The GUI crate owns presentation shell configuration only. Business rules stay
-//! in `ham-core`; future desktop, web, and plugin surfaces should consume these
-//! serializable layout and registration models instead of hardcoding behavior in
-//! panels.
+//! This module owns presentation shell configuration only. Business rules stay
+//! in the rest of `ham-core`; the desktop, web, and plugin surfaces consume
+//! these serializable layout and registration models instead of hardcoding
+//! behavior in panels.
 
 pub mod bridge;
 pub mod commands;
-pub mod mock;
 pub mod shell;
 
 pub use bridge::{GuiRuntimeBridge, RuntimeBridgeStatus, RuntimeEventInput};

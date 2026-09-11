@@ -2235,21 +2235,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "ham-api-contract"
-version = "0.4.0"
-dependencies = [
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "ham-cli"
+name = "ham-client"
 version = "0.4.0"
 dependencies = [
  "chrono",
  "ham-core",
- "ham-plugin-sdk",
- "ham-sync",
+ "serde",
  "serde_json",
  "tokio",
  "uuid",
@@ -2261,10 +2252,11 @@ version = "0.4.0"
 dependencies = [
  "async-trait",
  "chrono",
- "ham-plugin-sdk",
+ "hmac",
  "serde",
  "serde_json",
  "sha2",
+ "socket2",
  "thiserror 1.0.69",
  "tokio",
  "ureq",
@@ -2274,49 +2266,14 @@ dependencies = [
 ]
 
 [[package]]
-name = "ham-desktop"
-version = "0.4.0"
-dependencies = [
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "ham-gui"
-version = "0.4.0"
-dependencies = [
- "async-trait",
- "chrono",
- "ham-core",
- "ham-plugin-sdk",
- "ham-sync",
- "serde",
- "serde_json",
- "tokio",
- "uuid",
-]
-
-[[package]]
 name = "ham-ios-ffi"
 version = "0.4.0"
 dependencies = [
  "chrono",
  "ham-core",
- "ham-plugin-sdk",
- "ham-sync",
  "serde",
  "serde_json",
  "tokio",
- "uuid",
-]
-
-[[package]]
-name = "ham-plugin-sdk"
-version = "0.4.0"
-dependencies = [
- "chrono",
- "serde",
- "serde_json",
  "uuid",
 ]
 
@@ -2325,10 +2282,7 @@ name = "ham-server"
 version = "0.4.0"
 dependencies = [
  "chrono",
- "ham-api-contract",
  "ham-core",
- "ham-plugin-sdk",
- "ham-sync",
  "serde",
  "serde_json",
  "sha2",
@@ -2336,37 +2290,6 @@ dependencies = [
  "thiserror 1.0.69",
  "tokio",
  "ureq",
- "uuid",
-]
-
-[[package]]
-name = "ham-sync"
-version = "0.4.0"
-dependencies = [
- "chrono",
- "ham-core",
- "hmac",
- "serde",
- "serde_json",
- "sha2",
- "socket2",
- "surrealdb",
- "thiserror 1.0.69",
- "tokio",
- "ureq",
- "uuid",
-]
-
-[[package]]
-name = "ham-sync-server"
-version = "0.4.0"
-dependencies = [
- "ham-api-contract",
- "ham-core",
- "ham-sync",
- "serde",
- "serde_json",
- "tokio",
  "uuid",
 ]
 
@@ -3115,7 +3038,7 @@ dependencies = [
 name = "ke8ygw-logger-desktop"
 version = "0.4.0"
 dependencies = [
- "ham-desktop",
+ "ham-core",
  "rfd",
  "serde",
  "tauri",

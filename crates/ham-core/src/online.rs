@@ -11,8 +11,8 @@ use std::{
     time::Duration as StdDuration,
 };
 
+use crate::plugin_sdk::{PluginCapability, ServiceType, OFFICIAL_LOG_UPLOAD_COMPLETED};
 use chrono::{DateTime, Duration, Utc};
-use ham_plugin_sdk::{PluginCapability, ServiceType, OFFICIAL_LOG_UPLOAD_COMPLETED};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use thiserror::Error;

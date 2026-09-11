@@ -1,149 +1,64 @@
-use std::{
-    collections::HashMap,
-    env,
-    io::{BufRead, BufReader, Read, Write},
-    net::{TcpListener, TcpStream},
-    process,
-    sync::Arc,
-};
+//! Self-hosted sync and report routes.
+//!
+//! These share a listener and an HTTP layer with the hosted API; the
+//! `/api/v1/self-hosted` prefix keeps the two route trees unambiguous.
 
-use ham_api_contract::{ApiErrorBody, ApiErrorCode};
-use ham_sync::{
-    CloudAuth, CloudHealthResponse, CloudPreviewPullRequest, CloudPullEventsRequest,
-    CloudPushEventsRequest, CloudServerConfig, CloudServiceMode, DiagnosticReportUploadRequest,
-    DurableCloudSyncPaths, DurableCloudSyncServer, PairDeviceRequest,
-    DEFAULT_CLOUD_SYNC_SESSION_TTL_SECONDS,
+use std::sync::Arc;
+
+use ham_core::api_contract::{ApiErrorBody, ApiErrorCode, SELF_HOSTED_ROUTE_PREFIX};
+use ham_core::sync::{
+    CloudAuth, CloudPreviewPullRequest, CloudPullEventsRequest, CloudPushEventsRequest,
+    CloudSyncError, DiagnosticReportUploadRequest, PairDeviceRequest,
 };
 use serde::Serialize;
 use uuid::Uuid;
 
-fn main() {
-    let addr = env::var("HAM_SYNC_SERVER_BIND").unwrap_or_else(|_| "127.0.0.1:9740".to_owned());
-    let public_url = env::var("HAM_SYNC_PUBLIC_URL").unwrap_or_else(|_| format!("http://{addr}"));
-    let pairing_code =
-        env::var("HAM_SYNC_PAIRING_CODE").unwrap_or_else(|_| "local-dev-pairing-code".to_owned());
-    let sync_session_ttl_seconds = match env::var("HAM_SYNC_SESSION_TTL_SECONDS") {
-        Ok(value) => match value.parse::<i64>() {
-            Ok(seconds) if seconds > 0 => Some(seconds),
-            _ => {
-                eprintln!("HAM_SYNC_SESSION_TTL_SECONDS must be a positive integer");
-                process::exit(1);
-            }
-        },
-        Err(_) => Some(DEFAULT_CLOUD_SYNC_SESSION_TTL_SECONDS),
-    };
-    let mode = match env::var("HAM_SYNC_SERVICE_MODE")
-        .unwrap_or_else(|_| "self_hosted".to_owned())
-        .as_str()
-    {
-        "hosted" => CloudServiceMode::Hosted,
-        _ => CloudServiceMode::SelfHosted,
-    };
+use crate::sync_storage::DurableCloudSyncServer;
+use crate::{ApiRequest, ApiResponse};
 
-    let paths = DurableCloudSyncPaths::from_env();
-    let server = match DurableCloudSyncServer::open(
-        CloudServerConfig {
-            mode,
-            public_url,
-            pairing_code,
-            sync_session_ttl_seconds,
-        },
-        paths.clone(),
-    ) {
-        Ok(server) => Arc::new(server),
-        Err(error) => {
-            eprintln!("failed to initialize durable sync storage: {error}");
-            process::exit(1);
-        }
-    };
-    let listener = match TcpListener::bind(&addr) {
-        Ok(listener) => listener,
-        Err(error) => {
-            eprintln!("failed to bind sync server to {addr}: {error}");
-            process::exit(1);
-        }
-    };
-    let runtime = tokio::runtime::Runtime::new().expect("sync server runtime should start");
-
-    println!("ham-sync-server listening on http://{addr}");
-    println!("mode: {mode:?}");
-    println!("metadata store: {}", paths.metadata_store_path.display());
-    println!(
-        "official event log: {}",
-        paths.official_event_log_path.display()
-    );
-    println!("report directory: {}", paths.report_dir.display());
-
-    for stream in listener.incoming() {
-        match stream {
-            Ok(stream) => handle_client(server.clone(), &runtime, stream),
-            Err(error) => eprintln!("failed to accept sync request: {error}"),
-        }
-    }
+/// True when `path` belongs to the self-hosted sync contract.
+pub fn owns_path(path: &str) -> bool {
+    path == "/health" || path.starts_with(SELF_HOSTED_ROUTE_PREFIX)
 }
 
-#[derive(Debug)]
-struct HttpRequest {
-    method: String,
-    target: String,
-    headers: HashMap<String, String>,
-    body: Vec<u8>,
+/// Strips the self-hosted prefix, yielding the route-relative path.
+fn relative(path: &str) -> &str {
+    path.strip_prefix(SELF_HOSTED_ROUTE_PREFIX).unwrap_or(path)
 }
 
-fn handle_client(
-    server: Arc<DurableCloudSyncServer>,
+pub fn route(
+    server: &Arc<DurableCloudSyncServer>,
     runtime: &tokio::runtime::Runtime,
-    mut stream: TcpStream,
-) {
-    let request = {
-        let mut reader = BufReader::new(&mut stream);
-        match read_http_request(&mut reader) {
-            Ok(request) => request,
-            Err(_) => return,
-        }
-    };
-    let response = route_request(server, runtime, request);
-
-    let _ = stream.write_all(&response);
-}
-
-fn route_request(
-    server: Arc<DurableCloudSyncServer>,
-    runtime: &tokio::runtime::Runtime,
-    request: HttpRequest,
-) -> Vec<u8> {
-    let (path, query) = split_target(&request.target);
-    let request_id = request_id(&request);
+    request: &ApiRequest,
+) -> ApiResponse {
+    let request_id = request_id(request);
+    let path = relative(&request.path);
+    let token = request.query.get("token").cloned();
 
     match (request.method.as_str(), path) {
         ("GET", "/health") => json_response(&server.health()),
-        ("POST", "/api/v1/auth/pair") => {
+        ("POST", "/auth/pair") => {
             match serde_json::from_slice::<PairDeviceRequest>(&request.body) {
                 Ok(pair) => json_response(&runtime.block_on(server.pair_device(pair))),
                 Err(_) => json_error(
                     400,
                     "invalid pair request",
                     ApiErrorCode::InvalidJson,
-                    request_id.clone(),
+                    request_id,
                 ),
             }
         }
-        ("GET", "/api/v1/logbooks") => match auth_from_query(query) {
+        ("GET", "/logbooks") => match auth_from_token(token.as_deref()) {
             Some(auth) => match runtime.block_on(server.list_logbooks(&auth)) {
                 Ok(payload) => json_response(&payload),
-                Err(error) => cloud_error(error, request_id.clone()),
+                Err(error) => cloud_error(error, request_id),
             },
-            None => json_error(
-                401,
-                "missing token",
-                ApiErrorCode::MissingToken,
-                request_id.clone(),
-            ),
+            None => json_error(401, "missing token", ApiErrorCode::MissingToken, request_id),
         },
-        ("GET", path) if path.starts_with("/api/v1/logbooks/") && path.ends_with("/head") => {
+        ("GET", path) if path.starts_with("/logbooks/") && path.ends_with("/head") => {
             with_logbook_auth(
                 path,
-                query,
+                token.as_deref(),
                 "/head",
                 request_id.clone(),
                 |auth, logbook_id| match runtime.block_on(server.get_head(&auth, logbook_id)) {
@@ -152,14 +67,14 @@ fn route_request(
                 },
             )
         }
-        ("GET", path) if path.starts_with("/api/v1/logbooks/") && path.ends_with("/events") => {
+        ("GET", path) if path.starts_with("/logbooks/") && path.ends_with("/events") => {
             with_logbook_auth(
                 path,
-                query,
+                token.as_deref(),
                 "/events",
                 request_id.clone(),
                 |auth, logbook_id| {
-                    let after_hash = parse_query(query).get("after_hash").cloned();
+                    let after_hash = request.query.get("after_hash").cloned();
                     match runtime.block_on(server.event_metadata(&auth, logbook_id, after_hash)) {
                         Ok(payload) => json_response(&payload),
                         Err(error) => cloud_error(error, request_id.clone()),
@@ -167,143 +82,95 @@ fn route_request(
                 },
             )
         }
-        ("POST", path)
-            if path.starts_with("/api/v1/logbooks/") && path.ends_with("/preview-pull") =>
-        {
+        ("POST", path) if path.starts_with("/logbooks/") && path.ends_with("/preview-pull") => {
             match serde_json::from_slice::<CloudPreviewPullRequest>(&request.body) {
                 Ok(payload) => match runtime.block_on(server.preview_pull(payload)) {
                     Ok(payload) => json_response(&payload),
-                    Err(error) => cloud_error(error, request_id.clone()),
+                    Err(error) => cloud_error(error, request_id),
                 },
                 Err(_) => json_error(
                     400,
                     "invalid preview request",
                     ApiErrorCode::InvalidJson,
-                    request_id.clone(),
+                    request_id,
                 ),
             }
         }
-        ("POST", path) if path.starts_with("/api/v1/logbooks/") && path.ends_with("/pull") => {
+        ("POST", path) if path.starts_with("/logbooks/") && path.ends_with("/pull") => {
             match serde_json::from_slice::<CloudPullEventsRequest>(&request.body) {
                 Ok(payload) => match runtime.block_on(server.pull_events(payload)) {
                     Ok(payload) => json_response(&payload),
-                    Err(error) => cloud_error(error, request_id.clone()),
+                    Err(error) => cloud_error(error, request_id),
                 },
                 Err(_) => json_error(
                     400,
                     "invalid pull request",
                     ApiErrorCode::InvalidJson,
-                    request_id.clone(),
+                    request_id,
                 ),
             }
         }
-        ("POST", path) if path.starts_with("/api/v1/logbooks/") && path.ends_with("/push") => {
+        ("POST", path) if path.starts_with("/logbooks/") && path.ends_with("/push") => {
             match serde_json::from_slice::<CloudPushEventsRequest>(&request.body) {
                 Ok(payload) => match runtime.block_on(server.push_events(payload)) {
                     Ok(payload) => json_response(&payload),
-                    Err(error) => cloud_error(error, request_id.clone()),
+                    Err(error) => cloud_error(error, request_id),
                 },
                 Err(_) => json_error(
                     400,
                     "invalid push request",
                     ApiErrorCode::InvalidJson,
-                    request_id.clone(),
+                    request_id,
                 ),
             }
         }
-        ("GET", "/api/v1/sync/status") => match auth_from_query(query) {
-            Some(auth) => match runtime.block_on(server.status(Some(&auth))) {
+        ("GET", "/sync/status") => {
+            let auth = auth_from_token(token.as_deref());
+            match runtime.block_on(server.status(auth.as_ref())) {
                 Ok(payload) => json_response(&payload),
-                Err(error) => cloud_error(error, request_id.clone()),
-            },
-            None => match runtime.block_on(server.status(None)) {
-                Ok(payload) => json_response(&payload),
-                Err(error) => cloud_error(error, request_id.clone()),
-            },
-        },
-        ("POST", "/api/v1/reports") => {
+                Err(error) => cloud_error(error, request_id),
+            }
+        }
+        ("POST", "/reports") => {
             match serde_json::from_slice::<DiagnosticReportUploadRequest>(&request.body) {
                 Ok(payload) => match runtime.block_on(server.upload_report(payload)) {
                     Ok(payload) => json_response(&payload),
-                    Err(error) => cloud_error(error, request_id.clone()),
+                    Err(error) => cloud_error(error, request_id),
                 },
                 Err(_) => json_error(
                     400,
                     "invalid report upload request",
                     ApiErrorCode::InvalidJson,
-                    request_id.clone(),
+                    request_id,
                 ),
             }
         }
-        ("GET", path) if path.starts_with("/api/v1/reports/") => match auth_from_query(query) {
+        ("GET", path) if path.starts_with("/reports/") => match auth_from_token(token.as_deref()) {
             Some(auth) => {
-                let report_id = path.trim_start_matches("/api/v1/reports/");
+                let report_id = path.trim_start_matches("/reports/");
                 match runtime.block_on(server.report_metadata(&auth, report_id)) {
                     Ok(payload) => json_response(&payload),
-                    Err(error) => cloud_error(error, request_id.clone()),
+                    Err(error) => cloud_error(error, request_id),
                 }
             }
-            None => json_error(
-                401,
-                "missing token",
-                ApiErrorCode::MissingToken,
-                request_id.clone(),
-            ),
+            None => json_error(401, "missing token", ApiErrorCode::MissingToken, request_id),
         },
         _ => json_error(404, "not found", ApiErrorCode::NotFound, request_id),
     }
 }
 
-fn read_http_request(reader: &mut BufReader<&mut TcpStream>) -> std::io::Result<HttpRequest> {
-    let mut request_line = String::new();
-    reader.read_line(&mut request_line)?;
-    let mut parts = request_line.split_whitespace();
-    let method = parts.next().unwrap_or("GET").to_owned();
-    let target = parts.next().unwrap_or("/").to_owned();
-
-    let mut content_length = 0usize;
-    let mut headers = HashMap::new();
-    loop {
-        let mut header = String::new();
-        reader.read_line(&mut header)?;
-        let header = header.trim_end();
-        if header.is_empty() {
-            break;
-        }
-        if let Some((name, value)) = header.split_once(':') {
-            let name = name.trim().to_ascii_lowercase();
-            let value = value.trim().to_owned();
-            if name.eq_ignore_ascii_case("content-length") {
-                content_length = value.parse().unwrap_or(0);
-            }
-            headers.insert(name, value);
-        }
-    }
-
-    let mut body = vec![0; content_length];
-    if content_length > 0 {
-        reader.read_exact(&mut body)?;
-    }
-    Ok(HttpRequest {
-        method,
-        target,
-        headers,
-        body,
-    })
-}
-
 fn with_logbook_auth(
     path: &str,
-    query: &str,
+    token: Option<&str>,
     suffix: &str,
     request_id: String,
-    handler: impl FnOnce(CloudAuth, Uuid) -> Vec<u8>,
-) -> Vec<u8> {
-    let Some(auth) = auth_from_query(query) else {
+    handler: impl FnOnce(CloudAuth, Uuid) -> ApiResponse,
+) -> ApiResponse {
+    let Some(auth) = auth_from_token(token) else {
         return json_error(401, "missing token", ApiErrorCode::MissingToken, request_id);
     };
     let Some(logbook_id) = path
-        .trim_start_matches("/api/v1/logbooks/")
+        .trim_start_matches("/logbooks/")
         .trim_end_matches(suffix)
         .trim_end_matches('/')
         .parse::<Uuid>()
@@ -319,57 +186,45 @@ fn with_logbook_auth(
     handler(auth, logbook_id)
 }
 
-fn auth_from_query(query: &str) -> Option<CloudAuth> {
-    parse_query(query)
-        .get("token")
+fn auth_from_token(token: Option<&str>) -> Option<CloudAuth> {
+    token
         .filter(|token| !token.is_empty())
         .map(|sync_token| CloudAuth {
-            sync_token: sync_token.clone(),
+            sync_token: sync_token.to_owned(),
         })
 }
 
-fn split_target(target: &str) -> (&str, &str) {
-    target
-        .split_once('?')
-        .map_or((target, ""), |(path, query)| (path, query))
+fn response(status: u16, body: Vec<u8>) -> ApiResponse {
+    ApiResponse {
+        status,
+        headers: std::collections::HashMap::new(),
+        body,
+    }
 }
 
-fn parse_query(query: &str) -> std::collections::HashMap<String, String> {
-    query
-        .split('&')
-        .filter(|part| !part.is_empty())
-        .map(|part| {
-            let (key, value) = part.split_once('=').unwrap_or((part, ""));
-            (key.to_owned(), value.replace('+', " "))
-        })
-        .collect()
-}
-
-fn json_response<T: Serialize>(payload: &T) -> Vec<u8> {
+fn json_response<T: Serialize>(payload: &T) -> ApiResponse {
     let body = serde_json::to_vec(payload).expect("sync payload should serialize");
-    response(200, "application/json; charset=utf-8", &body)
+    response(200, body)
 }
 
-fn cloud_error(error: ham_sync::CloudSyncError, request_id: String) -> Vec<u8> {
+fn cloud_error(error: CloudSyncError, request_id: String) -> ApiResponse {
     match error {
-        ham_sync::CloudSyncError::Unauthenticated => json_error(
+        CloudSyncError::Unauthenticated => json_error(
             401,
             "unauthenticated",
             ApiErrorCode::InvalidToken,
             request_id,
         ),
-        ham_sync::CloudSyncError::UnauthorizedLogbook(_) => {
+        CloudSyncError::UnauthorizedLogbook(_) => {
             json_error(403, "forbidden", ApiErrorCode::Forbidden, request_id)
         }
-        ham_sync::CloudSyncError::PairingRejected(_) | ham_sync::CloudSyncError::Validation(_) => {
-            json_error(
-                400,
-                "request validation failed",
-                ApiErrorCode::ValidationFailed,
-                request_id,
-            )
-        }
-        ham_sync::CloudSyncError::Store(_) => json_error(
+        CloudSyncError::PairingRejected(_) | CloudSyncError::Validation(_) => json_error(
+            400,
+            "request validation failed",
+            ApiErrorCode::ValidationFailed,
+            request_id,
+        ),
+        CloudSyncError::Store(_) => json_error(
             500,
             "request could not be completed",
             ApiErrorCode::StoreUnavailable,
@@ -383,13 +238,13 @@ fn json_error(
     message: impl Into<String>,
     code: ApiErrorCode,
     request_id: String,
-) -> Vec<u8> {
+) -> ApiResponse {
     let body = serde_json::to_vec(&ApiErrorBody::new(message.into(), code, request_id, false))
         .expect("error payload should serialize");
-    response(status, "application/json; charset=utf-8", &body)
+    response(status, body)
 }
 
-fn request_id(request: &HttpRequest) -> String {
+fn request_id(request: &ApiRequest) -> String {
     request
         .headers
         .get("x-request-id")
@@ -398,37 +253,21 @@ fn request_id(request: &HttpRequest) -> String {
         .unwrap_or_else(|| Uuid::new_v4().to_string())
 }
 
-fn response(status: u16, content_type: &str, body: &[u8]) -> Vec<u8> {
-    let status_text = match status {
-        200 => "OK",
-        400 => "Bad Request",
-        401 => "Unauthorized",
-        403 => "Forbidden",
-        404 => "Not Found",
-        _ => "OK",
-    };
-    let mut response = format!(
-        "HTTP/1.1 {status} {status_text}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-        body.len()
-    )
-    .into_bytes();
-    response.extend_from_slice(body);
-    response
-}
-
-#[allow(dead_code)]
-fn _assert_health_is_serializable(_: CloudHealthResponse) {}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ham_core::{CoreEventEnvelope, NewLogbookEvent};
-    use ham_sync::{
-        CloudPullEventsResponse, CloudPushEventsResponse, ListLogbooksResponse, PairDeviceResponse,
-        ReplicationStatus,
+    use crate::sync_storage::DurableCloudSyncPaths;
+    use crate::{http, HostedServer, MergedServer};
+    use ham_core::sync::{
+        CloudPullEventsResponse, CloudPushEventsResponse, CloudServerConfig, ListLogbooksResponse,
+        PairDeviceResponse, ReplicationStatus,
     };
+    use ham_core::{CoreEventEnvelope, NewLogbookEvent};
     use serde::de::DeserializeOwned;
     use serde_json::{json, Value};
+    use std::collections::HashMap;
+    use std::io::{Read, Write};
+    use std::net::{TcpListener, TcpStream};
 
     const EVENT_QSO_CREATED: &str = "official.log.qso.created";
 
@@ -474,26 +313,51 @@ mod tests {
         }
     }
 
-    fn http_request(method: &str, target: impl Into<String>, body: impl Serialize) -> HttpRequest {
-        let body = serde_json::to_vec(&body).expect("test request should serialize");
+    fn api_request(method: &str, target: impl Into<String>, body: Vec<u8>) -> ApiRequest {
+        let target = target.into();
+        let (path, query) = target
+            .split_once('?')
+            .map_or((target.as_str(), ""), |(path, query)| (path, query));
         let mut headers = HashMap::new();
         headers.insert("x-request-id".to_owned(), "sync-route-test".to_owned());
         headers.insert("content-length".to_owned(), body.len().to_string());
-        HttpRequest {
+        ApiRequest {
             method: method.to_owned(),
-            target: target.into(),
+            path: path.to_owned(),
+            query: crate::parse_query(query),
             headers,
             body,
         }
     }
 
-    fn empty_http_request(method: &str, target: impl Into<String>) -> HttpRequest {
-        HttpRequest {
-            method: method.to_owned(),
-            target: target.into(),
-            headers: HashMap::from([("x-request-id".to_owned(), "sync-route-test".to_owned())]),
-            body: Vec::new(),
-        }
+    fn http_request(method: &str, target: impl Into<String>, body: impl Serialize) -> ApiRequest {
+        let body = serde_json::to_vec(&body).expect("test request should serialize");
+        api_request(method, target, body)
+    }
+
+    fn empty_http_request(method: &str, target: impl Into<String>) -> ApiRequest {
+        api_request(method, target, Vec::new())
+    }
+
+    /// Renders an [`ApiResponse`] as raw HTTP so route tests and wire tests can
+    /// share the same assertions.
+    fn raw_bytes(response: &ApiResponse) -> Vec<u8> {
+        let mut out = format!(
+            "HTTP/1.1 {} STATUS\r\nContent-Length: {}\r\n\r\n",
+            response.status,
+            response.body.len()
+        )
+        .into_bytes();
+        out.extend_from_slice(&response.body);
+        out
+    }
+
+    fn route_request(
+        server: Arc<DurableCloudSyncServer>,
+        runtime: &tokio::runtime::Runtime,
+        request: ApiRequest,
+    ) -> Vec<u8> {
+        raw_bytes(&route(&server, runtime, &request))
     }
 
     fn response_status(response: &[u8]) -> u16 {
@@ -525,7 +389,7 @@ mod tests {
     fn route_json<T: DeserializeOwned>(
         server: Arc<DurableCloudSyncServer>,
         runtime: &tokio::runtime::Runtime,
-        request: HttpRequest,
+        request: ApiRequest,
     ) -> T {
         let response = route_request(server, runtime, request);
         assert_eq!(response_status(&response), 200);
@@ -548,16 +412,19 @@ mod tests {
         request
     }
 
+    /// Serves the sync routes through the same merged listener the binary uses,
+    /// so wire tests exercise the real dispatch path.
     fn wire_round_trip(server: Arc<DurableCloudSyncServer>, request: Vec<u8>) -> Vec<u8> {
         let listener = TcpListener::bind("127.0.0.1:0").expect("test listener should bind");
         let addr = listener
             .local_addr()
             .expect("test listener should have a local address");
-        let server_thread = server.clone();
+        let merged = MergedServer::new(HostedServer::new(), server);
         let handle = std::thread::spawn(move || {
             let runtime = tokio::runtime::Runtime::new().expect("test runtime should start");
-            let (stream, _) = listener.accept().expect("test request should connect");
-            handle_client(server_thread, &runtime, stream);
+            let (mut stream, _) = listener.accept().expect("test request should connect");
+            http::handle_stream(&merged, &runtime, &mut stream)
+                .expect("test request should be handled");
         });
 
         let mut client = TcpStream::connect(addr).expect("test client should connect");
@@ -623,12 +490,9 @@ mod tests {
             ApiErrorCode::MissingToken,
             "sync-contract-test".to_owned(),
         );
-        let text = String::from_utf8(response).expect("HTTP response should be UTF-8");
-        let body = text
-            .split("\r\n\r\n")
-            .nth(1)
-            .expect("HTTP response should contain a body");
-        let json: Value = serde_json::from_str(body).expect("error body should be JSON");
+        assert_eq!(response.status, 401);
+        let json: Value =
+            serde_json::from_slice(&response.body).expect("error body should be JSON");
         assert_eq!(json["error"], "missing token");
         assert_eq!(json["code"], "missing_token");
         assert_eq!(json["request_id"], "sync-contract-test");
@@ -648,7 +512,7 @@ mod tests {
             &runtime,
             http_request(
                 "POST",
-                "/api/v1/auth/pair",
+                "/api/v1/self-hosted/auth/pair",
                 pair_request(logbook_id, device_id),
             ),
         );
@@ -663,7 +527,10 @@ mod tests {
         let logbooks: ListLogbooksResponse = route_json(
             server.clone(),
             &runtime,
-            empty_http_request("GET", format!("/api/v1/logbooks?token={}", auth.sync_token)),
+            empty_http_request(
+                "GET",
+                format!("/api/v1/self-hosted/logbooks?token={}", auth.sync_token),
+            ),
         );
         assert_eq!(logbooks.logbooks.len(), 1);
         assert_eq!(logbooks.logbooks[0].logbook_id, logbook_id);
@@ -675,7 +542,7 @@ mod tests {
             &runtime,
             http_request(
                 "POST",
-                format!("/api/v1/logbooks/{logbook_id}/push"),
+                format!("/api/v1/self-hosted/logbooks/{logbook_id}/push"),
                 CloudPushEventsRequest {
                     auth: auth.clone(),
                     logbook_id,
@@ -694,7 +561,7 @@ mod tests {
             &runtime,
             http_request(
                 "POST",
-                format!("/api/v1/logbooks/{logbook_id}/push"),
+                format!("/api/v1/self-hosted/logbooks/{logbook_id}/push"),
                 CloudPushEventsRequest {
                     auth: auth.clone(),
                     logbook_id,
@@ -711,7 +578,7 @@ mod tests {
             &runtime,
             http_request(
                 "POST",
-                format!("/api/v1/logbooks/{logbook_id}/pull"),
+                format!("/api/v1/self-hosted/logbooks/{logbook_id}/pull"),
                 CloudPullEventsRequest {
                     auth,
                     logbook_id,
@@ -726,7 +593,7 @@ mod tests {
         let bad_auth_response = route_request(
             server,
             &runtime,
-            empty_http_request("GET", "/api/v1/logbooks?token=missing-token"),
+            empty_http_request("GET", "/api/v1/self-hosted/logbooks?token=missing-token"),
         );
         assert_eq!(response_status(&bad_auth_response), 401);
         let error: ApiErrorBody = response_json(&bad_auth_response);
@@ -751,7 +618,7 @@ mod tests {
             server.clone(),
             raw_json_http_request(
                 "POST",
-                "/api/v1/auth/pair",
+                "/api/v1/self-hosted/auth/pair",
                 pair_request(logbook_id, device_id),
             ),
         );
@@ -766,7 +633,7 @@ mod tests {
             server.clone(),
             raw_json_http_request(
                 "POST",
-                format!("/api/v1/logbooks/{logbook_id}/push"),
+                format!("/api/v1/self-hosted/logbooks/{logbook_id}/push"),
                 CloudPushEventsRequest {
                     auth: auth.clone(),
                     logbook_id,
@@ -782,7 +649,7 @@ mod tests {
             server,
             raw_json_http_request(
                 "POST",
-                format!("/api/v1/logbooks/{logbook_id}/pull"),
+                format!("/api/v1/self-hosted/logbooks/{logbook_id}/pull"),
                 json!({
                     "auth": {
                         "sync_token": auth.sync_token,
@@ -821,7 +688,7 @@ mod tests {
             &runtime,
             http_request(
                 "POST",
-                "/api/v1/auth/pair",
+                "/api/v1/self-hosted/auth/pair",
                 pair_request(logbook_id, Uuid::new_v4()),
             ),
         );
@@ -833,7 +700,7 @@ mod tests {
             &runtime,
             empty_http_request(
                 "GET",
-                format!("/api/v1/logbooks?token={}", session.sync_token),
+                format!("/api/v1/self-hosted/logbooks?token={}", session.sync_token),
             ),
         );
 

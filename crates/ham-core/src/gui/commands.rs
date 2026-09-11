@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::shell::WorkspaceId;
+use crate::gui::shell::WorkspaceId;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CommandDefinition {

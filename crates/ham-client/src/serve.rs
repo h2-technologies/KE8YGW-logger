@@ -9,6 +9,9 @@ use std::{
     time::{Duration, Instant},
 };
 
+use ham_core::gui::{
+    CommandRegistry, GuiRuntimeBridge, GuiShellState, RuntimeBridgeStatus, RuntimeEventInput,
+};
 use ham_core::{
     build_diagnostic_bundle, confirmations_from_adif, default_credential_store,
     default_official_event_log_path, default_service_registry, dx_cluster_spot_to_spot,
@@ -29,11 +32,9 @@ use ham_core::{
     RuntimeLogConfig, ServiceCache, ServiceCacheEntry, ServiceRegistry, ServiceRegistrySnapshot,
     StationBook, StationConfiguration, StationProfile, UploadQueue, UploadTarget,
 };
-use ham_gui::{
-    mock::{capability_labels, mock_plugins},
-    CommandRegistry, GuiRuntimeBridge, GuiShellState, RuntimeBridgeStatus, RuntimeEventInput,
-};
-use ham_plugin_sdk::{
+
+use crate::mock::{capability_labels, mock_plugins};
+use ham_core::plugin_sdk::{
     PluginCapability, PluginManifest, ProposalEnvelope, ServiceType, PROPOSAL_ACTIVATION_CANCEL,
     PROPOSAL_ACTIVATION_CREATE, PROPOSAL_ACTIVATION_END, PROPOSAL_ACTIVATION_NOTE_ADD,
     PROPOSAL_ACTIVATION_START, PROPOSAL_ACTIVATION_UPDATE, PROPOSAL_NET_CHECKIN_CREATE,
@@ -44,7 +45,7 @@ use ham_plugin_sdk::{
     PROPOSAL_QSO_CORRECT, PROPOSAL_QSO_CREATE, PROPOSAL_QSO_DELETE, PROPOSAL_QSO_NOTE_ADD,
     PROPOSAL_QSO_RESTORE,
 };
-use ham_sync::{
+use ham_core::sync::{
     build_handshake_response, conflict_report_from_preview, lan_auth_signature, metadata_for_event,
     preview_pull_from_events, pull_missing_events, verify_lan_auth_signature, CloudAuth,
     CloudConnectionState, CloudPreviewPullRequest, CloudPullEventsRequest, CloudPullEventsResponse,
@@ -74,21 +75,22 @@ const INDEX_HTML: &str = include_str!("../web/index.html");
 const APP_CSS: &str = include_str!("../web/styles.css");
 const APP_JS: &str = include_str!("../web/app.js");
 const LAN_DISCOVERY_LISTEN_WINDOW: Duration = Duration::from_millis(750);
+pub const DEFAULT_SERVE_ADDR: &str = "127.0.0.1:9467";
+
 const LAN_DISCOVERY_SLEEP_SLICE: Duration = Duration::from_millis(250);
 const LAN_AUTH_DEVICE_ID_HEADER: &str = "x-ke8ygw-lan-device-id";
 const LAN_AUTH_REPLAY_NONCE_HEADER: &str = "x-ke8ygw-lan-replay-nonce";
 const LAN_AUTH_SIGNATURE_VERSION_HEADER: &str = "x-ke8ygw-lan-signature-version";
 const LAN_AUTH_SIGNATURE_HEADER: &str = "x-ke8ygw-lan-signature";
 
-fn main() {
-    let addr = env::args()
-        .nth(1)
-        .unwrap_or_else(|| "127.0.0.1:9467".to_owned());
+/// Runs the local-first client server that backs the web UI.
+pub fn run(addr: Option<String>) {
+    let addr = addr.unwrap_or_else(|| DEFAULT_SERVE_ADDR.to_owned());
 
     let listener = match TcpListener::bind(&addr) {
         Ok(listener) => listener,
         Err(error) => {
-            eprintln!("failed to bind ham-gui to {addr}: {error}");
+            eprintln!("failed to bind ham-client to {addr}: {error}");
             process::exit(1);
         }
     };
@@ -198,7 +200,7 @@ fn main() {
             } else {
                 RuntimeEventSeverity::Warn
             },
-            source: "ham-gui".to_owned(),
+            source: "ham-client".to_owned(),
             source_plugin_id: Some(manifest.plugin_id.clone()),
             workspace_id: Some("dashboard".to_owned()),
             payload_summary: format!("Plugin manifest loaded: {}", manifest.name),
@@ -216,7 +218,7 @@ fn main() {
             let _ = bridge.publish(RuntimeEventInput {
                 event_type: "plugin.permission.requested".to_owned(),
                 severity: RuntimeEventSeverity::Debug,
-                source: "ham-gui".to_owned(),
+                source: "ham-client".to_owned(),
                 source_plugin_id: Some(manifest.plugin_id.clone()),
                 workspace_id: Some("dashboard".to_owned()),
                 payload_summary: format!("{} requested {}", manifest.name, permission.as_str()),
@@ -239,7 +241,7 @@ fn main() {
     let _ = bridge.publish(RuntimeEventInput {
         event_type: "storage.opened".to_owned(),
         severity: RuntimeEventSeverity::Info,
-        source: "ham-gui".to_owned(),
+        source: "ham-client".to_owned(),
         source_plugin_id: None,
         workspace_id: Some("dashboard".to_owned()),
         payload_summary: format!("Official event store opened at {}", store_path.display()),
@@ -414,7 +416,7 @@ fn main() {
         permission_settings: Mutex::new(permission_settings),
     });
 
-    println!("ham-gui listening on http://{bound_addr}");
+    println!("ham-client listening on http://{bound_addr}");
 
     for stream in listener.incoming() {
         match stream {
@@ -526,7 +528,7 @@ struct SyncUiState {
     registry: PeerRegistry,
     discovery_running: bool,
     discovery_generation: u64,
-    latest_handshake: Option<ham_sync::HandshakeResponse>,
+    latest_handshake: Option<ham_core::sync::HandshakeResponse>,
     latest_preview: Option<PreviewPullResponse>,
     latest_pull: Option<PullEventsResponse>,
     last_sync_time: Option<String>,
@@ -884,7 +886,7 @@ fn read_http_request(reader: &mut BufReader<&mut TcpStream>) -> std::io::Result<
 struct ApiShellPayload {
     shell: GuiShellState,
     commands: CommandRegistry,
-    plugins: Vec<ham_gui::mock::MockPlugin>,
+    plugins: Vec<crate::mock::MockPlugin>,
     runtime_events: Vec<ham_core::RuntimeDiagnosticEvent>,
     runtime_status: RuntimeBridgeStatus,
     known_core_capabilities: Vec<String>,
@@ -1129,7 +1131,7 @@ struct PermissionActionRequest {
 
 #[derive(Debug, Serialize)]
 struct PluginPermissionsPayload {
-    plugins: Vec<ham_gui::mock::MockPlugin>,
+    plugins: Vec<crate::mock::MockPlugin>,
     manifests: Vec<PluginManifest>,
     registry: Vec<ham_core::PermissionMetadata>,
     grants: PermissionGrantSet,
@@ -1253,7 +1255,7 @@ struct SyncStatePayload {
     identity: LocalPeerIdentity,
     discovery_running: bool,
     peers: Vec<PeerRecord>,
-    latest_handshake: Option<ham_sync::HandshakeResponse>,
+    latest_handshake: Option<ham_core::sync::HandshakeResponse>,
     latest_preview: Option<PreviewPullResponse>,
     latest_pull: Option<PullEventsResponse>,
     last_sync_time: Option<String>,
@@ -1452,7 +1454,7 @@ fn publish_support_storage_event(
     let _ = bridge.publish(RuntimeEventInput {
         event_type: event_type.to_owned(),
         severity,
-        source: "ham-gui".to_owned(),
+        source: "ham-client".to_owned(),
         source_plugin_id: Some("core.support-storage".to_owned()),
         workspace_id: Some("dashboard".to_owned()),
         payload_summary,
@@ -4280,7 +4282,7 @@ fn handle_adif_import(state: &AppState, body: &[u8]) -> Vec<u8> {
     let _ = state.bridge.publish(RuntimeEventInput {
         event_type: "import.adif.started".to_owned(),
         severity: RuntimeEventSeverity::Info,
-        source: "ham-gui".to_owned(),
+        source: "ham-client".to_owned(),
         source_plugin_id: Some("core.gui".to_owned()),
         workspace_id: Some("casual-logger".to_owned()),
         payload_summary: format!("Importing ADIF from {}", request.path),
@@ -4300,7 +4302,7 @@ fn handle_adif_import(state: &AppState, body: &[u8]) -> Vec<u8> {
     let _ = state.bridge.publish(RuntimeEventInput {
         event_type: "import.adif.completed".to_owned(),
         severity: RuntimeEventSeverity::Info,
-        source: "ham-gui".to_owned(),
+        source: "ham-client".to_owned(),
         source_plugin_id: Some("core.gui".to_owned()),
         workspace_id: Some("casual-logger".to_owned()),
         payload_summary: format!("Imported {} ADIF records", summary.imported_count),
@@ -4326,7 +4328,7 @@ fn handle_adif_export(state: &AppState, body: &[u8]) -> Vec<u8> {
     let _ = state.bridge.publish(RuntimeEventInput {
         event_type: "export.adif.started".to_owned(),
         severity: RuntimeEventSeverity::Info,
-        source: "ham-gui".to_owned(),
+        source: "ham-client".to_owned(),
         source_plugin_id: Some("core.gui".to_owned()),
         workspace_id: Some("casual-logger".to_owned()),
         payload_summary: format!("Exporting ADIF to {}", request.path),
@@ -4347,7 +4349,7 @@ fn handle_adif_export(state: &AppState, body: &[u8]) -> Vec<u8> {
     let _ = state.bridge.publish(RuntimeEventInput {
         event_type: "export.adif.completed".to_owned(),
         severity: RuntimeEventSeverity::Info,
-        source: "ham-gui".to_owned(),
+        source: "ham-client".to_owned(),
         source_plugin_id: Some("core.gui".to_owned()),
         workspace_id: Some("casual-logger".to_owned()),
         payload_summary: format!("ADIF exported to {}", request.path),
@@ -5207,7 +5209,7 @@ fn handle_conflict_review_corrective_events(state: &AppState, body: &[u8]) -> Ve
 
 fn mark_conflict_review_user_action(
     state: &AppState,
-    review: &ham_sync::ManualConflictReview,
+    review: &ham_core::sync::ManualConflictReview,
     now: chrono::DateTime<chrono::Utc>,
 ) -> usize {
     if !review
@@ -7714,7 +7716,7 @@ fn build_demo_remote_events(state: &AppState) -> Vec<CoreEventEnvelope> {
     let previous_hash = events.last().map(|event| event.event_hash.clone());
     events.push(CoreEventEnvelope::from_new(
         NewLogbookEvent {
-            event_type: ham_plugin_sdk::OFFICIAL_LOG_QSO_CREATED.to_owned(),
+            event_type: ham_core::plugin_sdk::OFFICIAL_LOG_QSO_CREATED.to_owned(),
             logbook_id: state.logbook_id,
             entity_id: Some(uuid::Uuid::new_v4()),
             author_operator_id: None,
@@ -8228,7 +8230,7 @@ fn start_demo_runtime_publisher(bridge: GuiRuntimeBridge) {
             if let Err(error) = bridge.publish(RuntimeEventInput {
                 event_type: event_type.to_owned(),
                 severity,
-                source: "ham-gui".to_owned(),
+                source: "ham-client".to_owned(),
                 source_plugin_id: None,
                 workspace_id: Some("dashboard".to_owned()),
                 payload_summary: summary.to_owned(),
@@ -8357,13 +8359,13 @@ mod tests {
 
     #[test]
     fn account_state_reports_a_signed_out_default_without_contacting_a_server() {
-        let state = test_state("ke8ygw-ham-gui-account-state");
+        let state = test_state("ke8ygw-ham-client-account-state");
         let payload = response_json(handle_account_state(&state));
         assert_eq!(payload["ok"], json!(true));
         assert_eq!(payload["account"]["connection_state"], json!("signed_out"));
         assert_eq!(
             payload["account"]["base_url"],
-            json!(ham_sync::DEFAULT_HOSTED_ACCOUNT_BASE_URL)
+            json!(ham_core::sync::DEFAULT_HOSTED_ACCOUNT_BASE_URL)
         );
         assert!(payload["account"]["session_token_credential_id"].is_null());
         assert!(payload["credential_backend"]["backend_name"].is_string());
@@ -8371,7 +8373,7 @@ mod tests {
 
     #[test]
     fn account_configure_persists_the_hosted_endpoint_and_rejects_bad_urls() {
-        let state = test_state("ke8ygw-ham-gui-account-configure");
+        let state = test_state("ke8ygw-ham-client-account-configure");
         let payload = response_json(handle_account_configure(
             &state,
             serde_json::to_vec(&json!({
@@ -8412,7 +8414,7 @@ mod tests {
 
     #[test]
     fn account_session_routes_are_rejected_before_a_request_is_planned() {
-        let state = test_state("ke8ygw-ham-gui-account-session");
+        let state = test_state("ke8ygw-ham-client-account-session");
         for response in [
             run_account_action(&state, HostedAccountAction::Session),
             run_account_action(&state, HostedAccountAction::Logout),
@@ -8428,14 +8430,14 @@ mod tests {
 
     #[test]
     fn account_requests_reject_malformed_client_json() {
-        let state = test_state("ke8ygw-ham-gui-account-json");
+        let state = test_state("ke8ygw-ham-client-account-json");
         let payload = response_json_any_status(handle_account_login(&state, b"{"));
         assert_eq!(payload["error"], json!("invalid sign-in JSON"));
     }
 
     #[test]
     fn cloud_connect_auto_push_drains_recovered_desktop_queue() {
-        let state = test_state("ke8ygw-ham-gui-auto-drain");
+        let state = test_state("ke8ygw-ham-client-auto-drain");
         let created = create_test_qso(&state, "K1AUTO");
         assert_eq!(created["ok"], true);
         let operation_id: uuid::Uuid =
@@ -8500,7 +8502,7 @@ mod tests {
 
     #[test]
     fn cloud_connect_auto_push_skips_unqueued_local_history() {
-        let state = test_state("ke8ygw-ham-gui-auto-drain-skip");
+        let state = test_state("ke8ygw-ham-client-auto-drain-skip");
         let created = create_test_qso(&state, "K1LOCAL");
         let operation_id: uuid::Uuid =
             serde_json::from_value(created["offline_mutation"]["operation_id"].clone()).unwrap();
@@ -8622,7 +8624,7 @@ mod tests {
 
     #[test]
     fn lan_pairing_accept_stores_separate_endpoint_auth_code() {
-        let state = test_state("ke8ygw-ham-gui-lan-pairing-auth-code");
+        let state = test_state("ke8ygw-ham-client-lan-pairing-auth-code");
         let issuer = local_sync_device_id(&state);
         let peer_device_id = uuid::Uuid::new_v4();
         let token = state
@@ -8698,7 +8700,7 @@ mod tests {
 
     #[test]
     fn lan_pairing_accept_rejects_missing_or_reused_endpoint_auth_code() {
-        let state = test_state("ke8ygw-ham-gui-lan-pairing-auth-code-required");
+        let state = test_state("ke8ygw-ham-client-lan-pairing-auth-code-required");
         let issuer = local_sync_device_id(&state);
         let peer_device_id = uuid::Uuid::new_v4();
         let token = state
@@ -8859,8 +8861,8 @@ mod tests {
             capabilities: Vec::new(),
             first_seen: chrono::Utc::now(),
             last_seen: chrono::Utc::now(),
-            connection_state: ham_sync::PeerConnectionState::Discovered,
-            sync_state: ham_sync::PeerSyncState::Unknown,
+            connection_state: ham_core::sync::PeerConnectionState::Discovered,
+            sync_state: ham_core::sync::PeerSyncState::Unknown,
         };
         let sorted = sorted_peer_api_addresses(&peer);
         assert_eq!(sorted[0], "192.168.1.25:9738".parse().unwrap());

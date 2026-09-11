@@ -1692,10 +1692,156 @@
         }
       }
     },
-    "/api/v1/auth/pair": {
+    "/api/v1/self-hosted/logbooks": {
+      "get": {
+        "operationId": "get_api_v1_self_hosted_logbooks",
+        "summary": "GET /api/v1/self-hosted/logbooks",
+        "tags": [
+          "self-hosted"
+        ],
+        "x-deployment-modes": [
+          "self_hosted"
+        ],
+        "x-stability": "compatibility-only",
+        "parameters": [
+          {
+            "name": "logbook_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "UUID or stable route identifier as implemented by the server."
+          },
+          {
+            "name": "token",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response. Schema is endpoint-specific and additive fields are allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonObject"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "security": [
+          {
+            "syncTokenQuery": []
+          },
+          {
+            "syncTokenBody": []
+          }
+        ]
+      }
+    },
+    "/api/v1/self-hosted/sync/status": {
+      "get": {
+        "operationId": "get_api_v1_self_hosted_sync_status",
+        "summary": "GET /api/v1/self-hosted/sync/status",
+        "tags": [
+          "self-hosted"
+        ],
+        "x-deployment-modes": [
+          "self_hosted"
+        ],
+        "x-stability": "compatibility-only",
+        "parameters": [
+          {
+            "name": "logbook_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "UUID or stable route identifier as implemented by the server."
+          },
+          {
+            "name": "token",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response. Schema is endpoint-specific and additive fields are allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonObject"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "security": [
+          {
+            "syncTokenQuery": []
+          },
+          {
+            "syncTokenBody": []
+          }
+        ]
+      }
+    },
+    "/api/v1/self-hosted/auth/pair": {
       "post": {
-        "operationId": "post_api_v1_auth_pair",
-        "summary": "POST /api/v1/auth/pair",
+        "operationId": "post_api_v1_self_hosted_auth_pair",
+        "summary": "POST /api/v1/self-hosted/auth/pair",
         "tags": [
           "self-hosted"
         ],
@@ -2948,10 +3094,10 @@
         }
       }
     },
-    "/api/v1/logbooks/{logbook_id}/events": {
+    "/api/v1/self-hosted/logbooks/{logbook_id}/events": {
       "get": {
         "operationId": "get_api_v1_logbooks_logbook_id_events",
-        "summary": "GET /api/v1/logbooks/{logbook_id}/events",
+        "summary": "GET /api/v1/self-hosted/logbooks/{logbook_id}/events",
         "tags": [
           "self-hosted"
         ],
@@ -3029,10 +3175,10 @@
         ]
       }
     },
-    "/api/v1/logbooks/{logbook_id}/head": {
+    "/api/v1/self-hosted/logbooks/{logbook_id}/head": {
       "get": {
         "operationId": "get_api_v1_logbooks_logbook_id_head",
-        "summary": "GET /api/v1/logbooks/{logbook_id}/head",
+        "summary": "GET /api/v1/self-hosted/logbooks/{logbook_id}/head",
         "tags": [
           "self-hosted"
         ],
@@ -3102,10 +3248,10 @@
         ]
       }
     },
-    "/api/v1/logbooks/{logbook_id}/preview-pull": {
+    "/api/v1/self-hosted/logbooks/{logbook_id}/preview-pull": {
       "post": {
-        "operationId": "post_api_v1_logbooks_logbook_id_preview_pull",
-        "summary": "POST /api/v1/logbooks/{logbook_id}/preview-pull",
+        "operationId": "post_api_v1_self_hosted_logbooks_logbook_id_preview_pull",
+        "summary": "POST /api/v1/self-hosted/logbooks/{logbook_id}/preview-pull",
         "tags": [
           "self-hosted"
         ],
@@ -3177,10 +3323,10 @@
         }
       }
     },
-    "/api/v1/logbooks/{logbook_id}/pull": {
+    "/api/v1/self-hosted/logbooks/{logbook_id}/pull": {
       "post": {
-        "operationId": "post_api_v1_logbooks_logbook_id_pull",
-        "summary": "POST /api/v1/logbooks/{logbook_id}/pull",
+        "operationId": "post_api_v1_self_hosted_logbooks_logbook_id_pull",
+        "summary": "POST /api/v1/self-hosted/logbooks/{logbook_id}/pull",
         "tags": [
           "self-hosted"
         ],
@@ -3252,10 +3398,10 @@
         }
       }
     },
-    "/api/v1/logbooks/{logbook_id}/push": {
+    "/api/v1/self-hosted/logbooks/{logbook_id}/push": {
       "post": {
-        "operationId": "post_api_v1_logbooks_logbook_id_push",
-        "summary": "POST /api/v1/logbooks/{logbook_id}/push",
+        "operationId": "post_api_v1_self_hosted_logbooks_logbook_id_push",
+        "summary": "POST /api/v1/self-hosted/logbooks/{logbook_id}/push",
         "tags": [
           "self-hosted"
         ],
@@ -5394,10 +5540,10 @@
         }
       }
     },
-    "/api/v1/reports": {
+    "/api/v1/self-hosted/reports": {
       "post": {
-        "operationId": "post_api_v1_reports",
-        "summary": "POST /api/v1/reports",
+        "operationId": "post_api_v1_self_hosted_reports",
+        "summary": "POST /api/v1/self-hosted/reports",
         "tags": [
           "self-hosted"
         ],
@@ -5458,10 +5604,10 @@
         }
       }
     },
-    "/api/v1/reports/{report_id}": {
+    "/api/v1/self-hosted/reports/{report_id}": {
       "get": {
         "operationId": "get_api_v1_reports_report_id",
-        "summary": "GET /api/v1/reports/{report_id}",
+        "summary": "GET /api/v1/self-hosted/reports/{report_id}",
         "tags": [
           "self-hosted"
         ],

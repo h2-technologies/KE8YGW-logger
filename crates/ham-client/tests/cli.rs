@@ -1,7 +1,7 @@
 use std::process::Command;
 
 fn cli() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_ham-cli"))
+    Command::new(env!("CARGO_BIN_EXE_ham-client"))
 }
 
 #[test]
@@ -9,7 +9,7 @@ fn version_json_is_machine_readable_and_product_specific() {
     let output = cli()
         .args(["version", "--json"])
         .output()
-        .expect("run ham-cli");
+        .expect("run ham-client");
     assert!(output.status.success());
     let value: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("version output is JSON");
@@ -23,7 +23,7 @@ fn json_flag_can_precede_the_command() {
     let output = cli()
         .args(["--json", "version"])
         .output()
-        .expect("run ham-cli");
+        .expect("run ham-client");
     assert!(output.status.success());
     let value: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("version output is JSON");
@@ -33,7 +33,7 @@ fn json_flag_can_precede_the_command() {
 
 #[test]
 fn invalid_command_has_deterministic_usage_exit_code() {
-    let output = cli().arg("not-a-command").output().expect("run ham-cli");
+    let output = cli().arg("not-a-command").output().expect("run ham-client");
     assert_eq!(output.status.code(), Some(2));
     let stderr = String::from_utf8(output.stderr).expect("stderr is UTF-8");
     assert!(stderr.contains("unknown command: not-a-command"));
@@ -42,13 +42,14 @@ fn invalid_command_has_deterministic_usage_exit_code() {
 
 #[test]
 fn help_is_non_interactive_and_successful() {
-    let output = cli().arg("--help").output().expect("run ham-cli");
+    let output = cli().arg("--help").output().expect("run ham-client");
     assert!(output.status.success());
     let stderr = String::from_utf8(output.stderr).expect("stderr is UTF-8");
     assert!(stderr.contains("The logging commands are offline-first and never prompt"));
-    assert!(stderr.contains("ham-cli account status [--json]"));
-    assert!(stderr.contains("ham-cli account login <email>"));
+    assert!(stderr.contains("ham-client account status [--json]"));
+    assert!(stderr.contains("ham-client account login <email>"));
     assert!(stderr.contains("never print or persist those tokens"));
+    assert!(stderr.contains("ham-client serve [bind-address]"));
 }
 
 #[test]
@@ -61,7 +62,7 @@ fn account_subcommands_have_deterministic_usage_errors() {
         &["account", "delete"][..],
         &["account", "status", "unexpected"][..],
     ] {
-        let output = cli().args(args).output().expect("run ham-cli");
+        let output = cli().args(args).output().expect("run ham-client");
         assert_eq!(output.status.code(), Some(2), "arguments: {args:?}");
         assert!(String::from_utf8(output.stderr)
             .expect("stderr is UTF-8")
@@ -76,7 +77,7 @@ fn missing_or_extra_arguments_have_usage_exit_code() {
         &["export-adif"][..],
         &["verify-chain", "unexpected"][..],
     ] {
-        let output = cli().args(args).output().expect("run ham-cli");
+        let output = cli().args(args).output().expect("run ham-client");
         assert_eq!(output.status.code(), Some(2), "arguments: {args:?}");
         assert!(String::from_utf8(output.stderr)
             .expect("stderr is UTF-8")

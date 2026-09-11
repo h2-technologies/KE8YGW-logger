@@ -8,8 +8,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use crate::CoreEventEnvelope;
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
-use ham_core::CoreEventEnvelope;
 use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
@@ -17,7 +17,7 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 use uuid::Uuid;
 
-use crate::{EventMetadata, LocalPeerIdentity, PreviewPullResponse, ReplicationStatus};
+use crate::sync::{EventMetadata, LocalPeerIdentity, PreviewPullResponse, ReplicationStatus};
 
 pub const OFFLINE_MUTATION_SCHEMA_VERSION: u32 = 1;
 pub const OFFLINE_QUEUE_FILE_VERSION: u32 = 1;
