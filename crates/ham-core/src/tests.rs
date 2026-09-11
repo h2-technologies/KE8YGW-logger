@@ -4,22 +4,23 @@ use ham_plugin_sdk::{
     OFFICIAL_LOG_NET_CHECKIN_CREATED, OFFICIAL_LOG_NET_CHECKIN_DELETED,
     OFFICIAL_LOG_NET_REPORT_EXPORTED, OFFICIAL_LOG_NET_SESSION_ENDED,
     OFFICIAL_LOG_NET_SESSION_STARTED, OFFICIAL_LOG_NET_TRAFFIC_CREATED,
-    OFFICIAL_LOG_QSO_ACTIVATION_LINKED, OFFICIAL_LOG_QSO_CORRECTED, OFFICIAL_LOG_QSO_CREATED,
-    OFFICIAL_LOG_QSO_DELETED, OFFICIAL_LOG_QSO_NOTE_ADDED, OFFICIAL_LOG_QSO_RESTORED,
-    PROPOSAL_ACTIVATION_END, PROPOSAL_ACTIVATION_START, PROPOSAL_NET_CHECKIN_CREATE,
-    PROPOSAL_NET_CHECKIN_DELETE, PROPOSAL_NET_REPORT_EXPORT, PROPOSAL_NET_SESSION_END,
-    PROPOSAL_NET_SESSION_START, PROPOSAL_NET_TRAFFIC_CREATE, PROPOSAL_QSO_ACTIVATION_LINK,
-    PROPOSAL_QSO_CREATE, PROPOSAL_QSO_DELETE, PROPOSAL_QSO_RESTORE,
+    OFFICIAL_LOG_QSO_ACTIVATION_LINKED, OFFICIAL_LOG_QSO_ACTIVATION_UNLINKED,
+    OFFICIAL_LOG_QSO_CORRECTED, OFFICIAL_LOG_QSO_CREATED, OFFICIAL_LOG_QSO_DELETED,
+    OFFICIAL_LOG_QSO_NOTE_ADDED, OFFICIAL_LOG_QSO_RESTORED, PROPOSAL_ACTIVATION_END,
+    PROPOSAL_ACTIVATION_START, PROPOSAL_NET_CHECKIN_CREATE, PROPOSAL_NET_CHECKIN_DELETE,
+    PROPOSAL_NET_REPORT_EXPORT, PROPOSAL_NET_SESSION_END, PROPOSAL_NET_SESSION_START,
+    PROPOSAL_NET_TRAFFIC_CREATE, PROPOSAL_QSO_ACTIVATION_LINK, PROPOSAL_QSO_CREATE,
+    PROPOSAL_QSO_DELETE, PROPOSAL_QSO_RESTORE,
 };
 use serde_json::json;
 use std::{fs, path::PathBuf};
 use uuid::Uuid;
 
 use crate::{
-    export_net_report_markdown, submit_proposal, BusEvent, EventBus, InMemoryEventBus,
-    InMemoryLogbookEventStore, LogbookEventStore, NetControlProjection, NewLogbookEvent,
-    OperatorRole, PermissionGrantSet, PermissionGrantStatus, Projection, ProposalContext,
-    ProposalValidationError, QsoCurrentStateProjection,
+    export_net_report_markdown, submit_proposal, ActivationProjection, BusEvent, CoreEventEnvelope,
+    EventBus, InMemoryEventBus, InMemoryLogbookEventStore, LogbookEventStore, NetControlProjection,
+    NewLogbookEvent, OperatorRole, PermissionGrantSet, PermissionGrantStatus, Projection,
+    ProposalContext, ProposalValidationError, QsoCurrentStateProjection,
 };
 
 fn activation_payload(kind: &str) -> serde_json::Value {
@@ -1119,4 +1120,236 @@ async fn net_permission_denial_blocks_checkin() {
         err,
         ProposalValidationError::MissingPluginCapability(PluginCapability::NetCheckinCreate)
     ));
+}
+
+/// Independently derives the counters `ActivationProjection` maintains, so the
+/// incremental recompute can be checked against a full recomputation.
+fn expected_activation_counters(
+    linked_qsos: &std::collections::HashSet<Uuid>,
+    qsos: &QsoCurrentStateProjection,
+) -> (
+    usize,
+    usize,
+    std::collections::HashMap<String, usize>,
+    std::collections::HashMap<String, usize>,
+) {
+    let mut callsigns = std::collections::HashSet::new();
+    let mut bands: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    let mut modes: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    let mut count = 0usize;
+    for qso_id in linked_qsos {
+        let Some(qso) = qsos.get(*qso_id) else {
+            continue;
+        };
+        count += 1;
+        if let Some(callsign) = qso
+            .payload
+            .get("contacted_callsign")
+            .and_then(serde_json::Value::as_str)
+        {
+            callsigns.insert(callsign.to_ascii_uppercase());
+        }
+        if let Some(band) = qso.payload.get("band").and_then(serde_json::Value::as_str) {
+            *bands.entry(band.to_owned()).or_insert(0) += 1;
+        }
+        if let Some(mode) = qso.payload.get("mode").and_then(serde_json::Value::as_str) {
+            *modes.entry(mode.to_owned()).or_insert(0) += 1;
+        }
+    }
+    (count, callsigns.len(), bands, modes)
+}
+
+/// `ActivationProjection` only recomputes the activations an event touches.
+/// Replaying a stream that exercises every branch must still leave every
+/// activation's counters equal to a full recomputation over its links.
+#[tokio::test]
+async fn activation_projection_incremental_counters_match_full_recompute() {
+    let logbook_id = Uuid::new_v4();
+    let device_id = Uuid::new_v4();
+    let mut previous_hash: Option<String> = None;
+    let mut events: Vec<CoreEventEnvelope> = Vec::new();
+
+    let append = |event_type: &str,
+                  entity_id: Option<Uuid>,
+                  payload: serde_json::Value,
+                  previous_hash: &mut Option<String>,
+                  events: &mut Vec<CoreEventEnvelope>| {
+        let event = CoreEventEnvelope::from_new(
+            NewLogbookEvent {
+                event_type: event_type.to_owned(),
+                logbook_id,
+                entity_id,
+                author_operator_id: None,
+                station_callsign: "KE8YGW".to_owned(),
+                operator_callsign: Some("KE8YGW".to_owned()),
+                author_device_id: device_id,
+                source_device_id: device_id,
+                correlation_id: Uuid::new_v4(),
+                source_plugin_id: None,
+                schema_version: 1,
+                payload,
+            },
+            previous_hash.clone(),
+        );
+        *previous_hash = Some(event.event_hash.clone());
+        let entity_id = event.entity_id;
+        events.push(event);
+        entity_id
+    };
+
+    let activation_a = Uuid::new_v4();
+    let activation_b = Uuid::new_v4();
+    append(
+        OFFICIAL_LOG_ACTIVATION_STARTED,
+        Some(activation_a),
+        activation_payload("pota"),
+        &mut previous_hash,
+        &mut events,
+    );
+    append(
+        OFFICIAL_LOG_ACTIVATION_STARTED,
+        Some(activation_b),
+        activation_payload("pota"),
+        &mut previous_hash,
+        &mut events,
+    );
+
+    let qso_ids: Vec<Uuid> = (0..6).map(|_| Uuid::new_v4()).collect();
+    for (index, qso_id) in qso_ids.iter().enumerate() {
+        append(
+            OFFICIAL_LOG_QSO_CREATED,
+            Some(*qso_id),
+            json!({
+                "contacted_callsign": format!("W1AW/{}", index % 3),
+                "station_callsign": "KE8YGW",
+                "mode": if index % 2 == 0 { "SSB" } else { "CW" },
+                "band": if index % 3 == 0 { "20m" } else { "40m" },
+                "started_at": "2026-07-06T00:00:00Z",
+            }),
+            &mut previous_hash,
+            &mut events,
+        );
+        let activation_id = if index % 2 == 0 {
+            activation_a
+        } else {
+            activation_b
+        };
+        append(
+            OFFICIAL_LOG_QSO_ACTIVATION_LINKED,
+            Some(*qso_id),
+            json!({ "activation_id": activation_id.to_string() }),
+            &mut previous_hash,
+            &mut events,
+        );
+    }
+
+    // Exercise every branch that can invalidate an activation's counters.
+    append(
+        OFFICIAL_LOG_QSO_CORRECTED,
+        Some(qso_ids[0]),
+        json!({ "band": "15m", "contacted_callsign": "VE3ABC" }),
+        &mut previous_hash,
+        &mut events,
+    );
+    append(
+        OFFICIAL_LOG_QSO_DELETED,
+        Some(qso_ids[2]),
+        json!({ "reason": "duplicate" }),
+        &mut previous_hash,
+        &mut events,
+    );
+    append(
+        OFFICIAL_LOG_QSO_RESTORED,
+        Some(qso_ids[2]),
+        json!({ "reason": "operator restore" }),
+        &mut previous_hash,
+        &mut events,
+    );
+    append(
+        OFFICIAL_LOG_QSO_DELETED,
+        Some(qso_ids[4]),
+        json!({ "reason": "bust" }),
+        &mut previous_hash,
+        &mut events,
+    );
+    append(
+        OFFICIAL_LOG_QSO_ACTIVATION_UNLINKED,
+        Some(qso_ids[1]),
+        json!({ "activation_id": activation_b.to_string() }),
+        &mut previous_hash,
+        &mut events,
+    );
+    append(
+        OFFICIAL_LOG_QSO_NOTE_ADDED,
+        Some(qso_ids[3]),
+        json!({ "note": "thanks for the contact" }),
+        &mut previous_hash,
+        &mut events,
+    );
+    // Re-creating an activation drops its links; stale index entries must not
+    // resurrect counters.
+    append(
+        OFFICIAL_LOG_ACTIVATION_STARTED,
+        Some(activation_a),
+        activation_payload("pota"),
+        &mut previous_hash,
+        &mut events,
+    );
+    append(
+        OFFICIAL_LOG_QSO_ACTIVATION_LINKED,
+        Some(qso_ids[5]),
+        json!({ "activation_id": activation_a.to_string() }),
+        &mut previous_hash,
+        &mut events,
+    );
+
+    let mut activations = ActivationProjection::new();
+    activations.rebuild(&events).unwrap();
+    let mut qsos = QsoCurrentStateProjection::new();
+    qsos.rebuild(&events).unwrap();
+
+    for activation_id in [activation_a, activation_b] {
+        let record = activations
+            .get(activation_id)
+            .expect("activation projected");
+        let (qso_count, unique_callsigns, bands, modes) =
+            expected_activation_counters(&record.linked_qsos, &qsos);
+        assert_eq!(
+            record.qso_count, qso_count,
+            "qso_count drifted for {activation_id}"
+        );
+        assert_eq!(
+            record.unique_callsign_count, unique_callsigns,
+            "unique_callsign_count drifted for {activation_id}"
+        );
+        assert_eq!(
+            record.band_summary, bands,
+            "band_summary drifted for {activation_id}"
+        );
+        assert_eq!(
+            record.mode_summary, modes,
+            "mode_summary drifted for {activation_id}"
+        );
+    }
+
+    // The re-created activation kept only the link appended after it was recreated.
+    let recreated = activations.get(activation_a).expect("activation projected");
+    assert_eq!(recreated.linked_qsos.len(), 1);
+    assert!(recreated.linked_qsos.contains(&qso_ids[5]));
+    assert_eq!(
+        activations.activations_for_qso(qso_ids[0]),
+        Vec::<Uuid>::new()
+    );
+    // qso_ids[5] was linked to activation_b in the loop and to activation_a
+    // after the re-create, so it reports both owners.
+    let mut owners = activations.activations_for_qso(qso_ids[5]);
+    owners.sort();
+    let mut expected_owners = vec![activation_a, activation_b];
+    expected_owners.sort();
+    assert_eq!(owners, expected_owners);
+    // The unlinked QSO no longer reports an owning activation.
+    assert_eq!(
+        activations.activations_for_qso(qso_ids[1]),
+        Vec::<Uuid>::new()
+    );
 }
