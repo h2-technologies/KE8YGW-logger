@@ -1252,6 +1252,21 @@ report payloads. Set `HAM_SYNC_SURREAL_ENDPOINT`, `HAM_SYNC_SURREAL_USER`,
 `HAM_SYNC_SURREAL_PASS`, `HAM_SYNC_SURREAL_NAMESPACE`, and
 `HAM_SYNC_SURREAL_DATABASE` to use a remote SurrealDB server.
 
+The sync server also runs a projector that reads the append-only JSONL official
+event log and writes a queryable copy of current QSO and activation state into
+SurrealDB. The projection is never authoritative and is always rebuildable by
+replaying the log. It resumes from a durable checkpoint on startup and tails
+newly appended entries; a full rebuild is an explicit operator action:
+
+```powershell
+cargo run -p ham-sync-server --bin ham-sync-server -- --rebuild-projection
+```
+
+Every entry is hash-chain verified before it is projected, and a broken chain
+halts the projector at the break rather than projecting past it. See
+[Projection Pipeline](docs/PROJECTION_PIPELINE.md) for the projected tables,
+where the checkpoint lives, failure handling, and measured throughput.
+
 Docker build:
 
 ```powershell
