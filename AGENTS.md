@@ -119,6 +119,7 @@ When sources disagree:
 | `src-tauri/` | Tauri v2 desktop runtime wrapper | Tauri config, command bridge, packaging assets | Domain logic | `src-tauri/src/main.rs`, `tauri.conf.json` | `cargo tauri info`, `cargo tauri build` | `ham-desktop` |
 | `.env.example` | Runtime env reference | Supported server env vars | Secrets | Sync/server env names | Manual review | N/A |
 | `Dockerfile.sync-server` | Sync-server container build | Self-hosted sync packaging with digest-pinned base images | Hosted API containerization for unrelated services | `ham-sync-server` release binary | `docker build -f Dockerfile.sync-server .` | `ham-sync-server` |
+| `deploy/monitoring/` | Prometheus and Grafana assets for server observability | Scrape config, alert rules, dashboard JSON, monitoring compose file | Application code, secrets, scrape tokens | `deploy/monitoring/README.md`, `docker-compose.monitoring.yml` | Manual review; `docker compose config` | `ham-server`, `ham-sync-server` metrics endpoints |
 | `deny.toml` | Cargo advisory policy | Narrow, documented advisory exceptions with review dates | Broad vulnerability suppressions or dependency hiding | `cargo deny check advisories` | cargo-deny | N/A |
 | `target/` | Generated build artifacts | Nothing by hand | Source, docs, fixtures | None | Ignore in reviews unless build artifact debugging is requested | N/A |
 
@@ -131,6 +132,7 @@ Repository absences that matter:
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `crates/ham-core` | Authoritative domain and infrastructure core | Official events, proposal validation, projections, ADIF, lookup, rig, diagnostics, permissions, service framework, credentials, maps, stations, Net Control, upload queue, support storage, JSONL official store | GUI-only behavior, Tauri commands, hosted account/session ownership, JS business rules | `src/lib.rs`; modules `proposal.rs`, `store.rs`, `projection.rs`, `service.rs`, `credential.rs`, `online.rs` | `ham-plugin-sdk`, `tokio`, `serde`, `sha2`, `ureq`, OS credential APIs/tools | Module tests plus `src/tests.rs` | `ham-plugin-sdk` only |
 | `crates/ham-plugin-sdk` | Stable public SDK vocabulary | Plugin manifests, permission enums, proposal envelopes, official/proposal event constants, service-type vocabulary | Plugin loading, domain validation, app-specific logic | `src/lib.rs` | `serde`, `chrono`, `uuid` | Inline tests via downstream crates; compile-time usage across workspace | No app crates |
+| `crates/ham-metrics` | Server metrics registry and Prometheus exporter | Counters, gauges, histograms, Prometheus text encoding, bounded route labelling, scrape-authorization policy | Domain logic, HTTP routing, storage access, anything that could carry operator data into a label | `src/lib.rs` | None; standard library only | Inline tests in `src/lib.rs` | No app crates |
 | `crates/ham-sync` | Sync protocol and sync/report backend logic | Discovery, handshake, head comparison, preview/pull/push, pairing auth, report-upload models, optional durable sync/report metadata | GUI shell behavior, hosted account logic, domain rule duplication | `src/lib.rs` | `ham-core`, `serde`, `tokio`; optional `surreal-storage` enables `surrealdb` and `sha2` | Inline tests in `src/lib.rs` | `ham-core` |
 | `crates/ham-sync-server` | Self-hosted sync/report binary | Process startup, env loading, serving the `ham-sync` backend | Core sync protocol models, GUI, hosted logbook business rules | `src/main.rs` | `ham-sync` | Build/run validation; behavior mostly tested in `ham-sync` | `ham-sync` |
 | `crates/ham-server` | Hosted web/server API boundary | Auth/session/device/logbook metadata, role checks, thin routes, hosted support metadata persistence, proposal delegation, backup/divergence/sync endpoints | Reimplementing domain validation already in `ham-core`, Tauri UI code | `src/lib.rs`, `src/main.rs` | `ham-core`, `ham-sync`, `surrealdb`, `serde`, `tokio` | Large inline route/integration tests in `src/lib.rs` | `ham-core`, `ham-sync` |
@@ -149,6 +151,7 @@ Repository absences that matter:
 | `docs/PLUGIN_SDK.md` | Public plugin manifest, permission, and proposal contract. |
 | `docs/SYNC_PROTOCOL.md` | Sync rules and transport expectations. |
 | `docs/SECURITY_MODEL.md` and `docs/security/*` | Security constraints, credential handling, and redaction rules. |
+| `docs/OBSERVABILITY.md` | Server metrics contract, `/metrics` and `/ready` endpoints, scrape authorization, and metric catalogue. |
 | `docs/architecture/*` | Subsystem architecture notes for services, support storage, stations, search, awards, uploads, and online services. |
 | `docs/plugins/*` and `docs/plugin-map-providers/*` | Provider and plugin-development guidance. |
 | `docs/maps`, `docs/grid-system`, `docs/propagation`, `docs/weather` | GIS, Maidenhead, propagation, and weather model guidance. |
@@ -243,9 +246,9 @@ Web JS / HTML / CSS / Tauri UI / CLI / Hosted HTTP requests
                     |
                     v
        ham-gui / src-tauri / ham-desktop / ham-cli / ham-server / ham-sync-server
-                    |
-                    v
-                ham-core ---- ham-plugin-sdk
+                    |                                   |
+                    v                                   v
+                ham-core ---- ham-plugin-sdk       ham-metrics
                     |
                     v
                  ham-sync
@@ -258,6 +261,7 @@ Practical interpretation:
 - `ham-server` depends on `ham-core` and `ham-sync`; its routes must stay thin.
 - `ham-gui` depends on `ham-core` and `ham-sync` but only as a client/bridge.
 - `ham-desktop` is a narrow helper crate; `src-tauri` depends on it.
+- `ham-metrics` is a leaf observability crate with no dependencies; `ham-server` and `ham-sync-server` depend on it, and it must never depend on an application crate.
 
 Prohibited dependencies and ownership violations:
 - `ham-core` must not depend on `ham-gui`, `src-tauri`, Swift, or web assets.
@@ -267,6 +271,7 @@ Prohibited dependencies and ownership violations:
 - `ham-server` routes must not duplicate domain validation when `ham-core` already owns it.
 - Providers must not write directly to persistence or official event streams outside the proper core boundary.
 - `src-tauri` must not expose raw secrets to JavaScript.
+- Metric names, labels, and label values must never carry callsigns, e-mail addresses, account/user/device identifiers, logbook or entity identifiers, tokens, credentials, or file paths. Route labels come from the `ham-api-contract` route catalogs; unknown paths collapse to `unmatched`.
 
 Platform-specific code is acceptable when:
 - It adapts UI affordances, dialogs, packaging, OS credential APIs, or transport details.
@@ -607,7 +612,8 @@ actionlint .github/workflows/*.yml
 | `ham-core` | `cargo test -p ham-core`, optionally `cargo build -p ham-core` |
 | `ham-server` | `cargo test -p ham-server`, `cargo build -p ham-server` |
 | `ham-sync` | `cargo test -p ham-sync`, `cargo check --locked -p ham-sync --no-default-features --all-targets`, `cargo test --locked -p ham-sync --features surreal-storage`, `cargo check -p ham-sync --features hosted-http --all-targets`, `cargo build -p ham-sync` |
-| `ham-sync-server` | `cargo build -p ham-sync-server` |
+| `ham-metrics` | `cargo test -p ham-metrics`, `cargo clippy -p ham-metrics --all-targets -- -D warnings` |
+| `ham-sync-server` | `cargo build -p ham-sync-server`, `cargo test -p ham-sync-server` |
 | `ham-gui` | `cargo build -p ham-gui`, `node --check crates\ham-gui\web\app.js` |
 | `ham-desktop` | `cargo test -p ham-desktop`, `cargo build -p ham-desktop` |
 | `src-tauri` | `cargo tauri info`, `cargo tauri build` |
@@ -636,6 +642,7 @@ Update documentation in the same change as the implementation.
 | Plugin manifest, permission, or provider contract changes | `docs/PLUGIN_SDK.md`, `docs/plugins/*`, `docs/plugin-map-providers/*` |
 | Sync payloads, auth, replication, or conflict behavior | `docs/SYNC_PROTOCOL.md`, `docs/API_CLIENT_CONTRACT.md` |
 | Security, credentials, redaction, auth, or privacy changes | `docs/SECURITY_MODEL.md`, `docs/security/*` |
+| Server metrics, scrape endpoints, dashboards, or alert rules | `docs/OBSERVABILITY.md`, `deploy/monitoring/README.md` |
 | Hosted or native API contract changes | `docs/API_CLIENT_CONTRACT.md` |
 | Desktop/Tauri behavior or packaging | `docs/DESKTOP_RELEASE.md`, `src-tauri/README.md` |
 | Hosted API release readiness | `docs/HOSTED_WEB_RELEASE.md` |
@@ -790,7 +797,7 @@ This section is a verified snapshot of the repository as inspected on July 22, 2
   every release surface is unified on `0.4.0`. Publishing a `v0.4.0` tag is
   still a separate release action governed by `RELEASE.md`.
 - Current release target: v1 ships on November 24, 2026 with hosted web, native iOS, and Windows/macOS/Linux desktop.
-- Workspace members: `crates/ham-api-contract`, `crates/ham-core`, `crates/ham-plugin-sdk`, `crates/ham-sync`, `crates/ham-sync-server`, `crates/ham-server`, `crates/ham-cli`, `crates/ham-gui`, `crates/ham-desktop`, `crates/ham-ios-ffi`, and `src-tauri`.
+- Workspace members: `crates/ham-api-contract`, `crates/ham-core`, `crates/ham-plugin-sdk`, `crates/ham-metrics`, `crates/ham-sync`, `crates/ham-sync-server`, `crates/ham-server`, `crates/ham-cli`, `crates/ham-gui`, `crates/ham-desktop`, `crates/ham-ios-ffi`, and `src-tauri`.
 - Actual desktop state: a real Tauri v2 wrapper exists, bundles `crates/ham-gui/web`, exposes native dialog commands plus a restricted `/api/*` proxy, and packages desktop installers. The local backend is not yet embedded in-process or sidecar-launched automatically.
 - Actual hosted-server state: `ham-server` is the hosted API boundary with durable SurrealDB metadata, route tests, role-scoped logbook access, provider settings, upload execution foundation, backups, divergence review, and sync endpoints. It is still beta, not production-hardened.
 - Actual hosted-account client state: `ham_sync::account` is the shared, Rust-authoritative hosted account and session contract used by hosted web, desktop, native iOS, and the CLI. It owns action vocabulary, request planning, response interpretation, outcome classification, and the durable non-secret account record; platform layers only carry bytes and store issued session/refresh tokens in the OS credential backend or the iOS Keychain under Rust-assigned credential identifiers. Desktop, hosted web, and the CLI share the `ham-sync` `hosted-http` transport; native iOS uses URLSession with the `account.plan`, `account.apply`, and `account.transport_failure` bridge commands. Server administration UX (hosting mode, invitations, audits) has no client surface yet.

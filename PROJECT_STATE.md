@@ -1,5 +1,29 @@
 # Project State
 
+## Server observability milestone (September 11, 2026)
+
+- Both server binaries now expose a Prometheus scrape endpoint (`GET /metrics`)
+  and a readiness probe (`GET /ready`). `GET /health` keeps its existing
+  liveness behavior.
+- `ham-metrics` is the single owner of the metric registry, the Prometheus text
+  encoder, route labelling, and scrape authorization. It has no dependencies
+  beyond the standard library and no access to domain data.
+- Route labels are drawn from the `ham-api-contract` route catalogs, so
+  identifiers never reach a label and unknown paths collapse to `unmatched`.
+  Every metric family is capped at 512 label sets, and drops are counted in
+  `ham_metrics_series_dropped_total`.
+- The scrape endpoint is enabled and unauthenticated by default. A deployment
+  that cannot isolate the scrape port must set `HAM_SYNC_METRICS_TOKEN` or
+  `HAM_SERVER_METRICS_TOKEN`; both servers print the resolved policy at startup.
+- `deploy/monitoring/` carries a runnable Prometheus + Grafana stack with three
+  provisioned dashboards (server overview, sync server, hosted server) and
+  availability, request-health, replication, and cardinality alert rules.
+- Verified by `cargo test -p ham-metrics` (22 tests), `cargo test -p
+  ham-sync-server` (11 tests), and `cargo test -p ham-server` (37 lib tests),
+  including tests that assert no identifier or token reaches an exposition body.
+- Not covered yet: log aggregation and tracing, per-provider upload/lookup
+  outcome metrics, metric-backed SLOs, and a scraped production deployment.
+
 ## Account and session milestone (August 31, 2026)
 
 - The hosted account, session, recovery, and device routes now have a client

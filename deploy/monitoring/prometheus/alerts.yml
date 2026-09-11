@@ -1,0 +1,119 @@
+# Alerting rules for KE8YGW Logger servers.
+#
+# Thresholds are deliberately conservative starting points. Tune them against a
+# week of real traffic before paging on them.
+groups:
+  - name: ke8ygw-availability
+    rules:
+      - alert: KE8YGWServerDown
+        expr: up{job=~"ke8ygw-.*"} == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.job }} is not answering scrapes"
+          description: "Prometheus has failed to scrape {{ $labels.instance }} for 5 minutes."
+
+      - alert: KE8YGWSyncStorageNotReady
+        expr: ham_sync_ready == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Sync server durable storage is not ready"
+          description: "GET /ready reports unreachable sync storage on {{ $labels.instance }}."
+
+      - alert: KE8YGWHostedStorageNotReady
+        expr: ham_hosted_ready == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Hosted server storage is not ready"
+          description: "GET /ready reports an unreadable official event store on {{ $labels.instance }}."
+
+  - name: ke8ygw-request-health
+    rules:
+      - alert: KE8YGWHighServerErrorRate
+        expr: |
+          sum by (service) (rate(ham_http_requests_total{status=~"5.."}[5m]))
+            /
+          clamp_min(sum by (service) (rate(ham_http_requests_total[5m])), 0.001)
+            > 0.05
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.service }} is returning 5xx for more than 5% of requests"
+          description: "Check the store-unavailable counters and the server log."
+
+      - alert: KE8YGWHighAuthFailureRate
+        expr: sum by (service) (rate(ham_http_requests_total{status=~"401|403"}[5m])) > 1
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.service }} is rejecting more than 1 request/s on auth"
+          description: "Expired sync tokens, a revoked device, or credential stuffing."
+
+      - alert: KE8YGWRequestLatencyHigh
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (service, le) (rate(ham_http_request_duration_seconds_bucket[5m]))
+          ) > 1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.service }} p95 request latency is above 1s"
+          description: "Sustained p95 latency above one second."
+
+      - alert: KE8YGWRateLimitingActive
+        expr: sum by (service) (rate(ham_http_requests_total{status="429"}[5m])) > 0.5
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.service }} is rate limiting clients"
+          description: "Sustained 429 responses; review the hosted limit configuration."
+
+  - name: ke8ygw-sync-replication
+    rules:
+      - alert: KE8YGWSyncDivergence
+        expr: increase(ham_sync_replication_results_total{status="diverged"}[15m]) > 0
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Sync server reported a diverged logbook"
+          description: "A client and the server disagree on official history; divergence review is required."
+
+      - alert: KE8YGWSyncPushRejections
+        expr: rate(ham_sync_events_pushed_total{result="rejected"}[15m]) > 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Sync server is rejecting pushed events"
+          description: "Validation is refusing client events; inspect ham_sync_errors_total for the cause."
+
+      - alert: KE8YGWSyncPairingFailures
+        expr: rate(ham_sync_pair_requests_total{result="rejected"}[10m]) > 0.2
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Device pairing is failing repeatedly"
+          description: "A wrong pairing code, or an attempt to guess one."
+
+  - name: ke8ygw-observability
+    rules:
+      - alert: KE8YGWMetricsCardinalityCapped
+        expr: increase(ham_metrics_series_dropped_total[1h]) > 0
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.service }} dropped metric series at the cardinality cap"
+          description: "A metric family reached MAX_SERIES_PER_FAMILY; a label is unbounded."

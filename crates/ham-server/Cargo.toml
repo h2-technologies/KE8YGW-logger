@@ -8,6 +8,7 @@ version.workspace = true
 chrono.workspace = true
 ham-api-contract = { path = "../ham-api-contract" }
 ham-core = { path = "../ham-core" }
+ham-metrics = { path = "../ham-metrics" }
 ham-plugin-sdk = { path = "../ham-plugin-sdk" }
 ham-sync = { path = "../ham-sync" }
 surrealdb.workspace = true

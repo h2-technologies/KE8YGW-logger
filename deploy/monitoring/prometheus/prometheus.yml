@@ -1,0 +1,46 @@
+# Prometheus scrape configuration for KE8YGW Logger servers.
+#
+# Both server binaries expose the same `/metrics` contract:
+#   ham-sync-server (self-hosted sync/report) -> :9740/metrics
+#   ham-server      (hosted API)              -> :9750/metrics
+#
+# When HAM_SYNC_METRICS_TOKEN / HAM_SERVER_METRICS_TOKEN are set, put the token
+# in a file and reference it with `authorization.credentials_file` as shown
+# below. Never commit the token itself.
+global:
+  scrape_interval: 15s
+  scrape_timeout: 10s
+  evaluation_interval: 15s
+  external_labels:
+    deployment: ke8ygw-logger
+
+rule_files:
+  - /etc/prometheus/alerts.yml
+
+scrape_configs:
+  - job_name: ke8ygw-sync-server
+    metrics_path: /metrics
+    static_configs:
+      - targets:
+          - host.docker.internal:9740
+        labels:
+          instance_role: sync
+    # authorization:
+    #   type: Bearer
+    #   credentials_file: /etc/prometheus/secrets/sync-metrics-token
+
+  - job_name: ke8ygw-hosted-server
+    metrics_path: /metrics
+    static_configs:
+      - targets:
+          - host.docker.internal:9750
+        labels:
+          instance_role: hosted
+    # authorization:
+    #   type: Bearer
+    #   credentials_file: /etc/prometheus/secrets/hosted-metrics-token
+
+  - job_name: prometheus
+    static_configs:
+      - targets:
+          - localhost:9090

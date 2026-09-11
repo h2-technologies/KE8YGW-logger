@@ -2311,6 +2311,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "ham-metrics"
+version = "0.4.0"
+
+[[package]]
 name = "ham-plugin-sdk"
 version = "0.4.0"
 dependencies = [
@@ -2327,6 +2331,7 @@ dependencies = [
  "chrono",
  "ham-api-contract",
  "ham-core",
+ "ham-metrics",
  "ham-plugin-sdk",
  "ham-sync",
  "serde",
@@ -2363,6 +2368,7 @@ version = "0.4.0"
 dependencies = [
  "ham-api-contract",
  "ham-core",
+ "ham-metrics",
  "ham-sync",
  "serde",
  "serde_json",

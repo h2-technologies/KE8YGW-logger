@@ -63,6 +63,36 @@ Runtime logs must not contain:
 - full AI prompts/responses by default
 - raw provider metadata that may contain secrets
 
+## Server Metrics
+
+The `/metrics` endpoint on `ham-server` and `ham-sync-server` exports aggregated
+counts and timing distributions only. Metric names, label names, and label
+values must never contain:
+
+- callsigns or operator names
+- e-mail addresses
+- account, user, device, session, logbook, QSO, or report identifiers
+- session tokens, sync tokens, API tokens, or scrape tokens
+- credentials of any kind
+- request or response bodies
+- filesystem paths
+
+Route labels are taken from the route catalogs in `ham-api-contract`, so a path
+carrying an identifier is reported as its route pattern
+(`GET /api/v1/logbooks/:logbook_id/head`) and an unrecognized path collapses to
+`unmatched`. Every metric family is capped at 512 label sets so a mislabelled
+call site cannot exhaust server memory.
+
+The endpoint still exposes operational shape: traffic volumes, error rates,
+tenant counts, and storage size. Treat it as privileged. It is enabled and
+unauthenticated by default for local development; a deployment that cannot
+restrict the scrape port to a trusted network must set
+`HAM_SYNC_METRICS_TOKEN` or `HAM_SERVER_METRICS_TOKEN`, which requires
+`Authorization: Bearer <token>` on every scrape. The configured token is
+compared in constant time and is never echoed in a response or a label.
+Setting `HAM_SYNC_METRICS_ENABLED=0` or `HAM_SERVER_METRICS_ENABLED=0` removes
+the endpoint entirely.
+
 ## Credential Storage
 
 Provider credentials are support/security state and must never be stored in
@@ -141,4 +171,5 @@ Future work:
 - The self-hosted sync/report server now uses durable local storage by default; production migration, retention, and hosted-operations hardening still remain.
 - LAN sync writes are trust-gated and protected LAN reads require HMAC-SHA256 request proof after pairing, but the LAN HTTP transport is not encrypted and must stay on trusted local networks.
 - Native OS credential backends are implemented, but clean release-runner and packaged-app validation still remain.
+- The metrics scrape endpoint is unauthenticated unless a scrape token is configured, and it is served over the same plain HTTP listener as the rest of the server; production deployments must terminate TLS in front of it and restrict the scrape network.
 - Net Control template UI and ICS-style exports are not complete.

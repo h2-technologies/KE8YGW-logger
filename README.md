@@ -112,6 +112,7 @@ passes should start with these documents:
 - `ham-core`: append-only logbook events, event bus, proposal validation, event store, and projections.
 - `ham-plugin-sdk`: public plugin manifest, capability, proposal, and event constant types.
 - `ham-sync`: local-first discovery, handshake, head comparison, and safe pull replication models.
+- `ham-metrics`: dependency-free metrics registry and Prometheus exporter shared by both server binaries.
 - `ham-sync-server`: self-hostable cloud relay/sync service binary using the shared safe replication protocol.
 - `ham-server`: hosted web/server API boundary with server-admin bootstrap,
   hosting modes, registration, verified email, recovery, session/device,
@@ -1243,6 +1244,8 @@ HAM_SYNC_SESSION_TTL_SECONDS=2592000
 HAM_SYNC_SURREAL_PATH=<platform-data-dir>/sync-server/surrealdb
 HAM_SYNC_EVENT_LOG=<platform-data-dir>/sync-server/official-events.jsonl
 HAM_SYNC_REPORT_DIR=<platform-data-dir>/sync-server/reports
+HAM_SYNC_METRICS_ENABLED=1
+HAM_SYNC_METRICS_TOKEN=<unset>
 ```
 
 See `.env.example` for the same settings. The sync/report server now uses
@@ -1262,8 +1265,9 @@ docker run --rm -p 9740:9740 -e HAM_SYNC_PAIRING_CODE=change-me ke8ygw-sync-serv
 Current limitations: self-hosted sync pairing is token-based MVP auth, events
 are not signed, end-to-end encryption is not implemented, automatic
 merge/conflict resolution is deferred, and production deployment hardening such
-as hosted observability, retention, infrastructure sizing, and external
-email/Turnstile/provider credentials is still pending.
+as retention, infrastructure sizing, and external email/Turnstile/provider
+credentials is still pending. Prometheus metrics and readiness probes are
+implemented for both servers; see [Server Monitoring](#server-monitoring).
 
 Run the hosted beta API:
 
@@ -1279,6 +1283,8 @@ HAM_SERVER_OPERATION_MODE=personal_hosted
 HAM_SERVER_REGISTRATION_MODE=invite_only
 HAM_SERVER_EMAIL_MODE=test
 HAM_SERVER_SURREAL_PATH=<platform-data-dir>/server/surrealdb
+HAM_SERVER_METRICS_ENABLED=1
+HAM_SERVER_METRICS_TOKEN=<unset>
 ```
 
 `ham-server` persists server admins, accounts, login sessions with token hashes,
@@ -1290,6 +1296,54 @@ metadata in SurrealDB. Set
 `HAM_SERVER_SURREAL_DATABASE` to use remote SurrealDB. Official QSO mutations
 still go through the existing proposal pipeline and append-only official event
 model.
+
+## Server Monitoring
+
+Both server binaries expose a Prometheus scrape endpoint and a readiness probe,
+so a Prometheus + Grafana stack can monitor a deployment end to end.
+
+| Server | Bind | Scrape | Readiness | Liveness |
+| --- | --- | --- | --- | --- |
+| `ham-sync-server` | `127.0.0.1:9740` | `GET /metrics` | `GET /ready` | `GET /health` |
+| `ham-server` | `127.0.0.1:9750` | `GET /metrics` | `GET /ready` | `GET /health` |
+
+`/metrics` answers in the Prometheus text exposition format (version `0.0.4`).
+It exports shared HTTP metrics (request counts by method, route pattern, and
+status; latency and response-size histograms; in-flight requests; request and
+response bytes; build info; uptime), sync-server replication metrics (pairing
+attempts, pushed/pulled events, replication outcomes, report uploads, error
+causes, durable storage footprint), and hosted-server state metrics (accounts,
+logbooks, sessions, devices, invitations, API tokens, upload jobs, rate-limit
+buckets, and audited actions by action and outcome).
+
+Route labels come from the API route contract, so a request for
+`/api/v1/logbooks/<uuid>/head` is labelled
+`GET /api/v1/logbooks/:logbook_id/head` and unknown paths collapse to
+`unmatched`. No callsign, e-mail address, account/user/device identifier,
+logbook or entity identifier, token, credential, or file path is ever exported.
+
+`/metrics` is served unauthenticated by default, which is only safe when the
+port is reachable from a trusted scrape network. Set a bearer token, or disable
+the endpoint entirely:
+
+```text
+HAM_SYNC_METRICS_TOKEN=<random token>     # require Authorization: Bearer <token>
+HAM_SYNC_METRICS_ENABLED=0                # answer 404 instead
+HAM_SERVER_METRICS_TOKEN=<random token>
+HAM_SERVER_METRICS_ENABLED=0
+```
+
+A ready-to-run Prometheus + Grafana stack with three provisioned dashboards and
+alert rules lives in [`deploy/monitoring/`](deploy/monitoring/README.md):
+
+```powershell
+just monitoring
+```
+
+Grafana then serves the **KE8YGW Logger** dashboard folder at
+<http://127.0.0.1:3000>. The full metric catalogue, label vocabulary, privacy
+rules, and example PromQL are documented in
+[Server Observability](docs/OBSERVABILITY.md).
 
 ## GUI Architecture
 
@@ -1405,6 +1459,7 @@ just docs-link-check # local Markdown link validation
 just governance-check # repository governance, templates, metadata, license, secrets, and link checks
 just gui      # run the local GUI shell at http://127.0.0.1:9467
 just sync-server # run the self-hosted sync server at http://127.0.0.1:9740
+just monitoring  # start the Prometheus + Grafana stack for both servers
 cargo run -p ham-server --bin ham-server # run hosted beta API at http://127.0.0.1:9750
 cargo tauri dev   # run the Tauri desktop wrapper
 cargo tauri build # package the Tauri desktop wrapper

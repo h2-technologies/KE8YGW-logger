@@ -1,14 +1,14 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     fs,
     path::PathBuf,
     sync::{Arc, Mutex},
     thread,
-    time::Duration as StdDuration,
+    time::{Duration as StdDuration, Instant},
 };
 
 use chrono::{DateTime, Duration, Utc};
-use ham_api_contract::{hosted_route_strings, ApiErrorBody, ApiErrorCode};
+use ham_api_contract::{hosted_route_strings, ApiErrorBody, ApiErrorCode, HOSTED_ROUTE_STRINGS};
 use ham_core::{
     adif_for_upload_job, default_credential_store, default_log_directory, default_service_registry,
     execute_dx_cluster_read_once, execute_tier_one_lookup, execute_tier_one_upload, export_adif,
@@ -21,6 +21,9 @@ use ham_core::{
     ProviderLookupInput, ProviderRuntimeStatus, ProviderSpotExecution, ProviderSpotInput,
     ProviderUploadExecution, ProviderUploadInput, RegisteredServiceProvider, StationProfile,
     UploadJobStatus,
+};
+use ham_metrics::{
+    MetricsAccess, RouteMatcher, ScrapeAuthorization, ServerMetrics, PROMETHEUS_CONTENT_TYPE,
 };
 use ham_plugin_sdk::{
     PluginCapability, PluginManifest, ProposalEnvelope, PROPOSAL_ACTIVATION_CREATE,
@@ -1023,6 +1026,11 @@ struct ServerState {
     rate_limits: HashMap<String, RateLimitRecord>,
     turnstile_token_hashes: HashSet<String>,
     audit_log: Vec<AuditRecord>,
+    /// Running `(action, outcome)` audit totals exported as counters.
+    ///
+    /// Kept next to the audit log so `/metrics` never has to re-aggregate an
+    /// unbounded history on every scrape.
+    audit_counters: BTreeMap<(String, String), u64>,
     station_profiles: HashMap<Uuid, HostedStationProfile>,
     equipment_profiles: HashMap<Uuid, HostedEquipmentProfile>,
     provider_settings: HashMap<String, HostedProviderSetting>,
@@ -1050,6 +1058,7 @@ impl Default for ServerState {
             rate_limits: HashMap::new(),
             turnstile_token_hashes: HashSet::new(),
             audit_log: Vec::new(),
+            audit_counters: BTreeMap::new(),
             station_profiles: HashMap::new(),
             equipment_profiles: HashMap::new(),
             provider_settings: HashMap::new(),
@@ -2212,6 +2221,22 @@ fn push_audit(
         target,
         details,
     });
+    *state
+        .audit_counters
+        .entry((action.to_owned(), outcome.to_owned()))
+        .or_insert(0) += 1;
+}
+
+/// Rebuild the audit counters from a freshly loaded audit log so a restart
+/// keeps reporting lifetime totals instead of restarting from zero.
+fn seed_audit_counters(state: &mut ServerState) {
+    state.audit_counters.clear();
+    for record in &state.audit_log {
+        *state
+            .audit_counters
+            .entry((record.action.clone(), record.outcome.clone()))
+            .or_insert(0) += 1;
+    }
 }
 
 fn send_account_email(
@@ -2272,6 +2297,9 @@ pub struct HostedServer {
     bus: Arc<InMemoryEventBus>,
     credential_store: Arc<Mutex<Box<dyn CredentialStore>>>,
     email_outbox: Arc<Mutex<Vec<TestEmailMessage>>>,
+    metrics: Arc<ServerMetrics>,
+    metrics_access: Arc<MetricsAccess>,
+    routes: Arc<RouteMatcher>,
 }
 
 pub fn default_metadata_store_path() -> PathBuf {
@@ -2352,22 +2380,30 @@ impl HostedServer {
     fn with_metadata_store(
         metadata_store: Arc<dyn HostedMetadataStore>,
     ) -> Result<Self, MetadataStoreError> {
-        let state = metadata_store.load()?;
-        Ok(Self {
-            state: Arc::new(RwLock::new(state)),
+        Self::assemble(
             metadata_store,
-            store: Arc::new(InMemoryLogbookEventStore::new()),
-            bus: Arc::new(InMemoryEventBus::new(256)),
-            credential_store: Arc::new(Mutex::new(default_server_credential_store())),
-            email_outbox: Arc::new(Mutex::new(Vec::new())),
-        })
+            Arc::new(InMemoryLogbookEventStore::new()) as Arc<dyn LogbookEventStore>,
+        )
     }
 
     fn with_metadata_and_event_store(
         metadata_store: Arc<dyn HostedMetadataStore>,
         store: Arc<dyn LogbookEventStore>,
     ) -> Result<Self, MetadataStoreError> {
-        let state = metadata_store.load()?;
+        Self::assemble(metadata_store, store)
+    }
+
+    fn assemble(
+        metadata_store: Arc<dyn HostedMetadataStore>,
+        store: Arc<dyn LogbookEventStore>,
+    ) -> Result<Self, MetadataStoreError> {
+        let mut state = metadata_store.load()?;
+        seed_audit_counters(&mut state);
+        let metrics = ServerMetrics::new(
+            METRICS_SERVICE,
+            env!("CARGO_PKG_VERSION"),
+            hosting_operation_mode_label(state.hosting_config.operation_mode),
+        );
         Ok(Self {
             state: Arc::new(RwLock::new(state)),
             metadata_store,
@@ -2375,7 +2411,33 @@ impl HostedServer {
             bus: Arc::new(InMemoryEventBus::new(256)),
             credential_store: Arc::new(Mutex::new(default_server_credential_store())),
             email_outbox: Arc::new(Mutex::new(Vec::new())),
+            metrics: Arc::new(metrics),
+            metrics_access: Arc::new(MetricsAccess::from_env(
+                "HAM_SERVER_METRICS_ENABLED",
+                "HAM_SERVER_METRICS_TOKEN",
+            )),
+            routes: Arc::new(
+                RouteMatcher::new(HOSTED_ROUTE_STRINGS).with_routes(OBSERVABILITY_ROUTES),
+            ),
         })
+    }
+
+    /// Replace the metrics scrape policy, for tests and embedding hosts.
+    pub fn with_metrics_access(self, access: MetricsAccess) -> Self {
+        Self {
+            metrics_access: Arc::new(access),
+            ..self
+        }
+    }
+
+    /// Whether the `/metrics` endpoint is served by this deployment.
+    pub fn metrics_enabled(&self) -> bool {
+        self.metrics_access.enabled()
+    }
+
+    /// Whether `/metrics` is served without a scrape token.
+    pub fn metrics_is_open(&self) -> bool {
+        self.metrics_access.is_open()
     }
 
     pub fn with_credential_store_for_tests(
@@ -2388,7 +2450,29 @@ impl HostedServer {
         }
     }
 
+    /// Serve one request and record its HTTP metrics.
     pub async fn handle(&self, request: ApiRequest) -> ApiResponse {
+        let started = Instant::now();
+        let in_flight = self.metrics.request_started();
+        let method = request.method.clone();
+        let route = self.routes.label(&method, &request.path).to_owned();
+        let request_bytes = request.body.len();
+
+        let response = self.serve(request).await;
+
+        self.metrics.record_http_request(
+            &method,
+            &route,
+            response.status,
+            started.elapsed(),
+            request_bytes,
+            response.body.len(),
+        );
+        drop(in_flight);
+        response
+    }
+
+    async fn serve(&self, request: ApiRequest) -> ApiResponse {
         let mut request = request;
         let request_id = request_id(&request);
         request
@@ -2396,6 +2480,13 @@ impl HostedServer {
             .entry("x-request-id".to_owned())
             .or_insert_with(|| request_id.clone());
         let path = request.path.clone();
+        if request.method == "GET" {
+            match path_segments(&path).as_slice() {
+                ["metrics"] => return self.metrics_response(&request, request_id).await,
+                ["ready"] => return self.readiness_response(request_id).await,
+                _ => {}
+            }
+        }
         match self.route(request).await {
             Ok(response) => {
                 let mut api_response = json_response(200, &response);
@@ -2650,6 +2741,301 @@ impl HostedServer {
             }
             _ if is_scaffolded_route(&request.method, &segments) => self.scaffolded(&request).await,
             _ => Err(ApiError::NotFound),
+        }
+    }
+
+    /// Serve the Prometheus exposition body for an authorized scrape.
+    async fn metrics_response(&self, request: &ApiRequest, request_id: String) -> ApiResponse {
+        match self.metrics_access.authorize(
+            request
+                .headers
+                .get("authorization")
+                .or_else(|| request.headers.get("Authorization"))
+                .map(String::as_str),
+        ) {
+            ScrapeAuthorization::Allowed => {
+                self.refresh_state_gauges().await;
+                let mut response = ApiResponse {
+                    status: 200,
+                    headers: HashMap::new(),
+                    body: self.metrics.render().into_bytes(),
+                };
+                response.headers.insert(
+                    "content-type".to_owned(),
+                    PROMETHEUS_CONTENT_TYPE.to_owned(),
+                );
+                response
+                    .headers
+                    .insert("x-request-id".to_owned(), request_id);
+                response
+            }
+            ScrapeAuthorization::Disabled => {
+                json_error(404, "not found", ApiErrorCode::NotFound, request_id, false)
+            }
+            ScrapeAuthorization::Unauthorized => json_error(
+                401,
+                "metrics scrape token required",
+                ApiErrorCode::MissingToken,
+                request_id,
+                false,
+            ),
+        }
+    }
+
+    /// Report whether hosted metadata and official-event storage are usable.
+    async fn readiness_response(&self, request_id: String) -> ApiResponse {
+        let durable_metadata = self.metadata_store.is_durable();
+        let official_events_readable = self.refresh_readiness_gauge().await;
+        let ready = official_events_readable;
+        let mut response = json_response(
+            if ready { 200 } else { 503 },
+            &json!({
+                "ready": ready,
+                "service": METRICS_SERVICE,
+                "version": env!("CARGO_PKG_VERSION"),
+                "checks": {
+                    "durable_metadata_store": durable_metadata,
+                    "official_event_store": official_events_readable,
+                }
+            }),
+        );
+        response
+            .headers
+            .insert("x-request-id".to_owned(), request_id);
+        response
+    }
+
+    /// Probe the official event store and publish `ham_hosted_ready`, so the
+    /// gauge is present from the first scrape rather than only after a
+    /// `/ready` probe.
+    async fn refresh_readiness_gauge(&self) -> bool {
+        // Any logbook works as a probe; an empty instance probes the nil id,
+        // which a healthy store answers with `None` rather than an error.
+        let probe_logbook = {
+            let state = self.state.read().await;
+            state
+                .logbooks
+                .keys()
+                .copied()
+                .next()
+                .unwrap_or_else(Uuid::nil)
+        };
+        let readable = self.store.get_head(probe_logbook).await.is_ok();
+        self.metrics.gauge(
+            "ham_hosted_ready",
+            "1 when hosted storage is reachable, 0 otherwise.",
+            &[],
+            f64::from(u8::from(readable)),
+        );
+        readable
+    }
+
+    /// Refresh the hosted-state gauges sampled at scrape time.
+    async fn refresh_state_gauges(&self) {
+        self.refresh_readiness_gauge().await;
+        let state = self.state.read().await;
+        let now = Utc::now();
+
+        self.metrics.gauge(
+            "ham_hosted_accounts",
+            "Hosted user accounts.",
+            &[],
+            state.accounts.len() as f64,
+        );
+        self.metrics.gauge(
+            "ham_hosted_logbooks",
+            "Hosted logbooks.",
+            &[],
+            state.logbooks.len() as f64,
+        );
+        self.metrics.gauge(
+            "ham_hosted_logbook_memberships",
+            "Hosted logbook membership grants.",
+            &[],
+            state.memberships.len() as f64,
+        );
+        self.metrics.gauge(
+            "ham_hosted_server_admins",
+            "Users holding the instance-admin role.",
+            &[],
+            state.server_admin_user_ids.len() as f64,
+        );
+
+        self.metrics.reset_family("ham_hosted_sessions");
+        let mut active = 0u64;
+        let mut expired = 0u64;
+        let mut inactive = 0u64;
+        for session in state.sessions_by_token.values() {
+            if !session.active {
+                inactive += 1;
+            } else if session.expires_at.is_some_and(|expiry| expiry <= now) {
+                expired += 1;
+            } else {
+                active += 1;
+            }
+        }
+        for (state_label, count) in [
+            ("active", active),
+            ("expired", expired),
+            ("inactive", inactive),
+        ] {
+            self.metrics.gauge(
+                "ham_hosted_sessions",
+                "Hosted login sessions by lifecycle state.",
+                &[("state", state_label)],
+                count as f64,
+            );
+        }
+
+        self.metrics.reset_family("ham_hosted_devices");
+        let revoked_devices = state
+            .devices
+            .values()
+            .filter(|device| device.revoked)
+            .count();
+        for (state_label, count) in [
+            ("active", state.devices.len() - revoked_devices),
+            ("revoked", revoked_devices),
+        ] {
+            self.metrics.gauge(
+                "ham_hosted_devices",
+                "Registered devices by revocation state.",
+                &[("state", state_label)],
+                count as f64,
+            );
+        }
+
+        self.metrics.reset_family("ham_hosted_invitations");
+        let mut accepted = 0u64;
+        let mut revoked = 0u64;
+        let mut invite_expired = 0u64;
+        let mut pending = 0u64;
+        for invite in state.invites.values() {
+            if invite.accepted_at.is_some() {
+                accepted += 1;
+            } else if invite.revoked_at.is_some() {
+                revoked += 1;
+            } else if invite.expires_at <= now {
+                invite_expired += 1;
+            } else {
+                pending += 1;
+            }
+        }
+        for (state_label, count) in [
+            ("pending", pending),
+            ("accepted", accepted),
+            ("revoked", revoked),
+            ("expired", invite_expired),
+        ] {
+            self.metrics.gauge(
+                "ham_hosted_invitations",
+                "Server invitations by lifecycle state.",
+                &[("state", state_label)],
+                count as f64,
+            );
+        }
+
+        self.metrics.reset_family("ham_hosted_api_tokens");
+        let revoked_tokens = state
+            .api_tokens
+            .values()
+            .filter(|token| token.revoked)
+            .count();
+        for (state_label, count) in [
+            ("active", state.api_tokens.len() - revoked_tokens),
+            ("revoked", revoked_tokens),
+        ] {
+            self.metrics.gauge(
+                "ham_hosted_api_tokens",
+                "Issued API tokens by revocation state.",
+                &[("state", state_label)],
+                count as f64,
+            );
+        }
+
+        self.metrics.reset_family("ham_hosted_upload_jobs");
+        let mut upload_counts: BTreeMap<&'static str, u64> = BTreeMap::new();
+        for job in state.upload_jobs.values() {
+            *upload_counts
+                .entry(hosted_upload_status_label(job.status))
+                .or_insert(0) += 1;
+        }
+        for status in [
+            "queued",
+            "running",
+            "succeeded",
+            "failed",
+            "retryable",
+            "skipped",
+        ] {
+            self.metrics.gauge(
+                "ham_hosted_upload_jobs",
+                "Hosted upload jobs by status.",
+                &[("status", status)],
+                upload_counts.get(status).copied().unwrap_or(0) as f64,
+            );
+        }
+
+        self.metrics.gauge(
+            "ham_hosted_station_profiles",
+            "Hosted station profiles.",
+            &[],
+            state.station_profiles.len() as f64,
+        );
+        self.metrics.gauge(
+            "ham_hosted_equipment_profiles",
+            "Hosted equipment profiles.",
+            &[],
+            state.equipment_profiles.len() as f64,
+        );
+        self.metrics.gauge(
+            "ham_hosted_provider_settings",
+            "Stored hosted provider settings.",
+            &[],
+            state.provider_settings.len() as f64,
+        );
+        self.metrics.gauge(
+            "ham_hosted_backups",
+            "Stored hosted backup records.",
+            &[],
+            state.backups.len() as f64,
+        );
+        self.metrics.gauge(
+            "ham_hosted_divergence_reports",
+            "Stored sync divergence reports.",
+            &[],
+            state.divergence_reports.len() as f64,
+        );
+        self.metrics.gauge(
+            "ham_hosted_rate_limit_buckets",
+            "Active rate-limit buckets.",
+            &[],
+            state.rate_limits.len() as f64,
+        );
+        self.metrics.gauge(
+            "ham_hosted_audit_records",
+            "Audit records retained by the hosted server.",
+            &[],
+            state.audit_log.len() as f64,
+        );
+        self.metrics.gauge(
+            "ham_hosted_durable_metadata_store",
+            "1 when hosted metadata is stored durably, 0 for the in-memory store.",
+            &[],
+            f64::from(u8::from(self.metadata_store.is_durable())),
+        );
+
+        for ((action, outcome), count) in &state.audit_counters {
+            self.metrics.registry().set_counter(
+                "ham_hosted_audit_events_total",
+                "Audited hosted actions by action and outcome.",
+                &[
+                    ("service", METRICS_SERVICE),
+                    ("action", action.as_str()),
+                    ("outcome", outcome.as_str()),
+                ],
+                *count as f64,
+            );
         }
     }
 
@@ -7452,6 +7838,31 @@ fn bearer_token(request: &ApiRequest) -> Option<String> {
         .map(str::to_owned)
 }
 
+/// `service` label applied to every metric this crate exports.
+const METRICS_SERVICE: &str = "ke8ygw-ham-server";
+
+/// Operational routes served alongside the versioned `/api/v1` contract.
+const OBSERVABILITY_ROUTES: &[&str] = &["GET /metrics", "GET /ready"];
+
+const fn hosting_operation_mode_label(mode: HostingOperationMode) -> &'static str {
+    match mode {
+        HostingOperationMode::PersonalHosted => "personal_hosted",
+        HostingOperationMode::PublicHosted => "public_hosted",
+        HostingOperationMode::SelfHosted => "self_hosted",
+    }
+}
+
+const fn hosted_upload_status_label(status: HostedUploadStatus) -> &'static str {
+    match status {
+        HostedUploadStatus::Queued => "queued",
+        HostedUploadStatus::Running => "running",
+        HostedUploadStatus::Succeeded => "succeeded",
+        HostedUploadStatus::Failed => "failed",
+        HostedUploadStatus::Retryable => "retryable",
+        HostedUploadStatus::Skipped => "skipped",
+    }
+}
+
 fn json_response<T: Serialize>(status: u16, payload: &T) -> ApiResponse {
     ApiResponse {
         status,
@@ -10533,5 +10944,219 @@ mod tests {
             )
             .await;
         assert_eq!(owner_read.status, 200);
+    }
+
+    fn metrics_text(response: &ApiResponse) -> String {
+        assert_eq!(response.status, 200);
+        assert_eq!(
+            response.headers.get("content-type").map(String::as_str),
+            Some(PROMETHEUS_CONTENT_TYPE)
+        );
+        String::from_utf8(response.body.clone()).expect("metrics body should be UTF-8 text")
+    }
+
+    #[tokio::test]
+    async fn metrics_endpoint_exposes_hosted_state_and_request_metrics() {
+        let server = HostedServer::new();
+        let (token, logbook_id, _device_id) = login(&server, "metrics@example.test").await;
+        create_qso(&server, &token, logbook_id).await;
+        server.handle(ApiRequest::get("/api/v1/status")).await;
+
+        let response = server.handle(ApiRequest::get("/metrics")).await;
+        let body = metrics_text(&response);
+
+        assert!(body.contains("# TYPE ham_http_requests_total counter"));
+        assert!(
+            body.contains("ham_build_info{mode=\"personal_hosted\",service=\"ke8ygw-ham-server\"")
+        );
+        assert!(body.contains(
+            "ham_http_requests_total{method=\"GET\",route=\"GET /api/v1/status\",service=\"ke8ygw-ham-server\",status=\"200\"} 1"
+        ));
+        assert!(body.contains(
+            "ham_http_requests_total{method=\"POST\",route=\"POST /api/v1/qsos\",service=\"ke8ygw-ham-server\",status=\"200\"} 1"
+        ));
+        assert!(body.contains("ham_hosted_accounts{service=\"ke8ygw-ham-server\"} 1"));
+        assert!(body.contains("ham_hosted_logbooks{service=\"ke8ygw-ham-server\"} 1"));
+        assert!(
+            body.contains("ham_hosted_sessions{service=\"ke8ygw-ham-server\",state=\"active\"} 1")
+        );
+        assert!(
+            body.contains("ham_hosted_devices{service=\"ke8ygw-ham-server\",state=\"active\"} 1")
+        );
+        assert!(body
+            .contains("ham_hosted_upload_jobs{service=\"ke8ygw-ham-server\",status=\"queued\"} 0"));
+        assert!(body.contains("ham_http_request_duration_seconds_bucket"));
+        assert!(body.contains("ham_metrics_series{service=\"ke8ygw-ham-server\"}"));
+    }
+
+    #[tokio::test]
+    async fn metrics_route_labels_never_contain_identifiers_or_tokens() {
+        let server = HostedServer::new();
+        let (token, logbook_id, _device_id) = login(&server, "labels@example.test").await;
+        let qso: Value = create_qso(&server, &token, logbook_id).await;
+        let qso_id = qso["event"]["entity_id"]
+            .as_str()
+            .expect("created QSO should carry an entity id")
+            .to_owned();
+
+        server
+            .handle(
+                ApiRequest::json(
+                    "POST",
+                    format!("/api/v1/qsos/{qso_id}/delete"),
+                    &json!({"logbook_id": logbook_id, "reason": "metrics label test"}),
+                )
+                .with_bearer(&token),
+            )
+            .await;
+        server.handle(ApiRequest::get("/api/v1/not-a-route")).await;
+
+        let body = metrics_text(&server.handle(ApiRequest::get("/metrics")).await);
+
+        assert!(!body.contains(&qso_id), "{body}");
+        assert!(!body.contains(&logbook_id.to_string()), "{body}");
+        assert!(!body.contains(&token), "{body}");
+        assert!(body.contains("route=\"POST /api/v1/qsos/:id/delete\""));
+        assert!(body.contains("route=\"unmatched\",service=\"ke8ygw-ham-server\",status=\"404\""));
+    }
+
+    #[tokio::test]
+    async fn metrics_endpoint_records_audited_actions() {
+        let server = HostedServer::new();
+        bootstrap_admin(&server).await;
+
+        let body = metrics_text(&server.handle(ApiRequest::get("/metrics")).await);
+
+        assert!(body.contains(
+            "ham_hosted_audit_events_total{action=\"admin.bootstrap\",outcome=\"succeeded\",service=\"ke8ygw-ham-server\"} 1"
+        ));
+    }
+
+    #[test]
+    fn audit_counters_are_seeded_from_a_persisted_audit_log() {
+        let mut state = ServerState::default();
+        for (action, outcome) in [
+            ("auth.login", "succeeded"),
+            ("auth.login", "succeeded"),
+            ("auth.login", "denied"),
+            ("admin.bootstrap", "succeeded"),
+        ] {
+            state.audit_log.push(AuditRecord {
+                audit_id: Uuid::new_v4(),
+                occurred_at: Utc::now(),
+                request_id: "seed-test".to_owned(),
+                actor_account_id: None,
+                actor_user_id: None,
+                action: action.to_owned(),
+                outcome: outcome.to_owned(),
+                target: None,
+                details: Map::new(),
+            });
+        }
+
+        seed_audit_counters(&mut state);
+
+        assert_eq!(
+            state
+                .audit_counters
+                .get(&("auth.login".to_owned(), "succeeded".to_owned())),
+            Some(&2)
+        );
+        assert_eq!(
+            state
+                .audit_counters
+                .get(&("auth.login".to_owned(), "denied".to_owned())),
+            Some(&1)
+        );
+        assert_eq!(
+            state
+                .audit_counters
+                .get(&("admin.bootstrap".to_owned(), "succeeded".to_owned())),
+            Some(&1)
+        );
+        assert_eq!(state.audit_counters.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn metrics_endpoint_enforces_the_configured_scrape_token() {
+        let server = HostedServer::new()
+            .with_metrics_access(MetricsAccess::new(true, Some("hosted-scrape".to_owned())));
+
+        let anonymous = server.handle(ApiRequest::get("/metrics")).await;
+        assert_eq!(anonymous.status, 401);
+        let error: ApiErrorBody = anonymous.json();
+        assert_eq!(error.code, ApiErrorCode::MissingToken.as_str());
+
+        let wrong = server
+            .handle(ApiRequest::get("/metrics").with_bearer("nope"))
+            .await;
+        assert_eq!(wrong.status, 401);
+
+        let allowed = server
+            .handle(ApiRequest::get("/metrics").with_bearer("hosted-scrape"))
+            .await;
+        let body = metrics_text(&allowed);
+        assert!(body.contains("ham_build_info"));
+        assert!(!body.contains("hosted-scrape"));
+    }
+
+    #[tokio::test]
+    async fn a_disabled_metrics_endpoint_is_not_found() {
+        let server = HostedServer::new().with_metrics_access(MetricsAccess::new(false, None));
+
+        let response = server.handle(ApiRequest::get("/metrics")).await;
+
+        assert_eq!(response.status, 404);
+        let error: ApiErrorBody = response.json();
+        assert_eq!(error.code, ApiErrorCode::NotFound.as_str());
+        assert!(!server.metrics_enabled());
+    }
+
+    #[tokio::test]
+    async fn readiness_reports_hosted_storage_state() {
+        let server = HostedServer::new();
+
+        let response = server.handle(ApiRequest::get("/ready")).await;
+
+        assert_eq!(response.status, 200);
+        let payload: Value = response.json();
+        assert_eq!(payload["ready"], true);
+        assert_eq!(payload["service"], "ke8ygw-ham-server");
+        assert_eq!(payload["checks"]["official_event_store"], true);
+        assert_eq!(payload["checks"]["durable_metadata_store"], false);
+
+        let body = metrics_text(&server.handle(ApiRequest::get("/metrics")).await);
+        assert!(body.contains("ham_hosted_ready{service=\"ke8ygw-ham-server\"} 1"));
+        assert!(body.contains("ham_hosted_durable_metadata_store{service=\"ke8ygw-ham-server\"} 0"));
+    }
+
+    #[tokio::test]
+    async fn snapshot_gauges_drop_label_sets_that_no_longer_apply() {
+        let server = HostedServer::new();
+        let (token, _logbook_id, device_id) = login(&server, "gauges@example.test").await;
+
+        let before = metrics_text(&server.handle(ApiRequest::get("/metrics")).await);
+        assert!(before
+            .contains("ham_hosted_devices{service=\"ke8ygw-ham-server\",state=\"revoked\"} 0"));
+
+        let revoke = server
+            .handle(
+                ApiRequest::json(
+                    "POST",
+                    format!("/api/v1/devices/{device_id}/revoke"),
+                    &json!({}),
+                )
+                .with_bearer(&token),
+            )
+            .await;
+        assert_eq!(revoke.status, 200);
+
+        let after = metrics_text(&server.handle(ApiRequest::get("/metrics")).await);
+        assert!(
+            after.contains("ham_hosted_devices{service=\"ke8ygw-ham-server\",state=\"revoked\"} 1")
+        );
+        assert!(
+            after.contains("ham_hosted_devices{service=\"ke8ygw-ham-server\",state=\"active\"} 0")
+        );
     }
 }

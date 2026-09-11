@@ -292,6 +292,42 @@ Returns:
 
 `mode` is `hosted` or `self_hosted`.
 
+### Readiness
+
+`GET /ready`
+
+Answers `200` when durable storage is reachable and `503` when it is not. Both
+the hosted and the self-hosted server implement it. The body names each check:
+
+```json
+{
+  "ready": true,
+  "service": "ke8ygw-sync-server",
+  "version": "0.4.0",
+  "checks": {
+    "metadata_store": true,
+    "official_event_log_directory": true,
+    "report_directory": true
+  }
+}
+```
+
+The hosted server reports `durable_metadata_store` and `official_event_store`
+instead.
+
+### Metrics
+
+`GET /metrics`
+
+Returns the Prometheus text exposition format (version `0.0.4`) with
+`Content-Type: text/plain; version=0.0.4; charset=utf-8`. It answers `401` when a
+scrape token is configured and not presented, and `404` when the endpoint is
+disabled for the deployment.
+
+`/health`, `/ready`, and `/metrics` are operational endpoints. They sit outside
+the frozen `/api/v1` client contract and are not part of the sync or hosted
+client protocols. See [Server Observability](OBSERVABILITY.md).
+
 ### Pair Device
 
 `POST /api/v1/auth/pair`

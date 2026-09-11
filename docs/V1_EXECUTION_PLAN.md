@@ -141,8 +141,11 @@ outside issue #2.
 
 9. Operations and deployment qualification
    - Finish public/personal/self-hosted deployment docs, backup/restore
-     validation, rate limits, observability, diagnostic retention, release notes,
-     rollback, and support procedures.
+     validation, rate limits, diagnostic retention, release notes, rollback, and
+     support procedures.
+   - Prometheus metrics, readiness probes, and a provisioned Grafana stack are
+     implemented; see [Server Observability](OBSERVABILITY.md). Log aggregation,
+     tracing, metric-backed SLOs, and a scraped production deployment remain.
    - Blockers: production infrastructure, DNS/TLS, email, Turnstile, storage,
      signing/notarization, and protected GitHub environments.
 
@@ -174,8 +177,8 @@ outside issue #2.
   privacy policy URL, support URL, TestFlight, physical-device validation, and
   App Store review.
 - Microsoft Trusted Signing and macOS notarization credentials.
-- Production DNS/TLS, hosting, storage, backup destination, observability, and
-  protected environments.
+- Production DNS/TLS, hosting, storage, backup destination, a hosted
+  Prometheus/Grafana deployment, and protected environments.
 - Email provider and Cloudflare Turnstile credentials.
 - Provider credentials/approval for QRZ, QRZ Logbook, LoTW/TQSL, eQSL, Club Log,
   POTA, SOTAWatch, DX Cluster/RBN, maps, and propagation.

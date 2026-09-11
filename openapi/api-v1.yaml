@@ -6705,6 +6705,91 @@
           }
         }
       }
+    },
+    "/metrics": {
+      "get": {
+        "operationId": "get_metrics",
+        "summary": "GET /metrics",
+        "description": "Prometheus text exposition of server metrics. Deployments with the endpoint disabled answer 404, and deployments with a configured scrape token answer 401 without a matching bearer token.",
+        "tags": [
+          "operations"
+        ],
+        "x-deployment-modes": [
+          "hosted",
+          "self_hosted"
+        ],
+        "x-stability": "stable",
+        "security": [
+          {
+            "bearerSession": []
+          },
+          {}
+        ],
+        "responses": {
+          "200": {
+            "description": "Prometheus text exposition format, version 0.0.4.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        }
+      }
+    },
+    "/ready": {
+      "get": {
+        "operationId": "get_ready",
+        "summary": "GET /ready",
+        "description": "Readiness probe. Answers 200 when durable storage is reachable and 503 when it is not.",
+        "tags": [
+          "operations"
+        ],
+        "x-deployment-modes": [
+          "hosted",
+          "self_hosted"
+        ],
+        "x-stability": "stable",
+        "security": [
+          {}
+        ],
+        "responses": {
+          "200": {
+            "description": "Durable storage is reachable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonObject"
+                }
+              }
+            }
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "description": "Durable storage is not reachable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonObject"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {

@@ -31,6 +31,17 @@ fn main() {
 
     println!("ham-server listening on http://{addr}");
     println!("metadata store: {metadata_label}");
+    if server.metrics_enabled() {
+        if server.metrics_is_open() {
+            println!(
+                "metrics: http://{addr}/metrics (unauthenticated; set HAM_SERVER_METRICS_TOKEN and keep the scrape port private)"
+            );
+        } else {
+            println!("metrics: http://{addr}/metrics (bearer token required)");
+        }
+    } else {
+        println!("metrics: disabled (HAM_SERVER_METRICS_ENABLED)");
+    }
 
     for stream in listener.incoming() {
         match stream {
@@ -60,17 +71,28 @@ fn handle_stream(
         401 => "Unauthorized",
         403 => "Forbidden",
         404 => "Not Found",
+        429 => "Too Many Requests",
+        500 => "Internal Server Error",
+        503 => "Service Unavailable",
         _ => "OK",
     };
+    // `/metrics` answers in the Prometheus text format; every other route is JSON.
+    let content_type = response
+        .headers
+        .get("content-type")
+        .cloned()
+        .unwrap_or_else(|| "application/json; charset=utf-8".to_owned());
     let extra_headers = response
         .headers
         .iter()
+        .filter(|(name, _)| !name.eq_ignore_ascii_case("content-type"))
         .map(|(name, value)| format!("{name}: {value}\r\n"))
         .collect::<String>();
     let header = format!(
-        "HTTP/1.1 {} {}\r\nContent-Type: application/json; charset=utf-8\r\n{}Content-Length: {}\r\nConnection: close\r\n\r\n",
+        "HTTP/1.1 {} {}\r\nContent-Type: {}\r\n{}Content-Length: {}\r\nConnection: close\r\n\r\n",
         response.status,
         status_text,
+        content_type,
         extra_headers,
         response.body.len()
     );

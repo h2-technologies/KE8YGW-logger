@@ -3,6 +3,7 @@ members = [
     "crates/ham-api-contract",
     "crates/ham-core",
     "crates/ham-plugin-sdk",
+    "crates/ham-metrics",
     "crates/ham-sync",
     "crates/ham-sync-server",
     "crates/ham-server",

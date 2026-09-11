@@ -43,4 +43,13 @@ gui:
 sync-server:
     cargo run -p ham-sync-server --bin ham-sync-server
 
+hosted-server:
+    cargo run -p ham-server --bin ham-server
+
+monitoring:
+    docker compose -f deploy/monitoring/docker-compose.monitoring.yml up -d
+
+monitoring-down:
+    docker compose -f deploy/monitoring/docker-compose.monitoring.yml down
+
 ci: fmt-check clippy test feature-matrix api-contract version-check docs-link-check governance-check

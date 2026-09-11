@@ -4,6 +4,27 @@
 
 ### Added
 
+- Added `ham-metrics`, a dependency-free metrics registry and Prometheus text
+  exporter shared by both server binaries: counters, gauges, histograms,
+  bounded route labelling driven by the API route contract, a per-family
+  cardinality cap, and a constant-time scrape-authorization policy.
+- Added `GET /metrics` to `ham-sync-server` and `ham-server`. It serves the
+  Prometheus text exposition format (version `0.0.4`) with shared HTTP metrics,
+  sync replication and durable-storage metrics, and hosted account, session,
+  device, invitation, upload, and audit metrics.
+- Added `GET /ready` to both servers: a readiness probe that answers `200` when
+  durable storage is reachable and `503` when it is not.
+- Added `HAM_SYNC_METRICS_ENABLED`, `HAM_SYNC_METRICS_TOKEN`,
+  `HAM_SERVER_METRICS_ENABLED`, and `HAM_SERVER_METRICS_TOKEN`. Metrics are
+  enabled and unauthenticated by default; setting a token requires
+  `Authorization: Bearer <token>` on every scrape.
+- Added `deploy/monitoring/` with a Prometheus scrape configuration, alert
+  rules, Grafana data source and dashboard provisioning, three provisioned
+  Grafana dashboards, and a monitoring Docker Compose stack.
+- Added `docs/OBSERVABILITY.md` documenting the endpoints, configuration,
+  privacy rules, full metric catalogue, and example PromQL.
+- Added `just hosted-server`, `just monitoring`, and `just monitoring-down`.
+
 - Added `ham_sync::account`, the shared hosted account and session client used by
   every platform: bounded action vocabulary, hosted request planning, response
   interpretation, stable outcome classification, transport-failure
@@ -48,6 +69,14 @@
 
 ### Changed
 
+- `ham-server` responses now carry their own content type, so `/metrics` can
+  answer in the Prometheus text format while every other route stays JSON. The
+  wire layer also emits `429`, `500`, and `503` reason phrases.
+- The hosted server keeps running `(action, outcome)` audit totals alongside the
+  audit log and seeds them from persisted history at startup, so `/metrics`
+  never re-aggregates an unbounded log on a scrape.
+- Added `/metrics` and `/ready` to `openapi/api-v1.yaml` as operational
+  endpoints. The frozen `/api/v1` contract is unchanged.
 - Hosted account session and refresh tokens are now stored only in the
   operating-system credential backend or the iOS Keychain under Rust-assigned
   credential identifiers; the durable account record, GUI responses, CLI output,
