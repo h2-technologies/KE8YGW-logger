@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     env, fs,
     io::{BufRead, BufReader, Read, Write},
     net::{IpAddr, SocketAddr, TcpListener, TcpStream},
@@ -10,6 +10,7 @@ use std::{
 };
 
 use ham_core::gui::{
+    shell::{ShellAppearance, ShellLayoutId, ThemeMode},
     CommandRegistry, GuiRuntimeBridge, GuiShellState, RuntimeBridgeStatus, RuntimeEventInput,
 };
 use ham_core::{
@@ -46,7 +47,8 @@ use ham_core::plugin_sdk::{
     PROPOSAL_QSO_RESTORE,
 };
 use ham_core::sync::{
-    build_handshake_response, conflict_report_from_preview, lan_auth_signature, metadata_for_event,
+    build_handshake_response, conflict_report_from_preview, lan_auth_signature,
+    local_scan_interface_addresses, local_scan_targets, metadata_for_event,
     preview_pull_from_events, pull_missing_events, verify_lan_auth_signature, CloudAuth,
     CloudConnectionState, CloudPreviewPullRequest, CloudPullEventsRequest, CloudPullEventsResponse,
     CloudPushEventsRequest, CloudPushEventsResponse, CloudServerConfig, CloudSyncConfig,
@@ -54,8 +56,11 @@ use ham_core::sync::{
     DiagnosticReportUploadRequest, DiagnosticReportUploadResponse, DiagnosticReportUploadType,
     DiscoveryPacket, GetEventMetadataResponse, GetEventRangeResponse, HandshakeRequest,
     HostedAccountAction, HostedAccountClient, HostedAccountConfig, HostedAccountError,
-    HostedAccountResult, HostedAccountSecrets, HttpHostedAccountTransport, InMemoryCloudSyncServer,
-    JsonConflictReviewStore, JsonHostedAccountStore, JsonLanTrustStore, JsonLocalSyncIdentityStore,
+    HostedAccountResult, HostedAccountSecrets, HostedAdminAction, HostedAdminClient,
+    HostedAdminHostingUpdate, HostedAdminLogbookRole, HostedAdminOperationMode,
+    HostedAdminRegistrationMode, HostedAdminResult, HttpHostedAccountTransport,
+    HttpHostedAdminTransport, InMemoryCloudSyncServer, JsonConflictReviewStore,
+    JsonHostedAccountStore, JsonHostedAdminStore, JsonLanTrustStore, JsonLocalSyncIdentityStore,
     JsonOfflineMutationQueue, LanDiscoveryService, LanPairingAcceptance, LanPeerTrustUpdate,
     LanTrustSnapshot, ListLogbooksResponse, LocalPeerIdentity, LogbookHeadSummary,
     ManualConflictResolution, ManualConflictResolutionChoice, OfflineMutationEnvelope,
@@ -78,6 +83,16 @@ const LAN_DISCOVERY_LISTEN_WINDOW: Duration = Duration::from_millis(750);
 pub const DEFAULT_SERVE_ADDR: &str = "127.0.0.1:9467";
 
 const LAN_DISCOVERY_SLEEP_SLICE: Duration = Duration::from_millis(250);
+const DEFAULT_GUI_API_PORT: u16 = 9467;
+/// Long enough to span a peer's whole discovery interval, so one scan sees at
+/// least one announcement from every instance that is already broadcasting.
+const LAN_SCAN_LISTEN_WINDOW: Duration = Duration::from_secs(6);
+const LAN_SCAN_CONNECT_TIMEOUT: Duration = Duration::from_millis(400);
+const LAN_SCAN_IO_TIMEOUT: Duration = Duration::from_millis(1_500);
+const LAN_SCAN_WORKER_COUNT: usize = 64;
+const LAN_SCAN_MAX_TARGETS: usize = 1_024;
+const LAN_HTTP_CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
+const LAN_HTTP_IO_TIMEOUT: Duration = Duration::from_secs(5);
 const LAN_AUTH_DEVICE_ID_HEADER: &str = "x-ke8ygw-lan-device-id";
 const LAN_AUTH_REPLAY_NONCE_HEADER: &str = "x-ke8ygw-lan-replay-nonce";
 const LAN_AUTH_SIGNATURE_VERSION_HEADER: &str = "x-ke8ygw-lan-signature-version";
@@ -119,6 +134,8 @@ pub fn run(addr: Option<String>) {
     let permission_store =
         JsonPermissionGrantStore::new(support_dir.join("plugin-permissions.json"));
     let station_store = JsonStationBookStore::new(support_dir.join("station-book.json"));
+    let appearance_store =
+        JsonSupportStore::<ShellAppearance>::new(support_dir.join("shell-appearance.json"));
     let service_registry_store =
         JsonSupportStore::<ServiceRegistry>::new(support_dir.join("service-registry.json"));
     let service_cache_store =
@@ -139,6 +156,9 @@ pub fn run(addr: Option<String>) {
     let lan_trust_store = JsonLanTrustStore::new(support_dir.join("lan-trust.json"));
     let hosted_account = HostedAccountClient::new(JsonHostedAccountStore::new(
         support_dir.join("hosted-account.json"),
+    ));
+    let hosted_admin = HostedAdminClient::new(JsonHostedAdminStore::new(
+        support_dir.join("hosted-admin.json"),
     ));
     let local_sync_identity_store =
         JsonLocalSyncIdentityStore::new(support_dir.join("local-sync-identity.json"));
@@ -174,6 +194,8 @@ pub fn run(addr: Option<String>) {
         .ok()
         .as_deref()
         == Some("1");
+    let allow_remote_control_api =
+        env::var("HAM_GUI_ALLOW_REMOTE_CONTROL_API").ok().as_deref() == Some("1");
     let credential_store: Box<dyn CredentialStore> =
         default_credential_store(&support_dir, allow_insecure_dev_credentials);
     let permission_registry = PermissionRegistry::mvp_default();
@@ -333,6 +355,12 @@ pub fn run(addr: Option<String>) {
             loaded
         }
     };
+    let appearance = load_support_or(
+        &bridge,
+        &appearance_store,
+        ShellAppearance::default(),
+        "shell appearance",
+    );
     let lookup_config = load_support_or(
         &bridge,
         &lookup_config_store,
@@ -392,6 +420,7 @@ pub fn run(addr: Option<String>) {
         conflict_review_store,
         lan_trust_store,
         hosted_account,
+        hosted_admin,
         cloud_server: InMemoryCloudSyncServer::new(CloudServerConfig::default()),
         lookup_cache: LookupCache::new(),
         lookup_config: Mutex::new(lookup_config),
@@ -402,6 +431,8 @@ pub fn run(addr: Option<String>) {
         rig_config: Mutex::new(rig_config),
         station_store,
         station_book: Mutex::new(station_book),
+        appearance: Mutex::new(appearance),
+        appearance_store,
         credential_store: Mutex::new(credential_store),
         upload_queue: Mutex::new(upload_queue),
         online_support: Mutex::new(online_support),
@@ -414,6 +445,7 @@ pub fn run(addr: Option<String>) {
         upload_queue_store,
         permission_grants: Mutex::new(permission_grants),
         permission_settings: Mutex::new(permission_settings),
+        allow_remote_control_api,
     });
 
     println!("ham-client listening on http://{bound_addr}");
@@ -436,6 +468,7 @@ struct AppState {
     conflict_review_store: JsonConflictReviewStore,
     lan_trust_store: JsonLanTrustStore,
     hosted_account: HostedAccountClient,
+    hosted_admin: HostedAdminClient,
     cloud_server: InMemoryCloudSyncServer,
     lookup_cache: LookupCache,
     lookup_config: Mutex<LookupUiConfig>,
@@ -446,6 +479,8 @@ struct AppState {
     rig_config: Mutex<RigUiConfig>,
     station_store: JsonStationBookStore,
     station_book: Mutex<StationBook>,
+    appearance: Mutex<ShellAppearance>,
+    appearance_store: JsonSupportStore<ShellAppearance>,
     credential_store: Mutex<Box<dyn CredentialStore>>,
     upload_queue: Mutex<UploadQueue>,
     online_support: Mutex<OnlineSupportState>,
@@ -458,6 +493,7 @@ struct AppState {
     upload_queue_store: JsonSupportStore<UploadQueue>,
     permission_grants: Mutex<PermissionGrantSet>,
     permission_settings: Mutex<PermissionSettings>,
+    allow_remote_control_api: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -528,6 +564,8 @@ struct SyncUiState {
     registry: PeerRegistry,
     discovery_running: bool,
     discovery_generation: u64,
+    scan_running: bool,
+    last_scan: Option<LanScanSummary>,
     latest_handshake: Option<ham_core::sync::HandshakeResponse>,
     latest_preview: Option<PreviewPullResponse>,
     latest_pull: Option<PullEventsResponse>,
@@ -555,6 +593,8 @@ impl SyncUiState {
             registry: PeerRegistry::default(),
             discovery_running: false,
             discovery_generation: 0,
+            scan_running: false,
+            last_scan: None,
             latest_handshake: None,
             latest_preview: None,
             latest_pull: None,
@@ -630,6 +670,19 @@ fn handle_client(state: Arc<AppState>, mut stream: TcpStream) {
     let target = request.target.as_str();
     let (path, query) = split_target(target);
 
+    if !remote_request_is_permitted(
+        state.allow_remote_control_api,
+        requester_is_loopback(&stream),
+        request.method.as_str(),
+        path,
+    ) {
+        let denied = reject_remote_control_request(&state, request.method.as_str(), path);
+        if let Err(error) = stream.write_all(&denied) {
+            eprintln!("failed to write response: {error}");
+        }
+        return;
+    }
+
     let response = match (request.method.as_str(), path) {
         ("GET", "/") | ("GET", "/index.html") => {
             response(200, "text/html; charset=utf-8", INDEX_HTML.as_bytes())
@@ -637,7 +690,7 @@ fn handle_client(state: Arc<AppState>, mut stream: TcpStream) {
         ("GET", "/styles.css") => response(200, "text/css; charset=utf-8", APP_CSS.as_bytes()),
         ("GET", "/app.js") => response(200, "text/javascript; charset=utf-8", APP_JS.as_bytes()),
         ("GET", "/api/shell") => json_response(&ApiShellPayload {
-            shell: GuiShellState::default_shell(),
+            shell: shell_state(&state),
             commands: CommandRegistry::default_registry(),
             plugins: mock_plugins(),
             runtime_events: state.bridge.replay(RuntimeEventFilter::default(), 100),
@@ -645,6 +698,7 @@ fn handle_client(state: Arc<AppState>, mut stream: TcpStream) {
             known_core_capabilities: capability_labels(),
             service_providers: service_registry_snapshot(&state),
         }),
+        ("POST", "/api/shell/appearance") => handle_shell_appearance(&state, &request.body),
         ("GET", "/api/runtime-events") => {
             let params = parse_query(query);
             let filter = runtime_filter_from_query(&params);
@@ -747,6 +801,7 @@ fn handle_client(state: Arc<AppState>, mut stream: TcpStream) {
         ("GET", "/api/sync/event-metadata") => handle_sync_event_metadata(&state, query, &request),
         ("POST", "/api/sync/discovery/start") => handle_sync_discovery(&state, true),
         ("POST", "/api/sync/discovery/stop") => handle_sync_discovery(&state, false),
+        ("POST", "/api/sync/discovery/scan") => handle_sync_discovery_scan(&state),
         ("POST", "/api/sync/peers/refresh") => handle_sync_refresh(&state),
         ("POST", "/api/sync/peers/add") => handle_sync_add_peer(&state, &request.body),
         ("POST", "/api/sync/handshake") => handle_sync_handshake(&state, &request.body),
@@ -782,6 +837,7 @@ fn handle_client(state: Arc<AppState>, mut stream: TcpStream) {
         ("POST", "/api/account/recovery/complete") => {
             handle_account_recovery_complete(&state, &request.body)
         }
+        ("POST", "/api/account/bootstrap") => handle_account_bootstrap(&state, &request.body),
         ("POST", "/api/account/login") => handle_account_login(&state, &request.body),
         ("POST", "/api/account/session/refresh") => {
             run_account_action(&state, HostedAccountAction::Session)
@@ -801,6 +857,32 @@ fn handle_client(state: Arc<AppState>, mut stream: TcpStream) {
         }
         ("POST", "/api/account/devices/revoke") => {
             handle_account_device_revoke(&state, &request.body)
+        }
+        ("GET", "/api/admin/state") => handle_admin_state(&state),
+        ("POST", "/api/admin/hosting/refresh") => {
+            run_admin_action(&state, HostedAdminAction::HostingRead)
+        }
+        ("POST", "/api/admin/hosting/update") => handle_admin_hosting_update(&state, &request.body),
+        ("POST", "/api/admin/invitations/refresh") => {
+            run_admin_action(&state, HostedAdminAction::InvitationList)
+        }
+        ("POST", "/api/admin/invitations/create") => {
+            handle_admin_invitation_create(&state, &request.body)
+        }
+        ("POST", "/api/admin/invitations/inspect") => {
+            handle_admin_invitation_action(&state, &request.body, AdminInvitationVerb::Inspect)
+        }
+        ("POST", "/api/admin/invitations/resend") => {
+            handle_admin_invitation_action(&state, &request.body, AdminInvitationVerb::Resend)
+        }
+        ("POST", "/api/admin/invitations/expire") => {
+            handle_admin_invitation_action(&state, &request.body, AdminInvitationVerb::Expire)
+        }
+        ("POST", "/api/admin/invitations/revoke") => {
+            handle_admin_invitation_action(&state, &request.body, AdminInvitationVerb::Revoke)
+        }
+        ("POST", "/api/admin/audits/refresh") => {
+            run_admin_action(&state, HostedAdminAction::AuditList)
         }
         ("POST", "/api/account/devices/revoke-all") => {
             run_account_action(&state, HostedAccountAction::DeviceRevokeAll)
@@ -833,6 +915,69 @@ fn handle_client(state: Arc<AppState>, mut stream: TcpStream) {
     if let Err(error) = stream.write_all(&response) {
         eprintln!("failed to write response: {error}");
     }
+}
+
+/// LAN sync peers only ever issue these requests: unauthenticated identity
+/// probes, signed trust-gated reads, and reciprocal pairing carried by a
+/// one-time pairing token. Everything else on the GUI listener is local
+/// control-plane surface with no request authentication, so it must not be
+/// served to a non-loopback requester.
+fn is_lan_peer_endpoint(method: &str, path: &str) -> bool {
+    matches!(
+        (method, path),
+        (
+            "GET",
+            "/api/sync/state"
+                | "/api/sync/list-logbooks"
+                | "/api/sync/get-head"
+                | "/api/sync/events-since"
+                | "/api/sync/event-metadata"
+        ) | ("POST", "/api/sync/lan/pairing-accept")
+    )
+}
+
+/// A request may reach the local control plane only from loopback, or when the
+/// operator explicitly opted in through `HAM_GUI_ALLOW_REMOTE_CONTROL_API=1`.
+/// LAN peers keep their own signed, trust-gated read endpoints.
+fn remote_request_is_permitted(
+    allow_remote_control_api: bool,
+    requester_is_loopback: bool,
+    method: &str,
+    path: &str,
+) -> bool {
+    allow_remote_control_api || requester_is_loopback || is_lan_peer_endpoint(method, path)
+}
+
+fn requester_is_loopback(stream: &TcpStream) -> bool {
+    stream
+        .peer_addr()
+        .map(|address| address.ip().is_loopback())
+        .unwrap_or(false)
+}
+
+fn reject_remote_control_request(state: &AppState, method: &str, path: &str) -> Vec<u8> {
+    {
+        let mut sync = state
+            .sync
+            .lock()
+            .expect("sync state mutex should not be poisoned");
+        sync.warning_count += 1;
+    }
+    let _ = publish_gui_runtime(
+        state,
+        "sync.lan.control_api.rejected",
+        RuntimeEventSeverity::Warn,
+        "Rejected a non-loopback request for a local control endpoint",
+        Some(json!({"method": method, "path": path})),
+        None,
+    );
+    json_response_with_status(
+        403,
+        &json!({
+            "ok": false,
+            "error": "local control endpoints are served to loopback requesters only"
+        }),
+    )
 }
 
 #[derive(Debug)]
@@ -1254,6 +1399,8 @@ struct SyncStatePayload {
     config: SyncConfig,
     identity: LocalPeerIdentity,
     discovery_running: bool,
+    scan_running: bool,
+    last_scan: Option<LanScanSummary>,
     peers: Vec<PeerRecord>,
     latest_handshake: Option<ham_core::sync::HandshakeResponse>,
     latest_preview: Option<PreviewPullResponse>,
@@ -1836,6 +1983,93 @@ fn lookup_provider_status(state: &AppState) -> LookupProviderStatus {
         },
         rate_limited: false,
     }
+}
+
+/// The shell the client renders, with the operator's saved layout and theme
+/// applied. Everything else about the shell is static, so this is the only
+/// place the two settings enter the payload.
+fn shell_state(state: &AppState) -> GuiShellState {
+    let appearance = *state
+        .appearance
+        .lock()
+        .expect("shell appearance mutex should not be poisoned");
+    let mut shell = GuiShellState::default_shell();
+    shell.appearance = appearance;
+    shell
+}
+
+fn handle_shell_appearance(state: &AppState, body: &[u8]) -> Vec<u8> {
+    #[derive(Deserialize)]
+    struct AppearanceRequest {
+        layout: Option<String>,
+        theme: Option<String>,
+    }
+
+    let request: AppearanceRequest = match serde_json::from_slice(body) {
+        Ok(value) => value,
+        Err(error) => return json_error(400, format!("invalid appearance payload: {error}")),
+    };
+
+    // An unknown slug is a client/server version skew, not an operator mistake.
+    // Reject it loudly here rather than silently storing something the shell
+    // cannot render.
+    let layout = match request.layout.as_deref() {
+        Some(value) => match ShellLayoutId::from_slug(value) {
+            Some(layout) => Some(layout),
+            None => return json_error(400, format!("unknown shell layout `{value}`")),
+        },
+        None => None,
+    };
+    let theme = match request.theme.as_deref() {
+        Some(value) => match ThemeMode::from_slug(value) {
+            Some(theme) => Some(theme),
+            None => return json_error(400, format!("unknown theme mode `{value}`")),
+        },
+        None => None,
+    };
+
+    let updated = {
+        let mut current = state
+            .appearance
+            .lock()
+            .expect("shell appearance mutex should not be poisoned");
+        if let Some(layout) = layout {
+            current.layout = layout;
+        }
+        if let Some(theme) = theme {
+            current.theme = theme;
+        }
+        *current
+    };
+
+    if let Err(error) = state.appearance_store.save(&updated) {
+        publish_support_storage_event(
+            &state.bridge,
+            "support.storage.save_failed",
+            RuntimeEventSeverity::Warn,
+            format!("Failed to save shell appearance: {error}"),
+            None,
+        );
+    }
+    let _ = state.bridge.publish(RuntimeEventInput {
+        event_type: "shell.appearance.changed".to_owned(),
+        severity: RuntimeEventSeverity::Info,
+        source: "ham-gui".to_owned(),
+        source_plugin_id: Some("core.gui".to_owned()),
+        workspace_id: Some("dashboard".to_owned()),
+        payload_summary: format!(
+            "Shell layout set to {} with {} theme",
+            updated.layout.title(),
+            updated.theme.title()
+        ),
+        redacted_payload: Some(json!({
+            "layout": updated.layout.slug(),
+            "theme": updated.theme.slug()
+        })),
+        error: None,
+    });
+
+    json_response(&json!({ "appearance": updated }))
 }
 
 fn handle_lookup_status(state: &AppState) -> Vec<u8> {
@@ -4919,6 +5153,8 @@ fn sync_state_payload(state: &AppState) -> SyncStatePayload {
         config: sync.config.clone(),
         identity: sync.identity.clone(),
         discovery_running: sync.discovery_running,
+        scan_running: sync.scan_running,
+        last_scan: sync.last_scan.clone(),
         peers: sync.registry.list(),
         latest_handshake: sync.latest_handshake.clone(),
         latest_preview: sync.latest_preview.clone(),
@@ -5697,6 +5933,298 @@ fn handle_sync_discovery(state: &Arc<AppState>, running: bool) -> Vec<u8> {
     json_response(&sync_state_payload(state))
 }
 
+/// Result of one on-demand network scan, kept so the UI can explain what a scan
+/// actually covered rather than only showing the peers it happened to find.
+#[derive(Debug, Clone, Serialize)]
+struct LanScanSummary {
+    started_at: String,
+    finished_at: String,
+    /// Distinct instances seen by either pass. One instance announces repeatedly
+    /// and can answer on more than one address, so the counters below are
+    /// observation counts and always over-report the number of instances.
+    peers_found: usize,
+    multicast_observations: usize,
+    multicast_error: Option<String>,
+    probed_addresses: usize,
+    probed_responses: usize,
+    scanned_ports: Vec<u16>,
+    local_addresses: Vec<String>,
+}
+
+fn handle_sync_discovery_scan(state: &Arc<AppState>) -> Vec<u8> {
+    if let Err(response) = ensure_gui_permission(
+        state,
+        &core_gui_manifest(),
+        PluginCapability::SyncLanDiscovery,
+        "LAN network scan permission check",
+    ) {
+        return response;
+    }
+    let started = {
+        let mut sync = state
+            .sync
+            .lock()
+            .expect("sync state mutex should not be poisoned");
+        if !sync.config.enable_lan_discovery {
+            None
+        } else if sync.scan_running {
+            Some(false)
+        } else {
+            sync.scan_running = true;
+            Some(true)
+        }
+    };
+    match started {
+        None => json_response_with_status(
+            400,
+            &json!({"ok": false, "error": "LAN discovery is disabled in sync configuration"}),
+        ),
+        // The GUI API serves one request at a time, so the scan runs on its own
+        // thread and the UI picks up peers from the sync state as they land.
+        Some(true) => {
+            start_lan_scan_worker(state.clone());
+            json_response(
+                &json!({"ok": true, "scan_started": true, "sync": sync_state_payload(state)}),
+            )
+        }
+        Some(false) => json_response(
+            &json!({"ok": true, "scan_started": false, "sync": sync_state_payload(state)}),
+        ),
+    }
+}
+
+struct LanScanRunningGuard(Arc<AppState>);
+
+impl Drop for LanScanRunningGuard {
+    fn drop(&mut self) {
+        if let Ok(mut sync) = self.0.sync.lock() {
+            sync.scan_running = false;
+        }
+    }
+}
+
+fn start_lan_scan_worker(state: Arc<AppState>) {
+    thread::spawn(move || {
+        let (config, identity) = {
+            let sync = state
+                .sync
+                .lock()
+                .expect("sync state mutex should not be poisoned");
+            (sync.config.clone(), sync.identity.clone())
+        };
+        let _ = publish_gui_runtime(
+            &state,
+            "network.scan.started",
+            RuntimeEventSeverity::Info,
+            "LAN network scan started",
+            Some(json!({"listen_seconds": LAN_SCAN_LISTEN_WINDOW.as_secs()})),
+            None,
+        );
+        // Clearing the flag on drop keeps a failed scan from wedging the button:
+        // without it a panicking worker would leave `scan_running` set forever.
+        let running = LanScanRunningGuard(state.clone());
+        let summary = run_lan_scan(&state, config, identity);
+        {
+            let mut sync = state
+                .sync
+                .lock()
+                .expect("sync state mutex should not be poisoned");
+            sync.last_scan = Some(summary.clone());
+        }
+        drop(running);
+        expire_stale_discovery_peers(&state);
+        let _ = publish_gui_runtime(
+            &state,
+            "network.scan.completed",
+            RuntimeEventSeverity::Info,
+            "LAN network scan completed",
+            Some(json!({
+                "peers_found": summary.peers_found,
+                "multicast_observations": summary.multicast_observations,
+                "probed_addresses": summary.probed_addresses,
+                "probed_responses": summary.probed_responses,
+                "scanned_ports": summary.scanned_ports
+            })),
+            summary.multicast_error.clone(),
+        );
+    });
+}
+
+/// Listening for announcements and probing addresses directly cover different
+/// failure modes, so both run together: multicast finds instances that are
+/// broadcasting, and the direct sweep finds instances on networks that drop
+/// multicast or that simply have discovery switched off.
+fn run_lan_scan(
+    state: &Arc<AppState>,
+    config: SyncConfig,
+    identity: LocalPeerIdentity,
+) -> LanScanSummary {
+    let started_at = chrono::Utc::now().to_rfc3339();
+    let ports = lan_scan_ports(state, &config);
+    let local_addresses = local_scan_interface_addresses(&config);
+    let targets = local_scan_targets(&config, &ports, LAN_SCAN_MAX_TARGETS);
+
+    let sweep_state = Arc::clone(state);
+    let sweep = thread::spawn(move || run_lan_direct_sweep(&sweep_state, targets));
+
+    let (multicast_observations, multicast_ids, multicast_error) =
+        match run_lan_multicast_scan(state, config.clone(), identity) {
+            Ok((observations, peer_ids)) => (observations, peer_ids, None),
+            Err(error) => {
+                record_lan_discovery_error(state, "network.scan.multicast_failed", error.clone());
+                (0, HashSet::new(), Some(error))
+            }
+        };
+    let sweep_result = sweep.join().unwrap_or_default();
+
+    // Both passes can see the same instance, and either can see it more than
+    // once, so distinct peer ids are what "found" means.
+    let mut peer_ids = multicast_ids;
+    peer_ids.extend(sweep_result.peer_ids);
+
+    LanScanSummary {
+        started_at,
+        finished_at: chrono::Utc::now().to_rfc3339(),
+        peers_found: peer_ids.len(),
+        multicast_observations,
+        multicast_error,
+        probed_addresses: sweep_result.probed_addresses,
+        probed_responses: sweep_result.probed_responses,
+        scanned_ports: ports,
+        local_addresses: local_addresses
+            .into_iter()
+            .map(|address| address.to_string())
+            .collect(),
+    }
+}
+
+fn run_lan_multicast_scan(
+    state: &AppState,
+    config: SyncConfig,
+    identity: LocalPeerIdentity,
+) -> Result<(usize, HashSet<String>), String> {
+    let service = LanDiscoveryService { config, identity };
+    let observations = service
+        .scan_once(LAN_SCAN_LISTEN_WINDOW)
+        .map_err(|error| error.to_string())?;
+    let mut observed_count = 0usize;
+    let mut peer_ids = HashSet::new();
+    for observation in observations {
+        if let Some(peer_id) =
+            observe_discovery_packet(state, observation.packet, observation.source)
+        {
+            observed_count += 1;
+            peer_ids.insert(peer_id);
+        }
+    }
+    Ok((observed_count, peer_ids))
+}
+
+#[derive(Debug, Default)]
+struct LanSweepResult {
+    probed_addresses: usize,
+    probed_responses: usize,
+    peer_ids: HashSet<String>,
+}
+
+/// Probes candidate addresses in parallel with short timeouts; a serial sweep of a
+/// /24 would take minutes, which is far longer than an operator will wait.
+fn run_lan_direct_sweep(state: &Arc<AppState>, targets: Vec<SocketAddr>) -> LanSweepResult {
+    let probed_addresses = targets.len();
+    if probed_addresses == 0 {
+        return LanSweepResult::default();
+    }
+    let worker_count = LAN_SCAN_WORKER_COUNT.min(probed_addresses);
+    let queue = Arc::new(Mutex::new(targets));
+    let mut handles = Vec::with_capacity(worker_count);
+    for _ in 0..worker_count {
+        let queue = Arc::clone(&queue);
+        let state = Arc::clone(state);
+        handles.push(thread::spawn(move || {
+            let mut responses = 0usize;
+            let mut peer_ids = HashSet::new();
+            loop {
+                let Some(target) = queue
+                    .lock()
+                    .expect("LAN scan queue mutex should not be poisoned")
+                    .pop()
+                else {
+                    break;
+                };
+                let Ok(identity) = fetch_lan_peer_identity_with_timeouts(
+                    target,
+                    LAN_SCAN_CONNECT_TIMEOUT,
+                    LAN_SCAN_IO_TIMEOUT,
+                ) else {
+                    continue;
+                };
+                if let Some(peer_id) = record_probed_lan_peer(&state, identity, target) {
+                    responses += 1;
+                    peer_ids.insert(peer_id);
+                }
+            }
+            (responses, peer_ids)
+        }));
+    }
+    let mut result = LanSweepResult {
+        probed_addresses,
+        ..LanSweepResult::default()
+    };
+    for handle in handles {
+        let (responses, peer_ids) = handle.join().unwrap_or_default();
+        result.probed_responses += responses;
+        // A multi-homed instance answers on more than one swept address, so the
+        // response count is not an instance count.
+        result.peer_ids.extend(peer_ids);
+    }
+    result
+}
+
+/// Ports another instance is likely to serve its sync API on: whatever this
+/// instance bound, the default GUI port, and the configured local sync port.
+fn lan_scan_ports(state: &AppState, config: &SyncConfig) -> Vec<u16> {
+    let local_api_port = state
+        .sync
+        .lock()
+        .expect("sync state mutex should not be poisoned")
+        .identity
+        .local_api_port;
+    lan_scan_port_candidates(local_api_port, config.local_sync_port)
+}
+
+fn lan_scan_port_candidates(local_api_port: Option<u16>, local_sync_port: u16) -> Vec<u16> {
+    let mut ports = Vec::new();
+    for port in local_api_port
+        .into_iter()
+        .chain([DEFAULT_GUI_API_PORT, local_sync_port])
+    {
+        if port != 0 && !ports.contains(&port) {
+            ports.push(port);
+        }
+    }
+    ports
+}
+
+/// Records a peer whose `/api/sync/state` identity has already been read, so the
+/// registry never holds an address that did not answer as this protocol.
+fn record_probed_lan_peer(
+    state: &AppState,
+    identity: LocalPeerIdentity,
+    address: SocketAddr,
+) -> Option<String> {
+    let packet = DiscoveryPacket::from_identity(&identity);
+    let observation = {
+        let mut sync = state
+            .sync
+            .lock()
+            .expect("sync state mutex should not be poisoned");
+        let local = sync.identity.clone();
+        sync.registry.observe(&local, packet, address)
+    };
+    publish_discovery_observation(state, &observation, address);
+    recorded_peer_id(&observation)
+}
+
 fn handle_sync_refresh(state: &AppState) -> Vec<u8> {
     let discovery_snapshot = {
         let sync = state
@@ -5841,7 +6369,7 @@ fn run_lan_discovery_cycle(
         .map_err(|error| error.to_string())?;
     let mut observed_count = 0usize;
     for observation in observations {
-        if observe_discovery_packet(state, observation.packet, observation.source) {
+        if observe_discovery_packet(state, observation.packet, observation.source).is_some() {
             observed_count += 1;
         }
     }
@@ -5849,13 +6377,19 @@ fn run_lan_discovery_cycle(
     Ok(observed_count)
 }
 
-fn observe_discovery_packet(state: &AppState, packet: DiscoveryPacket, source: SocketAddr) -> bool {
+/// Returns the recorded peer id so a caller can count distinct instances: one
+/// instance announces repeatedly, so counting observations over-reports it.
+fn observe_discovery_packet(
+    state: &AppState,
+    packet: DiscoveryPacket,
+    source: SocketAddr,
+) -> Option<String> {
     if !is_supported_discovery_packet(&packet) {
         publish_discovery_observation(state, &PeerObservation::IgnoredIncompatible, source);
-        return false;
+        return None;
     }
     if is_local_discovery_packet(state, &packet) {
-        return false;
+        return None;
     }
     let api_address = discovery_api_address(&packet, source);
     if !is_usable_discovery_source(api_address) {
@@ -5867,7 +6401,7 @@ fn observe_discovery_packet(state: &AppState, packet: DiscoveryPacket, source: S
             Some(json!({"source": source.to_string(), "api_address": api_address.to_string()})),
             None,
         );
-        return false;
+        return None;
     }
     let identity = match fetch_lan_peer_identity(api_address) {
         Ok(identity) => identity,
@@ -5880,7 +6414,7 @@ fn observe_discovery_packet(state: &AppState, packet: DiscoveryPacket, source: S
                 Some(json!({"api_address": api_address.to_string()})),
                 Some(error),
             );
-            return false;
+            return None;
         }
     };
     if identity.device_id != packet.device_id || identity.session_id != packet.session_id {
@@ -5896,7 +6430,7 @@ fn observe_discovery_packet(state: &AppState, packet: DiscoveryPacket, source: S
             })),
             None,
         );
-        return false;
+        return None;
     }
     let packet = DiscoveryPacket::from_identity(&identity);
     let observation = {
@@ -5908,10 +6442,19 @@ fn observe_discovery_packet(state: &AppState, packet: DiscoveryPacket, source: S
         sync.registry.observe(&local, packet, api_address)
     };
     publish_discovery_observation(state, &observation, api_address);
-    matches!(
-        observation,
-        PeerObservation::Discovered(_) | PeerObservation::Updated(_)
-    )
+    recorded_peer_id(&observation)
+}
+
+/// The peer id an observation recorded, or `None` when the packet was ignored.
+/// It is the registry's own dedup key, so the same instance always yields the
+/// same id however many times it is seen.
+fn recorded_peer_id(observation: &PeerObservation) -> Option<String> {
+    match observation {
+        PeerObservation::Discovered(peer_id) | PeerObservation::Updated(peer_id) => {
+            Some(peer_id.clone())
+        }
+        PeerObservation::IgnoredSelf | PeerObservation::IgnoredIncompatible => None,
+    }
 }
 
 fn is_local_discovery_packet(state: &AppState, packet: &DiscoveryPacket) -> bool {
@@ -7362,7 +7905,21 @@ fn lan_api_address_rank(address: SocketAddr) -> u8 {
 }
 
 fn fetch_lan_peer_identity(address: SocketAddr) -> Result<LocalPeerIdentity, String> {
-    let state: Value = lan_http_get_json(address, "/api/sync/state", &[])?;
+    fetch_lan_peer_identity_with_timeouts(address, LAN_HTTP_CONNECT_TIMEOUT, LAN_HTTP_IO_TIMEOUT)
+}
+
+fn fetch_lan_peer_identity_with_timeouts(
+    address: SocketAddr,
+    connect_timeout: Duration,
+    io_timeout: Duration,
+) -> Result<LocalPeerIdentity, String> {
+    let state: Value = lan_http_get_json_with_timeouts(
+        address,
+        "/api/sync/state",
+        &[],
+        connect_timeout,
+        io_timeout,
+    )?;
     serde_json::from_value(
         state
             .get("identity")
@@ -7475,13 +8032,32 @@ fn lan_http_get_json<T>(
 where
     T: DeserializeOwned,
 {
-    let mut stream = TcpStream::connect_timeout(&address, Duration::from_secs(2))
+    lan_http_get_json_with_timeouts(
+        address,
+        path,
+        extra_headers,
+        LAN_HTTP_CONNECT_TIMEOUT,
+        LAN_HTTP_IO_TIMEOUT,
+    )
+}
+
+fn lan_http_get_json_with_timeouts<T>(
+    address: SocketAddr,
+    path: &str,
+    extra_headers: &[(String, String)],
+    connect_timeout: Duration,
+    io_timeout: Duration,
+) -> Result<T, String>
+where
+    T: DeserializeOwned,
+{
+    let mut stream = TcpStream::connect_timeout(&address, connect_timeout)
         .map_err(|error| format!("failed to connect to LAN peer {address}: {error}"))?;
     stream
-        .set_read_timeout(Some(Duration::from_secs(5)))
+        .set_read_timeout(Some(io_timeout))
         .map_err(|error| format!("failed to set LAN peer read timeout: {error}"))?;
     stream
-        .set_write_timeout(Some(Duration::from_secs(5)))
+        .set_write_timeout(Some(io_timeout))
         .map_err(|error| format!("failed to set LAN peer write timeout: {error}"))?;
     let request = format!(
         "GET {path} HTTP/1.1\r\nHost: {}\r\nAccept: application/json\r\nConnection: close\r\n{}\r\n",
@@ -8095,6 +8671,21 @@ fn handle_account_recovery_complete(state: &AppState, body: &[u8]) -> Vec<u8> {
     )
 }
 
+/// Claims the one-time instance-administrator bootstrap on a fresh server.
+fn handle_account_bootstrap(state: &AppState, body: &[u8]) -> Vec<u8> {
+    let request = match serde_json::from_slice::<AccountLoginRequest>(body) {
+        Ok(request) => request,
+        Err(_) => return json_error(400, "invalid bootstrap JSON"),
+    };
+    run_account_action(
+        state,
+        HostedAccountAction::Bootstrap {
+            email: request.email,
+            display_name: request.display_name,
+        },
+    )
+}
+
 fn handle_account_login(state: &AppState, body: &[u8]) -> Vec<u8> {
     let request = match serde_json::from_slice::<AccountLoginRequest>(body) {
         Ok(request) => request,
@@ -8120,6 +8711,275 @@ fn handle_account_device_revoke(state: &AppState, body: &[u8]) -> Vec<u8> {
             device_id: request.device_id,
         },
     )
+}
+
+/// Which invitation route a request targets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AdminInvitationVerb {
+    Inspect,
+    Resend,
+    Expire,
+    Revoke,
+}
+
+#[derive(Debug, Deserialize)]
+struct AdminHostingUpdateRequest {
+    #[serde(default)]
+    operation_mode: Option<String>,
+    #[serde(default)]
+    registration_mode: Option<String>,
+    #[serde(default)]
+    session_ttl_seconds: Option<i64>,
+    #[serde(default)]
+    refresh_ttl_seconds: Option<i64>,
+    #[serde(default)]
+    invitation_ttl_seconds: Option<i64>,
+    #[serde(default)]
+    verification_ttl_seconds: Option<i64>,
+    #[serde(default)]
+    recovery_ttl_seconds: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AdminInvitationCreateRequest {
+    logbook_id: uuid::Uuid,
+    email: String,
+    role: String,
+    #[serde(default)]
+    expires_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AdminInvitationRequest {
+    invite_id: uuid::Uuid,
+    #[serde(default)]
+    expires_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+fn publish_admin_runtime(
+    state: &AppState,
+    event_type: &str,
+    severity: RuntimeEventSeverity,
+    summary: &str,
+    redacted_payload: Option<Value>,
+    error: Option<String>,
+) -> std::io::Result<ham_core::RuntimeEventEnvelope> {
+    state.bridge.publish(RuntimeEventInput {
+        event_type: event_type.to_owned(),
+        severity,
+        source: "ham-admin".to_owned(),
+        source_plugin_id: None,
+        workspace_id: Some("dashboard".to_owned()),
+        payload_summary: summary.to_owned(),
+        redacted_payload,
+        error,
+    })
+}
+
+/// Publishes a redacted runtime event for one administration result.
+///
+/// The invitation token is never part of the runtime event, only the fact that
+/// one was issued.
+fn publish_admin_result(state: &AppState, result: &HostedAdminResult) {
+    let severity = if result.outcome.is_accepted() {
+        RuntimeEventSeverity::Info
+    } else if result.retryable {
+        RuntimeEventSeverity::Warn
+    } else {
+        RuntimeEventSeverity::Error
+    };
+    let _ = publish_admin_runtime(
+        state,
+        &format!("{}.result", result.action),
+        severity,
+        &result.message,
+        Some(json!({
+            "action": result.action,
+            "outcome": result.outcome,
+            "status": result.status,
+            "retryable": result.retryable,
+            "user_action_required": result.user_action_required,
+            "administrator": result.snapshot.administrator,
+            "request_id": result.request_id,
+        })),
+        result.error_code.clone(),
+    );
+}
+
+fn hosted_account_snapshot_for_admin(
+    state: &AppState,
+) -> Result<ham_core::sync::HostedAccountSnapshot, Vec<u8>> {
+    state
+        .hosted_account
+        .snapshot(&hosted_account_config(state), chrono::Utc::now())
+        .map_err(|error| json_error(500, format!("failed to read hosted account state: {error}")))
+}
+
+fn handle_admin_state(state: &AppState) -> Vec<u8> {
+    if let Err(response) = ensure_gui_permission(
+        state,
+        &core_gui_manifest(),
+        PluginCapability::SyncCloudConnect,
+        "Hosted administration state permission check",
+    ) {
+        return response;
+    }
+    let account = match hosted_account_snapshot_for_admin(state) {
+        Ok(account) => account,
+        Err(response) => return response,
+    };
+    match state.hosted_admin.snapshot(&account, chrono::Utc::now()) {
+        Ok(snapshot) => json_response(&json!({
+            "ok": true,
+            "admin": snapshot,
+            "signed_in": account.connection_state.is_signed_in(),
+            "account_email": account.email,
+        })),
+        Err(error) => json_error(
+            500,
+            format!("failed to read hosted administration state: {error}"),
+        ),
+    }
+}
+
+/// Executes one administration action against the signed-in hosted server.
+///
+/// The single-use invitation token is returned in this response and nowhere
+/// else: it is not persisted, logged, or published as a runtime event.
+fn run_admin_action(state: &AppState, action: HostedAdminAction) -> Vec<u8> {
+    if let Err(response) = ensure_gui_permission(
+        state,
+        &core_gui_manifest(),
+        PluginCapability::SyncCloudConnect,
+        "Hosted administration permission check",
+    ) {
+        return response;
+    }
+    let account = match hosted_account_snapshot_for_admin(state) {
+        Ok(account) => account,
+        Err(response) => return response,
+    };
+    let executed = {
+        let mut credential_store = state
+            .credential_store
+            .lock()
+            .expect("credential store mutex should not be poisoned");
+        let mut secrets = GuiHostedAccountSecrets {
+            store: credential_store.as_mut(),
+        };
+        state.hosted_admin.execute(
+            &action,
+            &account,
+            &HttpHostedAdminTransport::new(),
+            &mut secrets,
+            chrono::Utc::now(),
+        )
+    };
+    match executed {
+        Ok(mut result) => {
+            publish_admin_result(state, &result);
+            let invitation_token = result.take_invitation_token();
+            json_response(&json!({
+                "ok": result.outcome.is_accepted(),
+                "admin_result": result,
+                "invitation_token": invitation_token,
+            }))
+        }
+        Err(error) => {
+            let _ = publish_admin_runtime(
+                state,
+                "admin.request.rejected",
+                RuntimeEventSeverity::Warn,
+                "Hosted administration request was rejected before it was sent",
+                Some(json!({"action": action.name()})),
+                Some(error.to_string()),
+            );
+            json_error(
+                400,
+                format!("hosted administration request rejected: {error}"),
+            )
+        }
+    }
+}
+
+fn handle_admin_hosting_update(state: &AppState, body: &[u8]) -> Vec<u8> {
+    let request = match serde_json::from_slice::<AdminHostingUpdateRequest>(body) {
+        Ok(request) => request,
+        Err(_) => return json_error(400, "invalid hosting update JSON"),
+    };
+    let operation_mode = match request
+        .operation_mode
+        .as_deref()
+        .map(str::parse::<HostedAdminOperationMode>)
+        .transpose()
+    {
+        Ok(mode) => mode,
+        Err(error) => return json_error(400, error.to_string()),
+    };
+    let registration_mode = match request
+        .registration_mode
+        .as_deref()
+        .map(str::parse::<HostedAdminRegistrationMode>)
+        .transpose()
+    {
+        Ok(mode) => mode,
+        Err(error) => return json_error(400, error.to_string()),
+    };
+    let update = HostedAdminHostingUpdate {
+        operation_mode,
+        registration_mode,
+        session_ttl_seconds: request.session_ttl_seconds,
+        refresh_ttl_seconds: request.refresh_ttl_seconds,
+        invitation_ttl_seconds: request.invitation_ttl_seconds,
+        verification_ttl_seconds: request.verification_ttl_seconds,
+        recovery_ttl_seconds: request.recovery_ttl_seconds,
+    };
+    if let Err(error) = update.to_body() {
+        return json_error(400, error.to_string());
+    }
+    run_admin_action(state, HostedAdminAction::HostingUpdate { update })
+}
+
+fn handle_admin_invitation_create(state: &AppState, body: &[u8]) -> Vec<u8> {
+    let request = match serde_json::from_slice::<AdminInvitationCreateRequest>(body) {
+        Ok(request) => request,
+        Err(_) => return json_error(400, "invalid invitation JSON"),
+    };
+    let role = match request.role.parse::<HostedAdminLogbookRole>() {
+        Ok(role) => role,
+        Err(error) => return json_error(400, error.to_string()),
+    };
+    run_admin_action(
+        state,
+        HostedAdminAction::InvitationCreate {
+            logbook_id: request.logbook_id,
+            email: request.email,
+            role,
+            expires_at: request.expires_at,
+        },
+    )
+}
+
+fn handle_admin_invitation_action(
+    state: &AppState,
+    body: &[u8],
+    verb: AdminInvitationVerb,
+) -> Vec<u8> {
+    let request = match serde_json::from_slice::<AdminInvitationRequest>(body) {
+        Ok(request) => request,
+        Err(_) => return json_error(400, "invalid invitation action JSON"),
+    };
+    let invite_id = request.invite_id;
+    let action = match verb {
+        AdminInvitationVerb::Inspect => HostedAdminAction::InvitationGet { invite_id },
+        AdminInvitationVerb::Resend => HostedAdminAction::InvitationResend { invite_id },
+        AdminInvitationVerb::Expire => HostedAdminAction::InvitationExpire {
+            invite_id,
+            expires_at: request.expires_at,
+        },
+        AdminInvitationVerb::Revoke => HostedAdminAction::InvitationRevoke { invite_id },
+    };
+    run_admin_action(state, action)
 }
 
 fn publish_cloud_runtime(
@@ -8305,6 +9165,9 @@ mod tests {
             hosted_account: HostedAccountClient::new(JsonHostedAccountStore::new(
                 support_dir.join("hosted-account.json"),
             )),
+            hosted_admin: HostedAdminClient::new(JsonHostedAdminStore::new(
+                support_dir.join("hosted-admin.json"),
+            )),
             cloud_server: InMemoryCloudSyncServer::new(CloudServerConfig::default()),
             lookup_cache: LookupCache::new(),
             lookup_config: Mutex::new(LookupUiConfig::default()),
@@ -8315,6 +9178,10 @@ mod tests {
             rig_config: Mutex::new(RigUiConfig::default()),
             station_store,
             station_book: Mutex::new(StationBook::default()),
+            appearance: Mutex::new(ShellAppearance::default()),
+            appearance_store: JsonSupportStore::<ShellAppearance>::new(
+                support_dir.join("shell-appearance.json"),
+            ),
             credential_store: Mutex::new(Box::new(
                 InsecureDevCredentialStore::open(support_dir.join("dev-credentials.json"), true)
                     .unwrap(),
@@ -8330,6 +9197,7 @@ mod tests {
             upload_queue_store,
             permission_grants: Mutex::new(permission_grants),
             permission_settings: Mutex::new(permission_settings),
+            allow_remote_control_api: false,
         }
     }
 
@@ -8355,6 +9223,52 @@ mod tests {
             .unwrap()
             .as_slice(),
         ))
+    }
+
+    #[test]
+    fn shell_appearance_is_saved_and_served_back_with_the_shell() {
+        let state = test_state("ke8ygw-ham-gui-shell-appearance");
+        assert_eq!(
+            shell_state(&state).appearance,
+            ShellAppearance::default(),
+            "a fresh install starts on the default layout"
+        );
+
+        let payload = response_json(handle_shell_appearance(
+            &state,
+            br#"{"layout":"field-notebook","theme":"light"}"#,
+        ));
+        assert_eq!(payload["appearance"]["layout"], json!("field-notebook"));
+        assert_eq!(payload["appearance"]["theme"], json!("light"));
+
+        let shell = shell_state(&state);
+        assert_eq!(shell.appearance.layout, ShellLayoutId::FieldNotebook);
+        assert_eq!(shell.appearance.theme, ThemeMode::Light);
+        assert_eq!(
+            shell.layouts.len(),
+            ShellLayoutId::ALL.len(),
+            "the switcher needs every layout to choose from"
+        );
+
+        // Changing only the theme must leave the chosen layout alone.
+        let payload = response_json(handle_shell_appearance(&state, br#"{"theme":"dark"}"#));
+        assert_eq!(payload["appearance"]["layout"], json!("field-notebook"));
+        assert_eq!(payload["appearance"]["theme"], json!("dark"));
+    }
+
+    #[test]
+    fn unknown_shell_appearance_choices_are_rejected_without_changing_state() {
+        let state = test_state("ke8ygw-ham-gui-shell-appearance-reject");
+        let _ = handle_shell_appearance(&state, br#"{"layout":"focus-console"}"#);
+
+        let rejected = handle_shell_appearance(&state, br#"{"layout":"holodeck"}"#);
+        let text = String::from_utf8(rejected).unwrap();
+        assert!(text.starts_with("HTTP/1.1 400"), "{text}");
+        assert_eq!(
+            shell_state(&state).appearance.layout,
+            ShellLayoutId::FocusConsole,
+            "a rejected request must not clobber the saved layout"
+        );
     }
 
     #[test]
@@ -8426,6 +9340,88 @@ mod tests {
                 .unwrap_or_default()
                 .contains("hosted account request rejected"));
         }
+    }
+
+    #[test]
+    fn admin_state_reports_a_signed_out_operator_without_contacting_the_server() {
+        let state = test_state("ke8ygw-ham-gui-admin-state");
+        let payload = response_json(handle_admin_state(&state));
+        assert_eq!(payload["ok"], true);
+        assert_eq!(payload["signed_in"], json!(false));
+        // No administration call has been made, so rights are unknown rather
+        // than denied.
+        assert_eq!(payload["admin"]["administrator"], json!(null));
+        assert_eq!(payload["admin"]["hosting"], json!(null));
+        assert_eq!(payload["admin"]["invitations"], json!([]));
+    }
+
+    #[test]
+    fn admin_routes_are_rejected_before_a_request_is_planned_without_a_session() {
+        let state = test_state("ke8ygw-ham-gui-admin-session");
+        for response in [
+            run_admin_action(&state, HostedAdminAction::HostingRead),
+            run_admin_action(&state, HostedAdminAction::InvitationList),
+            run_admin_action(&state, HostedAdminAction::AuditList),
+        ] {
+            let payload = response_json_any_status(response);
+            assert!(payload["error"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("hosted administration request rejected"));
+        }
+    }
+
+    #[test]
+    fn admin_hosting_updates_reject_unknown_modes_and_empty_patches() {
+        let state = test_state("ke8ygw-ham-gui-admin-hosting");
+
+        let payload = response_json_any_status(handle_admin_hosting_update(
+            &state,
+            br#"{"registration_mode":"wide_open"}"#,
+        ));
+        assert!(payload["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("registration_mode"));
+
+        let payload = response_json_any_status(handle_admin_hosting_update(&state, b"{}"));
+        assert!(payload["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("must change at least one field"));
+
+        let payload = response_json_any_status(handle_admin_hosting_update(
+            &state,
+            br#"{"session_ttl_seconds":0}"#,
+        ));
+        assert!(payload["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("session_ttl_seconds"));
+    }
+
+    #[test]
+    fn admin_invitation_requests_reject_unknown_roles_and_malformed_json() {
+        let state = test_state("ke8ygw-ham-gui-admin-invite");
+
+        let payload = response_json_any_status(handle_admin_invitation_create(
+            &state,
+            br#"{"logbook_id":"00000000-0000-4000-8000-000000000001","email":"a@b.test","role":"superuser"}"#,
+        ));
+        assert!(payload["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("role"));
+
+        let payload = response_json_any_status(handle_admin_invitation_create(&state, b"{"));
+        assert_eq!(payload["error"], json!("invalid invitation JSON"));
+
+        let payload = response_json_any_status(handle_admin_invitation_action(
+            &state,
+            b"{",
+            AdminInvitationVerb::Revoke,
+        ));
+        assert_eq!(payload["error"], json!("invalid invitation action JSON"));
     }
 
     #[test]
@@ -8562,6 +9558,97 @@ mod tests {
         assert!(parse_lan_peer_address("8.8.8.8:9468").is_err());
         assert!(parse_lan_peer_address("[2001:4860:4860::8888]:9468").is_err());
         assert!(parse_lan_peer_address("127.0.0.1:0").is_err());
+    }
+
+    #[test]
+    fn lan_peers_reach_signed_read_endpoints_but_not_the_local_control_plane() {
+        for (method, path) in [
+            ("GET", "/api/sync/state"),
+            ("GET", "/api/sync/list-logbooks"),
+            ("GET", "/api/sync/get-head"),
+            ("GET", "/api/sync/events-since"),
+            ("GET", "/api/sync/event-metadata"),
+            ("POST", "/api/sync/lan/pairing-accept"),
+        ] {
+            assert!(
+                is_lan_peer_endpoint(method, path),
+                "{method} {path} is part of the LAN read surface"
+            );
+            assert!(remote_request_is_permitted(false, false, method, path));
+        }
+
+        for (method, path) in [
+            ("POST", "/api/qso/create"),
+            ("POST", "/api/qso/delete"),
+            ("POST", "/api/net/session/start"),
+            ("POST", "/api/backup/import"),
+            ("POST", "/api/credentials/create"),
+            ("POST", "/api/sync/lan/pairing-token"),
+            ("POST", "/api/sync/lan/pairing-complete"),
+            ("GET", "/api/sync/lan/pairing-accept"),
+            ("POST", "/api/sync/lan/revoke"),
+            ("POST", "/api/sync/cloud/connect"),
+            ("POST", "/api/sync/pull-events"),
+            ("GET", "/api/qsos"),
+            ("GET", "/api/credentials"),
+            ("GET", "/"),
+            ("POST", "/api/sync/state"),
+            ("GET", "/api/sync/state/extra"),
+        ] {
+            assert!(
+                !is_lan_peer_endpoint(method, path),
+                "{method} {path} is local control surface, not a LAN read"
+            );
+            assert!(
+                !remote_request_is_permitted(false, false, method, path),
+                "{method} {path} must be refused for a non-loopback requester"
+            );
+            assert!(
+                remote_request_is_permitted(false, true, method, path),
+                "{method} {path} must stay available to the local UI"
+            );
+            assert!(
+                remote_request_is_permitted(true, false, method, path),
+                "{method} {path} must be reachable after the explicit remote opt-in"
+            );
+        }
+    }
+
+    #[test]
+    fn rejected_remote_control_requests_return_403_and_record_a_redacted_warning() {
+        let state = test_state("remote-control-guard");
+        let response = reject_remote_control_request(&state, "POST", "/api/qso/create");
+        assert!(
+            http_response_body(&response).is_err(),
+            "the guard must not return a success status"
+        );
+        let body = response_json_any_status(response);
+        assert_eq!(body["ok"], false);
+        assert_eq!(
+            body["error"],
+            "local control endpoints are served to loopback requesters only"
+        );
+
+        let events = state.bridge.replay(RuntimeEventFilter::default(), 10);
+        let rejection = events
+            .iter()
+            .find(|event| event.event_type == "sync.lan.control_api.rejected")
+            .expect("a rejected remote control request should publish a runtime warning");
+        assert_eq!(rejection.severity, RuntimeEventSeverity::Warn);
+        let payload = rejection
+            .redacted_payload
+            .as_ref()
+            .expect("the rejection should carry a redacted payload");
+        assert_eq!(payload["method"], "POST");
+        assert_eq!(payload["path"], "/api/qso/create");
+        assert_eq!(
+            state
+                .sync
+                .lock()
+                .expect("sync state mutex should not be poisoned")
+                .warning_count,
+            1
+        );
     }
 
     #[test]
@@ -8809,6 +9896,127 @@ mod tests {
             std::net::SocketAddrV6::new("fe80::272f:463d:a6b2:5af7".parse().unwrap(), 9737, 0, 12)
                 .into()
         ));
+    }
+
+    #[test]
+    fn repeated_sightings_of_one_instance_count_as_a_single_peer() {
+        let state = test_state("ham-gui-scan-dedup");
+        let identity = LocalPeerIdentity::new("Scanned Peer", Some(9467));
+        let first: SocketAddr = "192.168.1.20:9467".parse().unwrap();
+        // The same instance, seen again and on a second address it also answers on.
+        let second: SocketAddr = "10.0.0.20:9467".parse().unwrap();
+
+        let sightings: HashSet<String> = [
+            record_probed_lan_peer(&state, identity.clone(), first),
+            record_probed_lan_peer(&state, identity.clone(), first),
+            record_probed_lan_peer(&state, identity.clone(), second),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+
+        assert_eq!(
+            sightings.len(),
+            1,
+            "one instance is one peer: {sightings:?}"
+        );
+        assert_eq!(
+            sightings.into_iter().next().unwrap(),
+            format!("{}:{}", identity.device_id, identity.session_id)
+        );
+        assert_eq!(state.sync.lock().unwrap().registry.list().len(), 1);
+    }
+
+    #[test]
+    fn ignored_observations_record_no_peer() {
+        assert_eq!(recorded_peer_id(&PeerObservation::IgnoredSelf), None);
+        assert_eq!(
+            recorded_peer_id(&PeerObservation::IgnoredIncompatible),
+            None
+        );
+        assert_eq!(
+            recorded_peer_id(&PeerObservation::Discovered("peer-1".to_owned())),
+            Some("peer-1".to_owned())
+        );
+        assert_eq!(
+            recorded_peer_id(&PeerObservation::Updated("peer-1".to_owned())),
+            Some("peer-1".to_owned())
+        );
+    }
+
+    #[test]
+    fn lan_scan_probe_reads_peer_identity_and_gives_up_on_silent_addresses() {
+        let identity = LocalPeerIdentity::new("Scanned Peer", Some(9467));
+        let body = json!({"identity": identity}).to_string();
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let address = listener.local_addr().unwrap();
+        let responder = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0_u8; 1024];
+            let _ = stream.read(&mut request);
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            stream.write_all(response.as_bytes()).unwrap();
+        });
+
+        let probed = fetch_lan_peer_identity_with_timeouts(
+            address,
+            LAN_SCAN_CONNECT_TIMEOUT,
+            LAN_SCAN_IO_TIMEOUT,
+        )
+        .unwrap();
+        responder.join().unwrap();
+        assert_eq!(probed.device_id, identity.device_id);
+        assert_eq!(probed.local_api_port, Some(9467));
+
+        // A closed address has to fail fast, or a sweep of a whole subnet never finishes.
+        let closed = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let closed_address = closed.local_addr().unwrap();
+        drop(closed);
+        let started = Instant::now();
+        assert!(fetch_lan_peer_identity_with_timeouts(
+            closed_address,
+            LAN_SCAN_CONNECT_TIMEOUT,
+            LAN_SCAN_IO_TIMEOUT,
+        )
+        .is_err());
+        assert!(started.elapsed() < LAN_SCAN_CONNECT_TIMEOUT + LAN_SCAN_IO_TIMEOUT);
+    }
+
+    #[test]
+    fn lan_scan_ports_cover_this_instance_and_the_documented_defaults() {
+        assert_eq!(
+            lan_scan_port_candidates(Some(9470), 9738),
+            vec![9470, DEFAULT_GUI_API_PORT, 9738]
+        );
+        assert_eq!(
+            lan_scan_port_candidates(None, 9738),
+            vec![DEFAULT_GUI_API_PORT, 9738]
+        );
+        // A port this instance already covers is never probed twice.
+        assert_eq!(
+            lan_scan_port_candidates(Some(DEFAULT_GUI_API_PORT), DEFAULT_GUI_API_PORT),
+            vec![DEFAULT_GUI_API_PORT]
+        );
+        assert_eq!(
+            lan_scan_port_candidates(Some(0), 0),
+            vec![DEFAULT_GUI_API_PORT]
+        );
+    }
+
+    #[test]
+    fn lan_scan_targets_only_reach_addresses_the_manual_peer_form_would_accept() {
+        let config = SyncConfig::default();
+        let ports = lan_scan_port_candidates(Some(DEFAULT_GUI_API_PORT), config.local_sync_port);
+        for target in local_scan_targets(&config, &ports, LAN_SCAN_MAX_TARGETS) {
+            assert!(
+                is_allowed_lan_peer_ip(target.ip()),
+                "{target} is outside the LAN peer policy"
+            );
+            assert!(is_usable_discovery_source(target));
+        }
     }
 
     #[test]

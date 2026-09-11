@@ -3,7 +3,7 @@
 ## Release versions
 
 The Tauri desktop package, the `ham_core::desktop` native integration module, native iOS
-application, and shared internal Rust crates are all `0.4.0`, inherited from
+application, and shared internal Rust crates are all `0.5.1`, inherited from
 `[workspace.package].version`. Desktop and iOS ship on one product version, so
 a release tag covers both. Run `python scripts/check_versions.py` before
 creating release artifacts.
@@ -14,7 +14,7 @@ release credentials and the corresponding Windows/macOS/Linux runners. They
 have not been validated merely because unsigned local builds succeed.
 
 v1 includes signed desktop clients for Windows, macOS, and broad Linux
-distribution support. The `0.4.0` workspace has a real Tauri runtime
+distribution support. The `0.5.1` workspace has a real Tauri runtime
 wrapper and keeps signing, notarization, updater policy, and installer branding
 as v1 work.
 
@@ -84,6 +84,15 @@ safe placeholder and file name.
 
 When Tauri commands are unavailable, the same web UI falls back to the existing
 browser/server path prompt behavior.
+
+`app.withGlobalTauri` must stay `true` in `src-tauri/tauri.conf.json`. The bundled
+`crates/ham-client/web` assets are plain scripts with no bundler, so they reach the
+command layer through the injected `window.__TAURI__` global rather than an
+`@tauri-apps/api` import. With the flag off, Tauri injects no global, the UI finds
+no `invoke`, and `/api/*` requests stay relative — Tauri's asset protocol answers
+unknown paths with `index.html`, so `/api/shell` returns the shell markup and
+startup fails with `SyntaxError: Unexpected token '<'`. Native file dialogs
+silently degrade to `window.prompt` in the same state.
 
 ## Security Model
 

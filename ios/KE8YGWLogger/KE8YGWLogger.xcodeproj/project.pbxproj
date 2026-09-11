@@ -38,10 +38,12 @@
 		20000000000000000000010D /* Features/NetControl/NetControlView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 20000000000000000000000D /* Features/NetControl/NetControlView.swift */; };
 		20000000000000000000010E /* Features/Diagnostics/DiagnosticsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 20000000000000000000000E /* Features/Diagnostics/DiagnosticsView.swift */; };
 		700000000000000000000101 /* Features/Account/AccountWorkspaceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 700000000000000000000001 /* Features/Account/AccountWorkspaceView.swift */; };
+		700000000000000000000102 /* Features/Admin/AdminWorkspaceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 700000000000000000000002 /* Features/Admin/AdminWorkspaceView.swift */; };
 		200000000000000000000201 /* RustBridgeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000021 /* RustBridgeTests.swift */; };
 		300000000000000000000102 /* Shared/Services/ProjectionRefreshService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 300000000000000000000002 /* Shared/Services/ProjectionRefreshService.swift */; };
 		600000000000000000000101 /* Shared/Persistence/ProjectionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 600000000000000000000001 /* Shared/Persistence/ProjectionStore.swift */; };
 		600000000000000000000201 /* ProjectionStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 600000000000000000000021 /* ProjectionStoreTests.swift */; };
+		600000000000000000000209 /* DashboardLayoutTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 600000000000000000000029 /* DashboardLayoutTests.swift */; };
 		400000000000000000000201 /* ProjectionRefreshServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 400000000000000000000021 /* ProjectionRefreshServiceTests.swift */; };
 		FAAEDEAD2FFCAE2E007249F1 /* appicon.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = FAAEDEAC2FFCAE2E007249F1 /* appicon.xcassets */; };
 /* End PBXBuildFile section */
@@ -92,10 +94,12 @@
 		20000000000000000000000D /* Features/NetControl/NetControlView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Features/NetControl/NetControlView.swift; sourceTree = "<group>"; };
 		20000000000000000000000E /* Features/Diagnostics/DiagnosticsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Features/Diagnostics/DiagnosticsView.swift; sourceTree = "<group>"; };
 		700000000000000000000001 /* Features/Account/AccountWorkspaceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Features/Account/AccountWorkspaceView.swift; sourceTree = "<group>"; };
+		700000000000000000000002 /* Features/Admin/AdminWorkspaceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Features/Admin/AdminWorkspaceView.swift; sourceTree = "<group>"; };
 		200000000000000000000021 /* RustBridgeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RustBridgeTests.swift; sourceTree = "<group>"; };
 		300000000000000000000002 /* Shared/Services/ProjectionRefreshService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Shared/Services/ProjectionRefreshService.swift; sourceTree = "<group>"; };
 		600000000000000000000001 /* Shared/Persistence/ProjectionStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Shared/Persistence/ProjectionStore.swift; sourceTree = "<group>"; };
 		600000000000000000000021 /* ProjectionStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectionStoreTests.swift; sourceTree = "<group>"; };
+		600000000000000000000029 /* DashboardLayoutTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardLayoutTests.swift; sourceTree = "<group>"; };
 		400000000000000000000021 /* ProjectionRefreshServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectionRefreshServiceTests.swift; sourceTree = "<group>"; };
 		FAAEDEAC2FFCAE2E007249F1 /* appicon.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = appicon.xcassets; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -144,6 +148,7 @@
 				20000000000000000000000D /* Features/NetControl/NetControlView.swift */,
 				20000000000000000000000E /* Features/Diagnostics/DiagnosticsView.swift */,
 				700000000000000000000001 /* Features/Account/AccountWorkspaceView.swift */,
+				700000000000000000000002 /* Features/Admin/AdminWorkspaceView.swift */,
 				100000000000000000000007 /* Views/RootView.swift */,
 				100000000000000000000008 /* Views/HomeView.swift */,
 				100000000000000000000009 /* Views/NewQSOView.swift */,
@@ -167,6 +172,7 @@
 				200000000000000000000021 /* RustBridgeTests.swift */,
 				400000000000000000000021 /* ProjectionRefreshServiceTests.swift */,
 				600000000000000000000021 /* ProjectionStoreTests.swift */,
+				600000000000000000000029 /* DashboardLayoutTests.swift */,
 			);
 			path = KE8YGWLoggerTests;
 			sourceTree = "<group>";
@@ -344,6 +350,7 @@
 				20000000000000000000010D /* Features/NetControl/NetControlView.swift in Sources */,
 				20000000000000000000010E /* Features/Diagnostics/DiagnosticsView.swift in Sources */,
 				700000000000000000000101 /* Features/Account/AccountWorkspaceView.swift in Sources */,
+				700000000000000000000102 /* Features/Admin/AdminWorkspaceView.swift in Sources */,
 				100000000000000000000107 /* Views/RootView.swift in Sources */,
 				100000000000000000000108 /* Views/HomeView.swift in Sources */,
 				100000000000000000000109 /* Views/NewQSOView.swift in Sources */,
@@ -364,6 +371,7 @@
 				200000000000000000000201 /* RustBridgeTests.swift in Sources */,
 				400000000000000000000201 /* ProjectionRefreshServiceTests.swift in Sources */,
 				600000000000000000000201 /* ProjectionStoreTests.swift in Sources */,
+				600000000000000000000209 /* DashboardLayoutTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -506,7 +514,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = KE8YGWLogger/KE8YGWLogger.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 2;
+				CURRENT_PROJECT_VERSION = 3;
 				DEVELOPMENT_TEAM = R4B2HA4TUA;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = NO;
@@ -520,7 +528,7 @@
 					"$(inherited)",
 					"$(SRCROOT)/../../artifacts/ios/link/$(CONFIGURATION)$(EFFECTIVE_PLATFORM_NAME)",
 				);
-				MARKETING_VERSION = 0.4.0;
+				MARKETING_VERSION = 0.5.1;
 				OTHER_LDFLAGS = (
 					"$(inherited)",
 					"-lham_ios_ffi",
@@ -541,7 +549,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = KE8YGWLogger/KE8YGWLogger.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 2;
+				CURRENT_PROJECT_VERSION = 3;
 				DEVELOPMENT_TEAM = R4B2HA4TUA;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = NO;
@@ -555,7 +563,7 @@
 					"$(inherited)",
 					"$(SRCROOT)/../../artifacts/ios/link/$(CONFIGURATION)$(EFFECTIVE_PLATFORM_NAME)",
 				);
-				MARKETING_VERSION = 0.4.0;
+				MARKETING_VERSION = 0.5.1;
 				OTHER_LDFLAGS = (
 					"$(inherited)",
 					"-lham_ios_ffi",

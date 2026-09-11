@@ -5,9 +5,11 @@ pub mod api_contract;
 pub mod application_settings;
 pub mod awards;
 pub mod bus;
+pub mod contest;
 pub mod credential;
 pub mod desktop;
 pub mod diagnostics;
+pub mod emcomm;
 pub mod event;
 pub mod gui;
 pub mod lookup;
@@ -33,8 +35,9 @@ pub use adif::{
     AdifImportSummary, DuplicatePolicy,
 };
 pub use application_settings::{
-    ApplicationSettings, ApplicationSettingsError, ProviderValidationSettings,
-    APPLICATION_SETTINGS_SCHEMA_VERSION,
+    ApplicationSettings, ApplicationSettingsError, ProviderValidationSettings, APPEARANCE_MODES,
+    APPLICATION_SETTINGS_SCHEMA_VERSION, DEFAULT_APPEARANCE_MODE, DEFAULT_DESKTOP_SHELL_LAYOUT,
+    DEFAULT_MOBILE_DASHBOARD_LAYOUT, DESKTOP_SHELL_LAYOUTS, MOBILE_DASHBOARD_LAYOUTS,
 };
 pub use awards::{
     compute_award_progress, default_award_definitions, AwardCredit, AwardDefinition, AwardEngine,
@@ -43,6 +46,16 @@ pub use awards::{
 pub use bus::{
     redact_payload, BusEvent, EventBus, EventBusError, InMemoryEventBus, RuntimeDiagnosticEvent,
     RuntimeEventEnvelope, RuntimeEventFilter, RuntimeEventSeverity,
+};
+pub use contest::{
+    builtin_definition_pack, load_definition_pack, load_signed_definition_pack,
+    sign_canonical_bytes, sign_definition_pack, ContestCatalogEntry, ContestCategories,
+    ContestDefinition, ContestDefinitionCatalog, ContestDefinitionOrigin, ContestDefinitionPack,
+    ContestExchange, ContestExportProfile, ContestPackEnvelope, ContestPackSignature,
+    ContestPackTrustStore, ContestSchemaError, ContestScoring, ContestTimeWindow, DuplicateRule,
+    DuplicateScope, ExchangeDirection, ExchangeField, ExchangeFieldKind, MultiplierRule,
+    MultiplierScope, MultiplierSource, PackSignatureAlgorithm, PointRule, SerialPolicy,
+    CONTEST_DEFINITION_PACK_KIND, CONTEST_RULE_SCHEMA_VERSION,
 };
 pub use credential::{
     authorize_credential_action, credential_runtime_payload, default_credential_store,
@@ -55,6 +68,12 @@ pub use diagnostics::{
     redact_for_report, ActionTimelineEntry, DiagnosticBundle, DiagnosticBundleFile,
     DiagnosticBundleInput, DiagnosticBundleManifest, DiagnosticBundlePreview, DiagnosticReportType,
     RedactionSummary, REPORT_FORMAT_VERSION,
+};
+pub use emcomm::{
+    ActivityLogEntry, AssignmentRecord, AssignmentStatus, EmCommProjection, EmCommProjectionError,
+    EmCommRecord, IcsForm, IncidentRecord, IncidentStatus, MessageNumber, MessagePrecedence,
+    MessageRecord, MessageStatus, OperationalPeriodRecord, OperationalPeriodStatus, PersonRecord,
+    PersonStatus, RecordChange, EMCOMM_SCHEMA_VERSION,
 };
 pub use event::{CoreEventEnvelope, NewLogbookEvent};
 pub use lookup::lookup_callsign_with_service_framework;

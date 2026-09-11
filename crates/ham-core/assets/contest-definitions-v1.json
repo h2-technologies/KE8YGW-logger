@@ -1,0 +1,84 @@
+{
+  "kind": "ke8ygw.contest.definition-pack",
+  "schema_version": 1,
+  "pack_id": "ke8ygw.builtin.generic",
+  "pack_version": 1,
+  "generated_at": "2026-08-31T00:00:00Z",
+  "definitions": [
+    {
+      "contest_id": "generic-serial",
+      "name": "Generic Serial Exchange",
+      "sponsor": "KE8YGW Logger",
+      "rule_version": 1,
+      "rule_source": "Built-in template for events that exchange a signal report and a serial number.",
+      "bands": ["160m", "80m", "40m", "20m", "15m", "10m", "6m", "2m", "70cm"],
+      "modes": ["CW", "PH", "DG"],
+      "exchange": {
+        "sent": [
+          { "key": "rst_sent", "label": "RST Sent", "kind": { "type": "rst" } },
+          { "key": "serial_sent", "label": "Serial Sent", "kind": { "type": "serial" } }
+        ],
+        "received": [
+          { "key": "rst_received", "label": "RST Received", "kind": { "type": "rst" } },
+          { "key": "serial_received", "label": "Serial Received", "kind": { "type": "serial" } }
+        ]
+      },
+      "categories": {
+        "operator": ["SINGLE-OP", "MULTI-OP", "CHECKLOG"],
+        "power": ["HIGH", "LOW", "QRP"],
+        "band": ["ALL", "160M", "80M", "40M", "20M", "15M", "10M"],
+        "mode": ["CW", "SSB", "DIGI", "MIXED"],
+        "assisted": ["ASSISTED", "NON-ASSISTED"]
+      },
+      "duplicate_rule": { "scope": "per_band_mode" },
+      "serial_policy": "per_contest",
+      "multipliers": [],
+      "scoring": { "default_points": 1, "rules": [] },
+      "export": { "cabrillo_name": "GENERIC-SERIAL", "cabrillo_version": "3.0" }
+    },
+    {
+      "contest_id": "generic-grid",
+      "name": "Generic Grid Exchange",
+      "sponsor": "KE8YGW Logger",
+      "rule_version": 1,
+      "rule_source": "Built-in template for events that exchange a signal report and a grid square.",
+      "bands": ["6m", "2m", "1.25m", "70cm", "33cm", "23cm"],
+      "modes": ["CW", "PH", "DG"],
+      "exchange": {
+        "sent": [
+          { "key": "rst_sent", "label": "RST Sent", "kind": { "type": "rst" } },
+          { "key": "grid_sent", "label": "Grid Sent", "kind": { "type": "grid" } }
+        ],
+        "received": [
+          { "key": "rst_received", "label": "RST Received", "kind": { "type": "rst" } },
+          { "key": "grid_received", "label": "Grid Received", "kind": { "type": "grid" } }
+        ]
+      },
+      "categories": {
+        "operator": ["SINGLE-OP", "MULTI-OP", "CHECKLOG"],
+        "power": ["HIGH", "LOW", "QRP"],
+        "band": ["ALL", "6M", "2M", "70CM"],
+        "mode": ["CW", "SSB", "DIGI", "MIXED"]
+      },
+      "duplicate_rule": { "scope": "per_band_mode" },
+      "serial_policy": "none",
+      "multipliers": [
+        {
+          "key": "grid-square",
+          "label": "Grid Squares",
+          "source": { "type": "received_exchange_field", "field_key": "grid_received" },
+          "scope": "per_band"
+        }
+      ],
+      "scoring": {
+        "default_points": 1,
+        "rules": [
+          { "bands": ["6m", "2m"], "modes": [], "points": 1 },
+          { "bands": ["1.25m", "70cm"], "modes": [], "points": 2 },
+          { "bands": ["33cm", "23cm"], "modes": [], "points": 4 }
+        ]
+      },
+      "export": { "cabrillo_name": "GENERIC-GRID", "cabrillo_version": "3.0" }
+    }
+  ]
+}

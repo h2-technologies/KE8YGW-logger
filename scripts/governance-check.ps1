@@ -86,8 +86,8 @@ $rootCargo = Get-Content -Raw Cargo.toml
 if ($rootCargo -notmatch '(?m)^edition\s*=\s*"2021"\s*$') {
     Fail 'Workspace edition must remain 2021.'
 }
-if ($rootCargo -notmatch '(?m)^version\s*=\s*"0\.4\.0"\s*$') {
-    Fail 'Workspace version must remain 0.4.0 for the account and session milestone.'
+if ($rootCargo -notmatch '(?m)^version\s*=\s*"0\.5\.1"\s*$') {
+    Fail 'Workspace version must remain 0.5.1 for the contest and EmComm foundation milestone.'
 }
 if ($rootCargo -notmatch '(?m)^license\s*=\s*"MIT"\s*$') {
     Fail 'Workspace license must remain MIT.'

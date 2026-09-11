@@ -26,18 +26,20 @@ use ham_core::plugin_sdk::{
     PROPOSAL_QSO_NOTE_ADD, PROPOSAL_QSO_RESTORE,
 };
 use ham_core::sync::{
-    apply_hosted_account_response, hosted_account_transport_failure, plan_hosted_account_request,
+    apply_hosted_account_response, apply_hosted_admin_response, hosted_account_transport_failure,
+    hosted_admin_transport_failure, plan_hosted_account_request, plan_hosted_admin_request,
     pull_missing_events, CloudConnectionState, CloudSyncConfig, ConflictReviewStatus,
     HostedAccountAction, HostedAccountClient, HostedAccountConfig, HostedAccountHttpResponse,
-    HostedAccountRequestPlan, HostedAccountResult, JsonConflictReviewStore, JsonHostedAccountStore,
-    JsonLanTrustStore, JsonLocalSyncIdentityStore, JsonOfflineMutationQueue, LanPairingAcceptance,
-    LanPeerTrustUpdate, LocalPeerIdentity, ManualConflictResolution,
-    ManualConflictResolutionChoice, OfflineMutationEnvelope, OfflineMutationInput,
-    PullEventsRequest, SyncConfig, SyncConflictReport, MAX_CONFLICT_REVIEW_NOTE_BYTES,
-    OFFLINE_OP_ACTIVATION_END, OFFLINE_OP_ACTIVATION_START, OFFLINE_OP_NET_CHECKIN_CREATE,
-    OFFLINE_OP_NET_CHECKIN_DELETE, OFFLINE_OP_NET_SESSION_END, OFFLINE_OP_NET_SESSION_START,
-    OFFLINE_OP_NET_TRAFFIC_CREATE, OFFLINE_OP_QSO_CORRECT, OFFLINE_OP_QSO_CREATE,
-    OFFLINE_OP_QSO_DELETE, OFFLINE_OP_QSO_NOTE_ADD, OFFLINE_OP_QSO_RESTORE,
+    HostedAccountRequestPlan, HostedAccountResult, HostedAccountSnapshot, HostedAdminAction,
+    HostedAdminHttpResponse, HostedAdminRequestPlan, HostedAdminResult, JsonConflictReviewStore,
+    JsonHostedAccountStore, JsonHostedAdminStore, JsonLanTrustStore, JsonLocalSyncIdentityStore,
+    JsonOfflineMutationQueue, LanPairingAcceptance, LanPeerTrustUpdate, LocalPeerIdentity,
+    ManualConflictResolution, ManualConflictResolutionChoice, OfflineMutationEnvelope,
+    OfflineMutationInput, PullEventsRequest, SyncConfig, SyncConflictReport,
+    MAX_CONFLICT_REVIEW_NOTE_BYTES, OFFLINE_OP_ACTIVATION_END, OFFLINE_OP_ACTIVATION_START,
+    OFFLINE_OP_NET_CHECKIN_CREATE, OFFLINE_OP_NET_CHECKIN_DELETE, OFFLINE_OP_NET_SESSION_END,
+    OFFLINE_OP_NET_SESSION_START, OFFLINE_OP_NET_TRAFFIC_CREATE, OFFLINE_OP_QSO_CORRECT,
+    OFFLINE_OP_QSO_CREATE, OFFLINE_OP_QSO_DELETE, OFFLINE_OP_QSO_NOTE_ADD, OFFLINE_OP_QSO_RESTORE,
     OFFLINE_OP_STATION_EQUIPMENT_CREATE, OFFLINE_OP_STATION_PROFILE_CREATE,
     OFFLINE_OP_STATION_PROFILE_SELECT,
 };
@@ -670,6 +672,10 @@ fn dispatch_call(call: BridgeCall, correlation_id: Uuid) -> Result<Value, Bridge
         "account.plan" => account_plan_command(payload),
         "account.apply" => account_apply_command(payload),
         "account.transport_failure" => account_transport_failure_command(payload),
+        "admin.snapshot" => admin_snapshot_command(payload),
+        "admin.plan" => admin_plan_command(payload),
+        "admin.apply" => admin_apply_command(payload),
+        "admin.transport_failure" => admin_transport_failure_command(payload),
         "diagnostics.snapshot" => diagnostics_command_payload(payload),
         "settings.get" => settings_get_command(payload),
         "settings.create_default" => settings_create_default_command(payload),
@@ -3075,6 +3081,175 @@ fn account_result_payload(result: &mut HostedAccountResult) -> Value {
     })
 }
 
+// ---------------------------------------------------------------------------
+// Hosted server administration bridge commands
+//
+// Administration reuses the hosted account session: Rust plans the request and
+// names the Keychain credential Swift must read, Swift carries the bytes, and
+// Rust interprets the response. The single-use invitation token is returned to
+// Swift exactly once and is never written to the durable record.
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Deserialize)]
+struct AdminSnapshotRequest {
+    app_support_dir: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct AdminPlanRequest {
+    app_support_dir: String,
+    action: HostedAdminAction,
+}
+
+#[derive(Debug, Deserialize)]
+struct AdminApplyRequest {
+    app_support_dir: String,
+    action: HostedAdminAction,
+    plan_token: String,
+    status: u16,
+    #[serde(default)]
+    body_json: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AdminTransportFailureRequest {
+    app_support_dir: String,
+    action: HostedAdminAction,
+    plan_token: String,
+    message: String,
+}
+
+fn hosted_admin_store(app_support_dir: &str) -> Result<JsonHostedAdminStore, BridgeFault> {
+    Ok(JsonHostedAdminStore::new(
+        rust_support_dir(app_support_dir)?.join("hosted-admin.json"),
+    ))
+}
+
+/// Loads the hosted account record that administration is scoped to.
+fn hosted_admin_account(app_support_dir: &str) -> Result<HostedAccountSnapshot, BridgeFault> {
+    hosted_account_store(app_support_dir)?
+        .load_or_initialize(&HostedAccountConfig::default(), Utc::now())
+        .map_err(|error| BridgeFault::storage(error.to_string()))
+}
+
+fn admin_plan_token(plan: &HostedAdminRequestPlan) -> Result<String, BridgeFault> {
+    serde_json::to_string(plan).map_err(|error| BridgeFault::internal(error.to_string()))
+}
+
+fn admin_plan_from_token(token: &str) -> Result<HostedAdminRequestPlan, BridgeFault> {
+    serde_json::from_str(token).map_err(|error| BridgeFault::invalid_input(error.to_string()))
+}
+
+/// Transport-only view of a planned administration request.
+fn admin_plan_request_payload(plan: &HostedAdminRequestPlan) -> Result<Value, BridgeFault> {
+    let body_json = match plan.body.as_ref() {
+        Some(body) => Some(
+            serde_json::to_string(body)
+                .map_err(|error| BridgeFault::internal(error.to_string()))?,
+        ),
+        None => None,
+    };
+    Ok(json!({
+        "action": plan.action,
+        "method": plan.method,
+        "url": plan.url,
+        "path": plan.path,
+        "body_json": body_json,
+        "session_token_credential_id": plan.session_token_credential_id,
+        "request_id": plan.request_id,
+        "timeout_seconds": plan.timeout_seconds,
+        "max_response_bytes": plan.max_response_bytes,
+    }))
+}
+
+/// Serializes one administration result for Swift.
+///
+/// The invitation token is moved out of the result so it appears in this
+/// payload once and never reaches the durable record.
+fn admin_result_payload(result: &mut HostedAdminResult) -> Value {
+    let invitation_token = result.take_invitation_token();
+    json!({
+        "result": result,
+        "admin": result.snapshot,
+        "invitation": result.invitation,
+        "invitation_token": invitation_token,
+    })
+}
+
+fn admin_snapshot_command(payload: Value) -> Result<Value, BridgeFault> {
+    let request: AdminSnapshotRequest = serde_json::from_value(payload)
+        .map_err(|error| BridgeFault::invalid_input(error.to_string()))?;
+    let account = hosted_admin_account(&request.app_support_dir)?;
+    let snapshot = hosted_admin_store(&request.app_support_dir)?
+        .load_or_initialize(&account.base_url, Utc::now())
+        .map_err(|error| BridgeFault::storage(error.to_string()))?;
+    Ok(json!({
+        "admin": snapshot,
+        "signed_in": account.connection_state.is_signed_in(),
+        "account_email": account.email,
+    }))
+}
+
+fn admin_plan_command(payload: Value) -> Result<Value, BridgeFault> {
+    let request: AdminPlanRequest = serde_json::from_value(payload)
+        .map_err(|error| BridgeFault::invalid_input(error.to_string()))?;
+    let account = hosted_admin_account(&request.app_support_dir)?;
+    let snapshot = hosted_admin_store(&request.app_support_dir)?
+        .load_or_initialize(&account.base_url, Utc::now())
+        .map_err(|error| BridgeFault::storage(error.to_string()))?;
+    let plan = plan_hosted_admin_request(&request.action, &account, Utc::now())
+        .map_err(|error| BridgeFault::domain(error.to_string()))?;
+    Ok(json!({
+        "admin": snapshot,
+        "plan_token": admin_plan_token(&plan)?,
+        "request": admin_plan_request_payload(&plan)?,
+    }))
+}
+
+fn admin_apply_command(payload: Value) -> Result<Value, BridgeFault> {
+    let request: AdminApplyRequest = serde_json::from_value(payload)
+        .map_err(|error| BridgeFault::invalid_input(error.to_string()))?;
+    let account = hosted_admin_account(&request.app_support_dir)?;
+    let store = hosted_admin_store(&request.app_support_dir)?;
+    let snapshot = store
+        .load_or_initialize(&account.base_url, Utc::now())
+        .map_err(|error| BridgeFault::storage(error.to_string()))?;
+    let plan = admin_plan_from_token(&request.plan_token)?;
+    let body = match request.body_json.as_deref().map(str::trim) {
+        Some(body) if !body.is_empty() => serde_json::from_str(body).ok(),
+        _ => None,
+    };
+    let response = HostedAdminHttpResponse::new(request.status, body);
+    let mut result =
+        apply_hosted_admin_response(&request.action, &plan, &response, snapshot, Utc::now());
+    store
+        .save(&result.snapshot)
+        .map_err(|error| BridgeFault::storage(error.to_string()))?;
+    Ok(admin_result_payload(&mut result))
+}
+
+fn admin_transport_failure_command(payload: Value) -> Result<Value, BridgeFault> {
+    let request: AdminTransportFailureRequest = serde_json::from_value(payload)
+        .map_err(|error| BridgeFault::invalid_input(error.to_string()))?;
+    let account = hosted_admin_account(&request.app_support_dir)?;
+    let store = hosted_admin_store(&request.app_support_dir)?;
+    let snapshot = store
+        .load_or_initialize(&account.base_url, Utc::now())
+        .map_err(|error| BridgeFault::storage(error.to_string()))?;
+    let plan = admin_plan_from_token(&request.plan_token)?;
+    let mut result = hosted_admin_transport_failure(
+        &request.action,
+        &plan,
+        &request.message,
+        snapshot,
+        Utc::now(),
+    );
+    store
+        .save(&result.snapshot)
+        .map_err(|error| BridgeFault::storage(error.to_string()))?;
+    Ok(admin_result_payload(&mut result))
+}
+
 fn rust_support_dir(app_support_dir: &str) -> Result<PathBuf, BridgeFault> {
     let trimmed = app_support_dir.trim();
     if trimmed.is_empty() {
@@ -3472,6 +3647,268 @@ mod tests {
                 .expect("hosted account record");
         assert!(!stored.contains("ios-session-secret"));
         assert!(!stored.contains("ios-refresh-secret"));
+
+        let _ = std::fs::remove_dir_all(app_support_dir);
+    }
+
+    /// Signs a hosted account in so administration has a session to reuse.
+    fn sign_in_for_admin(support: &str) -> Uuid {
+        let device_id = Uuid::new_v4();
+        call_json(json!({
+            "command": "account.configure",
+            "payload": {
+                "app_support_dir": support,
+                "base_url": "https://logger.example",
+                "device_name": "iPhone"
+            }
+        }));
+        let planned = call_json(json!({
+            "command": "account.plan",
+            "payload": {
+                "app_support_dir": support,
+                "action": {"action": "login", "email": "admin@example.test"}
+            }
+        }));
+        let plan_token = planned["data"]["plan_token"].as_str().unwrap().to_owned();
+        let applied = call_json(json!({
+            "command": "account.apply",
+            "payload": {
+                "app_support_dir": support,
+                "action": {"action": "login", "email": "admin@example.test"},
+                "plan_token": plan_token,
+                "status": 200,
+                "body_json": serde_json::to_string(&json!({
+                    "account": {
+                        "account_id": Uuid::new_v4(),
+                        "user_id": Uuid::new_v4(),
+                        "email": "admin@example.test",
+                        "created_at": "2026-08-01T00:00:00Z",
+                        "email_verified_at": "2026-08-02T00:00:00Z"
+                    },
+                    "session": {
+                        "session_id": Uuid::new_v4(),
+                        "device_id": device_id,
+                        "token": "ios-session-secret",
+                        "issued_at": "2026-08-31T12:00:00Z",
+                        "expires_at": "2026-09-30T12:00:00Z",
+                        "active": true
+                    },
+                    "device": {
+                        "device_id": device_id,
+                        "device_name": "iPhone",
+                        "trusted": true,
+                        "revoked": false,
+                        "registered_at": "2026-08-31T12:00:00Z"
+                    },
+                    "refresh_token": "ios-refresh-secret"
+                })).unwrap()
+            }
+        }));
+        assert_eq!(applied["data"]["account"]["connection_state"], "signed_in");
+        device_id
+    }
+
+    #[test]
+    fn admin_commands_plan_and_apply_a_hosting_read_against_the_signed_in_server() {
+        let app_support_dir = std::env::temp_dir().join(format!("ham-ios-{}", Uuid::new_v4()));
+        let support = app_support_dir.to_string_lossy().to_string();
+        sign_in_for_admin(&support);
+
+        let initial = call_json(json!({
+            "command": "admin.snapshot",
+            "payload": {"app_support_dir": support}
+        }));
+        assert_eq!(initial["ok"], true);
+        assert_eq!(initial["data"]["signed_in"], true);
+        assert_eq!(initial["data"]["admin"]["administrator"], Value::Null);
+
+        let planned = call_json(json!({
+            "command": "admin.plan",
+            "payload": {
+                "app_support_dir": support,
+                "action": {"action": "hosting_read"}
+            }
+        }));
+        assert_eq!(planned["ok"], true);
+        let plan_token = planned["data"]["plan_token"].as_str().unwrap().to_owned();
+        let request = planned["data"]["request"].clone();
+        assert_eq!(request["method"], "GET");
+        assert_eq!(
+            request["url"],
+            "https://logger.example/api/v1/admin/hosting"
+        );
+        // Swift is told which Keychain credential to read; the secret stays in Swift.
+        assert!(request["session_token_credential_id"].is_string());
+
+        let applied = call_json(json!({
+            "command": "admin.apply",
+            "payload": {
+                "app_support_dir": support,
+                "action": {"action": "hosting_read"},
+                "plan_token": plan_token,
+                "status": 200,
+                "body_json": serde_json::to_string(&json!({
+                    "hosting": {
+                        "operation_mode": "self_hosted",
+                        "registration_mode": "invite_only",
+                        "bootstrap_admin_completed": true,
+                        "session_ttl_seconds": 3600,
+                        "limits": {"window_seconds": 900},
+                        "turnstile": {"enabled_for_open_registration": false, "secret_configured": false}
+                    }
+                })).unwrap()
+            }
+        }));
+        assert_eq!(applied["ok"], true);
+        assert_eq!(applied["data"]["result"]["outcome"], "accepted");
+        assert_eq!(applied["data"]["admin"]["administrator"], true);
+        assert_eq!(
+            applied["data"]["admin"]["hosting"]["registration_mode"],
+            "invite_only"
+        );
+
+        let _ = std::fs::remove_dir_all(app_support_dir);
+    }
+
+    #[test]
+    fn admin_invitation_tokens_are_handed_to_swift_once_and_never_persisted() {
+        let app_support_dir = std::env::temp_dir().join(format!("ham-ios-{}", Uuid::new_v4()));
+        let support = app_support_dir.to_string_lossy().to_string();
+        sign_in_for_admin(&support);
+
+        let logbook_id = Uuid::new_v4();
+        let action = json!({
+            "action": "invitation_create",
+            "logbook_id": logbook_id,
+            "email": "operator@example.test",
+            "role": "operator"
+        });
+        let planned = call_json(json!({
+            "command": "admin.plan",
+            "payload": {"app_support_dir": support, "action": action}
+        }));
+        assert_eq!(planned["ok"], true);
+        let plan_token = planned["data"]["plan_token"].as_str().unwrap().to_owned();
+        assert_eq!(planned["data"]["request"]["method"], "POST");
+
+        let invite_id = Uuid::new_v4();
+        let applied = call_json(json!({
+            "command": "admin.apply",
+            "payload": {
+                "app_support_dir": support,
+                "action": action,
+                "plan_token": plan_token,
+                "status": 200,
+                "body_json": serde_json::to_string(&json!({
+                    "invitation": {
+                        "invite_id": invite_id,
+                        "logbook_id": logbook_id,
+                        "invited_email": "operator@example.test",
+                        "role": "operator",
+                        "created_at": "2026-08-31T12:00:00Z",
+                        "expires_at": "2026-09-07T12:00:00Z",
+                        "resend_count": 0
+                    },
+                    "invitation_token": "ios-invite-secret"
+                })).unwrap()
+            }
+        }));
+        assert_eq!(applied["ok"], true);
+        assert_eq!(applied["data"]["invitation_token"], "ios-invite-secret");
+        assert_eq!(
+            applied["data"]["invitation"]["invite_id"],
+            invite_id.to_string()
+        );
+        // The token must not be inside the serialized result or the record.
+        assert!(!applied["data"]["result"]
+            .to_string()
+            .contains("ios-invite-secret"));
+
+        let stored =
+            std::fs::read_to_string(app_support_dir.join("Rust").join("hosted-admin.json"))
+                .expect("hosted admin record");
+        assert!(!stored.contains("ios-invite-secret"));
+        assert!(stored.contains(&invite_id.to_string()));
+
+        let _ = std::fs::remove_dir_all(app_support_dir);
+    }
+
+    #[test]
+    fn admin_commands_are_rejected_without_a_signed_in_session() {
+        let app_support_dir = std::env::temp_dir().join(format!("ham-ios-{}", Uuid::new_v4()));
+        let planned = call_json(json!({
+            "command": "admin.plan",
+            "payload": {
+                "app_support_dir": app_support_dir.to_string_lossy(),
+                "action": {"action": "audit_list"}
+            }
+        }));
+        assert_eq!(planned["ok"], false);
+        assert_eq!(planned["error"]["code"], "domain_rejected");
+        let _ = std::fs::remove_dir_all(app_support_dir);
+    }
+
+    #[test]
+    fn admin_forbidden_responses_record_that_the_operator_is_not_an_administrator() {
+        let app_support_dir = std::env::temp_dir().join(format!("ham-ios-{}", Uuid::new_v4()));
+        let support = app_support_dir.to_string_lossy().to_string();
+        sign_in_for_admin(&support);
+
+        let planned = call_json(json!({
+            "command": "admin.plan",
+            "payload": {"app_support_dir": support, "action": {"action": "audit_list"}}
+        }));
+        let plan_token = planned["data"]["plan_token"].as_str().unwrap().to_owned();
+        let applied = call_json(json!({
+            "command": "admin.apply",
+            "payload": {
+                "app_support_dir": support,
+                "action": {"action": "audit_list"},
+                "plan_token": plan_token,
+                "status": 403,
+                "body_json": serde_json::to_string(&json!({"code": "forbidden", "error": "forbidden"})).unwrap()
+            }
+        }));
+        assert_eq!(applied["ok"], true);
+        assert_eq!(applied["data"]["result"]["outcome"], "permanent_failure");
+        assert_eq!(applied["data"]["admin"]["administrator"], false);
+
+        let _ = std::fs::remove_dir_all(app_support_dir);
+    }
+
+    #[test]
+    fn admin_transport_failures_stay_retryable_and_are_persisted() {
+        let app_support_dir = std::env::temp_dir().join(format!("ham-ios-{}", Uuid::new_v4()));
+        let support = app_support_dir.to_string_lossy().to_string();
+        sign_in_for_admin(&support);
+
+        let planned = call_json(json!({
+            "command": "admin.plan",
+            "payload": {"app_support_dir": support, "action": {"action": "invitation_list"}}
+        }));
+        let plan_token = planned["data"]["plan_token"].as_str().unwrap().to_owned();
+        let failed = call_json(json!({
+            "command": "admin.transport_failure",
+            "payload": {
+                "app_support_dir": support,
+                "action": {"action": "invitation_list"},
+                "plan_token": plan_token,
+                "message": "the network connection was lost"
+            }
+        }));
+        assert_eq!(failed["ok"], true);
+        assert_eq!(failed["data"]["result"]["outcome"], "transient_failure");
+        assert_eq!(failed["data"]["result"]["retryable"], true);
+        assert_eq!(failed["data"]["result"]["user_action_required"], false);
+
+        let reloaded = call_json(json!({
+            "command": "admin.snapshot",
+            "payload": {"app_support_dir": support}
+        }));
+        assert_eq!(
+            reloaded["data"]["admin"]["last_action"],
+            "admin.invitation.list"
+        );
 
         let _ = std::fs::remove_dir_all(app_support_dir);
     }
@@ -3957,6 +4394,215 @@ mod tests {
             plan["data"]["offline_queue"]["mutations"][0]["last_error_code"],
             "missing_local_official_event"
         );
+        let _ = std::fs::remove_dir_all(app_support_dir);
+    }
+
+    #[test]
+    fn sync_offline_queue_recover_initializes_absent_ios_queue_and_stays_stable() {
+        let app_support_dir = std::env::temp_dir().join(format!("ham-ios-{}", Uuid::new_v4()));
+        let recover = json!({
+            "command": "sync.offline_queue.recover",
+            "payload": {
+                "app_support_dir": app_support_dir.to_string_lossy()
+            }
+        });
+
+        let first = call_json(recover.clone());
+        assert_eq!(first["ok"], true);
+        assert_eq!(first["data"]["recovery"]["initialized_empty_queue"], true);
+        assert_eq!(
+            first["data"]["recovery"]["migrated_v0_2_absent_queue"],
+            true
+        );
+        assert_eq!(first["data"]["recovery"]["quarantined_corrupt_file"], false);
+        assert_eq!(first["data"]["offline_queue"]["health"]["total"], 0);
+        assert_eq!(first["data"]["recovered_count"], 0);
+
+        let second = call_json(recover);
+        assert_eq!(second["ok"], true);
+        assert_eq!(second["data"]["recovery"]["initialized_empty_queue"], false);
+        assert_eq!(
+            second["data"]["recovery"]["migrated_v0_2_absent_queue"],
+            false
+        );
+        assert_eq!(second["data"]["offline_queue"]["health"]["total"], 0);
+
+        let _ = std::fs::remove_dir_all(app_support_dir);
+    }
+
+    #[test]
+    fn sync_offline_queue_recover_migrates_legacy_v0_2_ios_queue_records() {
+        let app_support_dir = std::env::temp_dir().join(format!("ham-ios-{}", Uuid::new_v4()));
+        let rust_dir = app_support_dir.join("Rust");
+        std::fs::create_dir_all(&rust_dir).unwrap();
+        let logbook_id = default_logbook_id();
+        let device_id = Uuid::new_v4();
+        let sent_operation_id = Uuid::new_v4();
+        let sent_qso_id = Uuid::new_v4();
+        let unsent_operation_id = Uuid::new_v4();
+        let unsent_qso_id = Uuid::new_v4();
+        std::fs::write(
+            rust_dir.join("offline-mutations.json"),
+            serde_json::to_vec_pretty(&json!({
+                "version": 0,
+                "pending_operations": [
+                    {
+                        "operation_id": sent_operation_id,
+                        "device_id": device_id,
+                        "logbook_id": logbook_id,
+                        "operation_type": OFFLINE_OP_QSO_DELETE,
+                        "payload": { "qso_id": sent_qso_id },
+                        "local_event_hash": "legacy-local-event-hash"
+                    },
+                    {
+                        "operation_id": unsent_operation_id,
+                        "device_id": device_id,
+                        "logbook_id": logbook_id,
+                        "operation_type": OFFLINE_OP_QSO_CORRECT,
+                        "payload": { "qso_id": unsent_qso_id, "mode": "cw" }
+                    }
+                ]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let recovered = call_json(json!({
+            "command": "sync.offline_queue.recover",
+            "payload": {
+                "app_support_dir": app_support_dir.to_string_lossy(),
+                "logbook_id": logbook_id
+            }
+        }));
+        assert_eq!(recovered["ok"], true);
+        assert_eq!(recovered["data"]["recovery"]["migrated_v0_2_file"], true);
+        assert_eq!(
+            recovered["data"]["recovery"]["migrated_legacy_mutations"],
+            2
+        );
+        assert_eq!(
+            recovered["data"]["recovery"]["quarantined_corrupt_file"],
+            false
+        );
+        let health = &recovered["data"]["offline_queue"]["health"];
+        assert_eq!(health["total"], 2);
+        assert_eq!(health["retrying"], 1);
+        assert_eq!(health["pending"], 1);
+        assert_eq!(health["failed"], 0);
+
+        let mutations = recovered["data"]["offline_queue"]["mutations"]
+            .as_array()
+            .expect("migrated queue should expose mutations");
+        let sent = mutations
+            .iter()
+            .find(|mutation| mutation["operation_id"] == json!(sent_operation_id))
+            .expect("legacy record with a local event should survive migration");
+        assert_eq!(sent["status"], "retrying");
+        assert_eq!(sent["entity_id"], json!(sent_qso_id));
+        assert_eq!(sent["local_event_hash"], "legacy-local-event-hash");
+        assert_eq!(sent["schema_version"], 1);
+        let unsent = mutations
+            .iter()
+            .find(|mutation| mutation["operation_id"] == json!(unsent_operation_id))
+            .expect("legacy record without a local event should survive migration");
+        assert_eq!(unsent["status"], "pending");
+        assert_eq!(unsent["entity_id"], json!(unsent_qso_id));
+        assert!(unsent["local_event_hash"].is_null());
+
+        let reloaded = call_json(json!({
+            "command": "sync.snapshot",
+            "payload": {
+                "app_support_dir": app_support_dir.to_string_lossy(),
+                "logbook_id": logbook_id
+            }
+        }));
+        assert_eq!(reloaded["ok"], true);
+        assert_eq!(reloaded["data"]["offline_queue"]["health"]["total"], 2);
+
+        let _ = std::fs::remove_dir_all(app_support_dir);
+    }
+
+    #[test]
+    fn sync_offline_queue_recover_quarantines_corrupt_ios_queue_without_discarding_bytes() {
+        let app_support_dir = std::env::temp_dir().join(format!("ham-ios-{}", Uuid::new_v4()));
+        let rust_dir = app_support_dir.join("Rust");
+        std::fs::create_dir_all(&rust_dir).unwrap();
+        let queue_path = rust_dir.join("offline-mutations.json");
+        let corrupt = "{\"version\": 1, \"mutations\": [ truncated";
+        std::fs::write(&queue_path, corrupt).unwrap();
+
+        let recovered = call_json(json!({
+            "command": "sync.offline_queue.recover",
+            "payload": {
+                "app_support_dir": app_support_dir.to_string_lossy()
+            }
+        }));
+        assert_eq!(recovered["ok"], true);
+        assert_eq!(
+            recovered["data"]["recovery"]["quarantined_corrupt_file"],
+            true
+        );
+        assert_eq!(
+            recovered["data"]["recovery"]["initialized_empty_queue"],
+            true
+        );
+        assert_eq!(recovered["data"]["offline_queue"]["health"]["total"], 0);
+
+        let quarantined = std::fs::read_dir(&rust_dir)
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.path())
+            .filter(|path| {
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .map(|name| name.starts_with("offline-mutations.json.corrupt-"))
+                    .unwrap_or(false)
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            quarantined.len(),
+            1,
+            "corrupt iOS queue state must be preserved for recovery, not deleted"
+        );
+        assert_eq!(std::fs::read_to_string(&quarantined[0]).unwrap(), corrupt);
+        assert!(queue_path.exists());
+
+        let _ = std::fs::remove_dir_all(app_support_dir);
+    }
+
+    #[test]
+    fn sync_offline_queue_recover_promotes_interrupted_ios_atomic_write() {
+        let app_support_dir = std::env::temp_dir().join(format!("ham-ios-{}", Uuid::new_v4()));
+        let logbook_id = default_logbook_id();
+        create_test_qso_event(&app_support_dir, logbook_id, "k1crash", 7);
+        let queue_path = app_support_dir.join("Rust").join("offline-mutations.json");
+        let temp_path = app_support_dir
+            .join("Rust")
+            .join("offline-mutations.json.tmp");
+        std::fs::rename(&queue_path, &temp_path).unwrap();
+        assert!(!queue_path.exists());
+
+        let recovered = call_json(json!({
+            "command": "sync.offline_queue.recover",
+            "payload": {
+                "app_support_dir": app_support_dir.to_string_lossy(),
+                "logbook_id": logbook_id
+            }
+        }));
+        assert_eq!(recovered["ok"], true);
+        assert_eq!(
+            recovered["data"]["recovery"]["promoted_interrupted_atomic_write"],
+            true
+        );
+        assert_eq!(
+            recovered["data"]["recovery"]["quarantined_corrupt_file"],
+            false
+        );
+        assert_eq!(recovered["data"]["offline_queue"]["health"]["total"], 1);
+        assert_eq!(recovered["data"]["offline_queue"]["health"]["pending"], 1);
+        assert!(queue_path.exists());
+        assert!(!temp_path.exists());
+
         let _ = std::fs::remove_dir_all(app_support_dir);
     }
 

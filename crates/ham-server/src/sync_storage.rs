@@ -921,16 +921,7 @@ impl DurableCloudSyncServer {
             server_head_hash.clone(),
             event_count,
         )?;
-        let status = if errors.is_empty() {
-            ReplicationStatus::Pulled
-        } else if errors
-            .iter()
-            .any(|error| error.contains("does not connect") || error.contains("previous hash"))
-        {
-            ReplicationStatus::Diverged
-        } else {
-            ReplicationStatus::Rejected
-        };
+        let status = push_replication_status(&errors);
         Ok(CloudPushEventsResponse {
             status,
             accepted_count,

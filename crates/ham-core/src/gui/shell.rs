@@ -81,11 +81,198 @@ pub struct PanelDefinition {
     pub supported_workspaces: Vec<WorkspaceId>,
 }
 
+/// The shell layouts an operator can switch between. Each one arranges the same
+/// workspaces and panels differently; none of them changes what data is
+/// available, only where it sits and which surface owns the keyboard.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ShellLayoutId {
+    OperatingDeck,
+    CommandCenter,
+    FieldNotebook,
+    FocusConsole,
+    TabbedWorkbench,
+}
+
+impl ShellLayoutId {
+    pub const ALL: [Self; 5] = [
+        Self::OperatingDeck,
+        Self::CommandCenter,
+        Self::FieldNotebook,
+        Self::FocusConsole,
+        Self::TabbedWorkbench,
+    ];
+
+    /// The stable identifier persisted in `DisplaySettings::desktop_shell_layout`.
+    pub fn slug(self) -> &'static str {
+        match self {
+            Self::OperatingDeck => "operating-deck",
+            Self::CommandCenter => "command-center",
+            Self::FieldNotebook => "field-notebook",
+            Self::FocusConsole => "focus-console",
+            Self::TabbedWorkbench => "tabbed-workbench",
+        }
+    }
+
+    pub fn from_slug(value: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|layout| layout.slug().eq_ignore_ascii_case(value.trim()))
+    }
+
+    pub fn title(self) -> &'static str {
+        match self {
+            Self::OperatingDeck => "Operating Deck",
+            Self::CommandCenter => "Command Center",
+            Self::FieldNotebook => "Field Notebook",
+            Self::FocusConsole => "Focus Console",
+            Self::TabbedWorkbench => "Tabbed Workbench",
+        }
+    }
+
+    pub fn description(self) -> &'static str {
+        match self {
+            Self::OperatingDeck => {
+                "Entry deck anchored across the bottom, band map rail on the left, log in the centre, callsign context on the right. Fastest for live operating."
+            }
+            Self::CommandCenter => {
+                "Map fills the window; panels float above it. Best when propagation, parks, summits or net geography is what you are working from."
+            }
+            Self::FieldNotebook => {
+                "Calm card board with the entry card as the hero. The most approachable layout and the easiest to read in daylight."
+            }
+            Self::FocusConsole => {
+                "One centred column, a very large callsign field, and everything else collapsed to the menu bar and a single peek drawer."
+            }
+            Self::TabbedWorkbench => {
+                "Logbooks, activations, contests and nets open as document tabs over a tree, with a table above an inspector. Built for bulk work."
+            }
+        }
+    }
+
+    /// Whether the layout keeps a permanent QSO entry surface. Operators
+    /// choosing a layout for a contest care about this more than anything else.
+    pub fn has_persistent_entry(self) -> bool {
+        !matches!(self, Self::TabbedWorkbench)
+    }
+
+    pub fn density(self) -> LayoutDensity {
+        match self {
+            Self::OperatingDeck | Self::TabbedWorkbench => LayoutDensity::Dense,
+            Self::CommandCenter => LayoutDensity::Balanced,
+            Self::FieldNotebook | Self::FocusConsole => LayoutDensity::Relaxed,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum LayoutDensity {
+    Dense,
+    Balanced,
+    Relaxed,
+}
+
+/// How the shell resolves light and dark. `System` follows the host.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ThemeMode {
+    System,
+    Light,
+    Dark,
+}
+
+impl ThemeMode {
+    pub const ALL: [Self; 3] = [Self::System, Self::Light, Self::Dark];
+
+    pub fn slug(self) -> &'static str {
+        match self {
+            Self::System => "system",
+            Self::Light => "light",
+            Self::Dark => "dark",
+        }
+    }
+
+    pub fn from_slug(value: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|mode| mode.slug().eq_ignore_ascii_case(value.trim()))
+    }
+
+    pub fn title(self) -> &'static str {
+        match self {
+            Self::System => "Match system",
+            Self::Light => "Light",
+            Self::Dark => "Dark",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ShellLayoutDefinition {
+    pub id: ShellLayoutId,
+    pub slug: String,
+    pub title: String,
+    pub description: String,
+    pub density: LayoutDensity,
+    pub has_persistent_entry: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ThemeModeDefinition {
+    pub id: ThemeMode,
+    pub slug: String,
+    pub title: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ShellAppearance {
+    pub layout: ShellLayoutId,
+    pub theme: ThemeMode,
+}
+
+impl Default for ShellAppearance {
+    fn default() -> Self {
+        Self {
+            layout: ShellLayoutId::OperatingDeck,
+            theme: ThemeMode::System,
+        }
+    }
+}
+
+pub fn default_layout_catalog() -> Vec<ShellLayoutDefinition> {
+    ShellLayoutId::ALL
+        .into_iter()
+        .map(|id| ShellLayoutDefinition {
+            id,
+            slug: id.slug().to_owned(),
+            title: id.title().to_owned(),
+            description: id.description().to_owned(),
+            density: id.density(),
+            has_persistent_entry: id.has_persistent_entry(),
+        })
+        .collect()
+}
+
+pub fn default_theme_catalog() -> Vec<ThemeModeDefinition> {
+    ThemeMode::ALL
+        .into_iter()
+        .map(|id| ThemeModeDefinition {
+            id,
+            slug: id.slug().to_owned(),
+            title: id.title().to_owned(),
+        })
+        .collect()
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GuiShellState {
     pub active_workspace: WorkspaceId,
     pub workspaces: Vec<WorkspaceDefinition>,
     pub panels: Vec<PanelDefinition>,
+    pub appearance: ShellAppearance,
+    pub layouts: Vec<ShellLayoutDefinition>,
+    pub themes: Vec<ThemeModeDefinition>,
 }
 
 impl GuiShellState {
@@ -94,7 +281,32 @@ impl GuiShellState {
             active_workspace: WorkspaceId::Dashboard,
             workspaces: default_workspaces(),
             panels: default_panel_registry(),
+            appearance: ShellAppearance::default(),
+            layouts: default_layout_catalog(),
+            themes: default_theme_catalog(),
         }
+    }
+
+    /// Build the shell from persisted display settings. Unknown slugs fall back
+    /// to the defaults for the same reason `ApplicationSettings::normalized`
+    /// does: a stale or newer client must not lock the operator out of the GUI.
+    pub fn with_appearance(desktop_shell_layout: &str, appearance_mode: &str) -> Self {
+        let mut shell = Self::default_shell();
+        shell.appearance = ShellAppearance {
+            layout: ShellLayoutId::from_slug(desktop_shell_layout).unwrap_or_default_layout(),
+            theme: ThemeMode::from_slug(appearance_mode).unwrap_or(ThemeMode::System),
+        };
+        shell
+    }
+}
+
+trait OrDefaultLayout {
+    fn unwrap_or_default_layout(self) -> ShellLayoutId;
+}
+
+impl OrDefaultLayout for Option<ShellLayoutId> {
+    fn unwrap_or_default_layout(self) -> ShellLayoutId {
+        self.unwrap_or(ShellLayoutId::OperatingDeck)
     }
 }
 
@@ -588,7 +800,57 @@ fn place(panel_id: &str, region: PanelRegion, order: u16) -> PanelPlacement {
 
 #[cfg(test)]
 mod tests {
-    use super::{default_panel_registry, GuiShellState, WorkspaceId};
+    use super::{default_panel_registry, GuiShellState, ShellLayoutId, ThemeMode, WorkspaceId};
+    use crate::{DEFAULT_APPEARANCE_MODE, DEFAULT_DESKTOP_SHELL_LAYOUT, DESKTOP_SHELL_LAYOUTS};
+
+    #[test]
+    fn layout_slugs_match_the_shared_settings_vocabulary() {
+        let shell_slugs = ShellLayoutId::ALL
+            .into_iter()
+            .map(ShellLayoutId::slug)
+            .collect::<Vec<_>>();
+        // The GUI catalog and the persisted settings must agree, or an operator
+        // picks a layout the settings layer then silently discards.
+        assert_eq!(shell_slugs, DESKTOP_SHELL_LAYOUTS.to_vec());
+        assert_eq!(
+            ShellLayoutId::from_slug(DEFAULT_DESKTOP_SHELL_LAYOUT),
+            Some(ShellLayoutId::OperatingDeck)
+        );
+        assert_eq!(
+            ThemeMode::from_slug(DEFAULT_APPEARANCE_MODE),
+            Some(ThemeMode::System)
+        );
+    }
+
+    #[test]
+    fn appearance_round_trips_and_unknown_slugs_fall_back() {
+        let shell = GuiShellState::with_appearance("focus-console", "light");
+        assert_eq!(shell.appearance.layout, ShellLayoutId::FocusConsole);
+        assert_eq!(shell.appearance.theme, ThemeMode::Light);
+
+        let stale = GuiShellState::with_appearance("holodeck", "solarized");
+        assert_eq!(stale.appearance.layout, ShellLayoutId::OperatingDeck);
+        assert_eq!(stale.appearance.theme, ThemeMode::System);
+    }
+
+    #[test]
+    fn every_layout_is_offered_with_copy_the_settings_screen_can_show() {
+        let shell = GuiShellState::default_shell();
+        assert_eq!(shell.layouts.len(), ShellLayoutId::ALL.len());
+        assert_eq!(shell.themes.len(), ThemeMode::ALL.len());
+        for layout in &shell.layouts {
+            assert!(!layout.title.is_empty(), "{} needs a title", layout.slug);
+            assert!(
+                layout.description.len() > 40,
+                "{} needs a description an operator can choose from",
+                layout.slug
+            );
+        }
+        // The workbench is the one layout without an always-present entry field;
+        // the settings screen warns about that, so the flag has to stay true.
+        assert!(!ShellLayoutId::TabbedWorkbench.has_persistent_entry());
+        assert!(ShellLayoutId::OperatingDeck.has_persistent_entry());
+    }
 
     #[test]
     fn workspaces_are_json_serializable() {

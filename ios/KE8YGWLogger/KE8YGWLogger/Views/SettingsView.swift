@@ -98,12 +98,27 @@ struct SettingsView: View {
             case .loaded:
                 if let appSettings {
                     statusSection
-                Section("General") {
+                Section {
                     Picker("Theme", selection: bind(appSettings, \.appearance)) {
-                        Text("System").tag("system")
-                        Text("Light").tag("light")
-                        Text("Dark").tag("dark")
+                        ForEach(AppearanceMode.allCases) { mode in
+                            Text(mode.title).tag(mode.rawValue)
+                        }
                     }
+                    Picker("Dashboard", selection: dashboardLayoutBind(appSettings)) {
+                        ForEach(DashboardLayout.allCases) { layout in
+                            Label(layout.title, systemImage: layout.systemImage).tag(layout)
+                        }
+                    }
+                    Text(appSettings.effectiveDashboardLayout.summary)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                } header: {
+                    Text("Appearance")
+                } footer: {
+                    Text("Every dashboard shows the same contacts and status. They differ in what you can reach without scrolling.")
+                }
+
+                Section("General") {
                     TextField("Accent Color", text: bind(appSettings, \.accentColorName))
                         .textInputAutocapitalization(.never)
                     TextField("Operator Callsign", text: uppercaseBind(appSettings, \.operatorCallsign))
@@ -331,6 +346,17 @@ struct SettingsView: View {
             settings[keyPath: keyPath]
         } set: { value in
             settings[keyPath: keyPath] = value.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+            save(settings)
+        }
+    }
+
+    /// The dashboard picker binds to the enum rather than the raw string so an
+    /// unknown stored value shows the fallback the app is actually drawing.
+    private func dashboardLayoutBind(_ settings: AppSettings) -> Binding<DashboardLayout> {
+        Binding {
+            settings.effectiveDashboardLayout
+        } set: { value in
+            settings.dashboardLayout = value.rawValue
             save(settings)
         }
     }

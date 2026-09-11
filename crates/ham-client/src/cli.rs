@@ -3,8 +3,11 @@ use std::{env, fs, process};
 use ham_core::plugin_sdk::{PluginCapability, PluginManifest, ServiceType};
 use ham_core::sync::{
     HostedAccountAction, HostedAccountClient, HostedAccountConfig, HostedAccountError,
-    HostedAccountResult, HostedAccountSecrets, HostedAccountSnapshot, HttpHostedAccountTransport,
-    JsonHostedAccountStore, HOSTED_ACCOUNT_CREDENTIAL_PROVIDER_ID,
+    HostedAccountResult, HostedAccountSecrets, HostedAccountSnapshot, HostedAdminAction,
+    HostedAdminClient, HostedAdminHostingUpdate, HostedAdminInvitationStatus,
+    HostedAdminLogbookRole, HostedAdminOperationMode, HostedAdminRegistrationMode,
+    HostedAdminResult, HostedAdminSnapshot, HttpHostedAccountTransport, HttpHostedAdminTransport,
+    JsonHostedAccountStore, JsonHostedAdminStore, HOSTED_ACCOUNT_CREDENTIAL_PROVIDER_ID,
 };
 use ham_core::{
     default_credential_store, default_official_event_log_path, export_adif, import_adif,
@@ -50,6 +53,11 @@ pub async fn run(args: Vec<String>) {
 
     if command == "account" {
         run_account_command(&args, json);
+        return;
+    }
+
+    if command == "admin" {
+        run_admin_command(&args, json);
         return;
     }
 
@@ -216,6 +224,7 @@ fn print_usage() {
   ham-client account verify-email <token> [--json]
   ham-client account recovery-start <email> [--json]
   ham-client account recovery-complete <token> [--json]
+  ham-client account bootstrap <email> [display-name] [--json]
   ham-client account login <email> [display-name] [--json]
   ham-client account session [--json]
   ham-client account rotate [--json]
@@ -225,6 +234,16 @@ fn print_usage() {
   ham-client account revoke-device <device-id> [--json]
   ham-client account revoke-all-devices [--json]
   ham-client account delete --confirm [--json]
+  ham-client admin status [--json]
+  ham-client admin hosting [--json]
+  ham-client admin set-hosting <field> <value> [--json]
+  ham-client admin invitations [--json]
+  ham-client admin invite <logbook-id> <email> <role> [--json]
+  ham-client admin invitation <invite-id> [--json]
+  ham-client admin resend <invite-id> [--json]
+  ham-client admin expire <invite-id> [--json]
+  ham-client admin revoke <invite-id> --confirm [--json]
+  ham-client admin audits [--json]
 
 Options:
   --json       emit one stable JSON object on stdout
@@ -235,6 +254,18 @@ Options:
 The logging commands are offline-first and never prompt. The `account` commands
 contact the configured hosted server, store session and refresh tokens in the
 operating-system credential backend, and never print or persist those tokens.
+
+The `admin` commands administer the server the `account` commands are signed in
+to; they need a signed-in session that belongs to a server administrator. The
+`invite` and `resend` subcommands print a single-use invitation token once. That
+token is never stored by the CLI, so capture it from that one output if you are
+delivering it yourself.
+
+`set-hosting` accepts one field per call: operation_mode, registration_mode,
+session_ttl_seconds, refresh_ttl_seconds, invitation_ttl_seconds,
+verification_ttl_seconds, or recovery_ttl_seconds. Fields you do not name are
+left exactly as the server has them.
+
 Exit code 0 means success, 1 means an operational/data error, and 2 means
 invalid command usage."
     );
@@ -378,6 +409,10 @@ fn run_account_command(args: &[String], json: bool) {
         "recovery-complete" => HostedAccountAction::RecoveryComplete {
             token: account_argument(args, 2, "token").to_owned(),
         },
+        "bootstrap" => HostedAccountAction::Bootstrap {
+            email: account_argument(args, 2, "email").to_owned(),
+            display_name: optional_account_argument(args, 3),
+        },
         "login" => HostedAccountAction::Login {
             email: account_argument(args, 2, "email").to_owned(),
             display_name: optional_account_argument(args, 3),
@@ -449,6 +484,307 @@ fn run_account_command(args: &[String], json: bool) {
     print_account_result(&result, json);
     if !result.outcome.is_accepted() {
         process::exit(1);
+    }
+}
+
+fn admin_client() -> HostedAdminClient {
+    HostedAdminClient::new(JsonHostedAdminStore::new(
+        account_support_dir().join("hosted-admin.json"),
+    ))
+}
+
+fn admin_invite_id(args: &[String], index: usize) -> Uuid {
+    let value = account_argument(args, index, "invite-id");
+    Uuid::parse_str(value).unwrap_or_else(|_| usage_error("invite-id must be a UUID"))
+}
+
+/// Builds a single-field hosting patch.
+///
+/// One field per call keeps the CLI honest: an operator can never overwrite a
+/// hosting value they did not name.
+fn admin_hosting_update(field: &str, value: &str) -> HostedAdminHostingUpdate {
+    let mut update = HostedAdminHostingUpdate::default();
+    let seconds = || -> i64 {
+        value
+            .parse::<i64>()
+            .unwrap_or_else(|_| usage_error(&format!("{field} must be a whole number of seconds")))
+    };
+    match field {
+        "operation_mode" => {
+            update.operation_mode = Some(
+                value
+                    .parse::<HostedAdminOperationMode>()
+                    .unwrap_or_else(|error| usage_error(&error.to_string())),
+            )
+        }
+        "registration_mode" => {
+            update.registration_mode = Some(
+                value
+                    .parse::<HostedAdminRegistrationMode>()
+                    .unwrap_or_else(|error| usage_error(&error.to_string())),
+            )
+        }
+        "session_ttl_seconds" => update.session_ttl_seconds = Some(seconds()),
+        "refresh_ttl_seconds" => update.refresh_ttl_seconds = Some(seconds()),
+        "invitation_ttl_seconds" => update.invitation_ttl_seconds = Some(seconds()),
+        "verification_ttl_seconds" => update.verification_ttl_seconds = Some(seconds()),
+        "recovery_ttl_seconds" => update.recovery_ttl_seconds = Some(seconds()),
+        other => usage_error(&format!("unknown hosting field: {other}")),
+    }
+    if let Err(error) = update.to_body() {
+        usage_error(&error.to_string());
+    }
+    update
+}
+
+fn run_admin_command(args: &[String], json: bool) {
+    let Some(subcommand) = args.get(1).map(String::as_str) else {
+        usage_error("admin command requires a subcommand");
+    };
+    let admin = admin_client();
+    let account_client = account_client();
+    let now = chrono::Utc::now();
+
+    let account = account_client
+        .snapshot(&HostedAccountConfig::default(), now)
+        .unwrap_or_else(|error| {
+            eprintln!("failed to read hosted account state: {error}");
+            process::exit(1);
+        });
+
+    if subcommand == "status" {
+        require_argument_count(args, 2);
+        let snapshot = admin.snapshot(&account, now).unwrap_or_else(|error| {
+            eprintln!("failed to read hosted administration state: {error}");
+            process::exit(1);
+        });
+        print_admin_snapshot(&snapshot, &account, json);
+        return;
+    }
+
+    let action = match subcommand {
+        "hosting" => {
+            require_argument_count(args, 2);
+            HostedAdminAction::HostingRead
+        }
+        "set-hosting" => {
+            require_argument_count(args, 4);
+            let field = account_argument(args, 2, "field");
+            let value = account_argument(args, 3, "value");
+            HostedAdminAction::HostingUpdate {
+                update: admin_hosting_update(field, value),
+            }
+        }
+        "invitations" => {
+            require_argument_count(args, 2);
+            HostedAdminAction::InvitationList
+        }
+        "invite" => {
+            require_argument_count(args, 5);
+            let logbook_id = Uuid::parse_str(account_argument(args, 2, "logbook-id"))
+                .unwrap_or_else(|_| usage_error("logbook-id must be a UUID"));
+            let email = account_argument(args, 3, "email").to_owned();
+            let role = account_argument(args, 4, "role")
+                .parse::<HostedAdminLogbookRole>()
+                .unwrap_or_else(|error| usage_error(&error.to_string()));
+            HostedAdminAction::InvitationCreate {
+                logbook_id,
+                email,
+                role,
+                expires_at: None,
+            }
+        }
+        "invitation" => {
+            require_argument_count(args, 3);
+            HostedAdminAction::InvitationGet {
+                invite_id: admin_invite_id(args, 2),
+            }
+        }
+        "resend" => {
+            require_argument_count(args, 3);
+            HostedAdminAction::InvitationResend {
+                invite_id: admin_invite_id(args, 2),
+            }
+        }
+        "expire" => {
+            require_argument_count(args, 3);
+            HostedAdminAction::InvitationExpire {
+                invite_id: admin_invite_id(args, 2),
+                expires_at: None,
+            }
+        }
+        "revoke" => {
+            let invite_id = admin_invite_id(args, 2);
+            if args.get(3).map(String::as_str) != Some("--confirm") {
+                usage_error("admin revoke requires --confirm");
+            }
+            require_argument_count(args, 4);
+            HostedAdminAction::InvitationRevoke { invite_id }
+        }
+        "audits" => {
+            require_argument_count(args, 2);
+            HostedAdminAction::AuditList
+        }
+        other => usage_error(&format!("unknown admin subcommand: {other}")),
+    };
+
+    let mut secrets = CliHostedAccountSecrets {
+        store: default_credential_store(
+            account_support_dir(),
+            env::var("HAM_PLATFORM_ALLOW_INSECURE_DEV_CREDENTIALS").as_deref() == Ok("1"),
+        ),
+    };
+    let mut result = admin
+        .execute(
+            &action,
+            &account,
+            &HttpHostedAdminTransport::new(),
+            &mut secrets,
+            now,
+        )
+        .unwrap_or_else(|error| {
+            eprintln!("hosted administration request rejected: {error}");
+            process::exit(1);
+        });
+
+    let invitation_token = result.take_invitation_token();
+    print_admin_result(&result, invitation_token.as_deref(), json);
+    if !result.outcome.is_accepted() {
+        process::exit(1);
+    }
+}
+
+fn admin_rights_label(snapshot: &HostedAdminSnapshot) -> &'static str {
+    match snapshot.administrator {
+        Some(true) => "administrator",
+        Some(false) => "not-an-administrator",
+        None => "unchecked",
+    }
+}
+
+fn print_admin_snapshot(
+    snapshot: &HostedAdminSnapshot,
+    account: &HostedAccountSnapshot,
+    json: bool,
+) {
+    let now = chrono::Utc::now();
+    let pending = snapshot
+        .invitations_with_status(HostedAdminInvitationStatus::Pending, now)
+        .len();
+    if json {
+        println!(
+            "{}",
+            serde_json::json!({
+                "command": "admin",
+                "action": "admin.status",
+                "base_url": snapshot.base_url,
+                "administrator": snapshot.administrator,
+                "signed_in": account.connection_state.is_signed_in(),
+                "hosting": snapshot.hosting,
+                "invitations": snapshot.invitations.len(),
+                "pending_invitations": pending,
+                "audits": snapshot.audits.len(),
+                "last_action": snapshot.last_action,
+                "last_outcome": snapshot.last_outcome,
+            })
+        );
+    } else {
+        println!(
+            "rights={} server={} signed_in={} invitations={} pending={} audits={}",
+            admin_rights_label(snapshot),
+            snapshot.base_url,
+            account.connection_state.is_signed_in(),
+            snapshot.invitations.len(),
+            pending,
+            snapshot.audits.len()
+        );
+    }
+}
+
+/// Prints one administration result.
+///
+/// The invitation token is printed exactly once, on its own line, and is never
+/// written to the durable record.
+fn print_admin_result(result: &HostedAdminResult, invitation_token: Option<&str>, json: bool) {
+    if json {
+        println!(
+            "{}",
+            serde_json::json!({
+                "command": "admin",
+                "action": result.action,
+                "outcome": result.outcome,
+                "status": result.status,
+                "message": result.message,
+                "error_code": result.error_code,
+                "request_id": result.request_id,
+                "retryable": result.retryable,
+                "user_action_required": result.user_action_required,
+                "administrator": result.snapshot.administrator,
+                "hosting": result.snapshot.hosting,
+                "invitation": result.invitation,
+                "invitations": result.snapshot.invitations,
+                "audits": result.snapshot.audits,
+                "invitation_token": invitation_token,
+            })
+        );
+    } else {
+        println!(
+            "{} outcome={} rights={} {}",
+            result.action,
+            result.outcome,
+            admin_rights_label(&result.snapshot),
+            result.message
+        );
+        let now = chrono::Utc::now();
+        // Listings are only useful if the operator can read the identifiers the
+        // other subcommands need, so print the rows rather than a count.
+        if result.action == "admin.invitation.list" {
+            for invitation in &result.snapshot.invitations {
+                println!(
+                    "  {} {} {} expires={} resends={}",
+                    invitation.invite_id,
+                    invitation.invited_email.as_deref().unwrap_or("unknown"),
+                    invitation.status(now).as_str(),
+                    invitation
+                        .expires_at
+                        .map(|value| value.to_rfc3339())
+                        .unwrap_or_else(|| "never".to_owned()),
+                    invitation.resend_count
+                );
+            }
+        }
+        if result.action == "admin.audit.list" {
+            for audit in result.snapshot.audits.iter().take(50) {
+                println!(
+                    "  {} {} {} {}",
+                    audit
+                        .occurred_at
+                        .map(|value| value.to_rfc3339())
+                        .unwrap_or_else(|| "unknown".to_owned()),
+                    audit.action.as_deref().unwrap_or("unknown"),
+                    audit.outcome.as_deref().unwrap_or("unknown"),
+                    audit.target.as_deref().unwrap_or("")
+                );
+            }
+        }
+        if let Some(invitation) = &result.invitation {
+            println!(
+                "  {} {} {}",
+                invitation.invite_id,
+                invitation.invited_email.as_deref().unwrap_or("unknown"),
+                invitation.status(now).as_str()
+            );
+        }
+        if let Some(token) = invitation_token {
+            println!("invitation_token={token}");
+            eprintln!("this token is shown once and is not stored; deliver it now if needed");
+        }
+        if !result.outcome.is_accepted() {
+            eprintln!(
+                "retryable={} user_action_required={}",
+                result.retryable, result.user_action_required
+            );
+        }
     }
 }
 

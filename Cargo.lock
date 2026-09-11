@@ -2236,7 +2236,7 @@ dependencies = [
 
 [[package]]
 name = "ham-client"
-version = "0.4.0"
+version = "0.5.1"
 dependencies = [
  "chrono",
  "ham-core",
@@ -2248,7 +2248,7 @@ dependencies = [
 
 [[package]]
 name = "ham-core"
-version = "0.4.0"
+version = "0.5.1"
 dependencies = [
  "async-trait",
  "chrono",
@@ -2267,7 +2267,7 @@ dependencies = [
 
 [[package]]
 name = "ham-ios-ffi"
-version = "0.4.0"
+version = "0.5.1"
 dependencies = [
  "chrono",
  "ham-core",
@@ -2279,7 +2279,7 @@ dependencies = [
 
 [[package]]
 name = "ham-server"
-version = "0.4.0"
+version = "0.5.1"
 dependencies = [
  "chrono",
  "ham-core",
@@ -3036,7 +3036,7 @@ dependencies = [
 
 [[package]]
 name = "ke8ygw-logger-desktop"
-version = "0.4.0"
+version = "0.5.1"
 dependencies = [
  "ham-core",
  "rfd",

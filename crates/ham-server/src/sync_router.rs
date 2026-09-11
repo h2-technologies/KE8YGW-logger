@@ -260,7 +260,7 @@ mod tests {
     use crate::{http, HostedServer, MergedServer};
     use ham_core::sync::{
         CloudPullEventsResponse, CloudPushEventsResponse, CloudServerConfig, ListLogbooksResponse,
-        PairDeviceResponse, ReplicationStatus,
+        PairDeviceResponse, PreviewPullResponse, ReplicationStatus,
     };
     use ham_core::{CoreEventEnvelope, NewLogbookEvent};
     use serde::de::DeserializeOwned;
@@ -707,6 +707,176 @@ mod tests {
         assert_eq!(response_status(&response), 401);
         let error: ApiErrorBody = response_json(&response);
         assert_eq!(error.code, ApiErrorCode::InvalidToken.as_str());
+
+        let _ = std::fs::remove_dir_all(
+            paths
+                .metadata_store_path
+                .parent()
+                .expect("test paths should have a root"),
+        );
+    }
+
+    #[test]
+    fn self_hosted_wire_endpoint_rejects_divergent_branch_and_reconciles_after_pull() {
+        let paths = durable_paths("wire-divergence-reconcile");
+        let server = durable_server(CloudServerConfig::default(), &paths);
+        let logbook_id = Uuid::new_v4();
+        let desktop_device = Uuid::new_v4();
+        let ios_device = Uuid::new_v4();
+
+        let desktop_pair: PairDeviceResponse = wire_json(
+            server.clone(),
+            raw_json_http_request(
+                "POST",
+                "/api/v1/self-hosted/auth/pair",
+                pair_request(logbook_id, desktop_device),
+            ),
+        );
+        assert!(desktop_pair.accepted);
+        let desktop_auth = CloudAuth {
+            sync_token: desktop_pair
+                .session
+                .expect("desktop pairing should return a session")
+                .sync_token,
+        };
+        let ios_pair: PairDeviceResponse = wire_json(
+            server.clone(),
+            raw_json_http_request(
+                "POST",
+                "/api/v1/self-hosted/auth/pair",
+                pair_request(logbook_id, ios_device),
+            ),
+        );
+        let ios_auth = CloudAuth {
+            sync_token: ios_pair
+                .session
+                .expect("iOS pairing should return a session")
+                .sync_token,
+        };
+
+        let base = sample_qso_event(logbook_id, None, desktop_device);
+        let accepted: CloudPushEventsResponse = wire_json(
+            server.clone(),
+            raw_json_http_request(
+                "POST",
+                format!("/api/v1/self-hosted/logbooks/{logbook_id}/push"),
+                CloudPushEventsRequest {
+                    auth: desktop_auth.clone(),
+                    logbook_id,
+                    events: vec![base.clone()],
+                },
+            ),
+        );
+        assert_eq!(accepted.status, ReplicationStatus::Pulled);
+        assert_eq!(accepted.accepted_count, 1);
+        assert_eq!(accepted.server_head_hash, Some(base.event_hash.clone()));
+
+        // The second device logged offline from an empty local chain, so its
+        // branch does not continue the server head.
+        let divergent = sample_qso_event(logbook_id, None, ios_device);
+        let rejected: CloudPushEventsResponse = wire_json(
+            server.clone(),
+            raw_json_http_request(
+                "POST",
+                format!("/api/v1/self-hosted/logbooks/{logbook_id}/push"),
+                CloudPushEventsRequest {
+                    auth: ios_auth.clone(),
+                    logbook_id,
+                    events: vec![divergent.clone()],
+                },
+            ),
+        );
+        assert_eq!(rejected.status, ReplicationStatus::Diverged);
+        assert_eq!(rejected.accepted_count, 0);
+        assert_eq!(rejected.rejected_count, 1);
+        assert_eq!(
+            rejected.server_head_hash,
+            Some(base.event_hash.clone()),
+            "a divergent branch must never advance the self-hosted head"
+        );
+
+        let divergent_preview: PreviewPullResponse = wire_json(
+            server.clone(),
+            raw_json_http_request(
+                "POST",
+                format!("/api/v1/self-hosted/logbooks/{logbook_id}/preview-pull"),
+                CloudPreviewPullRequest {
+                    auth: ios_auth.clone(),
+                    logbook_id,
+                    local_head_hash: Some(divergent.event_hash.clone()),
+                },
+            ),
+        );
+        assert_eq!(divergent_preview.status, ReplicationStatus::Diverged);
+        assert_eq!(divergent_preview.missing_event_count, 0);
+        assert!(divergent_preview.events.is_empty());
+
+        // The safe recovery path is to pull the real head first and re-apply the
+        // offline work on top of it.
+        let pull: CloudPullEventsResponse = wire_json(
+            server.clone(),
+            raw_json_http_request(
+                "POST",
+                format!("/api/v1/self-hosted/logbooks/{logbook_id}/pull"),
+                CloudPullEventsRequest {
+                    auth: ios_auth.clone(),
+                    logbook_id,
+                    local_head_hash: None,
+                },
+            ),
+        );
+        assert_eq!(pull.preview.status, ReplicationStatus::RemoteAhead);
+        assert_eq!(pull.events, vec![base.clone()]);
+
+        let reapplied = sample_qso_event(logbook_id, Some(base.event_hash.clone()), ios_device);
+        let reconciled: CloudPushEventsResponse = wire_json(
+            server.clone(),
+            raw_json_http_request(
+                "POST",
+                format!("/api/v1/self-hosted/logbooks/{logbook_id}/push"),
+                CloudPushEventsRequest {
+                    auth: ios_auth.clone(),
+                    logbook_id,
+                    events: vec![reapplied.clone()],
+                },
+            ),
+        );
+        assert_eq!(reconciled.status, ReplicationStatus::Pulled);
+        assert_eq!(reconciled.accepted_count, 1);
+        assert_eq!(
+            reconciled.server_head_hash,
+            Some(reapplied.event_hash.clone())
+        );
+
+        let replayed: CloudPushEventsResponse = wire_json(
+            server.clone(),
+            raw_json_http_request(
+                "POST",
+                format!("/api/v1/self-hosted/logbooks/{logbook_id}/push"),
+                CloudPushEventsRequest {
+                    auth: ios_auth,
+                    logbook_id,
+                    events: vec![base.clone(), reapplied.clone()],
+                },
+            ),
+        );
+        assert_eq!(replayed.status, ReplicationStatus::Pulled);
+        assert_eq!(replayed.accepted_count, 0);
+        assert_eq!(replayed.ignored_duplicate_count, 2);
+        assert_eq!(
+            replayed.server_head_hash,
+            Some(reapplied.event_hash.clone())
+        );
+
+        let official_log = std::fs::read_to_string(&paths.official_event_log_path)
+            .expect("durable official event log should be readable");
+        assert_eq!(official_log.matches(&base.event_hash).count(), 2);
+        assert_eq!(official_log.matches(&reapplied.event_hash).count(), 1);
+        assert_eq!(
+            official_log.matches(&divergent.event_hash).count(),
+            0,
+            "rejected divergent events must never reach durable storage"
+        );
 
         let _ = std::fs::remove_dir_all(
             paths

@@ -12,7 +12,10 @@ through `frontendDist` and does not require a frontend dev server.
 The desktop shell loads bundled static assets and connects to a configured API
 endpoint:
 
-- `HAM_DESKTOP_SERVER_URL` sets the desktop API base.
+- `HAM_DESKTOP_SERVER_URL` sets the desktop API base. A non-loopback target
+  requires that `ham-gui` instance to run with
+  `HAM_GUI_ALLOW_REMOTE_CONTROL_API=1`; its control plane is loopback-only by
+  default.
 - Default API base: `http://127.0.0.1:9467`.
 - The web UI can override the base with `localStorage.ham.desktopServerUrl`.
 

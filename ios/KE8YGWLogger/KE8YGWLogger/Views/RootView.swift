@@ -19,6 +19,9 @@ struct RootView: View {
     var body: some View {
         AppShellView()
             .environmentObject(bridge)
+            // A forced scheme has to sit above the whole shell, or sheets and
+            // popovers keep the system appearance and the app looks half-themed.
+            .preferredColorScheme(settings.first?.effectiveColorScheme)
         .task {
             await bootstrap()
         }

@@ -17,7 +17,9 @@ permissions: {}
 
 concurrency:
   group: security-${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  # Cancel superseded pull request runs only. Every commit pushed to dev and
+  # main keeps its own scan result.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CARGO_AUDIT_VERSION: "0.22.2"
