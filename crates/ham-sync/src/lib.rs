@@ -4,10 +4,14 @@ pub mod account;
 #[cfg(feature = "hosted-http")]
 pub mod account_http;
 pub mod offline;
+#[cfg(feature = "surreal-storage")]
+pub mod projector;
 pub use account::*;
 #[cfg(feature = "hosted-http")]
 pub use account_http::*;
 pub use offline::*;
+#[cfg(feature = "surreal-storage")]
+pub use projector::*;
 
 use std::{
     collections::{HashMap, HashSet},
@@ -2147,6 +2151,26 @@ impl DurableCloudSyncServer {
             version: env!("CARGO_PKG_VERSION").to_owned(),
             mode: self.config.mode,
         }
+    }
+
+    /// Path of the append-only official event log this server owns.
+    pub fn official_event_log_path(&self) -> &std::path::Path {
+        self.store.path()
+    }
+
+    /// Builds a projector that writes into this server's SurrealDB instance.
+    ///
+    /// The projector shares the server's client because the embedded SurrealKV
+    /// datastore allows a single instance per path. It reads the official log
+    /// and writes only the projection tables; nothing here writes back to the log.
+    pub fn projector(
+        &self,
+        config: projector::ProjectorConfig,
+    ) -> Result<projector::SurrealProjector, projector::ProjectorError> {
+        projector::SurrealProjector::open(
+            projector::ProjectionStore::from_metadata(Arc::clone(&self.metadata)),
+            config,
+        )
     }
 
     pub async fn pair_device(&self, request: PairDeviceRequest) -> PairDeviceResponse {

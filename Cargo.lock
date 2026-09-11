@@ -2345,6 +2345,7 @@ version = "0.4.0"
 dependencies = [
  "chrono",
  "ham-core",
+ "ham-plugin-sdk",
  "hmac",
  "serde",
  "serde_json",

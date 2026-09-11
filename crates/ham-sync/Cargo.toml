@@ -24,3 +24,6 @@ ureq = { workspace = true, optional = true }
 uuid.workspace = true
 
 [dev-dependencies]
+# Test-only: lets projector tests use the real official event-type constants
+# instead of hardcoding event names. Not a runtime dependency of `ham-sync`.
+ham-plugin-sdk = { path = "../ham-plugin-sdk" }
