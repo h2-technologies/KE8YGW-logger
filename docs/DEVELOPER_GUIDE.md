@@ -48,7 +48,6 @@ just fmt
 just check
 just clippy
 just test
-just feature-matrix
 just api-contract
 just version-check
 just docs-link-check
@@ -65,8 +64,6 @@ cargo fmt --all
 cargo check --workspace --all-targets
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
-cargo check --locked -p ham-sync --no-default-features --all-targets
-cargo test --locked -p ham-sync --features surreal-storage
 cargo build --workspace
 cargo build --release --workspace
 python scripts/check_api_contract.py
@@ -78,7 +75,7 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/governance-check.ps1
 For the current static GUI JavaScript, also run:
 
 ```powershell
-node --check crates\ham-gui\web\app.js
+node --check crates\ham-client\web\app.js
 ```
 
 ## Completion Checklist
@@ -89,7 +86,7 @@ Before considering an implementation complete:
 2. Update `README.md` if contributor-facing behavior changed.
 3. Update architecture docs when architecture, protocols, permissions, or event catalogs change.
 4. Update this developer guide when workflow expectations change.
-5. Run formatting, linting, tests, API/version/docs/governance checks, and subsystem-specific validation. `just ci` is the workspace baseline; use `cargo build --release --workspace`, `node --check crates\\ham-gui\\web\\app.js`, `cargo tauri info`, and `cargo tauri build` when the touched subsystem requires them.
+5. Run formatting, linting, tests, API/version/docs/governance checks, and subsystem-specific validation. `just ci` is the workspace baseline; use `cargo build --release --workspace`, `node --check crates\\ham-client\\web\\app.js`, `cargo tauri info`, and `cargo tauri build` when the touched subsystem requires them.
 6. Fix every discovered issue.
 7. Report changed files, architecture decisions, risks, TODOs, and the next milestone.
 

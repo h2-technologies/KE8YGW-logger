@@ -16,7 +16,7 @@ all expensive paths.
 - Tauri validation runs for `src-tauri`, desktop helper, GUI, and shared core
   changes.
 - iOS selection is exposed for iOS workflow coordination.
-- Container validation runs for sync-server container inputs and shared sync
+- Container validation runs for server container inputs and shared sync
   crates.
 
 Skipped jobs still resolve as successful skipped checks rather than pending
@@ -41,9 +41,9 @@ Actions steps before introducing another compiler cache layer such as `sccache`.
 
 ## Docker
 
-`Dockerfile.sync-server` uses the same Rust version as `rust-toolchain.toml`,
+`Dockerfile.server` uses the same Rust version as `rust-toolchain.toml`,
 fetches dependencies from manifests before copying source, uses BuildKit Cargo
-cache mounts, and builds only `ham-sync-server` with `--locked`.
+cache mounts, and builds only `ham-server` with `--locked`.
 
 No container registry is configured in source. CI builds and smokes the image but
 does not push dev, beta, or production tags until maintainers configure a

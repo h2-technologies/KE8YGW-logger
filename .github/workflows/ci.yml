@@ -112,7 +112,7 @@ jobs:
             if [[ "$file" == *.md ]]; then
               docs_links=true
             fi
-            if [[ "$file" == openapi/* || "$file" == scripts/check_api_contract.py || "$file" == crates/ham-api-contract/* || "$file" == crates/ham-server/* ]]; then
+            if [[ "$file" == openapi/* || "$file" == scripts/check_api_contract.py || "$file" == crates/ham-core/src/api_contract.rs || "$file" == crates/ham-server/* ]]; then
               api=true
               rust=true
             fi
@@ -125,10 +125,10 @@ jobs:
             if [[ "$file" == crates/* || "$file" == src-tauri/* ]]; then
               rust=true
             fi
-            if [[ "$file" == src-tauri/* || "$file" == crates/ham-desktop/* || "$file" == crates/ham-gui/* || "$file" == crates/ham-core/* ]]; then
+            if [[ "$file" == src-tauri/* || "$file" == crates/ham-client/* || "$file" == crates/ham-core/* ]]; then
               tauri=true
             fi
-            if [[ "$file" == Dockerfile.sync-server || "$file" == .dockerignore || "$file" == crates/ham-sync-server/* || "$file" == crates/ham-sync/* || "$file" == crates/ham-core/* || "$file" == crates/ham-api-contract/* || "$file" == Cargo.toml || "$file" == Cargo.lock || "$file" == rust-toolchain.toml ]]; then
+            if [[ "$file" == Dockerfile.server || "$file" == .dockerignore || "$file" == crates/ham-server/* || "$file" == crates/ham-core/* || "$file" == Cargo.toml || "$file" == Cargo.lock || "$file" == rust-toolchain.toml ]]; then
               container=true
             fi
           done <<< "$files"
@@ -248,7 +248,7 @@ jobs:
         run: cargo test --locked --workspace
 
       - name: JavaScript syntax
-        run: node --check crates/ham-gui/web/app.js
+        run: node --check crates/ham-client/web/app.js
 
   platform-validation:
     name: Platform validation (${{ matrix.os }})
@@ -282,7 +282,7 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/main' }}
 
       - name: Compile platform binaries
-        run: cargo build --locked -p ham-gui --bin ham-gui -p ham-sync-server --bin ham-sync-server
+        run: cargo build --locked -p ham-client --bin ham-client -p ham-server --bin ham-server
 
       - name: Platform credential tests
         run: cargo test --locked -p ham-core credential
@@ -328,7 +328,7 @@ jobs:
         run: cargo check --locked -p ke8ygw-logger-desktop --all-targets
 
   container-validation:
-    name: Sync server container
+    name: Server container
     runs-on: ubuntu-latest
     needs:
       - changes
@@ -341,16 +341,16 @@ jobs:
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
 
       - name: Build image
-        run: docker build -f Dockerfile.sync-server -t ham-sync-server:ci .
+        run: docker build -f Dockerfile.server -t ham-server:ci .
 
       - name: Smoke image
         shell: bash
         run: |
           set -euo pipefail
-          container_id="$(docker run -d ham-sync-server:ci)"
+          container_id="$(docker run -d ham-server:ci)"
           trap 'docker rm -f "$container_id" >/dev/null 2>&1 || true' EXIT
           for _ in {1..10}; do
-            if docker logs "$container_id" 2>&1 | grep -q "ham-sync-server listening"; then
+            if docker logs "$container_id" 2>&1 | grep -q "ham-server listening"; then
               exit 0
             fi
             if ! docker inspect -f '{{.State.Running}}' "$container_id" | grep -q true; then

@@ -1,5 +1,4 @@
-use chrono::{DateTime, Utc};
-use ham_plugin_sdk::{
+use crate::plugin_sdk::{
     PluginCapability, PluginManifest, ProposalEnvelope, OFFICIAL_LOG_ACTIVATION_CANCELLED,
     OFFICIAL_LOG_ACTIVATION_CREATED, OFFICIAL_LOG_ACTIVATION_ENDED,
     OFFICIAL_LOG_ACTIVATION_NOTE_ADDED, OFFICIAL_LOG_ACTIVATION_STARTED,
@@ -37,6 +36,7 @@ use ham_plugin_sdk::{
     PROPOSAL_QSO_ACTIVATION_LINK, PROPOSAL_QSO_ACTIVATION_UNLINK, PROPOSAL_QSO_CORRECT,
     PROPOSAL_QSO_CREATE, PROPOSAL_QSO_DELETE, PROPOSAL_QSO_NOTE_ADD, PROPOSAL_QSO_RESTORE,
 };
+use chrono::{DateTime, Utc};
 use serde_json::Value;
 use thiserror::Error;
 use uuid::Uuid;

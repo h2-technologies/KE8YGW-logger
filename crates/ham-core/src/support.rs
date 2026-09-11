@@ -83,8 +83,8 @@ where
 mod tests {
     use std::fs;
 
+    use crate::plugin_sdk::ServiceType;
     use chrono::Utc;
-    use ham_plugin_sdk::ServiceType;
 
     use crate::{
         default_service_registry, MapLayerStack, NetTemplate, ServiceCacheEntry, ServiceRegistry,
@@ -141,7 +141,10 @@ mod tests {
         registry.set_enabled("qrz-xml", false).unwrap();
         registry.set_priority("local-prefix", 99).unwrap();
         registry
-            .set_preferred_provider(ham_plugin_sdk::ServiceType::CallsignLookup, "local-prefix")
+            .set_preferred_provider(
+                crate::plugin_sdk::ServiceType::CallsignLookup,
+                "local-prefix",
+            )
             .unwrap();
 
         store.save(&registry).unwrap();
@@ -159,7 +162,7 @@ mod tests {
         assert_eq!(
             snapshot
                 .preferred_providers
-                .get(&ham_plugin_sdk::ServiceType::CallsignLookup),
+                .get(&crate::plugin_sdk::ServiceType::CallsignLookup),
             Some(&"local-prefix".to_owned())
         );
         let _ = fs::remove_file(path);

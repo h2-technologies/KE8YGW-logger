@@ -1054,7 +1054,7 @@ struct FallbackRustBridgeClient: RustBridgeClient {
                 "app": "KE8YGW Logger",
                 "core_version": "0.5.1",
                 "bridge_version": 1,
-                "rust_modules": ["ham-core", "ham-sync", "ham-plugin-sdk"],
+                "rust_modules": ["ham-core", "ham-ios-ffi"],
                 "contract": "ffi_unavailable_in_this_build"
             ]
         case .dashboard:
@@ -3249,7 +3249,7 @@ enum SyncPushEndpointStyle: Equatable {
     func path(logbookId: String) -> String {
         switch self {
         case .logbookScoped:
-            return "api/v1/logbooks/\(logbookId)/push"
+            return "api/v1/self-hosted/logbooks/\(logbookId)/push"
         case .hostedSync:
             return "api/v1/sync/push"
         }
@@ -3272,7 +3272,7 @@ enum SyncPullEndpointStyle: Equatable {
     func path(logbookId: String) -> String {
         switch self {
         case .logbookScoped:
-            return "api/v1/logbooks/\(logbookId)/pull"
+            return "api/v1/self-hosted/logbooks/\(logbookId)/pull"
         case .hostedSync:
             return "api/v1/sync/pull"
         }

@@ -11,8 +11,7 @@ use tokio::sync::RwLock;
 use uuid::Uuid;
 
 use crate::event::{CoreEventEnvelope, NewLogbookEvent};
-use crate::projection::{ActivationProjection, Projection, QsoCurrentStateProjection};
-use ham_plugin_sdk::{
+use crate::plugin_sdk::{
     OFFICIAL_LOG_ACTIVATION_CANCELLED, OFFICIAL_LOG_ACTIVATION_CREATED,
     OFFICIAL_LOG_ACTIVATION_ENDED, OFFICIAL_LOG_ACTIVATION_NOTE_ADDED,
     OFFICIAL_LOG_ACTIVATION_STARTED, OFFICIAL_LOG_ACTIVATION_UPDATED,
@@ -26,6 +25,7 @@ use ham_plugin_sdk::{
     OFFICIAL_LOG_QSO_DELETED, OFFICIAL_LOG_QSO_NOTE_ADDED, OFFICIAL_LOG_QSO_RESTORED,
     OFFICIAL_LOG_UPLOAD_COMPLETED, OFFICIAL_LOG_UPLOAD_FAILED, OFFICIAL_LOG_UPLOAD_QUEUED,
 };
+use crate::projection::{ActivationProjection, Projection, QsoCurrentStateProjection};
 
 #[derive(Debug, Error)]
 pub enum StoreError {

@@ -31,17 +31,18 @@ crates/ham-core/src/permissions.rs @ahadley1124
 
 # Server and API surface.
 crates/ham-server/ @ahadley1124
-crates/ham-sync-server/ @ahadley1124
+crates/ham-core/src/api_contract.rs @ahadley1124
 
 # Sync protocol and authorization-sensitive replication.
-crates/ham-sync/ @ahadley1124
+crates/ham-core/src/sync/ @ahadley1124
 
 # Desktop, Tauri, and native integration.
-crates/ham-desktop/ @ahadley1124
+crates/ham-core/src/desktop.rs @ahadley1124
 src-tauri/ @ahadley1124
 
-# GUI shell and web frontend.
-crates/ham-gui/ @ahadley1124
+# Client binary, GUI shell, and web frontend.
+crates/ham-client/ @ahadley1124
+crates/ham-core/src/gui/ @ahadley1124
 
 # Provider runtime and credential storage.
 crates/ham-core/src/online.rs @ahadley1124
@@ -60,7 +61,7 @@ migrations/ @ahadley1124
 
 # Release workflows and packaging.
 .github/workflows/release.yml @ahadley1124
-Dockerfile.sync-server @ahadley1124
+Dockerfile.server @ahadley1124
 docs/DESKTOP_RELEASE.md @ahadley1124
 docs/HOSTED_WEB_RELEASE.md @ahadley1124
 

@@ -19,13 +19,13 @@ The current workspace includes:
 
 - `crates/ham-core`: append-only official events, projections, services,
   credentials, diagnostics, provider boundaries, and domain rules.
-- `crates/ham-plugin-sdk`: public plugin manifest, permissions, proposal, and
+- `crates/ham-core` `plugin_sdk` module: public plugin manifest, permissions, proposal, and
   event constants.
-- `crates/ham-sync` and `crates/ham-sync-server`: local-first sync protocol and
+- `crates/ham-core` `sync` module and `crates/ham-server`: local-first sync protocol and
   self-hosted relay/server foundations.
 - `crates/ham-server`: hosted and self-hosted API boundary, including `/api/v1`.
-- `crates/ham-gui`: Rust GUI shell server and static web UI.
-- `crates/ham-desktop` and `src-tauri`: desktop/Tauri integration.
+- `crates/ham-client`: Rust client binary, local web UI server, and static web UI.
+- `crates/ham-core` `desktop` module and `src-tauri`: desktop/Tauri integration.
 - `docs/adr`: accepted architecture decision records.
 
 Read [docs/MASTER_BLUEPRINT.md](docs/MASTER_BLUEPRINT.md),
@@ -43,7 +43,7 @@ Package managers and tools used by the repository today:
 
 - Cargo for Rust workspace builds, tests, formatting, and linting.
 - `just` for command aliases aligned with CI.
-- Node for static JavaScript syntax checks in `crates/ham-gui/web/app.js`.
+- Node for static JavaScript syntax checks in `crates/ham-client/web/app.js`.
 - Cargo Tauri commands for desktop/Tauri checks when desktop code is touched.
 
 ## Local Setup
@@ -86,7 +86,7 @@ just fmt
 For JavaScript or frontend changes, run:
 
 ```powershell
-node --check crates\ham-gui\web\app.js
+node --check crates\ham-client\web\app.js
 ```
 
 For desktop/Tauri changes, run the relevant Tauri checks documented in

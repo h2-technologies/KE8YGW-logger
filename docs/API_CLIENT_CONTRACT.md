@@ -104,7 +104,7 @@ Token rules:
 ## Shared Hosted Account Client Contract
 
 Every client surface drives the hosted account routes through
-`ham_sync::account`. Rust plans the request, interprets the response, and owns
+`ham_core::sync::account`. Rust plans the request, interprets the response, and owns
 the durable account record; platform layers only carry bytes and store secrets.
 
 - `HostedAccountAction` names the operation (register, verify email, recovery
@@ -142,7 +142,7 @@ Secret handling is uniform across platforms:
 
 Transport ownership per surface:
 
-- Desktop and hosted web use the shared `ureq` transport in `ham-sync` behind
+- Desktop and hosted web use the shared `ureq` transport in `ham_core::sync` behind
   the `hosted-http` feature, reached through the local `/api/account/*` GUI
   endpoints.
 - The CLI uses the same shared transport.
@@ -264,10 +264,10 @@ To run contract checks locally:
 ```sh
 just api-contract
 cargo test -p ham-server route_catalog_lists_scaffolded_v0_2_api_surface
-cargo test -p ham-sync-server self_hosted_errors_keep_stable_shape
+cargo test -p ham-server self_hosted_errors_keep_stable_shape
 ```
 
-When adding a route, update `crates/ham-api-contract`, `openapi/api-v1.yaml`,
+When adding a route, update `crates/ham-core/src/api_contract.rs`, `openapi/api-v1.yaml`,
 the route inventory, and conformance tests. Additive changes keep all existing
 paths, methods, status codes, response fields, auth requirements, and error
 codes. Intentional breaking changes require a new API major version, an ADR,

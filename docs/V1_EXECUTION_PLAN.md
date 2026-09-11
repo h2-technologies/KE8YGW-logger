@@ -24,9 +24,9 @@ outside issue #2.
      durable rate limits.
    - Client surfaces: the v0.4 milestone wired hosted web, desktop, native iOS,
      and the CLI to the account, session, recovery, and device routes through
-     the shared `ham_sync::account` contract. The v0.5 milestone wired the same
-     four surfaces to the administration routes through `ham_sync::admin`:
-     hosting configuration read/update, invitation
+     the shared `ham_core::sync::account` contract. The v0.5 milestone wired the
+     same four surfaces to the administration routes through
+     `ham_core::sync::admin`: hosting configuration read/update, invitation
      create/list/inspect/resend/expire/revoke, audit review, and one-time
      instance-administrator bootstrap. See
      [V0_4_RELEASE_PLAN.md](V0_4_RELEASE_PLAN.md) and

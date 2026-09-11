@@ -9,18 +9,18 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use crate::plugin_sdk::{PluginCapability, ServiceType};
 use chrono::{DateTime, Utc};
-use ham_plugin_sdk::{PluginCapability, ServiceType};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
 use uuid::Uuid;
 
+use crate::plugin_sdk::PluginManifest;
 use crate::{
     check_plugin_permission, redact_payload, OperatorRole, PermissionGrantSet,
     ProposalValidationError,
 };
-use ham_plugin_sdk::PluginManifest;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -891,7 +891,7 @@ impl From<CredentialError> for ProposalValidationError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ham_plugin_sdk::{PluginCapability, PluginManifest};
+    use crate::plugin_sdk::{PluginCapability, PluginManifest};
 
     #[test]
     fn metadata_list_does_not_expose_secret() {

@@ -2,7 +2,7 @@
 
 ## Release versions
 
-The Tauri desktop package, `ham-desktop` native integration crate, native iOS
+The Tauri desktop package, the `ham_core::desktop` native integration module, native iOS
 application, and shared internal Rust crates are all `0.5.1`, inherited from
 `[workspace.package].version`. Desktop and iOS ship on one product version, so
 a release tag covers both. Run `python scripts/check_versions.py` before
@@ -43,21 +43,21 @@ as v1 work.
 - `src-tauri/capabilities/default.json`
 - `src-tauri/icons/icon.ico`
 
-The runtime depends on `ham-desktop` and delegates native-dialog behavior to the
-existing helper layer. The shared `crates/ham-gui/web` assets are bundled
+The runtime depends on `ham_core::desktop` and delegates native-dialog behavior to
+the existing helper layer. The shared `crates/ham-client/web` assets are bundled
 directly by `frontendDist`, so release packaging does not require a frontend dev
 server. The previous bad watch-path build failure was caused by a config-only
 `src-tauri` directory and an unused dev-server-oriented `devUrl`; the runtime
 crate now exists and the config uses the real static asset directory.
 
-The desktop app does not yet embed the full `ham-gui` HTTP backend in-process.
+The desktop app does not yet embed the full `ham-client` HTTP backend in-process.
 For v0.2 it loads the bundled UI and talks to a configured API endpoint through
 a Tauri-only `/api/*` proxy command. Use `HAM_DESKTOP_SERVER_URL` or
 `localStorage.ham.desktopServerUrl` to point at a hosted/self-hosted server. For
 local development, run:
 
 ```powershell
-cargo run -p ham-gui --bin ham-gui
+cargo run -p ham-client --bin ham-client -- serve
 ```
 
 That starts the local API at `http://127.0.0.1:9467`, which is the desktop
@@ -77,7 +77,7 @@ The web UI calls these Tauri commands when present:
 - `export_divergence_report_dialog`
 - `select_app_data_directory_dialog`
 
-Dialog commands return the typed `DesktopDialogResult` from `ham-desktop`.
+Dialog commands return the typed `DesktopDialogResult` from `ham_core::desktop`.
 Cancellation is a normal result with `canceled: true`. Full selected paths are
 not written to logs by the helper layer; `redacted_path_for_logs` keeps only a
 safe placeholder and file name.
@@ -86,7 +86,7 @@ When Tauri commands are unavailable, the same web UI falls back to the existing
 browser/server path prompt behavior.
 
 `app.withGlobalTauri` must stay `true` in `src-tauri/tauri.conf.json`. The bundled
-`crates/ham-gui/web` assets are plain scripts with no bundler, so they reach the
+`crates/ham-client/web` assets are plain scripts with no bundler, so they reach the
 command layer through the injected `window.__TAURI__` global rather than an
 `@tauri-apps/api` import. With the flag off, Tauri injects no global, the UI finds
 no `invoke`, and `/api/*` requests stay relative — Tauri's asset protocol answers
@@ -100,7 +100,7 @@ Tauri capabilities grant only `core:default` for the main window. The app does
 not expose arbitrary filesystem or shell commands. Native dialogs are exposed
 only through the seven implemented command wrappers, and all dialog policy,
 filters, defaults, cancellation handling, and path redaction live in
-`ham-desktop`.
+`ham_core::desktop`.
 
 `desktop_api_request` accepts only `/api/*` paths and only `GET`/`POST`. It is a
 desktop-only bridge to the configured server URL so packaged assets do not need
@@ -116,13 +116,13 @@ opt-in only with `HAM_PLATFORM_ALLOW_INSECURE_DEV_CREDENTIALS=1`.
 Local GUI/API:
 
 ```powershell
-cargo run -p ham-gui --bin ham-gui
+cargo run -p ham-client --bin ham-client -- serve
 ```
 
 Desktop helper crate:
 
 ```powershell
-cargo build -p ham-desktop
+cargo build -p ham-core
 ```
 
 Tauri development run:

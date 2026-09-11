@@ -1,9 +1,9 @@
 use std::collections::VecDeque;
 
-use chrono::{DateTime, Utc};
-use ham_plugin_sdk::{
+use crate::plugin_sdk::{
     OFFICIAL_LOG_UPLOAD_COMPLETED, OFFICIAL_LOG_UPLOAD_FAILED, OFFICIAL_LOG_UPLOAD_QUEUED,
 };
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use thiserror::Error;
