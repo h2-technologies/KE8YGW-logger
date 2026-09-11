@@ -1,3 +1,17 @@
+//! Server: the hosted API boundary and the self-hosted sync service.
+//!
+//! Both route trees are served by one binary on one port; see [`http`].
+
+pub mod http;
+pub mod projector;
+pub mod sync_router;
+pub mod sync_storage;
+
+pub use ham_core::sync::{
+    CloudServerConfig, CloudServiceMode, DEFAULT_CLOUD_SYNC_SESSION_TTL_SECONDS,
+};
+pub use http::MergedServer;
+
 use std::{
     collections::{HashMap, HashSet},
     fs,
@@ -8,7 +22,19 @@ use std::{
 };
 
 use chrono::{DateTime, Duration, Utc};
-use ham_api_contract::{hosted_route_strings, ApiErrorBody, ApiErrorCode};
+use ham_core::api_contract::{hosted_route_strings, ApiErrorBody, ApiErrorCode};
+use ham_core::plugin_sdk::{
+    PluginCapability, PluginManifest, ProposalEnvelope, PROPOSAL_ACTIVATION_CREATE,
+    PROPOSAL_ACTIVATION_END, PROPOSAL_ACTIVATION_START, PROPOSAL_ACTIVATION_UPDATE,
+    PROPOSAL_NET_CHECKIN_CREATE, PROPOSAL_NET_CHECKIN_UPDATE, PROPOSAL_NET_SESSION_END,
+    PROPOSAL_NET_SESSION_START, PROPOSAL_NET_TRAFFIC_CREATE, PROPOSAL_QSO_CORRECT,
+    PROPOSAL_QSO_CREATE, PROPOSAL_QSO_DELETE, PROPOSAL_QSO_NOTE_ADD, PROPOSAL_QSO_RESTORE,
+};
+use ham_core::sync::{
+    metadata_for_event, preview_pull_from_events, push_replication_status, CloudPullEventsResponse,
+    CloudPushEventsRequest, CloudPushEventsResponse, LogbookHeadSummary, PreviewPullRequest,
+    ReplicationStatus,
+};
 use ham_core::{
     adif_for_upload_job, default_credential_store, default_log_directory, default_service_registry,
     execute_dx_cluster_read_once, execute_tier_one_lookup, execute_tier_one_upload, export_adif,
@@ -21,18 +47,6 @@ use ham_core::{
     ProviderLookupInput, ProviderRuntimeStatus, ProviderSpotExecution, ProviderSpotInput,
     ProviderUploadExecution, ProviderUploadInput, RegisteredServiceProvider, StationProfile,
     UploadJobStatus,
-};
-use ham_plugin_sdk::{
-    PluginCapability, PluginManifest, ProposalEnvelope, PROPOSAL_ACTIVATION_CREATE,
-    PROPOSAL_ACTIVATION_END, PROPOSAL_ACTIVATION_START, PROPOSAL_ACTIVATION_UPDATE,
-    PROPOSAL_NET_CHECKIN_CREATE, PROPOSAL_NET_CHECKIN_UPDATE, PROPOSAL_NET_SESSION_END,
-    PROPOSAL_NET_SESSION_START, PROPOSAL_NET_TRAFFIC_CREATE, PROPOSAL_QSO_CORRECT,
-    PROPOSAL_QSO_CREATE, PROPOSAL_QSO_DELETE, PROPOSAL_QSO_NOTE_ADD, PROPOSAL_QSO_RESTORE,
-};
-use ham_sync::{
-    metadata_for_event, preview_pull_from_events, push_replication_status, CloudPullEventsResponse,
-    CloudPushEventsRequest, CloudPushEventsResponse, LogbookHeadSummary, PreviewPullRequest,
-    ReplicationStatus,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value as JsonValue};
@@ -8552,7 +8566,7 @@ mod tests {
         let catalog: RouteCatalogResponse = response.json();
         assert_eq!(
             catalog.implemented,
-            ham_api_contract::hosted_route_strings()
+            ham_core::api_contract::hosted_route_strings()
         );
         assert!(catalog
             .implemented
@@ -10367,7 +10381,7 @@ mod tests {
                     "POST",
                     "/api/v1/sync/push",
                     &CloudPushEventsRequest {
-                        auth: ham_sync::CloudAuth {
+                        auth: ham_core::sync::CloudAuth {
                             sync_token: "unused-by-hosted-bearer".to_owned(),
                         },
                         logbook_id,
@@ -10435,7 +10449,7 @@ mod tests {
         let device_id = Uuid::new_v4();
         CoreEventEnvelope::from_new(
             ham_core::NewLogbookEvent {
-                event_type: ham_plugin_sdk::OFFICIAL_LOG_QSO_CREATED.to_owned(),
+                event_type: ham_core::plugin_sdk::OFFICIAL_LOG_QSO_CREATED.to_owned(),
                 logbook_id,
                 entity_id: Some(qso_id),
                 author_operator_id: None,
@@ -10474,7 +10488,7 @@ mod tests {
                     "POST",
                     "/api/v1/sync/push",
                     &CloudPushEventsRequest {
-                        auth: ham_sync::CloudAuth {
+                        auth: ham_core::sync::CloudAuth {
                             sync_token: "unused-by-hosted-bearer".to_owned(),
                         },
                         logbook_id: other_logbook,
@@ -10545,7 +10559,7 @@ mod tests {
                     "POST",
                     "/api/v1/sync/push",
                     &CloudPushEventsRequest {
-                        auth: ham_sync::CloudAuth {
+                        auth: ham_core::sync::CloudAuth {
                             sync_token: "unused-by-hosted-bearer".to_owned(),
                         },
                         logbook_id,
@@ -10574,7 +10588,7 @@ mod tests {
                     "POST",
                     "/api/v1/sync/push",
                     &CloudPushEventsRequest {
-                        auth: ham_sync::CloudAuth {
+                        auth: ham_core::sync::CloudAuth {
                             sync_token: "unused-by-hosted-bearer".to_owned(),
                         },
                         logbook_id,

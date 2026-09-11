@@ -1,0 +1,54 @@
+# syntax=docker/dockerfile:1.7@sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e
+ARG RUST_VERSION=1.96.0
+
+FROM rust:${RUST_VERSION}-bookworm@sha256:5e2214abe154fe26e39f64488952e5c991eeed1d6d6da7cc8381ae83927f0cfc AS builder
+WORKDIR /app
+
+COPY Cargo.toml Cargo.lock ./
+COPY crates/ham-core/Cargo.toml crates/ham-core/Cargo.toml
+COPY crates/ham-server/Cargo.toml crates/ham-server/Cargo.toml
+COPY crates/ham-client/Cargo.toml crates/ham-client/Cargo.toml
+COPY crates/ham-ios-ffi/Cargo.toml crates/ham-ios-ffi/Cargo.toml
+COPY src-tauri/Cargo.toml src-tauri/Cargo.toml
+
+RUN mkdir -p \
+      crates/ham-core/src \
+      crates/ham-server/src \
+      crates/ham-client/src \
+      crates/ham-ios-ffi/src \
+      src-tauri/src && \
+    touch \
+      crates/ham-core/src/lib.rs \
+      crates/ham-server/src/lib.rs \
+      crates/ham-server/src/main.rs \
+      crates/ham-client/src/main.rs \
+      crates/ham-ios-ffi/src/lib.rs \
+      src-tauri/src/main.rs
+
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
+    cargo fetch --locked
+
+COPY . .
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
+    --mount=type=cache,target=/app/target,sharing=locked \
+    cargo build --locked --release -p ham-server --bin ham-server && \
+    cp /app/target/release/ham-server /tmp/ham-server
+
+FROM debian:bookworm-slim@sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends ca-certificates && \
+    rm -rf /var/lib/apt/lists/* && \
+    useradd --system --uid 10001 --home-dir /nonexistent --shell /usr/sbin/nologin ham-server && \
+    mkdir -p /var/lib/ham-server/logs && \
+    chown -R ham-server:ham-server /var/lib/ham-server
+WORKDIR /var/lib/ham-server
+COPY --from=builder /tmp/ham-server /usr/local/bin/ham-server
+ENV HAM_SERVER_BIND=0.0.0.0:9750
+ENV HAM_SYNC_PUBLIC_URL=http://localhost:9750
+ENV HAM_SYNC_SERVICE_MODE=self_hosted
+ENV HAM_PLATFORM_LOG_DIR=/var/lib/ham-server/logs
+EXPOSE 9750
+USER ham-server
+CMD ["ham-server"]

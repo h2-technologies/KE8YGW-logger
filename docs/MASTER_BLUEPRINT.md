@@ -97,7 +97,11 @@ crates/
   ham-tests
 ```
 
-Current implementation differs intentionally while the MVP is small:
+Current implementation differs intentionally. The workspace is deliberately
+consolidated into one library and two binaries — `ham-core`, `ham-server`, and
+`ham-client` — plus the `ham-ios-ffi` and `src-tauri` platform shells. Splitting
+into the many-crate layout above is deferred until a split reduces real coupling
+rather than only matching the blueprint's names.
 
 | Blueprint crate | Current location | Migration path |
 | --- | --- | --- |
@@ -107,9 +111,12 @@ Current implementation differs intentionally while the MVP is small:
 | `ham-lookup` | `ham-core::lookup` | Extract when online provider integrations and datasets expand. |
 | `ham-pota-sota` | `ham-core::proposal` and `ham-core::projection` plus GUI panels | Extract once plugin loading is real rather than static manifests. |
 | `ham-diagnostics` | `ham-core::diagnostics` and `ham-core::runtime_log` | Extract if report generation grows server/client-specific code. |
-| `ham-ui-model` | `ham-gui::shell` and `ham-gui::commands` | Extract before alternate GUI/TUI clients need the same models. |
-| `ham-desktop`/`ham-web` | `ham-gui` static web shell | Split when Tauri packaging and web deployment diverge. |
-| `ham-server` | `ham-sync-server` | Rename only if a broader server surface replaces the sync-specific binary. |
+| `ham-plugin-sdk` | `ham-core::plugin_sdk` | Extract if plugins are ever published against a versioned SDK separate from the core. |
+| `ham-sync` | `ham-core::sync`, with durable storage in `ham-server::sync_storage` | Extract only if a consumer needs the protocol without the rest of the core. |
+| `ham-ui-model` | `ham-core::gui::shell` and `ham-core::gui::commands` | Extract before alternate GUI/TUI clients need the same models. |
+| `ham-desktop`/`ham-web` | `ham-core::desktop` plus the `ham-client` static web shell | Split when Tauri packaging and web deployment diverge. |
+| `ham-cli` | `ham-client` subcommands | Split only if the CLI and the local UI server need separate release cadences. |
+| `ham-server` | `ham-server` | Serves the hosted API and the self-hosted sync contract from one process. |
 
 Do not rename crates only for cosmetic alignment. Prefer stable APIs and migration notes until the extraction reduces real coupling.
 

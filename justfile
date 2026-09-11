@@ -15,10 +15,6 @@ clippy:
 test:
     cargo test --locked --workspace
 
-feature-matrix:
-    cargo check --locked -p ham-sync --no-default-features --all-targets
-    cargo test --locked -p ham-sync --features surreal-storage
-
 api-contract:
     python scripts/check_api_contract.py
 
@@ -37,10 +33,10 @@ build:
 release:
     cargo build --locked --release --workspace
 
-gui:
-    cargo run -p ham-gui --bin ham-gui
+client:
+    cargo run -p ham-client --bin ham-client -- serve
 
-sync-server:
-    cargo run -p ham-sync-server --bin ham-sync-server
+server:
+    cargo run -p ham-server --bin ham-server
 
-ci: fmt-check clippy test feature-matrix api-contract version-check docs-link-check governance-check
+ci: fmt-check clippy test api-contract version-check docs-link-check governance-check

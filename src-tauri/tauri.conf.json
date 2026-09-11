@@ -4,7 +4,7 @@
   "version": "0.5.1",
   "identifier": "com.h2technologies.ke8ygw-logger",
   "build": {
-    "frontendDist": "../crates/ham-gui/web"
+    "frontendDist": "../crates/ham-client/web"
   },
   "app": {
     "withGlobalTauri": true,

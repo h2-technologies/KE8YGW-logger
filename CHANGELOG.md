@@ -1,5 +1,38 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- **Breaking (self-hosted API):** the self-hosted sync routes moved under an
+  `/api/v1/self-hosted` prefix so the hosted and self-hosted contracts can be
+  served by one binary on one port without colliding on `/api/v1/logbooks` and
+  `/api/v1/sync/status`. `POST /api/v1/auth/pair`,
+  `GET /api/v1/logbooks`, `GET|POST /api/v1/logbooks/:logbook_id/{head,events,preview-pull,pull,push}`,
+  `GET /api/v1/sync/status`, `POST /api/v1/reports`, and
+  `GET /api/v1/reports/:report_id` are now served at the same paths under that
+  prefix. The old paths no longer resolve. `/health` is unchanged and now
+  answers for both services. The hosted contract is unchanged.
+- Restructured the workspace from eleven crates into one library and two
+  binaries. `ham-core` holds everything identical across platforms;
+  `ham-server` and `ham-client` are the binaries built on it; `ham-ios-ffi` and
+  `src-tauri` remain as the iOS and desktop packaging shells.
+- Folded `ham-plugin-sdk`, `ham-api-contract`, `ham-sync`, `ham-desktop`, and
+  the `ham-gui` shell models into `ham-core` as the `plugin_sdk`,
+  `api_contract`, `sync`, `desktop`, and `gui` modules.
+- Merged `ham-sync-server` into `ham-server`. One process now serves both route
+  trees on one port behind a shared HTTP layer, replacing two listeners and two
+  hand-rolled HTTP stacks. `HAM_SERVER_BIND` replaces `HAM_SYNC_SERVER_BIND`,
+  and the default bind is `127.0.0.1:9750`.
+- Merged `ham-cli` and `ham-gui` into `ham-client`. `ham-client serve` runs the
+  local web UI server; the former `ham-cli` commands are subcommands of the same
+  binary.
+- Moved the durable SurrealDB sync and report storage out of the shared library
+  into `ham-server`, so client and iOS builds no longer link SurrealDB. The
+  `ham-sync` `surreal-storage` and `hosted-http` feature flags are gone.
+- Renamed `Dockerfile.sync-server` to `Dockerfile.server`; it now builds
+  `ham-server` and exposes port 9750.
+- Release archives now package the `ham-client` binary instead of `ham-gui`.
 ## 0.5.1
 
 ### Added
@@ -79,15 +112,17 @@
 - Added `network.scan.started`, `network.scan.completed`, and
   `network.scan.multicast_failed` runtime events.
 
-- Added a JSONL-to-SurrealDB projector in `ham-sync` behind the `surreal-storage`
-  feature. It replays the append-only official event log one way into
-  `projection_qso` and `projection_activation`, verifies the per-logbook hash
+- Added a JSONL-to-SurrealDB projector in `ham-server` (`src/projector.rs`),
+  beside the SurrealDB storage it depends on so `ham-core` and the client and
+  iOS builds never link SurrealDB for it. It replays the append-only official
+  event log one way into `projection_qso` and `projection_activation`, verifies
+  the per-logbook hash
   chain before projecting each entry, halts durably at a broken chain, projects
   tombstones as projection-level removal instead of row deletion, commits rows
   and its checkpoint in one transaction per batch, resumes from that checkpoint,
   tails newly appended entries, records orphan-tombstone anomalies, and holds a
   single-writer lease over the projection tables.
-- Added `ham-sync-server --rebuild-projection` to wipe and replay the SurrealDB
+- Added `ham-server --rebuild-projection` to wipe and replay the SurrealDB
   projection explicitly. The projector otherwise resumes and tails automatically,
   configured by `HAM_SYNC_PROJECTION_ENABLED`, `HAM_SYNC_PROJECTION_BATCH_SIZE`,
   `HAM_SYNC_PROJECTION_POLL_SECONDS`, and `HAM_SYNC_PROJECTION_WRITER_ID`.

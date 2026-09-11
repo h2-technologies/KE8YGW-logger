@@ -23,12 +23,13 @@ official-events.jsonl  --(read, verify, replay)-->  SurrealDB projection tables
 
 ## Where The Projector Lives
 
-`crates/ham-sync/src/projector.rs`, behind the existing `surreal-storage`
-feature. `ham-sync` already owns the sync server's SurrealDB client and its
-JSONL official log, and the embedded SurrealKV datastore allows one instance per
-path, so the projector shares the sync server's client rather than opening the
-same datastore twice. `DurableCloudSyncServer::projector` builds that shared
-instance; `ProjectionStore::open` builds a standalone one.
+`crates/ham-server/src/projector.rs`, beside the `sync_storage` module that owns
+the server's SurrealDB client and its JSONL official log. It lives in the server
+binary rather than in `ham-core` because only the server links SurrealDB —
+client and iOS builds must not — and because the embedded SurrealKV datastore
+allows one instance per path, so the projector shares the server's client rather
+than opening the same datastore twice. `DurableCloudSyncServer::projector`
+builds that shared instance; `ProjectionStore::open` builds a standalone one.
 
 Row content comes from `ham-core`'s `QsoCurrentStateProjection` and
 `ActivationProjection` and from `ham_core::projection_touch`, so the projected
@@ -79,7 +80,7 @@ On a broken chain the projector **halts at the break**:
   the halt is durable and survives a restart.
 - The error is typed (`ProjectorError::BrokenChain`) and its message starts with
   `PROJECTION HALTED`.
-- `ham-sync-server` prints a boxed banner naming the failure and saying the
+- `ham-server` prints a boxed banner naming the failure and saying the
   projection is now stale.
 - Incremental runs refuse to advance while the checkpoint is halted. Clearing a
   halt is an explicit operator action (a full rebuild).
@@ -165,7 +166,7 @@ deployment so a restart reclaims its own lease immediately.
 On startup the projector resumes from the checkpoint and then polls for newly
 appended entries. Polling matches what the rest of the codebase does — the
 workspace has no filesystem-watch dependency — and the append-only log makes
-polling the file length sufficient. `ham-sync-server` runs this in a background
+polling the file length sufficient. `ham-server` runs this in a background
 thread automatically.
 
 ### Full Rebuild (explicit only)
@@ -174,7 +175,7 @@ A full rebuild wipes the projection tables and the checkpoint, then replays the
 whole log from the first byte. It is **never** automatic. Trigger it with:
 
 ```bash
-ham-sync-server --rebuild-projection
+ham-server --rebuild-projection
 ```
 
 The server rebuilds, prints the entry count and the new `rebuild_generation`,
@@ -220,7 +221,7 @@ log rebuilds in roughly 33 seconds on this hardware.
 Reproduce with:
 
 ```bash
-cargo test -p ham-sync --features surreal-storage --release \
+cargo test -p ham-server --release \
   projection_batch_size_benchmark -- --ignored --nocapture
 ```
 

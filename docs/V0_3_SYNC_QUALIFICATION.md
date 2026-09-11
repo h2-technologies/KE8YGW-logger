@@ -48,7 +48,7 @@ hand.
 | --- | --- | --- |
 | Hosted push refuses cross-logbook event batches | `cargo test -p ham-server sync_push_` | `sync_push_rejects_events_scoped_to_another_logbook` |
 | Hosted push reports divergence with the shared status vocabulary and reconciles after a pull | `cargo test -p ham-server sync_push_` | `sync_push_reports_divergence_with_the_shared_replication_vocabulary` |
-| Self-hosted HTTP push refuses a divergent branch, keeps the durable head, and recovers by pull-then-reapply | `cargo test -p ham-sync-server self_hosted_wire` | `self_hosted_wire_endpoint_rejects_divergent_branch_and_reconciles_after_pull` |
+| Self-hosted HTTP push refuses a divergent branch, keeps the durable head, and recovers by pull-then-reapply | `cargo test -p ham-server self_hosted_wire` | `self_hosted_wire_endpoint_rejects_divergent_branch_and_reconciles_after_pull` |
 | iOS first-launch queue initialization, legacy `version: 0` migration, corrupt-queue quarantine, and interrupted atomic-write promotion | `cargo test -p ham-ios-ffi sync_offline_queue_recover` | `sync_offline_queue_recover_*` |
 
 Known harness limitation: the durable self-hosted metadata store keeps its

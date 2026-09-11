@@ -66,7 +66,7 @@ Test-only, mock, fake, or stub functionality:
 - Mock lookup providers, mock rig provider, placeholder map providers, mock weather/propagation data.
 - Fake/default provider execution remains the ordinary test path for online adapters.
 - In-memory hosted metadata stores and in-memory cloud sync server remain test helpers.
-- Demo LAN peer and demo runtime events in `ham-gui` are development scaffolding.
+- Demo LAN peer and demo runtime events in `ham-client` are development scaffolding.
 
 Provider reality check:
 - Do not call a provider “live” unless real transport exists in code and is explicitly enabled.
@@ -108,7 +108,7 @@ When sources disagree:
 | Path | Purpose | Put Here | Do Not Put Here | Key Entry Points | Tests / Validation | May Call |
 | --- | --- | --- | --- | --- | --- | --- |
 | `Cargo.toml` | Workspace manifest | Workspace members, shared deps, version | Crate-specific business rules | Workspace members include `src-tauri` | `cargo check --workspace --all-targets` | N/A |
-| `justfile` | Canonical local commands | Shared validation and launch commands | Task-specific ad hoc scripts | `just ci`, `just gui`, `just sync-server` | Mirrors CI baseline | Cargo binaries |
+| `justfile` | Canonical local commands | Shared validation and launch commands | Task-specific ad hoc scripts | `just ci`, `just client`, `just server` | Mirrors CI baseline | Cargo binaries |
 | `README.md` | Contributor and product overview | Current high-level behavior and entry docs | Detailed operating rules better suited to `AGENTS.md` | Start-here guide | Manual review | Docs only |
 | `PROJECT_STATE.md` | Implementation-state ledger | Verified state, debt, recent validation history | Aspirational claims not proven by code | Current milestone snapshot | Manual review | Docs only |
 | `ROADMAP.md` | Root milestone summary | High-level milestone direction | Detailed architecture | Milestone summary | Manual review | Docs only |
@@ -116,9 +116,9 @@ When sources disagree:
 | `.github/dependabot.yml` | Dependency update automation | Scheduled update policy for Cargo, GitHub Actions, and Docker | Auto-merge policy or invented labels | Weekly updates targeting `dev` | Dependabot | N/A |
 | `docs/` | Architecture, security, protocols, release plans | Stable subsystem docs | Runtime code, generated outputs | See sections below | Manual review | N/A |
 | `crates/` | Workspace crates | Rust implementation | Generated assets | See crate table below | Cargo tests/builds | Inter-crate deps only |
-| `src-tauri/` | Tauri v2 desktop runtime wrapper | Tauri config, command bridge, packaging assets | Domain logic | `src-tauri/src/main.rs`, `tauri.conf.json` | `cargo tauri info`, `cargo tauri build` | `ham-desktop` |
+| `src-tauri/` | Tauri v2 desktop runtime wrapper | Tauri config, command bridge, packaging assets | Domain logic | `src-tauri/src/main.rs`, `tauri.conf.json` | `cargo tauri info`, `cargo tauri build` | `ham-core` |
 | `.env.example` | Runtime env reference | Supported server env vars | Secrets | Sync/server env names | Manual review | N/A |
-| `Dockerfile.sync-server` | Sync-server container build | Self-hosted sync packaging with digest-pinned base images | Hosted API containerization for unrelated services | `ham-sync-server` release binary | `docker build -f Dockerfile.sync-server .` | `ham-sync-server` |
+| `Dockerfile.server` | Server container build | Server packaging with digest-pinned base images | Client or desktop packaging | `ham-server` release binary | `docker build -f Dockerfile.server .` | `ham-server` |
 | `deny.toml` | Cargo advisory policy | Narrow, documented advisory exceptions with review dates | Broad vulnerability suppressions or dependency hiding | `cargo deny check advisories` | cargo-deny | N/A |
 | `target/` | Generated build artifacts | Nothing by hand | Source, docs, fixtures | None | Ignore in reviews unless build artifact debugging is requested | N/A |
 
@@ -129,15 +129,11 @@ Repository absences that matter:
 
 | Path | Purpose | Logic That Belongs Here | Logic That Must Not Be Here | Important Entry Points | Significant Dependencies | Testing Locations | May Call |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `crates/ham-core` | Authoritative domain and infrastructure core | Official events, proposal validation, projections, ADIF, lookup, rig, diagnostics, permissions, service framework, credentials, maps, stations, Net Control, upload queue, support storage, JSONL official store | GUI-only behavior, Tauri commands, hosted account/session ownership, JS business rules | `src/lib.rs`; modules `proposal.rs`, `store.rs`, `projection.rs`, `service.rs`, `credential.rs`, `online.rs` | `ham-plugin-sdk`, `tokio`, `serde`, `sha2`, `ureq`, OS credential APIs/tools | Module tests plus `src/tests.rs` | `ham-plugin-sdk` only |
-| `crates/ham-plugin-sdk` | Stable public SDK vocabulary | Plugin manifests, permission enums, proposal envelopes, official/proposal event constants, service-type vocabulary | Plugin loading, domain validation, app-specific logic | `src/lib.rs` | `serde`, `chrono`, `uuid` | Inline tests via downstream crates; compile-time usage across workspace | No app crates |
-| `crates/ham-sync` | Sync protocol and sync/report backend logic | Discovery, handshake, head comparison, preview/pull/push, pairing auth, report-upload models, optional durable sync/report metadata, JSONL-to-SurrealDB projector | GUI shell behavior, hosted account logic, domain rule duplication, projection replay semantics owned by `ham-core` | `src/lib.rs`, `src/projector.rs` | `ham-core`, `serde`, `tokio`; optional `surreal-storage` enables `surrealdb` and `sha2`; `ham-plugin-sdk` is a dev-dependency for event-name constants in tests | Inline tests in `src/lib.rs` and `src/projector.rs` | `ham-core` |
-| `crates/ham-sync-server` | Self-hosted sync/report binary | Process startup, env loading, serving the `ham-sync` backend, starting the projector and its `--rebuild-projection` operator flag | Core sync protocol models, GUI, hosted logbook business rules, projector implementation | `src/main.rs` | `ham-sync` | Build/run validation; behavior mostly tested in `ham-sync` | `ham-sync` |
-| `crates/ham-server` | Hosted web/server API boundary | Auth/session/device/logbook metadata, role checks, thin routes, hosted support metadata persistence, proposal delegation, backup/divergence/sync endpoints | Reimplementing domain validation already in `ham-core`, Tauri UI code | `src/lib.rs`, `src/main.rs` | `ham-core`, `ham-sync`, `surrealdb`, `serde`, `tokio` | Large inline route/integration tests in `src/lib.rs` | `ham-core`, `ham-sync` |
-| `crates/ham-cli` | CLI operations on local data | ADIF import/export, chain verification, projection rebuild | New domain rules, hosted route logic, desktop-only behaviors | `src/main.rs` | `ham-core`, `ham-plugin-sdk` | Build/run validation | `ham-core` |
-| `crates/ham-gui` | Local Rust GUI shell server and web frontend bundle | Shell state, command registry, runtime bridge, HTTP endpoints for GUI, static HTML/CSS/JS, support-state persistence wiring | Authoritative domain validation in JS, direct official-event writes from frontend | `src/main.rs`, `src/bridge.rs`, `src/shell.rs`, `web/app.js`, `web/index.html`, `web/styles.css` | `ham-core`, `ham-sync`, `ham-plugin-sdk`, `tokio` | `src/commands.rs`, `src/shell.rs`, JS syntax check | `ham-core`, `ham-sync`, `ham-plugin-sdk` |
-| `crates/ham-desktop` | Desktop-native dialog contract and helpers | Typed dialog request/result models, redaction of user paths, backend-agnostic helper functions | QSO/business logic, Tauri app bootstrap, HTTP API proxy rules | `src/lib.rs`, `src/main.rs` | `serde` | Inline tests in `src/lib.rs` | No domain crates required |
-| `src-tauri` | Tauri v2 desktop wrapper | Tauri commands, runtime payload, restricted `/api/*` proxy, packaging metadata, capability files, icons | Core business rules, direct credential handling in JS, provider logic | `src-tauri/src/main.rs`, `src-tauri/tauri.conf.json`, `src-tauri/README.md` | `ham-desktop`, `tauri`, `rfd`, `ureq` | Inline tests in `src-tauri/src/main.rs`; Tauri build commands | `ham-desktop` |
+| `crates/ham-core` | Authoritative shared library: everything identical across platforms | Official events, proposal validation, projections, ADIF, lookup, rig, diagnostics, permissions, service framework, credentials, maps, stations, Net Control, upload queue, support storage, JSONL official store, plugin SDK vocabulary, API error/route contract, sync protocol models and client, desktop dialog contract, GUI shell models | Binary startup, HTTP listeners, SurrealDB storage, the JSONL-to-SurrealDB projector, Tauri commands, JS business rules | `src/lib.rs`; modules `proposal.rs`, `store.rs`, `projection.rs`, `service.rs`, `credential.rs`, `online.rs`, `plugin_sdk.rs`, `api_contract.rs`, `desktop.rs`, `sync/`, `gui/` | `tokio`, `serde`, `sha2`, `hmac`, `socket2`, `ureq`, OS credential APIs/tools | Module tests plus `src/tests.rs` | No workspace crates |
+| `crates/ham-server` | Server binary: hosted API boundary and self-hosted sync service | Auth/session/device/logbook metadata, role checks, thin routes, hosted support metadata persistence, proposal delegation, backup/divergence/sync endpoints, durable SurrealDB sync/report storage, the shared HTTP layer serving both route trees | Reimplementing domain validation already in `ham-core`, GUI or Tauri code | `src/lib.rs`, `src/http.rs`, `src/sync_router.rs`, `src/sync_storage.rs`, `src/main.rs` | `ham-core`, `surrealdb`, `serde`, `tokio` | Large inline route/integration tests in `src/lib.rs`, `src/http.rs`, `src/sync_router.rs`, `src/sync_storage.rs` | `ham-core` |
+| `crates/ham-client` | Client binary: local web UI server and offline command-line tools | `serve` HTTP endpoints and static web bundle, LAN peer endpoints, ADIF import/export, chain verification, projection rebuild, hosted account commands, demo/mock scaffolding | New domain rules, hosted route logic, authoritative validation in JS, direct official-event writes from the frontend | `src/main.rs`, `src/serve.rs`, `src/cli.rs`, `web/app.js`, `web/index.html`, `web/styles.css` | `ham-core`, `tokio` | Inline tests in `src/serve.rs`, `src/cli.rs`; `tests/cli.rs`; JS syntax check | `ham-core` |
+| `crates/ham-ios-ffi` | iOS platform shell: the Rust/Swift bridge | JSON command dispatch for Swift, iOS-specific queueing and bridge glue | Domain rules that belong in `ham-core`, non-Apple platform behavior | `src/lib.rs`, `include/ham_ios_ffi.h`, `include/module.modulemap` | `ham-core`, `tokio` | Inline tests in `src/lib.rs` | `ham-core` |
+| `src-tauri` | Desktop platform shell: Tauri v2 packaging wrapper | Tauri commands, runtime payload, restricted `/api/*` proxy, packaging metadata, capability files, icons | Core business rules, direct credential handling in JS, provider logic | `src-tauri/src/main.rs`, `src-tauri/tauri.conf.json`, `src-tauri/README.md` | `ham-core`, `tauri`, `rfd`, `ureq` | Inline tests in `src-tauri/src/main.rs`; Tauri build commands | `ham-core` |
 
 ### Documentation Areas
 
@@ -250,30 +246,37 @@ Repository absences that matter:
 Allowed dependency direction:
 
 ```text
-Web JS / HTML / CSS / Tauri UI / CLI / Hosted HTTP requests
+Web JS / HTML / CSS / Tauri UI / SwiftUI / CLI / HTTP requests
                     |
                     v
-       ham-gui / src-tauri / ham-desktop / ham-cli / ham-server / ham-sync-server
-                    |
-                    v
-                ham-core ---- ham-plugin-sdk
-                    |
-                    v
-                 ham-sync
+   ham-server   ham-client   ham-ios-ffi   src-tauri
+        \___________ | ___________/____________/
+                     |
+                     v
+                  ham-core
 ```
 
+The workspace is one library and two binaries, plus two platform shells.
+`ham-core` holds everything identical across platforms; `ham-server` and
+`ham-client` are the binaries built on it; `ham-ios-ffi` and `src-tauri` are
+thin packaging shells for the iOS and desktop apps.
+
 Practical interpretation:
-- `ham-core` is the shared owner of domain behavior.
-- `ham-plugin-sdk` is a shared vocabulary crate and may be depended on by `ham-core`, `ham-gui`, `ham-cli`, and `ham-server`.
-- `ham-sync` depends on `ham-core` for official-event validation and storage semantics.
-- `ham-server` depends on `ham-core` and `ham-sync`; its routes must stay thin.
-- `ham-gui` depends on `ham-core` and `ham-sync` but only as a client/bridge.
-- `ham-desktop` is a narrow helper crate; `src-tauri` depends on it.
+- `ham-core` is the shared owner of domain behavior, the plugin SDK vocabulary,
+  the API error/route contract, the sync protocol, the desktop dialog contract,
+  and the GUI shell models. It depends on no other workspace crate.
+- `ham-server` depends on `ham-core` only; its routes must stay thin. It owns
+  every SurrealDB-backed store and both HTTP route trees.
+- `ham-client` depends on `ham-core` only, as a client/bridge.
+- `ham-ios-ffi` and `src-tauri` depend on `ham-core` only.
 
 Prohibited dependencies and ownership violations:
-- `ham-core` must not depend on `ham-gui`, `src-tauri`, Swift, or web assets.
+- `ham-core` must not depend on any other workspace crate, on Swift, on web
+  assets, or on Tauri.
 - `ham-core` must not depend on hosted-route implementations from `ham-server`.
-- `ham-plugin-sdk` must not depend on application implementations.
+- `ham-core` must not link SurrealDB; durable server storage belongs to
+  `ham-server` so client and iOS builds stay free of it.
+- The `plugin_sdk` module must not depend on application implementations.
 - JavaScript, HTML, or Swift must not become the authoritative owner of QSO, activation, Net Control, permission, credential, or synchronization rules.
 - `ham-server` routes must not duplicate domain validation when `ham-core` already owns it.
 - Providers must not write directly to persistence or official event streams outside the proper core boundary.
@@ -304,14 +307,14 @@ Platform-specific code is acceptable when:
 | Saved searches | `ham-core::search` | Local JSON saved-search store | No | Search-store APIs |
 | Runtime events and runtime logs | `ham-core::bus` + `runtime_log` | Rotating JSONL files and replay buffer | No | Runtime bridge publishing only |
 | Hosted users, server admins, sessions, devices, memberships, invites, API token hashes, verification/recovery token hashes, rate limits, audits | `ham-server` | SurrealDB | N/A server auth state | Hosted auth and admin routes |
-| Sync pairing sessions, relay refs, sync heads, report metadata | `ham-sync` durable server backend behind `surreal-storage` | SurrealDB + filesystem payloads + JSONL official log | N/A infrastructure state | Sync server methods only |
-| Diagnostic reports and bundles | `ham-core::diagnostics` bundle model; `ham-sync` report upload storage | ZIP/filesystem local export; server metadata + filesystem payloads | Uploaded only by user action | Build bundle -> optional upload through sync/report API |
+| Sync pairing sessions, relay refs, sync heads, report metadata | `ham-server::sync_storage` durable backend | SurrealDB + filesystem payloads + JSONL official log | N/A infrastructure state | Sync server methods only |
+| Diagnostic reports and bundles | `ham-core::diagnostics` bundle model; `ham-server::sync_storage` report upload storage | ZIP/filesystem local export; server metadata + filesystem payloads | Uploaded only by user action | Build bundle -> optional upload through sync/report API |
 | iOS cache / projection records | Native iOS SwiftData cache models backed by Rust/API refresh paths | SwiftData / app container | Rebuildable, not directly official sync | Rust bridge/API refresh; SwiftData remains cache/projection state |
 
 ## 8. Event And Proposal Conventions
 
 When adding or changing official state, follow this sequence:
-1. Define or update the public proposal vocabulary in `ham-plugin-sdk`.
+1. Define or update the public proposal vocabulary in `ham-core::plugin_sdk`.
 2. Define payload models and serialized field names.
 3. Define required plugin permissions and operator-role requirements.
 4. Validate schema and state transitions in `ham-core::proposal` and related modules.
@@ -325,7 +328,7 @@ When adding or changing official state, follow this sequence:
 12. Update `docs/EVENT_CATALOG.md` and any affected architecture docs.
 
 Naming rules:
-- Follow the existing dotted stable names in `docs/EVENT_CATALOG.md` and `ham-plugin-sdk` constants.
+- Follow the existing dotted stable names in `docs/EVENT_CATALOG.md` and `ham-core::plugin_sdk` constants.
 - Treat renaming event names, JSON fields, ABI command names, route fields, and persisted schema fields as compatibility work, not cosmetic cleanup.
 - Before renaming anything serialized or persisted, search all consumers: Rust core, hosted API, GUI JS, tests, docs, and any desktop command callers.
 
@@ -334,8 +337,8 @@ Naming rules:
 ### Adding A Core Domain Feature
 
 - Put shared models, validation, official-event creation, projection replay, and storage abstractions in `ham-core`.
-- Add stable constants and proposal/event vocabulary in `ham-plugin-sdk` when the change is part of the public plugin contract.
-- Use thin adapters in `ham-server`, `ham-gui`, `ham-cli`, and `src-tauri`.
+- Add stable constants and proposal/event vocabulary in `ham-core::plugin_sdk` when the change is part of the public plugin contract.
+- Use thin adapters in `ham-server`, `ham-client`, `ham-ios-ffi`, and `src-tauri`.
 - Add replay, permission, and serialization tests before marking the feature done.
 
 ### Adding Or Modifying A QSO Field
@@ -406,7 +409,7 @@ Require all of the following:
 
 Require all of the following:
 - A narrow, testable Rust command boundary.
-- Platform-specific code kept in `ham-desktop` and `src-tauri`, not in web JS.
+- Platform-specific code kept in `ham-core::desktop` and `src-tauri`, not in web JS.
 - Browser-safe fallbacks where supported.
 - No direct secret exposure to JavaScript.
 - Packaging configuration updates when commands/assets change.
@@ -498,7 +501,7 @@ Security checklist:
 ## 12. Error Handling Conventions
 
 Actual repository conventions:
-- `ham-core`, `ham-sync`, `ham-server`, and `ham-desktop` use typed Rust errors, primarily via `thiserror` enums.
+- `ham-core` and `ham-server` use typed Rust errors, primarily via `thiserror` enums.
 - Sync uses structured error/status enums such as `ReplicationError`, `CloudSyncError`, and `ReplicationStatus`.
 - Desktop/Tauri command errors use `DesktopCommandError { code, message }`.
 - Hosted API responses still commonly use `{ "error": "message" }` for compatibility, while provider/runtime paths also expose stable redacted status fields and error codes.
@@ -519,10 +522,10 @@ Required practice:
 | Layer | Repository Evidence | Expectations |
 | --- | --- | --- |
 | Core domain tests | `crates/ham-core/src/tests.rs` and module tests | Proposal validation, permissions, event hashing, chain verification, projections, tombstones, restore, ADIF, upload status, maps, search, credentials, services |
-| Sync tests | `crates/ham-sync/src/lib.rs` | Discovery, handshake, preview/pull/push, auth, duplicate handling, divergence, durable sync/report reload |
+| Sync tests | `crates/ham-core/src/sync/`, `crates/ham-server/src/sync_storage.rs` | Discovery, handshake, preview/pull/push, auth, duplicate handling, divergence, durable sync/report reload |
 | Hosted API tests | `crates/ham-server/src/lib.rs` | Auth, scoping, roles, revoked devices, route success/failure, backups, provider routes, sync routes |
-| GUI model tests | `crates/ham-gui/src/commands.rs`, `crates/ham-gui/src/shell.rs` | Shell models and command behavior |
-| Desktop tests | `crates/ham-desktop/src/lib.rs`, `src-tauri/src/main.rs` | Dialog helpers, path redaction, command boundaries, proxy validation |
+| GUI model tests | `crates/ham-core/src/gui/commands.rs`, `crates/ham-core/src/gui/shell.rs` | Shell models and command behavior |
+| Desktop tests | `crates/ham-core/src/desktop.rs`, `src-tauri/src/main.rs` | Dialog helpers, path redaction, command boundaries, proxy validation |
 | Syntax / packaging checks | `node --check`, Tauri commands, Cargo builds | Frontend syntax and desktop packaging sanity |
 
 At minimum, code changes should add or update tests for:
@@ -563,15 +566,14 @@ just fmt-check
 just check
 just clippy
 just test
-just feature-matrix
 just api-contract
 just version-check
 just docs-link-check
 just governance-check
 just build
 just release
-just gui
-just sync-server
+just client
+just server
 just ci
 ```
 
@@ -582,18 +584,15 @@ cargo fmt --all -- --check
 cargo check --workspace --all-targets
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
-cargo check --locked -p ham-sync --no-default-features --all-targets
-cargo test --locked -p ham-sync --features surreal-storage
 cargo build --workspace
 cargo build --release --workspace
 python scripts/check_api_contract.py
 python scripts/check_versions.py
 python scripts/check_docs_links.py
 pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/governance-check.ps1
-cargo run -p ham-gui --bin ham-gui
-cargo run -p ham-sync-server --bin ham-sync-server
+cargo run -p ham-client --bin ham-client -- serve
 cargo run -p ham-server --bin ham-server
-node --check crates\ham-gui\web\app.js
+node --check crates\ham-client\web\app.js
 git diff --check
 cargo tauri info
 cargo tauri build
@@ -608,7 +607,7 @@ actionlint .github/workflows/*.yml
 | --- | --- |
 | Docs-only changes | `python scripts/check_docs_links.py`, `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/governance-check.ps1`, `git diff --check` |
 | Rust code changes | `cargo fmt --all -- --check`, `cargo check --workspace --all-targets`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`, `git diff --check` |
-| GUI web asset changes | Rust baseline if Rust changed; always `node --check crates\ham-gui\web\app.js`; `git diff --check` |
+| GUI web asset changes | Rust baseline if Rust changed; always `node --check crates\ham-client\web\app.js`; `git diff --check` |
 | Desktop/Tauri changes | Relevant Rust baseline plus `cargo tauri info` and `cargo tauri build` when host prerequisites exist |
 | Release work | `just ci`, `just release`, `python scripts/check_versions.py`, plus any subsystem-specific packaging commands |
 
@@ -618,17 +617,15 @@ actionlint .github/workflows/*.yml
 | --- | --- |
 | `ham-core` | `cargo test -p ham-core`, optionally `cargo build -p ham-core` |
 | `ham-server` | `cargo test -p ham-server`, `cargo build -p ham-server` |
-| `ham-sync` | `cargo test -p ham-sync`, `cargo check --locked -p ham-sync --no-default-features --all-targets`, `cargo test --locked -p ham-sync --features surreal-storage`, `cargo check -p ham-sync --features hosted-http --all-targets`, `cargo build -p ham-sync` |
-| `ham-sync-server` | `cargo build -p ham-sync-server` |
-| Projector throughput | `cargo test -p ham-sync --features surreal-storage --release projection_batch_size_benchmark -- --ignored --nocapture` (ignored by default; writes a multi-thousand-entry log) |
-| `ham-gui` | `cargo build -p ham-gui`, `node --check crates\ham-gui\web\app.js` |
-| `ham-desktop` | `cargo test -p ham-desktop`, `cargo build -p ham-desktop` |
+| Projector throughput | `cargo test -p ham-server --release projection_batch_size_benchmark -- --ignored --nocapture` (ignored by default; writes a multi-thousand-entry log) |
+| `ham-client` | `cargo test -p ham-client`, `cargo build -p ham-client`, `node --check crates\ham-client\web\app.js` |
+| `ham-ios-ffi` | `cargo test -p ham-ios-ffi`, `cargo build -p ham-ios-ffi` |
 | `src-tauri` | `cargo tauri info`, `cargo tauri build` |
-| Hosted/sync runtime smoke | `cargo run -p ham-server --bin ham-server`, `cargo run -p ham-sync-server --bin ham-sync-server` when manual smoke is needed |
+| Server runtime smoke | `cargo run -p ham-server --bin ham-server` when manual smoke is needed |
 
 Platform-prerequisite notes:
 - `cargo tauri info` and `cargo tauri build` require Tauri host prerequisites and may be unavailable on some machines.
-- The release workflow in GitHub Actions currently packages versioned `ham-gui` release archives; full signed Tauri package publishing remains future release work.
+- The release workflow in GitHub Actions currently packages versioned `ham-client` release archives; full signed Tauri package publishing remains future release work.
 - Repository-native docs link checking is `python scripts/check_docs_links.py`; governance validation also checks local Markdown links.
 - There are no migration commands because the repo has no dedicated migrations directory.
 
@@ -805,22 +802,24 @@ This section is a verified snapshot of the repository as inspected on July 22, 2
   surface, and every release surface is unified on `0.5.1`. Publishing a
   `v0.5.1` tag is still a separate release action governed by `RELEASE.md`.
 - Current release target: v1 ships on November 24, 2026 with hosted web, native iOS, and Windows/macOS/Linux desktop.
-- Workspace members: `crates/ham-api-contract`, `crates/ham-core`, `crates/ham-plugin-sdk`, `crates/ham-sync`, `crates/ham-sync-server`, `crates/ham-server`, `crates/ham-cli`, `crates/ham-gui`, `crates/ham-desktop`, `crates/ham-ios-ffi`, and `src-tauri`.
-- Actual desktop state: a real Tauri v2 wrapper exists, bundles `crates/ham-gui/web`, exposes native dialog commands plus a restricted `/api/*` proxy, and packages desktop installers. The local backend is not yet embedded in-process or sidecar-launched automatically.
+- Workspace members: `crates/ham-core`, `crates/ham-server`, `crates/ham-client`, `crates/ham-ios-ffi`, and `src-tauri`.
+- Actual desktop state: a real Tauri v2 wrapper exists, bundles `crates/ham-client/web`, exposes native dialog commands plus a restricted `/api/*` proxy, and packages desktop installers. The local backend is not yet embedded in-process or sidecar-launched automatically.
 - Actual hosted-server state: `ham-server` is the hosted API boundary with durable SurrealDB metadata, route tests, role-scoped logbook access, provider settings, upload execution foundation, backups, divergence review, and sync endpoints. It is still beta, not production-hardened.
-- Actual hosted-account client state: `ham_sync::account` is the shared, Rust-authoritative hosted account and session contract used by hosted web, desktop, native iOS, and the CLI. It owns action vocabulary, request planning, response interpretation, outcome classification, and the durable non-secret account record; platform layers only carry bytes and store issued session/refresh tokens in the OS credential backend or the iOS Keychain under Rust-assigned credential identifiers. Desktop, hosted web, and the CLI share the `ham-sync` `hosted-http` transport; native iOS uses URLSession with the `account.plan`, `account.apply`, and `account.transport_failure` bridge commands. Server administration UX (hosting mode, invitations, audits) has no client surface yet.
-- Actual projection state: `ham-sync` carries a JSONL-to-SurrealDB projector
-  behind `surreal-storage`. `ham-sync-server` starts it automatically in
-  incremental/tail mode and exposes `--rebuild-projection` for an explicit full
-  rebuild. It verifies the per-logbook hash chain before projecting each entry,
-  halts durably at a broken chain, records orphan-tombstone anomalies, tolerates
-  a partial trailing entry from a crashed writer, holds a single-writer lease,
-  and commits each batch of rows together with its checkpoint. Net Control and
-  upload events are not projected into SurrealDB yet; they are counted as
-  unprojected in the run report. No GUI, hosted route, or plugin reads the
-  projection tables yet — the projector is the write side only, and consumers
-  are future work. See [Projection Pipeline](docs/PROJECTION_PIPELINE.md).
-- Actual synchronization state: `ham-sync` implements LAN discovery and verification models, preview/pull/push logic including verified missing-tail pull apply, cloud/self-hosted sync models with bounded sync-token session expiry, durable self-hosted sync/report storage, guarded replay rules, durable offline mutation queue models with optional target-entity metadata, v0.2 absent/legacy queue migration, corrupt queue quarantine, interrupted atomic-write promotion, durable local sync identity records that persist stable device IDs while rotating discovery sessions, desktop/iOS queue hooks, desktop cloud reconnect auto-drain when auto-push is enabled, iOS FFI background retry planning/result classification with native Swift retry-plan/result bridge methods, Rust-planned official-event envelope decoding, Rust-owned pulled-event apply through `sync.remote_events.apply`, self-hosted/logbook-scoped push execution coordination, hosted `/api/v1/sync/push` request construction, self-hosted/logbook-scoped and hosted pull request construction, native hosted/self-hosted and signed LAN pull fetch -> Rust apply coordination with peer-identity probing before signed LAN reads, partial-acceptance retry-result handling, typed queue health plus saved conflict-review display and durable identity decoding, Rust-owned iOS LAN trust snapshot/issue/accept/trust/rotate/revoke bridge commands plus reciprocal peer-URL pairing and multicast discovery peer selection with Keychain-backed credential references, queue-aware cloud push acknowledgment, structured conflict reports for divergent heads, missing dependencies, unsupported schemas, concurrent QSO corrections, and tombstone/restore overlaps, durable manual conflict-review records, explicit recovery-path decisions, deterministic shared sync golden tests for crash recovery, retry, duplicate/reordered delivery, verified missing-tail pull apply, partial push accepted-prefix/rejected-tail queue recovery, revoked and expired cloud-auth user-action recovery, clock-skewed timestamps, divergent heads, client-ready conflict-report JSON portability across desktop and iOS review stores, unsafe-resolution rejection, user-action queue marking, no-mutation divergent pull rejection, legacy migration, restore replay, and LAN revocation, desktop/iOS corrective-event commands that submit normal proposals and resolve reviews with generated official event hashes, a guided browser conflict-review surface for saved reviews, structured conflict summaries, explicit recovery choices, and corrective QSO note events, a single shared `ham_sync::push_replication_status` classifier so hosted, self-hosted, and in-memory push all report `pulled`/`diverged`/`rejected` identically, hosted `POST /api/v1/sync/push` rejection of event envelopes scoped to a logbook other than the authorized request logbook, durable LAN trust records with guided browser pairing/trust controls that require generated endpoint auth codes distinct from one-time pairing codes, reject missing/reused endpoint auth codes, and support auth-credential rotation, GUI manual direct LAN HTTP preview/pull transport, HMAC-SHA256 signed LAN read endpoint authorization, a GUI automatic IPv4/IPv6 multicast discovery worker that probes reachable peer identity before recording peers, and an on-demand GUI network scan that combines a longer multicast listen window with a parallel direct sweep of the local private/link-local IPv4 subnets under the same identity probe. The GUI listener serves only the LAN sync peer endpoints (identity probe, signed trust-gated reads, and reciprocal pairing accept) to non-loopback requesters; the browser UI and the unauthenticated local control plane require a loopback requester or the explicit `HAM_GUI_ALLOW_REMOTE_CONTROL_API=1` opt-in. The iOS project declares the approved and provisioned multicast entitlement used by native discovery. Release-device cross-client branch review/reconciliation workflow qualification, physical-device LAN/iOS Local Network validation, real hosted web/desktop/iOS/self-hosted migration/recovery qualification, release-device iOS BGTask execution, real endpoint native sync transport qualification, and physical poor-network validation are still missing.
+- Actual hosted-account client state: `ham_core::sync::account` is the shared, Rust-authoritative hosted account and session contract used by hosted web, desktop, native iOS, and the CLI. It owns action vocabulary, request planning, response interpretation, outcome classification, and the durable non-secret account record; platform layers only carry bytes and store issued session/refresh tokens in the OS credential backend or the iOS Keychain under Rust-assigned credential identifiers. Desktop, hosted web, and the CLI share the `ham_core::sync::account_http` transport; native iOS uses URLSession with the `account.plan`, `account.apply`, and `account.transport_failure` bridge commands. Server administration UX (hosting mode, invitations, audits) has no client surface yet.
+- Actual projection state: `ham-server` carries a JSONL-to-SurrealDB projector
+  in `src/projector.rs`, alongside the SurrealDB storage it depends on, so
+  `ham-core` and the client/iOS builds never link SurrealDB for it. The server
+  starts it automatically in incremental/tail mode and exposes
+  `--rebuild-projection` for an explicit full rebuild. It verifies the
+  per-logbook hash chain before projecting each entry, halts durably at a broken
+  chain, records orphan-tombstone anomalies, tolerates a partial trailing entry
+  from a crashed writer, holds a single-writer lease, and commits each batch of
+  rows together with its checkpoint. Net Control, EmComm, and upload events are
+  not projected into SurrealDB yet; they are counted as unprojected in the run
+  report. No GUI, hosted route, or plugin reads the projection tables yet — the
+  projector is the write side only, and consumers are future work. See
+  [Projection Pipeline](docs/PROJECTION_PIPELINE.md).
+- Actual synchronization state: `ham_core::sync` implements LAN discovery and verification models, preview/pull/push logic including verified missing-tail pull apply, cloud/self-hosted sync models with bounded sync-token session expiry, durable self-hosted sync/report storage, guarded replay rules, durable offline mutation queue models with optional target-entity metadata, v0.2 absent/legacy queue migration, corrupt queue quarantine, interrupted atomic-write promotion, durable local sync identity records that persist stable device IDs while rotating discovery sessions, desktop/iOS queue hooks, desktop cloud reconnect auto-drain when auto-push is enabled, iOS FFI background retry planning/result classification with native Swift retry-plan/result bridge methods, Rust-planned official-event envelope decoding, Rust-owned pulled-event apply through `sync.remote_events.apply`, self-hosted/logbook-scoped push execution coordination, hosted `/api/v1/sync/push` request construction, self-hosted/logbook-scoped and hosted pull request construction, native hosted/self-hosted and signed LAN pull fetch -> Rust apply coordination with peer-identity probing before signed LAN reads, partial-acceptance retry-result handling, typed queue health plus saved conflict-review display and durable identity decoding, Rust-owned iOS LAN trust snapshot/issue/accept/trust/rotate/revoke bridge commands plus reciprocal peer-URL pairing and multicast discovery peer selection with Keychain-backed credential references, queue-aware cloud push acknowledgment, structured conflict reports for divergent heads, missing dependencies, unsupported schemas, concurrent QSO corrections, and tombstone/restore overlaps, durable manual conflict-review records, explicit recovery-path decisions, deterministic shared sync golden tests for crash recovery, retry, duplicate/reordered delivery, verified missing-tail pull apply, partial push accepted-prefix/rejected-tail queue recovery, revoked and expired cloud-auth user-action recovery, clock-skewed timestamps, divergent heads, client-ready conflict-report JSON portability across desktop and iOS review stores, unsafe-resolution rejection, user-action queue marking, no-mutation divergent pull rejection, legacy migration, restore replay, and LAN revocation, desktop/iOS corrective-event commands that submit normal proposals and resolve reviews with generated official event hashes, a guided browser conflict-review surface for saved reviews, structured conflict summaries, explicit recovery choices, and corrective QSO note events, a single shared `ham_core::sync::push_replication_status` classifier so hosted, self-hosted, and in-memory push all report `pulled`/`diverged`/`rejected` identically, hosted `POST /api/v1/sync/push` rejection of event envelopes scoped to a logbook other than the authorized request logbook, durable LAN trust records with guided browser pairing/trust controls that require generated endpoint auth codes distinct from one-time pairing codes, reject missing/reused endpoint auth codes, and support auth-credential rotation, GUI manual direct LAN HTTP preview/pull transport, HMAC-SHA256 signed LAN read endpoint authorization, a GUI automatic IPv4/IPv6 multicast discovery worker that probes reachable peer identity before recording peers, and an on-demand GUI network scan that combines a longer multicast listen window with a parallel direct sweep of the local private/link-local IPv4 subnets under the same identity probe. The client listener serves only the LAN sync peer endpoints (identity probe, signed trust-gated reads, and reciprocal pairing accept) to non-loopback requesters; the browser UI and the unauthenticated local control plane require a loopback requester or the explicit `HAM_GUI_ALLOW_REMOTE_CONTROL_API=1` opt-in. The iOS project declares the approved and provisioned multicast entitlement used by native discovery. Release-device cross-client branch review/reconciliation workflow qualification, physical-device LAN/iOS Local Network validation, real hosted web/desktop/iOS/self-hosted migration/recovery qualification, release-device iOS BGTask execution, real endpoint native sync transport qualification, and physical poor-network validation are still missing.
 - Actual iOS state: native SwiftUI, SwiftData cache/projection models, Rust FFI bridge, Xcode project, Apple build/link scripts, shared scheme, unit tests, and iOS CI are present. App Store signing, TestFlight/App Store distribution, full offline/sync reconciliation, and production validation remain incomplete.
 - Real versus mock providers:
   - Real but gated live transports: Club Log upload, QRZ Logbook upload, eQSL upload, QRZ XML lookup, HamQTH lookup, POTA spot fetch, DX Cluster bounded runtime controls.
@@ -834,10 +833,10 @@ This section is a verified snapshot of the repository as inspected on July 22, 2
   - Browser-level GUI tests.
   - Remaining production provider adapters and confirmation reconciliation.
 - Validation currently supported by CI:
-  - Change-aware CI on `ubuntu-latest`, `windows-latest`, and `macos-latest` runs formatting, API contract, governance, Clippy, tests, JavaScript syntax, platform builds, Tauri checks, and sync-server container validation as applicable.
+  - Change-aware CI on `ubuntu-latest`, `windows-latest`, and `macos-latest` runs formatting, API contract, governance, Clippy, tests, JavaScript syntax, platform builds, Tauri checks, and server container validation as applicable.
   - The Security scanning workflow runs Cargo advisory checks, checked-in Semgrep rules with SARIF upload, and actionlint on pull requests and pushes to `dev`/`main`, weekly, and manually.
   - The Scorecard workflow publishes Scorecard SARIF from `main`.
-  - The tagged release workflow builds release `ham-gui` archives and adds GitHub artifact attestations for future release archives and checksums before publishing assets.
+  - The tagged release workflow builds release `ham-client` archives and adds GitHub artifact attestations for future release archives and checksums before publishing assets.
 - Current release blockers:
   - Production provider completeness and validation.
   - Physical-device iOS LAN and Local Network validation for the declared

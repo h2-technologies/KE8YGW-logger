@@ -30,7 +30,7 @@ rules:
     message: Docker base images must include an immutable sha256 digest.
     paths:
       include:
-        - /Dockerfile.sync-server
+        - /Dockerfile.server
     pattern-regex: '^FROM\s+(?!.*@sha256:).*$'
 
   - id: ke8ygw.javascript.localstorage-sensitive-value
@@ -40,7 +40,7 @@ rules:
     message: Do not persist secrets, tokens, passwords, or keys in browser localStorage.
     paths:
       include:
-        - /crates/ham-gui/web/app.js
+        - /crates/ham-client/web/app.js
     pattern-regex: '(?i)localStorage\.setItem\([^)]*(secret|token|password|api[_-]?key|credential)'
 
   - id: ke8ygw.rust.shell-command-boundary

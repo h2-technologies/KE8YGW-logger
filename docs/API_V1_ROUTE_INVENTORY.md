@@ -1,7 +1,7 @@
 # API v1 Route Inventory
 
 This inventory is frozen for `/api/v1` clients and is backed by
-`crates/ham-api-contract`, `openapi/api-v1.yaml`, and conformance tests.
+`crates/ham-core/src/api_contract.rs`, `openapi/api-v1.yaml`, and conformance tests.
 Hosted routes use bearer sessions. Self-hosted sync/report routes keep the
 documented query-token and request-body `auth.sync_token` compatibility
 transport until a new major API version replaces them.

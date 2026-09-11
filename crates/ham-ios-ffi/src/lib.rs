@@ -14,18 +14,7 @@ use std::{
 };
 
 use chrono::Utc;
-use ham_core::CallsignLookupProvider;
-use ham_core::{
-    default_service_registry, encode_maidenhead, export_adif, grid_to_lat_lon, infer_band,
-    maidenhead_to_coordinate, map_provider_metadata, mock_propagation_forecast, mock_weather,
-    online_provider_metadata, parse_adif, qso_map_objects, station_markers_from_profiles,
-    submit_proposal, validate_grid, ApplicationSettings, Coordinate, CoreEventEnvelope,
-    EquipmentItem, EquipmentType, InMemoryEventBus, JsonStationBookStore, JsonSupportStore,
-    JsonlLogbookEventStore, LocalPrefixProvider, LogbookEventStore, MapLayerStack, OperatorRole,
-    ProposalContext, QsoCurrentStateProjection, QsoRecord, StationBook, StationConfiguration,
-    StationProfile, UploadQueue, UploadTarget,
-};
-use ham_plugin_sdk::{
+use ham_core::plugin_sdk::{
     PluginCapability, PluginManifest, ProposalEnvelope, OFFICIAL_LOG_QSO_CREATED,
     PROPOSAL_ACTIVATION_CANCEL, PROPOSAL_ACTIVATION_CREATE, PROPOSAL_ACTIVATION_END,
     PROPOSAL_ACTIVATION_NOTE_ADD, PROPOSAL_ACTIVATION_START, PROPOSAL_ACTIVATION_UPDATE,
@@ -36,7 +25,7 @@ use ham_plugin_sdk::{
     PROPOSAL_QSO_ACTIVATION_UNLINK, PROPOSAL_QSO_CORRECT, PROPOSAL_QSO_CREATE, PROPOSAL_QSO_DELETE,
     PROPOSAL_QSO_NOTE_ADD, PROPOSAL_QSO_RESTORE,
 };
-use ham_sync::{
+use ham_core::sync::{
     apply_hosted_account_response, apply_hosted_admin_response, hosted_account_transport_failure,
     hosted_admin_transport_failure, plan_hosted_account_request, plan_hosted_admin_request,
     pull_missing_events, CloudConnectionState, CloudSyncConfig, ConflictReviewStatus,
@@ -53,6 +42,17 @@ use ham_sync::{
     OFFLINE_OP_QSO_CREATE, OFFLINE_OP_QSO_DELETE, OFFLINE_OP_QSO_NOTE_ADD, OFFLINE_OP_QSO_RESTORE,
     OFFLINE_OP_STATION_EQUIPMENT_CREATE, OFFLINE_OP_STATION_PROFILE_CREATE,
     OFFLINE_OP_STATION_PROFILE_SELECT,
+};
+use ham_core::CallsignLookupProvider;
+use ham_core::{
+    default_service_registry, encode_maidenhead, export_adif, grid_to_lat_lon, infer_band,
+    maidenhead_to_coordinate, map_provider_metadata, mock_propagation_forecast, mock_weather,
+    online_provider_metadata, parse_adif, qso_map_objects, station_markers_from_profiles,
+    submit_proposal, validate_grid, ApplicationSettings, Coordinate, CoreEventEnvelope,
+    EquipmentItem, EquipmentType, InMemoryEventBus, JsonStationBookStore, JsonSupportStore,
+    JsonlLogbookEventStore, LocalPrefixProvider, LogbookEventStore, MapLayerStack, OperatorRole,
+    ProposalContext, QsoCurrentStateProjection, QsoRecord, StationBook, StationConfiguration,
+    StationProfile, UploadQueue, UploadTarget,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -747,12 +747,11 @@ fn version_payload() -> Result<Value, BridgeFault> {
         "bridge_version": IOS_BRIDGE_VERSION,
         "abi_version": ABI_VERSION,
         "bridge_schema_version": BRIDGE_SCHEMA_VERSION,
-        "sync_protocol_version": ham_sync::PROTOCOL_VERSION,
+        "sync_protocol_version": ham_core::sync::PROTOCOL_VERSION,
         "backup_schema_version": BACKUP_SCHEMA_VERSION,
         "rust_modules": [
             "ham-core",
-            "ham-sync",
-            "ham-plugin-sdk"
+            "ham-ios-ffi"
         ],
         "contract": "swiftui -> observable view models -> rust ffi -> ham-core",
         "build_target": build_target()
@@ -799,7 +798,7 @@ fn bridge_self_test_payload() -> Result<Value, BridgeFault> {
         "abi_version": ABI_VERSION,
         "bridge_schema_version": BRIDGE_SCHEMA_VERSION,
         "core_version": CORE_VERSION,
-        "sync_protocol_version": ham_sync::PROTOCOL_VERSION,
+        "sync_protocol_version": ham_core::sync::PROTOCOL_VERSION,
         "backup_schema_version": BACKUP_SCHEMA_VERSION,
         "build_target": build_target(),
         "json_round_trip": true,
@@ -1813,7 +1812,7 @@ fn sync_snapshot_for_support(
         "identity": identity,
         "cloud_config": CloudSyncConfig::default(),
         "cloud_connection_state": CloudConnectionState::Disconnected,
-        "sync_protocol_version": ham_sync::PROTOCOL_VERSION,
+        "sync_protocol_version": ham_core::sync::PROTOCOL_VERSION,
         "logbook_id": logbook_id,
         "local_head_hash": local_head_hash,
         "pending_changes": pending_changes,
@@ -1872,7 +1871,7 @@ fn diagnostics_payload(app_support_dir: Option<&str>) -> Result<Value, BridgeFau
         "bridge_loaded": true,
         "abi_version": ABI_VERSION,
         "bridge_schema_version": BRIDGE_SCHEMA_VERSION,
-        "sync_protocol_version": ham_sync::PROTOCOL_VERSION,
+        "sync_protocol_version": ham_core::sync::PROTOCOL_VERSION,
         "backup_schema_version": BACKUP_SCHEMA_VERSION,
         "build_target": build_target(),
         "database_status": {
@@ -4756,10 +4755,10 @@ mod tests {
     fn conflict_review_create_and_resolve_use_rust_store() {
         let app_support_dir = std::env::temp_dir().join(format!("ham-ios-{}", Uuid::new_v4()));
         let logbook_id = Uuid::new_v4();
-        let preview = ham_sync::PreviewPullResponse {
+        let preview = ham_core::sync::PreviewPullResponse {
             peer_id: "ios-peer".to_owned(),
             logbook_id,
-            status: ham_sync::ReplicationStatus::Diverged,
+            status: ham_core::sync::ReplicationStatus::Diverged,
             local_head_hash: Some("local".to_owned()),
             remote_head_hash: Some("remote".to_owned()),
             missing_event_count: 0,
@@ -4767,7 +4766,7 @@ mod tests {
             events: Vec::new(),
             message: "Remote chain does not contain the local head".to_owned(),
         };
-        let report = ham_sync::conflict_report_from_preview(&preview, &[], Utc::now());
+        let report = ham_core::sync::conflict_report_from_preview(&preview, &[], Utc::now());
         let created = call_json(json!({
             "command": "sync.conflict_reviews.create",
             "payload": {
@@ -4850,10 +4849,10 @@ mod tests {
         assert_eq!(qso["ok"], true);
         let qso_id = qso["data"]["qso"]["qso_id"].as_str().unwrap().to_owned();
 
-        let preview = ham_sync::PreviewPullResponse {
+        let preview = ham_core::sync::PreviewPullResponse {
             peer_id: "ios-peer".to_owned(),
             logbook_id,
-            status: ham_sync::ReplicationStatus::Diverged,
+            status: ham_core::sync::ReplicationStatus::Diverged,
             local_head_hash: Some("local".to_owned()),
             remote_head_hash: Some("remote".to_owned()),
             missing_event_count: 0,
@@ -4861,7 +4860,7 @@ mod tests {
             events: Vec::new(),
             message: "Remote chain does not contain the local head".to_owned(),
         };
-        let report = ham_sync::conflict_report_from_preview(&preview, &[], Utc::now());
+        let report = ham_core::sync::conflict_report_from_preview(&preview, &[], Utc::now());
         let created = call_json(json!({
             "command": "sync.conflict_reviews.create",
             "payload": {
@@ -4932,10 +4931,10 @@ mod tests {
     fn conflict_review_corrective_events_reject_empty_proposals() {
         let app_support_dir = std::env::temp_dir().join(format!("ham-ios-{}", Uuid::new_v4()));
         let logbook_id = default_logbook_id();
-        let preview = ham_sync::PreviewPullResponse {
+        let preview = ham_core::sync::PreviewPullResponse {
             peer_id: "ios-peer".to_owned(),
             logbook_id,
-            status: ham_sync::ReplicationStatus::Diverged,
+            status: ham_core::sync::ReplicationStatus::Diverged,
             local_head_hash: Some("local".to_owned()),
             remote_head_hash: Some("remote".to_owned()),
             missing_event_count: 0,
@@ -4943,7 +4942,7 @@ mod tests {
             events: Vec::new(),
             message: "Remote chain does not contain the local head".to_owned(),
         };
-        let report = ham_sync::conflict_report_from_preview(&preview, &[], Utc::now());
+        let report = ham_core::sync::conflict_report_from_preview(&preview, &[], Utc::now());
         let created = call_json(json!({
             "command": "sync.conflict_reviews.create",
             "payload": {
