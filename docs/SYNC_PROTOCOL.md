@@ -73,7 +73,7 @@ Event counts are hints only. A matching head hash means the logbook heads match.
 
 ### Offline Mutation Queue
 
-The v0.3 queue contract is implemented in `ham-sync::offline` and persisted as
+The v0.3 queue contract is implemented in `ham_core::sync::offline` and persisted as
 versioned JSON support state named `offline-mutations.json` by desktop and iOS
 clients.
 
@@ -110,6 +110,15 @@ queue JSON before creating a fresh empty current file. Unsupported current file
 versions, mutation schema versions, invalid dependencies, and duplicate
 per-logbook sequences still fail closed instead of being silently repaired.
 
+`sync.offline_queue.recover` exposes that shared path to native iOS. Its
+simulator-safe FFI tests cover a first-launch absent queue that initializes once
+and stays stable on the next launch, legacy `version: 0` records that migrate
+into current envelopes (records with a local official event resume as
+`retrying`, records without one resume as `pending`), corrupt queue JSON that is
+quarantined beside the queue with the original bytes preserved before a fresh
+empty file is created, and an app termination between the atomic temp write and
+the rename that is promoted back into the live queue without losing queued work.
+
 Station/equipment commands are queued as support-state mutations and marked
 accepted after the support store write succeeds. They remain support state and
 are not official logbook history.
@@ -139,6 +148,20 @@ Accepted remote events are appended through the official event store without rew
 ### Push
 
 Push sends local official events to a peer or cloud server. The receiver applies the same verification rules and stores only valid append-only events.
+
+Every transport reports push outcomes with the same vocabulary. Hosted,
+self-hosted, and LAN receivers classify a push result through
+`ham_core::sync::push_replication_status`, so a rejection caused by a branch that does
+not continue the receiver head is always reported as `diverged` rather than a
+generic `rejected`. Clients depend on that distinction: `diverged` stops
+unattended retry, blocks the queued operations, and opens a manual conflict
+review, while `rejected` describes a validation failure that review cannot
+merge away.
+
+Receivers also scope every pushed envelope to the authorized logbook. A push is
+refused when any event envelope carries a `logbook_id` other than the
+authorized request `logbook_id`, so an authorized session for one logbook can
+never append official events into another logbook.
 
 Desktop cloud push now uses the offline queue when queued local official events
 are present. Queue entries are marked `sending` before transport and `accepted`
@@ -215,7 +238,7 @@ poor-network state returns a blocked no-op plan without losing queued work.
 
 ### Manual Conflict Review
 
-`ham-sync::offline` defines durable conflict-review records persisted as
+`ham_core::sync::offline` defines durable conflict-review records persisted as
 `conflict-reviews.json` by desktop and exposed through the iOS FFI bridge.
 Review records capture the structured conflict report, a stable fingerprint,
 open/resolved status, timestamps, and the operator-selected recovery path.
@@ -251,7 +274,7 @@ conflict details without owning merge or validation rules.
 
 ## LAN Trust
 
-`ham-sync::offline` includes durable LAN trust records persisted as
+`ham_core::sync::offline` includes durable LAN trust records persisted as
 `lan-trust.json` by GUI and iOS bridge clients. The trust model includes:
 
 - explicit operator approval before issuing a pairing token
@@ -347,6 +370,17 @@ remote GUI instance to be participating in discovery and to serve its API from a
 LAN-reachable bind address; loopback-only peers remain supported through manual
 loopback URLs.
 
+The client listener also serves the browser UI and the local control plane, which
+have no request authentication. Only the LAN peer endpoints
+(`GET /api/sync/state`, `/api/sync/list-logbooks`, `/api/sync/get-head`,
+`/api/sync/events-since`, `/api/sync/event-metadata`, and reciprocal
+`POST /api/sync/lan/pairing-accept`, which is carried by a one-time pairing
+token) are served to non-loopback requesters. Every other path is refused with `403` and a redacted
+`sync.lan.control_api.rejected` runtime event unless the operator explicitly
+sets `HAM_GUI_ALLOW_REMOTE_CONTROL_API=1`. That keeps a LAN-reachable bind from
+turning unauthenticated logging, credential, backup, pairing, and cloud
+controls into a network surface.
+
 Mutating LAN pull rejects untrusted, revoked, wrong-logbook, or replayed peers
 before appending any remote official events, and serving LAN read endpoints
 reject untrusted, revoked, wrong-logbook, or replayed requesters before
@@ -395,16 +429,29 @@ Current REST surface:
 The hosted `ham-server` API exposes bearer/session-scoped sync push as
 `POST /api/v1/sync/push`; the logbook-scoped routes above are the self-hosted
 sync-server compatibility surface used by sync-token clients.
+Hosted push enforces the same logbook scoping and the same
+`pulled`/`diverged`/`rejected` status vocabulary as the self-hosted routes:
+`sync_push_rejects_events_scoped_to_another_logbook` proves a session authorized
+for one logbook cannot append official events into another account's logbook,
+and `sync_push_reports_divergence_with_the_shared_replication_vocabulary` proves
+a branch that does not continue the hosted head is reported as `diverged`,
+appends nothing, and can be reconciled by re-applying the work on the pulled
+head.
+`self_hosted_wire_endpoint_rejects_divergent_branch_and_reconciles_after_pull`
+proves the same divergence rejection, unchanged durable head, `diverged`
+preview for an unknown local head, pull-then-reapply recovery, and duplicate
+replay handling over a real loopback HTTP request against the durable
+self-hosted backend.
 `ham-server` binary loopback TCP wire tests cover hosted admin bootstrap,
 proposal-backed QSO creation, hosted sync pull, duplicate hosted sync push, and
 durable JSONL official-event storage without duplicate replay.
-`ham-sync-server` route and loopback TCP wire tests cover device pairing, scoped
+`ham-server` self-hosted route and loopback TCP wire tests cover device pairing, scoped
 logbook listing, canonical official-event push, duplicate replay handling, pull
 of missing events, invalid-token rejection, and expired-token rejection against
 the durable self-hosted backend.
 
 Pull application uses the same Rust verification path for hosted, self-hosted,
-LAN, desktop, and iOS clients. `ham-sync::pull_missing_events` accepts either a
+LAN, desktop, and iOS clients. `ham_core::sync::pull_missing_events` accepts either a
 full remote chain that contains the local head or a verified missing tail whose
 first event directly follows the actual local store head. In both cases, every
 accepted event is appended through `append_verified_remote_event`; divergent
@@ -420,7 +467,7 @@ accepts remote events, manual iOS pull, trusted LAN pull, and background Auto
 Pull refresh the native SwiftData QSO cache from the Rust `qso.list` projection;
 SwiftData remains a projection cache, not an official state owner.
 
-The current self-hosted server uses durable local storage by default: embedded SurrealDB metadata/support state, append-only JSONL official-event storage, and filesystem-backed diagnostic report payloads. Durable SurrealDB storage is exposed through the `ham-sync` `surreal-storage` feature so GUI, iOS, and other protocol-only clients can avoid the database dependency. The in-memory backend remains for deterministic tests.
+The current self-hosted server uses durable local storage by default: embedded SurrealDB metadata/support state, append-only JSONL official-event storage, and filesystem-backed diagnostic report payloads. Durable SurrealDB storage lives in `ham-server`, so the client, iOS, and other protocol-only consumers of `ham_core::sync` never link the database dependency. The in-memory backend remains for deterministic tests.
 
 ## Deferred Work
 

@@ -1,0 +1,4677 @@
+// Mirrors the desktop proxy default in src-tauri/src/main.rs.
+const DEFAULT_DESKTOP_SERVER_URL = "http://127.0.0.1:9467";
+
+const state = {
+  shell: null,
+  commands: [],
+  plugins: [],
+  serviceProviders: { providers: [], preferred_providers: {} },
+  credentials: null,
+  netControl: null,
+  mapState: null,
+  onlineServices: null,
+  permissionState: null,
+  runtimeEvents: [],
+  runtimeStatus: null,
+  qsos: [],
+  station: null,
+  awards: null,
+  search: { query: "", results: [] },
+  uploads: null,
+  activations: [],
+  activeActivation: null,
+  lookupSuggestion: null,
+  acceptedLookupFields: null,
+  rigStatus: null,
+  acceptedRigFields: null,
+  qsoDraft: {
+    contacted_callsign: "",
+    mode: "",
+    frequency_khz: "",
+    band: "",
+    notes: "",
+  },
+  qsoError: "",
+  duplicateWarning: "",
+  importSummary: null,
+  backupState: { lastBackup: null, dryRun: null, importResult: null },
+  account: null,
+  accountBackend: null,
+  accountResult: null,
+  accountError: null,
+  accountBusy: false,
+  admin: null,
+  adminResult: null,
+  adminError: null,
+  adminBusy: false,
+  adminSignedIn: false,
+  adminAccountEmail: null,
+  adminInvitationToken: null,
+  divergenceReview: null,
+  conflictReview: null,
+  selectedConflictReviewId: null,
+  lanPairingIssued: null,
+  reportPreview: null,
+  lastReport: null,
+  syncState: null,
+  selectedPeerId: null,
+  activeWorkspace: "dashboard",
+  appearance: { layout: "operating-deck", theme: "system" },
+  moreMenuOpen: false,
+  busConnected: false,
+  streamPaused: false,
+  selectedEventId: null,
+  monitorFilters: {
+    severity: "",
+    category: "",
+    source: "",
+    text: "",
+  },
+  panelLayouts: loadPanelLayouts(),
+};
+
+const byId = (id) => document.getElementById(id);
+
+function escapeHtml(value) {
+  return String(value ?? "").replace(/[&<>"']/g, (character) => {
+    const entities = {
+      "&": "&amp;",
+      "<": "&lt;",
+      ">": "&gt;",
+      '"': "&quot;",
+      "'": "&#39;",
+    };
+    return entities[character];
+  });
+}
+
+function loadPanelLayouts() {
+  try {
+    return JSON.parse(localStorage.getItem("ham.panelLayouts") || "{}");
+  } catch (_) {
+    return {};
+  }
+}
+
+function savePanelLayouts() {
+  try {
+    localStorage.setItem("ham.panelLayouts", JSON.stringify(state.panelLayouts));
+  } catch (_) {
+    // Layout customization is convenient UI state; failure should not break logging.
+  }
+}
+
+function tauriInvoke() {
+  return (
+    window.__TAURI__?.core?.invoke ||
+    window.__TAURI__?.tauri?.invoke ||
+    window.__TAURI_INTERNALS__?.invoke ||
+    null
+  );
+}
+
+// Tauri serves the bundled assets from tauri://localhost (http://tauri.localhost on
+// Windows) and answers unknown paths with index.html, so an unbridged /api/* fetch
+// silently returns the shell markup instead of JSON.
+function isTauriWebview() {
+  if (window.__TAURI__ || window.__TAURI_INTERNALS__) return true;
+  return window.location.protocol === "tauri:" || window.location.hostname === "tauri.localhost";
+}
+
+// localStorage access throws outright where site data is blocked, so guard it the
+// way loadPanelLayouts already does.
+function readStoredServerUrl() {
+  try {
+    return localStorage.getItem("ham.desktopServerUrl") || "";
+  } catch (_) {
+    return "";
+  }
+}
+
+function storeServerUrl(serverUrl) {
+  try {
+    localStorage.setItem("ham.desktopServerUrl", serverUrl);
+  } catch (_) {
+    // Caching only saves one desktop_runtime round trip; the bridge works without it.
+  }
+}
+
+// Which API a diagnostic should point at: the desktop bridge target on desktop, and
+// the origin actually serving the page in browser and hosted web mode.
+function apiOriginLabel() {
+  const stored = readStoredServerUrl();
+  if (stored) return stored;
+  return isTauriWebview() ? DEFAULT_DESKTOP_SERVER_URL : window.location.origin;
+}
+
+async function configureDesktopFetchBridge() {
+  const invoke = tauriInvoke();
+  if (!invoke) {
+    if (isTauriWebview()) {
+      throw new Error(
+        "Desktop bridge unavailable: the Tauri API was not injected into this webview, " +
+          "so /api requests cannot reach the local server. Enable app.withGlobalTauri in " +
+          "src-tauri/tauri.conf.json and rebuild the desktop app.",
+      );
+    }
+    return;
+  }
+
+  let serverUrl = readStoredServerUrl();
+  if (!serverUrl) {
+    try {
+      const runtime = await invoke("desktop_runtime");
+      serverUrl = runtime?.server_url || "";
+      if (serverUrl) storeServerUrl(serverUrl);
+    } catch (_) {
+      serverUrl = "";
+    }
+  }
+  // The proxy command applies the same default, so keep routing through it rather
+  // than letting relative /api requests fall back to the bundled index.html.
+  if (!serverUrl) serverUrl = DEFAULT_DESKTOP_SERVER_URL;
+
+  const browserFetch = window.fetch.bind(window);
+  window.fetch = async (input, init = {}) => {
+    if (typeof input === "string" && input.startsWith("/api/")) {
+      const response = await invoke("desktop_api_request", {
+        request: {
+          path: input,
+          method: init.method || "GET",
+          body: typeof init.body === "string" ? init.body : null,
+          server_url: serverUrl,
+        },
+      });
+      return new Response(response.body || "", {
+        status: response.status || 200,
+        headers: { "Content-Type": response.content_type || "application/json" },
+      });
+    }
+    return browserFetch(input, init);
+  };
+}
+
+function selectedPathFromDialogResult(result) {
+  if (!result || result.canceled) return "";
+  if (typeof result === "string") return result;
+  return result.selected_path || "";
+}
+
+function formatKhz(frequencyHz) {
+  if (!frequencyHz) return "";
+  const khz = Number(frequencyHz) / 1000;
+  return Number.isInteger(khz) ? khz.toString() : khz.toFixed(3).replace(/\.?0+$/, "");
+}
+
+function khzToHz(value) {
+  const text = value?.toString().trim();
+  if (!text) return null;
+  const khz = Number(text);
+  return Number.isFinite(khz) && khz > 0 ? Math.round(khz * 1000) : null;
+}
+
+// response.json() on the shell markup reports only "Unexpected token '<'", which hides
+// the fact that the API never answered. Say which endpoint failed and what came back.
+async function fetchJson(path, init) {
+  const response = await fetch(path, init);
+  const body = await response.text();
+  try {
+    return JSON.parse(body);
+  } catch (_) {
+    const contentType = response.headers.get("content-type") || "unknown content type";
+    throw new Error(
+      `${path} returned ${response.status} ${contentType} instead of JSON. ` +
+        `Confirm the API is reachable at ${apiOriginLabel()}. ` +
+        `First bytes: ${body.slice(0, 120)}`,
+    );
+  }
+}
+
+async function boot() {
+  await configureDesktopFetchBridge();
+  const payload = await fetchJson("/api/shell");
+  state.shell = payload.shell;
+  state.commands = payload.commands.commands;
+  state.plugins = payload.plugins;
+  state.serviceProviders = payload.service_providers || { providers: [], preferred_providers: {} };
+  state.runtimeEvents = payload.runtime_events;
+  state.runtimeStatus = payload.runtime_status;
+  state.activeWorkspace = payload.shell.active_workspace;
+  state.appearance = payload.shell.appearance || state.appearance;
+  state.busConnected = payload.runtime_status.connected;
+
+  bindShellControls();
+  renderWorkspaceSelector();
+  renderModeButtons();
+  renderThemeToggle();
+  renderLayoutSelect();
+  applyAppearance();
+  await refreshQsos();
+  await refreshStation();
+  await refreshAwards();
+  await refreshUploads();
+  await refreshCredentials();
+  await refreshAccount();
+  await refreshNetControl();
+  await refreshMapState();
+  await refreshOnlineServices();
+  await refreshActivations();
+  await refreshRigStatus();
+  await refreshSyncState();
+  await refreshPluginPermissions();
+  render();
+  startRuntimeEventPolling();
+}
+
+function bindShellControls() {
+  byId("workspace-selector").addEventListener("change", (event) => switchWorkspace(event.target.value));
+  byId("layout-select").addEventListener("change", (event) => setShellLayout(event.target.value));
+  byId("theme-toggle").addEventListener("click", (event) => {
+    const option = event.target.closest("[data-theme-option]");
+    if (option) setThemeMode(option.dataset.themeOption);
+  });
+  byId("workspace-modes").addEventListener("click", (event) => {
+    const button = event.target.closest("[data-workspace]");
+    if (button) switchWorkspace(button.dataset.workspace);
+  });
+  byId("more-button").addEventListener("click", () => toggleMoreMenu());
+  document.addEventListener("click", (event) => {
+    if (state.moreMenuOpen && !event.target.closest(".menu-more")) toggleMoreMenu(false);
+  });
+  byId("command-button").addEventListener("click", openCommandPalette);
+  byId("import-adif-button").addEventListener("click", importAdifFromPrompt);
+  byId("export-adif-button").addEventListener("click", exportAdifFromPrompt);
+  byId("backup-button").addEventListener("click", () => openScreen("backups"));
+  byId("settings-button").addEventListener("click", () => openScreen("settings"));
+  byId("plugins-button").addEventListener("click", () => openScreen("plugins"));
+  byId("account-button").addEventListener("click", openAccountScreen);
+  byId("admin-button")?.addEventListener("click", openAdminScreen);
+  byId("close-screen").addEventListener("click", closeScreen);
+  byId("command-search").addEventListener("input", renderCommandResults);
+  document.querySelectorAll(".more-item").forEach((item) => {
+    item.addEventListener("click", () => toggleMoreMenu(false));
+  });
+
+  document.addEventListener("keydown", (event) => {
+    const key = event.key.toLowerCase();
+    if ((event.ctrlKey || event.metaKey) && key === "k") {
+      event.preventDefault();
+      openCommandPalette();
+    }
+    if ((event.ctrlKey || event.metaKey) && key === "l") {
+      event.preventDefault();
+      runCommand("focus.callsign-entry");
+    }
+    // Shift+Ctrl/Cmd+L steps through the shell layouts without leaving the log.
+    if ((event.ctrlKey || event.metaKey) && event.shiftKey && key === "l") {
+      event.preventDefault();
+      cycleShellLayout();
+    }
+    if (event.key === "Enter" && document.activeElement?.id === "callsign-entry-input") {
+      const form = byId("qso-create-form");
+      if (form?.checkValidity()) {
+        event.preventDefault();
+        form.requestSubmit();
+      }
+    }
+    if (event.key === "Escape") {
+      closeScreen();
+      closeCommandPalette();
+      toggleMoreMenu(false);
+    }
+  });
+}
+
+function renderWorkspaceSelector() {
+  const selector = byId("workspace-selector");
+  selector.innerHTML = state.shell.workspaces
+    .map((workspace) => `<option value="${workspace.id}">${escapeHtml(workspace.title)}</option>`)
+    .join("");
+}
+
+// ---------------------------------------------------------------------------
+// Appearance: shell layout and theme.
+//
+// The layouts rearrange the same regions rather than swapping in different
+// screens, so switching one never loses the operator's place, their draft QSO,
+// or their panel customization.
+// ---------------------------------------------------------------------------
+
+// Panels a layout prefers to pull out of the centre and into the left context
+// rail. A layout only gets a rail if the active workspace actually offers one
+// of these panels, so the rail never appears empty.
+const LAYOUT_RAIL_PANELS = {
+  "operating-deck": ["dx-cluster", "spots-alerts", "rig-control"],
+  "tabbed-workbench": ["global-search", "recent-qsos"],
+};
+
+// Regions a layout does not render. Their panels fold into the centre instead
+// of disappearing, because a layout choice must never hide data.
+const LAYOUT_FOLDED_REGIONS = {
+  "focus-console": ["bottom"],
+};
+
+function shellLayouts() {
+  return state.shell?.layouts || [];
+}
+
+function activeLayoutId() {
+  const layouts = shellLayouts();
+  const current = state.appearance?.layout;
+  if (layouts.some((layout) => layout.slug === current)) return current;
+  return layouts[0]?.slug || "operating-deck";
+}
+
+function activeLayoutDefinition() {
+  return shellLayouts().find((layout) => layout.slug === activeLayoutId()) || null;
+}
+
+function renderModeButtons() {
+  byId("workspace-modes").innerHTML = state.shell.workspaces
+    .map(
+      (workspace) =>
+        `<button class="mode-button" type="button" data-workspace="${workspace.id}">${escapeHtml(workspace.title)}</button>`,
+    )
+    .join("");
+}
+
+function renderThemeToggle() {
+  const themes = state.shell?.themes || [
+    { slug: "system", title: "Match system" },
+    { slug: "light", title: "Light" },
+    { slug: "dark", title: "Dark" },
+  ];
+  const glyphs = { system: "\u25D1", light: "\u2600", dark: "\u263E" };
+  byId("theme-toggle").innerHTML = themes
+    .map(
+      (theme) =>
+        `<button class="theme-option" type="button" data-theme-option="${theme.slug}" title="${escapeHtml(theme.title)}" aria-label="${escapeHtml(theme.title)}">${glyphs[theme.slug] || "?"}</button>`,
+    )
+    .join("");
+}
+
+function renderLayoutSelect() {
+  byId("layout-select").innerHTML = shellLayouts()
+    .map((layout) => `<option value="${layout.slug}">${escapeHtml(layout.title)}</option>`)
+    .join("");
+}
+
+/// Push the chosen layout and theme onto the document. Theme lives on <html> so
+/// the tokens resolve before anything inside the shell paints.
+function applyAppearance() {
+  const layout = activeLayoutId();
+  const theme = state.appearance?.theme || "system";
+  document.documentElement.dataset.theme = theme;
+  byId("app").dataset.layout = layout;
+  byId("layout-select").value = layout;
+  document.querySelectorAll("[data-theme-option]").forEach((option) => {
+    const active = option.dataset.themeOption === theme;
+    option.setAttribute("aria-pressed", active ? "true" : "false");
+  });
+}
+
+async function persistAppearance(patch) {
+  state.appearance = { ...state.appearance, ...patch };
+  applyAppearance();
+  render();
+  try {
+    const result = await fetchJson("/api/shell/appearance", {
+      method: "POST",
+      body: JSON.stringify(patch),
+    });
+    if (result?.appearance) {
+      state.appearance = result.appearance;
+      applyAppearance();
+    }
+  } catch (error) {
+    // The shell already switched locally; say so rather than silently reverting,
+    // because losing the choice on the next launch is the surprising part.
+    console.warn("shell appearance not persisted", error);
+    state.appearanceError = error.message;
+    render();
+  }
+}
+
+function setShellLayout(layout) {
+  if (!layout || layout === state.appearance?.layout) return Promise.resolve();
+  return persistAppearance({ layout });
+}
+
+function setThemeMode(theme) {
+  if (!theme || theme === state.appearance?.theme) return Promise.resolve();
+  return persistAppearance({ theme });
+}
+
+function cycleShellLayout() {
+  const layouts = shellLayouts();
+  if (!layouts.length) return;
+  const index = layouts.findIndex((layout) => layout.slug === activeLayoutId());
+  setShellLayout(layouts[(index + 1) % layouts.length].slug);
+}
+
+function toggleMoreMenu(force) {
+  state.moreMenuOpen = typeof force === "boolean" ? force : !state.moreMenuOpen;
+  byId("more-menu").hidden = !state.moreMenuOpen;
+  byId("more-button").setAttribute("aria-expanded", state.moreMenuOpen ? "true" : "false");
+}
+
+function renderMenubarChips() {
+  const rigState = state.rigStatus?.active_state;
+  const outstanding = (state.uploads?.jobs || []).filter((job) => job.status !== "completed");
+  const failed = outstanding.filter((job) => job.status === "failed").length;
+  const errors = state.runtimeStatus?.latest_error_count || 0;
+  const peers = state.syncState?.peers?.length || 0;
+  const chips = [
+    {
+      tone: rigState ? "ok" : "",
+      label: rigState ? `${formatKhz(rigState.frequency_hz) || "?"} kHz ${rigState.mode || ""}`.trim() : "Rig idle",
+    },
+    { tone: peers ? "info" : "", label: `${peers} peer${peers === 1 ? "" : "s"}` },
+    failed
+      ? { tone: "danger", label: `${failed} upload${failed === 1 ? "" : "s"} failed` }
+      : {
+          tone: outstanding.length ? "warn" : "ok",
+          label: outstanding.length ? `${outstanding.length} queued` : "Uploads clear",
+        },
+  ];
+  if (errors) chips.push({ tone: "danger", label: `${errors} error${errors === 1 ? "" : "s"}` });
+  byId("menubar-chips").innerHTML = chips
+    .map((chip) => `<span class="chip"><span class="dot ${chip.tone}"></span>${escapeHtml(chip.label)}</span>`)
+    .join("");
+}
+
+function render() {
+  const workspace = currentWorkspace();
+  const layout = activeLayoutDefinition();
+  byId("workspace-title").textContent = workspace.title;
+  byId("workspace-selector").value = state.activeWorkspace;
+  byId("workspace-description").textContent = state.appearanceError
+    ? `Layout applied for this session only: ${state.appearanceError}`
+    : workspace.description || "";
+  // The station payload carries `active_profile_id` plus a profile list, not an
+  // `active_profile` object, so resolve it the same way the rest of the shell
+  // does rather than silently falling back to a hard-coded callsign.
+  byId("brand-callsign").textContent = activeStationProfile()?.station_callsign || "No station";
+  byId("brand-context").textContent = layout ? layout.title : "Local station";
+  byId("status-workspace").textContent = `Workspace: ${workspace.title}`;
+  byId("status-plugins").textContent = `Plugins: ${state.plugins.filter((plugin) => plugin.enabled).length} enabled`;
+  byId("status-bus").textContent = `Event bus: ${state.busConnected ? "connected" : "disconnected"}`;
+  const rigState = state.rigStatus?.active_state;
+  const rigLabel = rigState ? `${formatKhz(rigState.frequency_hz) || "freq?"} kHz ${rigState.mode || ""}` : "none";
+  byId("status-sync").textContent = `Sync: ${state.runtimeStatus?.sync_state || "Local only"} / Rig: ${rigLabel}`;
+  byId("status-events").textContent = `Runtime events: ${state.runtimeStatus?.runtime_event_count || state.runtimeEvents.length}`;
+  byId("status-errors").textContent = `Errors: ${state.runtimeStatus?.latest_error_count || 0}`;
+  byId("status-sync-peers").textContent = `Discovery: ${state.syncState?.scan_running ? "scanning" : state.syncState?.discovery_running ? "running" : "stopped"} / ${state.syncState?.peers?.length || 0} peers / ${state.syncState?.warning_count || 0} warnings`;
+  const mapStatus = state.mapState?.status || {};
+  byId("status-map-grid").textContent = `Grid: ${mapStatus.grid || "unknown"}`;
+  byId("status-map-coordinates").textContent = `Coords: ${formatCoordinate(mapStatus.coordinates)}`;
+  byId("status-map-distance").textContent = `Distance: ${mapStatus.distance || "n/a"}`;
+  byId("status-map-bearing").textContent = `Bearing: ${mapStatus.bearing || "n/a"}`;
+  byId("status-map-zoom").textContent = `Zoom: ${mapStatus.zoom || "n/a"}`;
+  byId("status-map-layer").textContent = `Layer: ${mapStatus.selected_layer || "none"}`;
+
+  document.querySelectorAll(".mode-button").forEach((button) => {
+    button.classList.toggle("is-active", button.dataset.workspace === state.activeWorkspace);
+  });
+
+  // Map cursor readouts only earn status bar space where a map is on screen.
+  const showsMap = panelsAvailableForWorkspace(workspace).some((panel) =>
+    ["interactive-map", "map-placeholder"].includes(panel.id),
+  );
+  byId("app").dataset.showMapStatus = showsMap ? "true" : "false";
+
+  renderMenubarChips();
+  renderRegion("rail-panels", "rail");
+  renderRegion("center-panels", "center");
+  renderRegion("right-panels", "right-inspector");
+  renderRegion("bottom-panels", "bottom");
+  bindPanelControls();
+}
+
+/// Where a placement actually lands once the active layout has had its say.
+///
+/// The workspace definitions from the server describe the canonical arrangement;
+/// a layout may pull spotting panels into its context rail, or fold a region it
+/// does not draw back into the centre. Panels are never dropped.
+function resolvedRegion(placement, layoutId = activeLayoutId()) {
+  const railPanels = LAYOUT_RAIL_PANELS[layoutId] || [];
+  if (railPanels.includes(placement.panel_id) && placement.region === "center") return "rail";
+  const folded = LAYOUT_FOLDED_REGIONS[layoutId] || [];
+  if (folded.includes(placement.region)) return "center";
+  return placement.region;
+}
+
+function renderRegion(elementId, region) {
+  const workspace = currentWorkspace();
+  const placements = effectivePlacements(workspace)
+    .filter((placement) => resolvedRegion(placement) === region)
+    .sort((left, right) => left.order - right.order);
+  const host = byId(elementId);
+  if (!host) return;
+  // The rail is layout-driven, so it hides itself rather than showing an empty
+  // column when the workspace has nothing to put there.
+  if (region === "rail") {
+    const railHost = host.closest(".rail-region");
+    if (railHost) railHost.hidden = placements.length === 0;
+    byId("app").dataset.rail = placements.length ? "visible" : "empty";
+    host.innerHTML = placements.map((placement) => renderPanel(placement.panel_id, region)).join("");
+    return;
+  }
+  host.innerHTML = `${renderPanelOpener(region)}${placements.map((placement) => renderPanel(placement.panel_id, region)).join("")}`;
+}
+
+function layoutKey(workspace = currentWorkspace()) {
+  return workspace.id;
+}
+
+function workspaceLayoutState(workspace = currentWorkspace()) {
+  const key = layoutKey(workspace);
+  if (!state.panelLayouts[key]) {
+    state.panelLayouts[key] = {
+      placements: workspace.layout.placements.map((placement) => ({ ...placement })),
+      hidden: [],
+    };
+  }
+  return state.panelLayouts[key];
+}
+
+function effectivePlacements(workspace = currentWorkspace()) {
+  const layout = workspaceLayoutState(workspace);
+  const hidden = new Set(layout.hidden || []);
+  return (layout.placements || workspace.layout.placements)
+    .filter((placement) => !hidden.has(placement.panel_id))
+    .map((placement) => ({ ...placement }));
+}
+
+function panelsAvailableForWorkspace(workspace = currentWorkspace()) {
+  return state.shell.panels.filter((panel) => panel.supported_workspaces.includes(workspace.id));
+}
+
+function renderPanelOpener(region) {
+  const workspace = currentWorkspace();
+  const visible = new Set(effectivePlacements(workspace).map((placement) => placement.panel_id));
+  const available = panelsAvailableForWorkspace(workspace).filter((panel) => !visible.has(panel.id));
+  if (!available.length) return "";
+  return `<div class="panel-opener">
+    <select class="placeholder-control panel-open-select" data-panel-open-region="${region}" aria-label="Open card in ${region}">
+      <option value="">Open card...</option>
+      ${available.map((panel) => `<option value="${panel.id}">${panel.title}</option>`).join("")}
+    </select>
+    <button class="toolbar-button" type="button" data-panel-open-button="${region}">Open</button>
+  </div>`;
+}
+
+function renderPanel(panelId, region) {
+  const panel = state.shell.panels.find((candidate) => candidate.id === panelId);
+  if (!panel) return "";
+  return `
+    <article class="panel-card" data-panel-id="${panel.id}">
+      <header>
+        <div>
+          <h3>${panel.title}</h3>
+          <span class="source">${panel.source}</span>
+        </div>
+        <div class="panel-card-actions" aria-label="${panel.title} card actions">
+          <button class="icon-button" type="button" title="Move to center" aria-label="Move ${panel.title} to center" data-panel-move="center" data-panel-id="${panel.id}" ${region === "center" ? "disabled" : ""}>C</button>
+          <button class="icon-button" type="button" title="Move to inspector" aria-label="Move ${panel.title} to inspector" data-panel-move="right-inspector" data-panel-id="${panel.id}" ${region === "right-inspector" ? "disabled" : ""}>R</button>
+          <button class="icon-button" type="button" title="Move to bottom" aria-label="Move ${panel.title} to bottom" data-panel-move="bottom" data-panel-id="${panel.id}" ${region === "bottom" ? "disabled" : ""}>B</button>
+          <button class="icon-button" type="button" title="Close card" aria-label="Close ${panel.title}" data-panel-close="${panel.id}">X</button>
+        </div>
+      </header>
+      <div class="panel-content">${panelContent(panel)}</div>
+    </article>
+  `;
+}
+
+function panelContent(panel) {
+  switch (panel.id) {
+    case "recent-qsos":
+      return renderRecentQsos();
+    case "callsign-entry":
+      return renderCallsignEntry();
+    case "station-summary":
+      return renderStationSummary();
+    case "station-profiles":
+      return renderStationProfiles();
+    case "equipment-manager":
+      return renderEquipmentManager();
+    case "awards-summary":
+      return renderAwardsSummary();
+    case "global-search":
+      return renderGlobalSearch();
+    case "uploads":
+      return renderUploads();
+    case "online-accounts":
+      return renderOnlineAccounts();
+    case "online-providers":
+      return renderOnlineProviders();
+    case "online-upload-queue":
+      return renderOnlineUploadQueue();
+    case "online-downloads":
+      return renderOnlineDownloads();
+    case "confirmation-status":
+      return renderConfirmationStatus();
+    case "provider-health":
+      return renderProviderHealth();
+    case "service-cache":
+      return renderServiceCachePanel();
+    case "online-automation":
+      return renderOnlineAutomation();
+    case "online-notifications":
+      return renderOnlineNotifications();
+    case "interactive-map":
+      return renderInteractiveMap();
+    case "map-layers":
+      return renderMapLayers();
+    case "map-selected-object":
+      return renderMapSelectedObject();
+    case "map-search":
+      return renderMapSearch();
+    case "map-filters":
+      return renderMapFilters();
+    case "propagation":
+      return renderPropagation();
+    case "weather":
+      return renderWeather();
+    case "event-bus-monitor":
+      return renderEventBusMonitor();
+    case "activation-setup":
+      return renderActivationSetup();
+    case "activation-progress":
+      return renderActivationProgress();
+    case "activation-recent-qsos":
+      return renderActivationRecentQsos();
+    case "portable-logger-entry":
+      return renderPortableLoggerEntry();
+    case "spots-alerts":
+      return renderPortableSpots();
+    case "plugin-permissions":
+      return state.plugins
+        .map((plugin) => `<p><strong>${plugin.name}</strong><br />${permissionSummary(plugin.plugin_id)}</p>`)
+        .join("");
+    case "service-providers":
+      return renderServiceProviders();
+    case "credential-manager":
+      return renderCredentialManager();
+    case "net-session-control":
+      return renderNetSessionControl();
+    case "net-checkin-entry":
+      return renderNetCheckinEntry();
+    case "net-checkin-roster":
+      return renderNetRoster();
+    case "net-traffic-queue":
+      return renderNetTrafficQueue();
+    case "net-report":
+      return renderNetReport();
+    case "sync-status":
+      return renderSyncStatus();
+    case "backup-restore":
+      return renderBackupRestorePanel();
+    case "divergence-review":
+      return renderDivergencePanel();
+    case "rig-control":
+      return renderRigControl();
+    case "map-placeholder":
+      return renderInteractiveMap();
+    case "dx-cluster":
+      return renderDxCluster();
+    case "ai-assistant":
+      return `<p>AI assistant placeholder. Future access should be permissioned and proposal-aware.</p>`;
+    case "diagnostic-reports":
+      return `<p>Diagnostic report placeholder for event bus, store, sync, and plugin runtime health.</p>`;
+    default:
+      return `<p>${panel.title} placeholder panel. Required permissions: ${panel.required_permissions.join(", ") || "none"}.</p>`;
+  }
+}
+
+function renderRuntimeEvent(event) {
+  const selected = state.selectedEventId === event.event_id ? " is-selected" : "";
+  return `<button class="event-row${selected}" type="button" data-event-id="${event.event_id}">
+    <span class="event-main">
+      <strong>${event.event_type}</strong>
+      <span>${event.payload_summary}</span>
+      ${event.error ? `<span class="event-error">${event.error}</span>` : ""}
+    </span>
+    <span class="event-meta">
+      <span class="severity severity-${event.severity}">${event.severity}</span>
+      <small>${event.source}</small>
+      <small>${new Date(event.timestamp).toLocaleTimeString()}</small>
+    </span>
+  </button>`;
+}
+
+function switchWorkspace(workspaceId) {
+  state.activeWorkspace = workspaceId;
+  render();
+}
+
+function currentWorkspace() {
+  return state.shell.workspaces.find((workspace) => workspace.id === state.activeWorkspace) || state.shell.workspaces[0];
+}
+
+function openCommandPalette() {
+  const dialog = byId("command-palette");
+  byId("command-search").value = "";
+  renderCommandResults();
+  dialog.showModal();
+  byId("command-search").focus();
+}
+
+function closeCommandPalette() {
+  const dialog = byId("command-palette");
+  if (dialog.open) dialog.close();
+}
+
+function renderCommandResults() {
+  const query = byId("command-search").value.toLowerCase();
+  const commands = state.commands.filter((command) =>
+    `${command.id} ${command.title} ${command.category}`.toLowerCase().includes(query),
+  );
+  byId("command-results").innerHTML = commands.map(renderCommand).join("");
+  document.querySelectorAll(".command-row").forEach((row) => {
+    row.addEventListener("click", () => runCommand(row.dataset.commandId));
+  });
+}
+
+function renderCommand(command) {
+  return `<div class="command-row" role="option" data-command-id="${command.id}">
+    <span>${command.title}<br /><small>${command.category}</small></span>
+    <small>${command.shortcut || ""}</small>
+  </div>`;
+}
+
+function runCommand(commandId) {
+  const command = state.commands.find((candidate) => candidate.id === commandId);
+  if (!command) return;
+
+  if (command.target_workspace) switchWorkspace(command.target_workspace);
+  if (command.id === "open.settings") openScreen("settings");
+  if (command.id === "shell.layout.cycle") cycleShellLayout();
+  if (command.id === "shell.theme.light") setThemeMode("light");
+  if (command.id === "shell.theme.dark") setThemeMode("dark");
+  if (command.id === "shell.theme.system") setThemeMode("system");
+  if (command.id === "open.plugins") openScreen("plugins");
+  if (command.id === "account.open" || command.id === "account.sign-in" || command.id === "account.devices.open") openAccountScreen();
+  if (command.id === "account.session.refresh") accountRequest("/api/account/session/refresh", {});
+  if (command.id === "account.sign-out") accountRequest("/api/account/logout", {});
+  if (command.id === "admin.open" || command.id === "admin.invitations.open") openAdminScreen();
+  if (command.id === "admin.hosting.refresh") adminRequest("/api/admin/hosting/refresh", {});
+  if (command.id === "admin.audits.refresh") adminRequest("/api/admin/audits/refresh", {});
+  if (command.id === "services.open") openScreen("services");
+  if (command.id === "services.cache.clear") clearServiceCache();
+  if (command.id === "services.lookup.test") lookupCallsignFromPrompt();
+  if (command.id === "services.spotting.test") openScreen("services");
+  if (command.id === "credentials.open" || command.id === "credentials.create") openScreen("credentials");
+  if (command.id === "credentials.test") testFirstCredential();
+  if (command.id === "open.diagnostics") openScreen("diagnostics");
+  if (command.id === "diagnostics.open-folder") openScreen("diagnostics-folder");
+  if (command.id === "diagnostics.report.problem") openReportProblemScreen();
+  if (command.id === "diagnostics.report.export") exportDiagnosticZipFromScreen();
+  if (command.id === "diagnostics.report.upload") uploadDiagnosticReportFromScreen();
+  if (command.id === "diagnostics.report.copy-last-id") copyLastReportId();
+  if (command.id === "backup.open") openScreen("backups");
+  if (command.id === "backup.export") exportBackupFromScreen();
+  if (command.id === "backup.restore.dry-run") dryRunBackupRestoreFromScreen();
+  if (command.id === "backup.restore.import") importBackupFromScreen();
+  if (command.id === "sync.divergence.review") openDivergenceReview();
+  if (command.id === "sync.divergence.export") exportDivergenceReportFromScreen();
+  if (command.id === "adif.import") importAdifFromPrompt();
+  if (command.id === "adif.export") exportAdifFromPrompt();
+  if (command.id === "lookup.callsign") lookupCallsignFromPrompt();
+  if (command.id === "lookup.cache.clear") clearLookupCache();
+  if (command.id === "lookup.provider-status") showLookupProviderStatus();
+  if (command.id === "rig.connect") connectRig();
+  if (command.id === "rig.disconnect") disconnectRig();
+  if (command.id === "rig.refresh-state") refreshRigState();
+  if (command.id === "rig.use-frequency-mode") acceptRigSuggestion(true);
+  if (command.id === "rig.open-panel") switchWorkspace("casual-logger");
+  if (command.id === "station.profiles.open") openScreen("station-profiles");
+  if (command.id === "station.equipment.open") openScreen("equipment");
+  if (command.id === "station.profile.switch") switchStationProfileFromPrompt();
+  if (command.id === "awards.open") switchWorkspace("awards");
+  if (command.id === "awards.rebuild") refreshAwards().then(render);
+  if (command.id === "search.open" || command.id === "logger.open-advanced-search") openScreen("search");
+  if (command.id === "search.deleted") runSearchPrompt("deleted:true ");
+  if (command.id === "uploads.open") openScreen("uploads");
+  if (command.id === "uploads.queue-not-uploaded") queueNotUploadedQsos();
+  if (command.id === "uploads.export-adif") exportAdifFromPrompt();
+  if (command.id === "map.open") switchWorkspace("maps");
+  if (command.id === "map.layers.toggle") switchWorkspace("maps");
+  if (command.id === "map.center.home") refreshMapState().then(() => switchWorkspace("maps"));
+  if (command.id === "map.center.activation") refreshMapState().then(() => switchWorkspace("maps"));
+  if (command.id === "map.center.selected-qso") refreshMapState().then(() => switchWorkspace("maps"));
+  if (command.id === "map.grayline.toggle") toggleMapLayer("grayline");
+  if (command.id === "map.distance.recalculate") refreshMapState().then(render);
+  if (command.id === "propagation.open") switchWorkspace("maps");
+  if (command.id === "online.open") switchWorkspace("online-services");
+  if (command.id === "online.upload.queue") switchWorkspace("online-services");
+  if (command.id === "online.download.confirmations") switchWorkspace("online-services");
+  if (command.id === "online.health.refresh") refreshOnlineServices().then(render);
+  if (command.id === "online.dxcluster.open") switchWorkspace("online-services");
+  if (command.id === "online.pota-spots.open") switchWorkspace("online-services");
+  if (command.id === "online.sota-spots.open") switchWorkspace("online-services");
+  if (command.id === "logger.submit-qso") byId("qso-create-form")?.requestSubmit();
+  if (command.id === "logger.clear-form") clearQsoForm();
+  if (command.id === "logger.use-rig-frequency") acceptRigSuggestion(true);
+  if (command.id === "logger.accept-lookup-suggestions") acceptLookupSuggestion();
+  if (command.id === "logger.open-recent-qsos") switchWorkspace("casual-logger");
+  if (command.id === "net.open") switchWorkspace("net-control");
+  if (command.id === "net.session.start") startNetFromPrompt();
+  if (command.id === "net.session.end") endActiveNet();
+  if (command.id === "net.checkin.focus") {
+    switchWorkspace("net-control");
+    requestAnimationFrame(() => byId("net-checkin-callsign")?.focus());
+  }
+  if (command.id === "net.checkin.late") addLateCheckinFromPrompt();
+  if (command.id === "net.report.export") exportNetReport();
+  if (command.id === "net.traffic.open") switchWorkspace("net-control");
+  if (command.id === "activation.start-pota") startActivationFromPrompt("pota");
+  if (command.id === "activation.start-sota") startActivationFromPrompt("sota");
+  if (command.id === "activation.end-current") endCurrentActivation();
+  if (command.id === "activation.export-adif") exportActivationAdifFromPrompt();
+  if (command.id === "activation.workspace") switchWorkspace("pota-sota");
+  if (command.id === "official-log.verify-chain") verifyLogChain();
+  if (command.id === "projection.rebuild") rebuildProjections();
+  if (command.id === "sync.discovery.start") startDiscovery();
+  if (command.id === "sync.discovery.stop") stopDiscovery();
+  if (command.id === "sync.discovery.scan") scanNetwork();
+  if (command.id === "sync.peers.refresh") refreshPeers();
+  if (command.id === "sync.handshake.selected") handshakeSelectedPeer();
+  if (command.id === "sync.preview-pull.selected") previewPullSelectedPeer();
+  if (command.id === "sync.pull.selected") pullSelectedPeer();
+  if (command.id === "sync.verify-local-chain") verifyLogChain();
+  if (command.id === "sync.rebuild-projections") rebuildProjections();
+  if (command.id === "sync.diagnostics.copy") copySyncDiagnosticSummary();
+  if (command.id === "sync.cloud.connect") connectCloudSyncFromPrompt();
+  if (command.id === "sync.cloud.push") pushCloudEvents();
+  if (command.id === "sync.cloud.preview-pull") previewCloudPull();
+  if (command.id === "sync.cloud.pull") pullCloudEvents();
+  if (command.id === "sync.cloud.settings") openScreen("settings");
+  if (command.id === "sync.cloud.diagnostics.copy") copyCloudSyncDiagnosticSummary();
+  if (command.id === "sync.identity.copy") copyLocalSyncIdentity();
+  if (command.id === "event-bus.open") switchWorkspace("dashboard");
+  if (command.id === "event-bus.pause") toggleRuntimeStream();
+  if (command.id === "event-bus.export") exportVisibleRuntimeEvents();
+  if (command.id === "event-bus.copy-latest-error") copyLatestError();
+  if (command.id === "focus.callsign-entry") {
+    switchWorkspace("casual-logger");
+    requestAnimationFrame(() => byId("callsign-entry-input")?.focus());
+  }
+  if (command.id === "toggle.event-bus-monitor") switchWorkspace("dashboard");
+  closeCommandPalette();
+}
+
+function openScreen(kind) {
+  const overlay = byId("overlay");
+  const title = byId("screen-title");
+  const eyebrow = byId("screen-eyebrow");
+  const body = byId("screen-body");
+  overlay.hidden = false;
+
+  if (kind === "plugins") {
+    eyebrow.textContent = "Plugin Runtime";
+    title.textContent = "Plugin Manager";
+    body.innerHTML = renderPluginManager();
+    bindPluginPermissionControls();
+    return;
+  }
+
+  if (kind === "services") {
+    eyebrow.textContent = "Provider Runtime";
+    title.textContent = "Service Providers";
+    body.innerHTML = renderServiceProviderScreen();
+    return;
+  }
+
+  if (kind === "account") {
+    eyebrow.textContent = "Account";
+    title.textContent = "Hosted Account";
+    body.innerHTML = renderAccountScreen();
+    bindAccountControls();
+    return;
+  }
+
+  if (kind === "admin") {
+    eyebrow.textContent = "Administration";
+    title.textContent = "Server Administration";
+    body.innerHTML = renderAdminScreen();
+    bindAdminControls();
+    return;
+  }
+
+  if (kind === "credentials") {
+    eyebrow.textContent = "Security";
+    title.textContent = "Credential Manager";
+    body.innerHTML = renderCredentialManager();
+    bindCredentialControls();
+    return;
+  }
+
+  if (kind === "station-profiles") {
+    eyebrow.textContent = "Station";
+    title.textContent = "Station Profiles";
+    body.innerHTML = renderStationProfiles();
+    return;
+  }
+
+  if (kind === "equipment") {
+    eyebrow.textContent = "Station";
+    title.textContent = "Equipment Manager";
+    body.innerHTML = renderEquipmentManager();
+    return;
+  }
+
+  if (kind === "search") {
+    eyebrow.textContent = "Search";
+    title.textContent = "Advanced Search";
+    body.innerHTML = renderGlobalSearch();
+    bindSearchControls();
+    return;
+  }
+
+  if (kind === "uploads") {
+    eyebrow.textContent = "Uploads";
+    title.textContent = "Upload Queue";
+    body.innerHTML = renderUploads();
+    bindUploadControls();
+    return;
+  }
+
+  if (kind === "diagnostics") {
+    eyebrow.textContent = "Diagnostics";
+    title.textContent = "Diagnostic Report";
+    body.innerHTML = `<div class="monitor-actions">
+        <button class="toolbar-button" type="button" onclick="openReportProblemScreen()">Report a Problem</button>
+        <button class="toolbar-button" type="button" onclick="openScreen('diagnostics-folder')">Open Diagnostics Folder</button>
+      </div>
+      <div class="stack">${state.runtimeEvents.map(renderRuntimeEvent).join("")}</div>`;
+    return;
+  }
+
+  if (kind === "report-problem") {
+    eyebrow.textContent = "Diagnostics";
+    title.textContent = "Report a Problem";
+    body.innerHTML = renderReportProblem();
+    bindReportProblemControls();
+    return;
+  }
+
+  if (kind === "backups") {
+    eyebrow.textContent = "Backup";
+    title.textContent = "Backup and Restore";
+    body.innerHTML = renderBackupRestoreScreen();
+    bindBackupRestoreControls();
+    return;
+  }
+
+  if (kind === "divergence-review") {
+    eyebrow.textContent = "Sync";
+    title.textContent = "Divergence Review";
+    body.innerHTML = renderDivergenceReviewScreen();
+    bindDivergenceControls();
+    return;
+  }
+
+  if (kind === "diagnostics-folder") {
+    eyebrow.textContent = "Diagnostics";
+    title.textContent = "Diagnostics Folder";
+    body.innerHTML = `<p class="muted">Runtime JSONL logs are written here. Opening the folder through the OS shell is not wired yet.</p>
+      <pre class="path-block">${state.runtimeStatus?.log_directory || "unknown"}</pre>`;
+    return;
+  }
+
+  if (kind === "import-summary") {
+    eyebrow.textContent = "ADIF";
+    title.textContent = "Import Summary";
+    body.innerHTML = `<pre class="path-block">${JSON.stringify(state.importSummary, null, 2)}</pre>`;
+    return;
+  }
+
+  eyebrow.textContent = "Application";
+  title.textContent = "Settings";
+  body.innerHTML = renderSettings();
+  byId("cloud-connect-settings")?.addEventListener("click", connectCloudSyncFromSettings);
+  bindAppearanceControls();
+}
+
+function closeScreen() {
+  byId("overlay").hidden = true;
+}
+
+function renderPluginManager() {
+  const permissionState = state.permissionState;
+  return `<p class="muted">Enable and disable controls are placeholders until real plugin loading is implemented. Permission grants are active and enforced.</p>
+    <div class="plugin-grid">
+      ${state.plugins
+        .map(
+          (plugin) => `<article class="plugin-card">
+            <h3>${plugin.name}</h3>
+            <p class="muted">${plugin.plugin_id}</p>
+            <p>${permissionSummary(plugin.plugin_id)}</p>
+            <details>
+              <summary>Review permissions</summary>
+              <div class="stack">${(plugin.requested_permissions || [])
+                .map((permission) => renderPermissionReview(plugin.plugin_id, permission))
+                .join("")}</div>
+            </details>
+            <button class="toolbar-button" disabled>${plugin.enabled ? "Enabled" : "Disabled"}</button>
+            <button class="toolbar-button" type="button" data-approve-low-risk="${plugin.plugin_id}">Approve Low Risk</button>
+          </article>`,
+        )
+        .join("")}
+    </div>`;
+}
+
+function permissionSummary(pluginId) {
+  const grants = permissionGrantsFor(pluginId);
+  const counts = grants.reduce((acc, grant) => {
+    acc[grant.status] = (acc[grant.status] || 0) + 1;
+    return acc;
+  }, {});
+  return `<span class="pill">granted ${counts.granted || 0}</span><span class="pill">pending ${counts.pending || 0}</span><span class="pill">denied ${counts.denied || 0}</span><span class="pill">revoked ${counts.revoked || 0}</span>`;
+}
+
+function renderPermissionReview(pluginId, permissionId) {
+  const metadata = permissionMetadata(permissionId);
+  const grant = permissionGrant(pluginId, permissionId);
+  const status = grant?.status || "pending";
+  const risk = metadata?.risk_level || "unknown";
+  return `<article class="sync-summary">
+    <p><strong>${metadata?.display_name || permissionId}</strong> <span class="pill">${permissionId}</span> <span class="severity severity-${risk === "critical" || risk === "high" ? "error" : risk === "medium" ? "warn" : "info"}">${risk}</span></p>
+    <p>${metadata?.user_visible_reason || "Plugin requested this permission."}</p>
+    <p>Status: <strong>${status}</strong>${risk === "high" || risk === "critical" ? ` <span class="event-error">Admin review recommended</span>` : ""}</p>
+    <div class="monitor-actions">
+      <button class="toolbar-button" type="button" data-permission-action="grant" data-plugin-id="${pluginId}" data-permission-id="${permissionId}">Grant</button>
+      <button class="toolbar-button" type="button" data-permission-action="deny" data-plugin-id="${pluginId}" data-permission-id="${permissionId}">Deny</button>
+      <button class="toolbar-button" type="button" data-permission-action="revoke" data-plugin-id="${pluginId}" data-permission-id="${permissionId}">Revoke</button>
+    </div>
+  </article>`;
+}
+
+function permissionMetadata(permissionId) {
+  return state.permissionState?.registry?.find((permission) => permission.permission_id === permissionId);
+}
+
+function permissionGrant(pluginId, permissionId) {
+  return state.permissionState?.grants?.grants?.find((grant) => grant.plugin_id === pluginId && grant.permission_id === permissionId);
+}
+
+function permissionGrantsFor(pluginId) {
+  return state.permissionState?.grants?.grants?.filter((grant) => grant.plugin_id === pluginId) || [];
+}
+
+function bindPluginPermissionControls() {
+  document.querySelectorAll("[data-permission-action]").forEach((button) => {
+    button.addEventListener("click", () => updatePluginPermission(button.dataset.permissionAction, button.dataset.pluginId, button.dataset.permissionId));
+  });
+  document.querySelectorAll("[data-approve-low-risk]").forEach((button) => {
+    button.addEventListener("click", () => approveLowRiskPermissions(button.dataset.approveLowRisk));
+  });
+}
+
+function bindCredentialControls() {
+  byId("credential-create-form")?.addEventListener("submit", submitCredentialCreate);
+  document.querySelectorAll("[data-credential-test]").forEach((button) => {
+    button.addEventListener("click", () => testCredential(button.dataset.credentialTest));
+  });
+  document.querySelectorAll("[data-credential-revoke]").forEach((button) => {
+    button.addEventListener("click", () => revokeCredential(button.dataset.credentialRevoke));
+  });
+}
+
+function renderSettings() {
+  const sections = ["General", "Appearance", "Callsign/Profile", "Account", "Sync", "Service Providers", "Credentials", "Lookup/Enrichment", "Rig Control", "Plugin Permissions", "Plugins", "Diagnostics", "Keyboard Shortcuts"];
+  return `<div class="settings-grid">
+    ${sections
+      .map((section) =>
+        section === "Appearance"
+          ? `<article class="settings-card" style="grid-column: 1 / -1"><h3>${section}</h3>${renderAppearanceSettings()}</article>`
+        : section === "Account"
+          ? `<article class="settings-card"><h3>${section}</h3>${renderAccountSummary()}</article>`
+          : section === "Sync"
+            ? `<article class="settings-card"><h3>${section}</h3>${renderCloudSettings()}</article>`
+          : section === "Service Providers"
+            ? `<article class="settings-card"><h3>${section}</h3>${renderServiceProviderSummary()}</article>`
+          : section === "Credentials"
+            ? `<article class="settings-card"><h3>${section}</h3>${renderCredentialSummary()}</article>`
+          : section === "Lookup/Enrichment"
+            ? `<article class="settings-card"><h3>${section}</h3>${renderLookupSettings()}</article>`
+          : section === "Rig Control"
+            ? `<article class="settings-card"><h3>${section}</h3>${renderRigSettings()}</article>`
+          : section === "Plugin Permissions"
+            ? `<article class="settings-card"><h3>${section}</h3>${renderPermissionSettings()}</article>`
+          : `<article class="settings-card"><h3>${section}</h3><p class="muted">Placeholder settings surface.</p></article>`,
+      )
+      .join("")}
+  </div>`;
+}
+
+/// The layout switcher. Every layout arranges the same workspaces and panels,
+/// so the copy focuses on what changes for the operator rather than on visual
+/// styling, and flags the one layout without a permanent entry field.
+function renderAppearanceSettings() {
+  const layouts = shellLayouts();
+  const current = activeLayoutId();
+  const theme = state.appearance?.theme || "system";
+  const themes = state.shell?.themes || [];
+  const warning = state.appearanceError
+    ? `<p class="event-warn">This device kept the change, but it was not saved for next launch: ${escapeHtml(state.appearanceError)}</p>`
+    : "";
+  return `
+    <p class="muted">Layout and theme apply to this desktop or browser. Switching keeps your workspace, draft contact, and card arrangement.</p>
+    <div class="theme-choices" role="group" aria-label="Theme">
+      ${themes
+        .map(
+          (mode) =>
+            `<button class="theme-choice ${mode.slug === theme ? "is-active" : ""}" type="button" data-appearance-theme="${mode.slug}">${escapeHtml(mode.title)}</button>`,
+        )
+        .join("")}
+    </div>
+    <div class="layout-choices" role="group" aria-label="Shell layout">
+      ${layouts
+        .map(
+          (layout) => `
+        <button class="layout-choice ${layout.slug === current ? "is-active" : ""}" type="button" data-appearance-layout="${layout.slug}">
+          <b>${escapeHtml(layout.title)}</b>
+          <small>${escapeHtml(layout.description)}</small>
+          <span class="layout-flags">
+            <span class="layout-flag">${escapeHtml(layout.density)}</span>
+            <span class="layout-flag ${layout.has_persistent_entry ? "entry" : "no-entry"}">${layout.has_persistent_entry ? "Always-on entry" : "No permanent entry field"}</span>
+          </span>
+        </button>`,
+        )
+        .join("")}
+    </div>
+    <p class="muted">Shortcut: Ctrl/Cmd + Shift + L steps through the layouts.</p>
+    ${warning}`;
+}
+
+function bindAppearanceControls() {
+  document.querySelectorAll("[data-appearance-layout]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      await setShellLayout(button.dataset.appearanceLayout);
+      byId("screen-body").innerHTML = renderSettings();
+      bindAppearanceControls();
+    });
+  });
+  document.querySelectorAll("[data-appearance-theme]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      await setThemeMode(button.dataset.appearanceTheme);
+      byId("screen-body").innerHTML = renderSettings();
+      bindAppearanceControls();
+    });
+  });
+}
+
+function renderServiceProviders() {
+  const providers = [...(state.serviceProviders?.providers || [])].sort((left, right) =>
+    `${left.metadata.service_type}:${left.metadata.display_name}`.localeCompare(`${right.metadata.service_type}:${right.metadata.display_name}`),
+  );
+  if (!providers.length) return `<p class="muted">No service providers are registered.</p>`;
+  return `<div class="stack">${providers
+    .map((provider) => {
+      const meta = provider.metadata;
+      const health = provider.health || {};
+      const missingConfig = (meta.required_config_keys || []).length ? `<p class="event-warn">Missing config: ${meta.required_config_keys.join(", ")}</p>` : "";
+      return `<article class="sync-summary">
+        <p><strong>${meta.display_name}</strong> <span class="pill">${meta.service_type}</span></p>
+        <p class="muted">${meta.provider_id} / ${meta.source_plugin_id}</p>
+        <p>Status: ${provider.enabled ? "enabled" : "disabled"} / Health: ${health.state || "unknown"} / Priority: ${meta.priority}</p>
+        <p>${meta.supports_offline ? "Offline capable" : "Online only"} / ${meta.requires_network_access ? "Network required" : "No network required"}</p>
+        <p>Capabilities: ${(meta.capabilities || []).join(", ") || "none"}</p>
+        <p>Permissions: ${(meta.required_permissions || []).join(", ") || "none"}</p>
+        ${missingConfig}
+        <div class="monitor-actions">
+          <button class="toolbar-button" type="button" data-provider-toggle="${meta.provider_id}" data-provider-enabled="${provider.enabled ? "false" : "true"}">${provider.enabled ? "Disable" : "Enable"}</button>
+          <label>Priority
+            <input class="placeholder-control provider-priority" data-provider-priority="${meta.provider_id}" inputmode="numeric" value="${meta.priority}" />
+          </label>
+          <button class="toolbar-button" type="button" data-provider-priority-save="${meta.provider_id}">Save Priority</button>
+        </div>
+      </article>`;
+    })
+    .join("")}</div>`;
+}
+
+function renderServiceProviderSummary() {
+  const providers = state.serviceProviders?.providers || [];
+  const byType = providers.reduce((acc, provider) => {
+    const type = provider.metadata?.service_type || "unknown";
+    acc[type] = (acc[type] || 0) + 1;
+    return acc;
+  }, {});
+  return `<p>${providers.length} providers registered.</p>
+    <p>${Object.entries(byType)
+      .map(([type, count]) => `${type}: ${count}`)
+      .join(" / ")}</p>
+    <button class="toolbar-button" type="button" onclick="openScreen('services')">Review Providers</button>
+    <button class="toolbar-button" type="button" onclick="clearServiceCache()">Clear Service Cache</button>`;
+}
+
+function renderServiceProviderScreen() {
+  return `<p class="muted">Providers are registered through the shared core service framework. Provider configs reference credential IDs; raw secrets are handled only by the credential store.</p>
+    ${renderServiceProviderSummary()}
+    ${renderServiceProviders()}`;
+}
+
+function renderAccountSummary() {
+  const snapshot = accountSnapshot();
+  const stateLabel = snapshot ? ACCOUNT_STATE_LABELS[snapshot.connection_state] || snapshot.connection_state : "Unknown";
+  return `<p class="muted">${escapeHtml(stateLabel)}${snapshot?.email ? ` &middot; ${escapeHtml(snapshot.email)}` : ""}</p>
+    <p class="muted">${escapeHtml(snapshot?.base_url || "No hosted server configured")}</p>
+    <button class="toolbar-button" type="button" onclick="openAccountScreen()">Open Hosted Account</button>`;
+}
+
+function renderCredentialSummary() {
+  const backend = state.credentials?.backend || {};
+  const count = state.credentials?.credentials?.length || 0;
+  const warning = backend.dev_only ? `<p class="event-error">Development fallback is active. Do not use for production credentials.</p>` : "";
+  return `<p>${count} credential metadata records.</p>
+    <p>Backend: ${backend.backend_name || "unknown"} / ${backend.available ? "available" : "unavailable"} / ${backend.secure ? "secure" : "not secure"}</p>
+    ${warning}
+    <button class="toolbar-button" type="button" onclick="openScreen('credentials')">Open Credential Manager</button>`;
+}
+
+function renderCredentialManager() {
+  const backend = state.credentials?.backend || {};
+  const credentials = state.credentials?.credentials || [];
+  return `<div class="stack">
+    <div class="sync-summary">
+      <p><strong>${backend.backend_name || "Credential backend"}</strong></p>
+      <p>${backend.message || "Credential backend status is unknown."}</p>
+      <p>${backend.available ? "Available" : "Unavailable"} / ${backend.secure ? "Secure" : "Not secure"}${backend.dev_only ? " / Development only" : ""}</p>
+      ${backend.dev_only ? `<p class="event-error">Secrets are stored in the explicit insecure development fallback. Set up OS keychain support before real provider use.</p>` : ""}
+    </div>
+    <form id="credential-create-form" class="qso-form">
+      <label>Provider ID <input name="provider_id" class="placeholder-control" placeholder="qrz-stub" required /></label>
+      <label>Account ID <input name="account_id" class="placeholder-control" placeholder="local-account" required /></label>
+      <label>Service Type
+        <select name="service_type" class="placeholder-control">
+          <option value="callsign_lookup">callsign_lookup</option>
+          <option value="log_upload">log_upload</option>
+          <option value="authentication">authentication</option>
+        </select>
+      </label>
+      <label>Label <input name="label" class="placeholder-control" placeholder="QRZ token" required /></label>
+      <label>Secret <input name="secret" class="placeholder-control" type="password" autocomplete="new-password" placeholder="Secret is never displayed after save" required /></label>
+      <button class="toolbar-button" type="submit" ${backend.available ? "" : "disabled"}>Save Credential</button>
+    </form>
+    <div class="qso-list">${credentials
+      .map((credential) => `<article class="qso-row">
+        <strong>${credential.label}</strong>
+        <span>${credential.provider_id} / ${credential.service_type}</span>
+        <small>${credential.status}</small>
+        <div class="monitor-actions">
+          <button class="toolbar-button" type="button" data-credential-test="${credential.credential_id}">Test</button>
+          <button class="toolbar-button" type="button" data-credential-revoke="${credential.credential_id}">Revoke</button>
+        </div>
+      </article>`)
+      .join("") || `<p class="muted">No credential metadata records.</p>`}</div>
+  </div>`;
+}
+
+function renderPermissionSettings() {
+  const settings = state.permissionState?.settings || {};
+  return `<div class="qso-form">
+    <label>Auto-grant built-in low/medium risk <input type="checkbox" ${settings.auto_grant_builtin_low_risk_permissions !== false ? "checked" : ""} disabled /></label>
+    <label>Confirm high-risk permissions <input type="checkbox" ${settings.require_confirmation_for_high_risk_permissions !== false ? "checked" : ""} disabled /></label>
+    <label>Allow external network plugins <input type="checkbox" ${settings.allow_external_network_plugins ? "checked" : ""} disabled /></label>
+    <label>Permission audit logging <input type="checkbox" ${settings.permission_audit_logging !== false ? "checked" : ""} disabled /></label>
+  </div>`;
+}
+
+function renderRigSettings() {
+  const config = state.rigStatus?.config || {};
+  return `<div class="qso-form">
+    <label>Rig Control Enabled <input type="checkbox" ${config.enable_rig_control !== false ? "checked" : ""} disabled /></label>
+    <label>Default Provider <input class="placeholder-control" value="${config.default_provider || "mock"}" disabled /></label>
+    <label>Polling Interval ms <input class="placeholder-control" value="${config.polling_interval_ms || 1000}" disabled /></label>
+    <label>Auto Fill From Rig <input type="checkbox" ${config.auto_fill_from_rig !== false ? "checked" : ""} disabled /></label>
+    <label>Hamlib Host/Port <input class="placeholder-control" value="${config.hamlib_endpoint || "127.0.0.1:4532"}" disabled /></label>
+    <label>Serial Settings <input class="placeholder-control" value="${config.serial_settings_placeholder || "planned"}" disabled /></label>
+  </div>`;
+}
+
+function renderLookupSettings() {
+  return `<div class="qso-form">
+    <label>Lookup Enabled <input type="checkbox" checked disabled /></label>
+    <label>Online Lookup <input type="checkbox" disabled /></label>
+    <label>Preferred Provider <input class="placeholder-control" value="local-prefix" disabled /></label>
+    <label>Cache TTL Days <input class="placeholder-control" value="30" disabled /></label>
+    <label>Provider Credentials <input class="placeholder-control" value="Not stored in MVP" disabled /></label>
+    <button class="toolbar-button" type="button" onclick="clearLookupCache()">Clear Lookup Cache</button>
+  </div>`;
+}
+
+function renderCloudSettings() {
+  const config = state.syncState?.cloud_config || {};
+  return `<div class="qso-form">
+    <label>Cloud Sync <input id="cloud-enabled" type="checkbox" ${config.enable_cloud_sync ? "checked" : ""} /></label>
+    <label>Server URL <input id="cloud-server-url" class="placeholder-control" value="${config.sync_server_url || "http://127.0.0.1:9740"}" /></label>
+    <label>Device Name <input id="cloud-device-name" class="placeholder-control" value="${config.device_name || "KE8YGW Logger Device"}" /></label>
+    <label>Prefer LAN <input id="cloud-prefer-lan" type="checkbox" ${config.prefer_lan_sync !== false ? "checked" : ""} /></label>
+    <label>Auto Push <input id="cloud-auto-push" type="checkbox" ${config.auto_push_enabled ? "checked" : ""} /></label>
+    <label>Auto Pull <input id="cloud-auto-pull" type="checkbox" ${config.auto_pull_enabled ? "checked" : ""} /></label>
+    <label>Sync Interval Seconds <input id="cloud-sync-interval" class="placeholder-control" inputmode="numeric" value="${config.sync_interval_seconds || 300}" /></label>
+    <button id="cloud-connect-settings" class="toolbar-button" type="button">Pair / Connect</button>
+  </div>`;
+}
+
+function renderReportProblem() {
+  const preview = state.reportPreview;
+  const lastReportId = state.lastReport?.report_id || state.lastReport?.upload?.report_id || "";
+  return `<div class="qso-form">
+    <label>Report Type
+      <select id="report-type" class="placeholder-control">
+        <option value="basic" ${preview?.report_type === "basic" ? "selected" : ""}>Basic</option>
+        <option value="sync" ${preview?.report_type === "sync" ? "selected" : ""}>Sync</option>
+      </select>
+    </label>
+    <label>Short Description
+      <input id="report-description" class="placeholder-control" placeholder="What went wrong?" />
+    </label>
+    <label>User Notes
+      <textarea id="report-notes" class="placeholder-control" rows="5" placeholder="Steps, expectations, anything useful"></textarea>
+    </label>
+    <label>Export Path
+      <input id="report-output-path" class="placeholder-control" placeholder="C:\\Temp\\ham-report.zip" />
+    </label>
+    <div class="monitor-actions">
+      <button id="report-refresh-preview" class="toolbar-button" type="button">Preview</button>
+      <button id="report-export" class="toolbar-button" type="button">Export ZIP</button>
+      <button id="report-upload" class="toolbar-button" type="button">Upload Report</button>
+      <button id="report-copy-id" class="toolbar-button" type="button" ${lastReportId ? "" : "disabled"}>Copy Report ID</button>
+    </div>
+    <div class="sync-summary">
+      <p><strong>Included files</strong></p>
+      <p>${preview?.included_files?.map((file) => `<span class="pill">${file}</span>`).join("") || "Click Preview to inspect bundle contents."}</p>
+      <p><strong>Redaction summary</strong></p>
+      <p>${preview ? redactionSummaryText(preview.redaction_summary) : "Official logs, credentials, full AI payloads, private profile fields, and raw provider metadata are excluded/redacted by default."}</p>
+      ${lastReportId ? `<p><strong>Last report ID:</strong> <span class="pill">${lastReportId}</span></p>` : ""}
+      ${state.importSummary ? `<pre class="path-block">${JSON.stringify(state.importSummary, null, 2)}</pre>` : ""}
+    </div>
+  </div>`;
+}
+
+function bindReportProblemControls() {
+  byId("report-refresh-preview")?.addEventListener("click", refreshReportPreview);
+  byId("report-export")?.addEventListener("click", exportDiagnosticZipFromScreen);
+  byId("report-upload")?.addEventListener("click", uploadDiagnosticReportFromScreen);
+  byId("report-copy-id")?.addEventListener("click", copyLastReportId);
+  byId("report-type")?.addEventListener("change", refreshReportPreview);
+}
+
+function renderBackupRestorePanel() {
+  const last = state.backupState.lastBackup;
+  return `<div class="stack">
+    <p>Backup current logbook, validate restore payloads, and import only when the dry-run is safe.</p>
+    <div class="monitor-actions">
+      <button class="toolbar-button" type="button" onclick="openScreen('backups')">Open Backup Workflow</button>
+      <button class="toolbar-button" type="button" onclick="exportBackupFromScreen()">Export Backup</button>
+    </div>
+    ${last ? `<pre class="path-block">${JSON.stringify(last.manifest || last, null, 2)}</pre>` : `<p class="muted">No backup exported in this session.</p>`}
+  </div>`;
+}
+
+function renderBackupRestoreScreen() {
+  const dryRun = state.backupState.dryRun;
+  const result = state.backupState.importResult;
+  return `<div class="qso-form">
+    <label>Backup Export Path
+      <input id="backup-export-path" class="placeholder-control" placeholder="C:\\Temp\\ke8ygw-backup.json" />
+    </label>
+    <div class="monitor-actions">
+      <button id="backup-export-browse" class="toolbar-button" type="button">Choose Export Path</button>
+      <button id="backup-export-run" class="toolbar-button" type="button">Export Current Logbook</button>
+    </div>
+    <div class="sync-summary">
+      <p><strong>Backup contents</strong></p>
+      <p><span class="pill">official event stream</span><span class="pill">station profiles</span><span class="pill">upload queue</span><span class="pill">map preferences</span></p>
+      <p><strong>Excluded</strong></p>
+      <p><span class="pill">credential secrets</span><span class="pill">session tokens</span><span class="pill">device tokens</span><span class="pill">runtime logs</span></p>
+      ${state.backupState.lastBackup ? `<pre class="path-block">${JSON.stringify(state.backupState.lastBackup.manifest || state.backupState.lastBackup, null, 2)}</pre>` : ""}
+    </div>
+    <label>Backup Import Path
+      <input id="backup-import-path" class="placeholder-control" placeholder="C:\\Temp\\ke8ygw-backup.json" />
+    </label>
+    <div class="monitor-actions">
+      <button id="backup-import-browse" class="toolbar-button" type="button">Choose Backup</button>
+      <button id="backup-dry-run" class="toolbar-button" type="button">Run Dry-Run</button>
+      <button id="backup-import-run" class="toolbar-button" type="button" ${dryRun?.ok ? "" : "disabled"}>Import Safe Backup</button>
+    </div>
+    ${dryRun ? renderRestoreDryRun(dryRun) : `<p class="muted">Choose a backup and run dry-run before importing.</p>`}
+    ${result ? `<div class="sync-summary"><p><strong>Import Result</strong></p><pre class="path-block">${JSON.stringify(result, null, 2)}</pre></div>` : ""}
+  </div>`;
+}
+
+function renderRestoreDryRun(dryRun) {
+  const severity = dryRun.ok ? "info" : "error";
+  return `<div class="sync-summary">
+    <p><strong>Dry-Run Review</strong> <span class="severity severity-${severity}">${dryRun.ok ? "safe" : "blocked"}</span></p>
+    <p>Backup version: ${dryRun.backup_version ?? "unknown"} / source logbook: <small>${dryRun.source_logbook_id || "unknown"}</small></p>
+    <p>Target logbook: <small>${dryRun.target_logbook_id || "current"}</small></p>
+    <p>Official events: ${dryRun.official_event_count || dryRun.event_count || 0} / skipped duplicates: ${dryRun.skipped_duplicate_count || 0}</p>
+    <p>Support sections: ${(dryRun.support_sections || []).map((section) => `<span class="pill">${escapeHtml(section)}</span>`).join("") || "none"}</p>
+    <p>Missing credentials: ${(dryRun.missing_credentials || dryRun.missing_credential_references || []).map((item) => `<span class="pill">${escapeHtml(item)}</span>`).join("") || "none"}</p>
+    ${(dryRun.warnings || []).map((warning) => `<p class="event-warn">${escapeHtml(warning)}</p>`).join("")}
+    ${(dryRun.errors || []).map((error) => `<p class="event-error">${escapeHtml(error)}</p>`).join("")}
+  </div>`;
+}
+
+function bindBackupRestoreControls() {
+  byId("backup-export-browse")?.addEventListener("click", chooseBackupExportPath);
+  byId("backup-import-browse")?.addEventListener("click", chooseBackupImportPath);
+  byId("backup-export-run")?.addEventListener("click", exportBackupFromScreen);
+  byId("backup-dry-run")?.addEventListener("click", dryRunBackupRestoreFromScreen);
+  byId("backup-import-run")?.addEventListener("click", importBackupFromScreen);
+}
+
+function renderDivergencePanel() {
+  const review = state.divergenceReview;
+  return `<div class="stack">
+    <p>Review sync heads before pulling or pushing. Divergent chains are blocked from automatic merge.</p>
+    <div class="monitor-actions">
+      <button class="toolbar-button" type="button" onclick="openDivergenceReview()">Review Divergence</button>
+      <button class="toolbar-button" type="button" onclick="exportDivergenceReportFromScreen()">Export Report</button>
+    </div>
+    ${review ? renderDivergenceReview(review) : `<p class="muted">No divergence report loaded.</p>`}
+  </div>`;
+}
+
+function renderDivergenceReviewScreen() {
+  const selectedReview = selectedConflictReview();
+  return `<div class="stack">
+    <div class="monitor-actions">
+      <button id="divergence-refresh" class="toolbar-button" type="button">Refresh Review</button>
+      <button id="divergence-save-review" class="toolbar-button" type="button">Save Manual Review</button>
+      <button id="divergence-export" class="toolbar-button" type="button">Export Report</button>
+    </div>
+    ${state.divergenceReview ? renderDivergenceReview(state.divergenceReview) : `<p class="muted">Refresh to inspect current sync head state.</p>`}
+    ${renderConflictReviewList()}
+    ${selectedReview ? renderConflictReviewRecord(selectedReview) : ""}
+  </div>`;
+}
+
+function renderDivergenceReview(review) {
+  return `<div class="sync-summary">
+    <p><strong>Divergence:</strong> <span class="severity severity-${review.divergence_detected ? "error" : "info"}">${review.divergence_detected ? "detected" : "not detected"}</span></p>
+    <p>Local head: <small>${review.local_head_hash || "genesis"}</small></p>
+    <p>Remote head: <small>${review.remote_head_hash || "unknown"}</small></p>
+    <p>Common ancestor: <small>${review.common_ancestor || "unknown"}</small></p>
+    <p>Missing local events: ${review.missing_local_event_count || 0} / missing remote events: ${review.missing_remote_event_count || 0}</p>
+    <p>Safe pull: ${review.can_safely_pull ? "yes" : "no"} / safe push: ${review.can_safely_push ? "yes" : "no"}</p>
+    <p>Revoked device state: ${review.revoked_device_state || "unknown"}</p>
+    <p><strong>Recommended action:</strong> ${escapeHtml(review.recommended_action || "No action available.")}</p>
+    ${review.divergence_detected ? `<p class="event-error">Automatic merge is intentionally unavailable. Export this report for manual review.</p>` : ""}
+    ${review.conflict_report ? renderConflictReport(review.conflict_report) : ""}
+  </div>`;
+}
+
+function conflictReviewSnapshot() {
+  return state.syncState?.conflict_reviews || { health: { total: 0, open: 0, resolved: 0 }, reviews: [] };
+}
+
+function conflictReviewList() {
+  return [...(conflictReviewSnapshot().reviews || [])].sort((left, right) => {
+    if (reviewStatus(left) !== reviewStatus(right)) return isOpenReview(left) ? -1 : 1;
+    return String(right.updated_at || right.created_at || "").localeCompare(String(left.updated_at || left.created_at || ""));
+  });
+}
+
+function findConflictReview(reviewId) {
+  return conflictReviewList().find((review) => review.review_id === reviewId) || null;
+}
+
+function reviewStatus(review) {
+  return String(review?.status || "").toLowerCase();
+}
+
+function isOpenReview(review) {
+  return reviewStatus(review) === "open";
+}
+
+function selectedConflictReview() {
+  const selected = state.selectedConflictReviewId ? findConflictReview(state.selectedConflictReviewId) : null;
+  if (selected) return selected;
+  const current = state.conflictReview?.review_id ? findConflictReview(state.conflictReview.review_id) || state.conflictReview : null;
+  if (current) return current;
+  return conflictReviewList().find(isOpenReview) || conflictReviewList()[0] || null;
+}
+
+function conflictKindLabel(kind) {
+  return String(kind || "manual_review_required")
+    .replace(/_/g, " ")
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function resolutionLabel(choice) {
+  const labels = {
+    keep_local_history: "Keep Local History",
+    pull_remote_after_review: "Record Pull Approval",
+    retry_after_dependency_arrives: "Retry After Dependency",
+    mark_user_action_required: "Mark User Action",
+  };
+  return labels[choice] || conflictKindLabel(choice);
+}
+
+function reportAllowsPullAfterReview(report) {
+  return Boolean(
+    report?.logbook_id &&
+      report.status !== "diverged" &&
+      (report.conflicts || []).every((conflict) => conflict.safe_auto_merge),
+  );
+}
+
+function reportHasMissingDependency(report) {
+  return Boolean(report && (report.conflicts || []).some((conflict) => conflict.kind === "missing_dependency"));
+}
+
+function renderConflictReviewList() {
+  const snapshot = conflictReviewSnapshot();
+  const reviews = conflictReviewList();
+  return `<div class="sync-summary">
+    <p><strong>Saved reviews:</strong> open ${snapshot.health?.open || 0} / resolved ${snapshot.health?.resolved || 0} / total ${snapshot.health?.total || 0}</p>
+    ${
+      reviews.length
+        ? `<div class="conflict-review-list">
+            ${reviews
+              .map((review) => {
+                const selected = selectedConflictReview()?.review_id === review.review_id ? " is-selected" : "";
+                const conflictCount = review.report?.conflicts?.length || 0;
+                return `<button class="event-row${selected}" type="button" data-conflict-review-id="${escapeHtml(review.review_id)}">
+                  <span class="event-main">
+                    <strong>${escapeHtml(review.report?.status || "unknown")}</strong>
+                    <span>${conflictCount} conflicts / ${escapeHtml(review.report?.peer_id || "unknown peer")}</span>
+                  </span>
+                  <span class="event-meta">
+                    <span class="severity severity-${isOpenReview(review) ? "warn" : "info"}">${escapeHtml(review.status)}</span>
+                    <small>${escapeHtml(review.updated_at || review.created_at || "unknown")}</small>
+                  </span>
+                </button>`;
+              })
+              .join("")}
+          </div>`
+        : `<p class="muted">No saved conflict reviews.</p>`
+    }
+  </div>`;
+}
+
+function renderConflictReviewRecord(review) {
+  const report = review.report || {};
+  const selectedResolution = review.selected_resolution?.choice || "not selected";
+  const pullAllowed = reportAllowsPullAfterReview(report);
+  const dependencyRetryAllowed = reportHasMissingDependency(report);
+  return `<div class="sync-summary">
+    <p><strong>Saved review:</strong> ${escapeHtml(review.status)} / <small>${escapeHtml(review.review_id)}</small></p>
+    <p>Resolution: ${escapeHtml(review.selected_resolution?.choice || "not selected")}</p>
+    <p>Created: ${escapeHtml(review.created_at || "unknown")} / resolved: ${escapeHtml(review.resolved_at || "open")}</p>
+    ${renderConflictReport(report)}
+    ${
+      isOpenReview(review)
+        ? `<div class="conflict-resolution-panel">
+            <label>Operator Note
+              <textarea id="conflict-resolution-note" class="placeholder-control conflict-note" maxlength="4096">${escapeHtml(
+                review.selected_resolution?.operator_note || "",
+              )}</textarea>
+            </label>
+            <div class="monitor-actions">
+              <button id="divergence-keep-local" class="toolbar-button" type="button">${resolutionLabel("keep_local_history")}</button>
+              <button id="divergence-pull-reviewed" class="toolbar-button" type="button" ${pullAllowed ? "" : "disabled"}>${resolutionLabel("pull_remote_after_review")}</button>
+              <button id="divergence-retry-dependency" class="toolbar-button" type="button" ${dependencyRetryAllowed ? "" : "disabled"}>${resolutionLabel("retry_after_dependency_arrives")}</button>
+              <button id="divergence-mark-action" class="toolbar-button" type="button">${resolutionLabel("mark_user_action_required")}</button>
+            </div>
+            <form id="conflict-corrective-form" class="qso-form">
+              <label>Corrective QSO
+                <input id="conflict-corrective-qso-id" class="placeholder-control" list="conflict-qso-options" />
+              </label>
+              <datalist id="conflict-qso-options">
+                ${(state.qsos || [])
+                  .map((qso) => `<option value="${escapeHtml(qso.qso_id)}">${escapeHtml(qso.payload?.contacted_callsign || qso.qso_id)}</option>`)
+                  .join("")}
+              </datalist>
+              <label>Corrective Note
+                <textarea id="conflict-corrective-note" class="placeholder-control conflict-note"></textarea>
+              </label>
+              <label>Review Note
+                <textarea id="conflict-corrective-review-note" class="placeholder-control conflict-note">Resolved with a corrective QSO note event.</textarea>
+              </label>
+              <button class="toolbar-button" type="submit">Create Corrective Note Event</button>
+            </form>
+          </div>`
+        : `<p><strong>Selected recovery:</strong> ${escapeHtml(selectedResolution)}</p>`
+    }
+  </div>`;
+}
+
+function renderConflictReport(report) {
+  if (!report) return "";
+  const conflicts = report.conflicts || [];
+  return `<div class="conflict-report">
+    <p><strong>Peer:</strong> ${escapeHtml(report.peer_id || "unknown")} / <strong>Status:</strong> ${escapeHtml(report.status || "unknown")}</p>
+    <p><strong>Logbook:</strong> <small>${escapeHtml(report.logbook_id || "unknown")}</small></p>
+    <p><strong>Local head:</strong> <small>${escapeHtml(report.local_head_hash || "genesis")}</small></p>
+    <p><strong>Remote head:</strong> <small>${escapeHtml(report.remote_head_hash || "unknown")}</small></p>
+    <p><strong>Missing events:</strong> ${report.missing_event_count || 0} / <strong>Pending operations:</strong> ${report.pending_operation_count || 0}</p>
+    <p><strong>Recommended action:</strong> ${escapeHtml(report.recommended_action || "Review required.")}</p>
+    <div class="conflict-list">
+      ${
+        conflicts.length
+          ? conflicts
+              .map(
+                (conflict) => `<div class="conflict-item">
+                  <p><strong>${escapeHtml(conflictKindLabel(conflict.kind))}</strong> <span class="severity severity-${conflict.requires_user_action ? "warn" : "info"}">${conflict.requires_user_action ? "action" : "review"}</span></p>
+                  <p>${escapeHtml(conflict.message || "")}</p>
+                  <p>Safe automatic merge: ${conflict.safe_auto_merge ? "yes" : "no"}</p>
+                  <p>Options: ${(conflict.resolution_options || []).map((option) => `<span class="pill">${escapeHtml(option)}</span>`).join("") || "none"}</p>
+                  ${
+                    conflict.related_operation_ids?.length
+                      ? `<p>Operations: ${conflict.related_operation_ids.map((id) => `<small>${escapeHtml(id)}</small>`).join(" ")}</p>`
+                      : ""
+                  }
+                  ${
+                    conflict.related_event_hashes?.length
+                      ? `<p>Events: ${conflict.related_event_hashes.map((hash) => `<small>${escapeHtml(hash)}</small>`).join(" ")}</p>`
+                      : ""
+                  }
+                </div>`,
+              )
+              .join("")
+          : `<p class="muted">No structured conflicts.</p>`
+      }
+    </div>
+  </div>`;
+}
+
+function bindDivergenceControls() {
+  byId("divergence-refresh")?.addEventListener("click", refreshDivergenceReview);
+  byId("divergence-save-review")?.addEventListener("click", saveConflictReview);
+  byId("conflict-corrective-form")?.addEventListener("submit", createCorrectiveConflictNote);
+  byId("divergence-mark-action")?.addEventListener("click", () => resolveConflictReview("mark_user_action_required"));
+  byId("divergence-keep-local")?.addEventListener("click", () => resolveConflictReview("keep_local_history"));
+  byId("divergence-pull-reviewed")?.addEventListener("click", () => resolveConflictReview("pull_remote_after_review"));
+  byId("divergence-retry-dependency")?.addEventListener("click", () => resolveConflictReview("retry_after_dependency_arrives"));
+  byId("divergence-export")?.addEventListener("click", exportDivergenceReportFromScreen);
+  document.querySelectorAll("[data-conflict-review-id]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.selectedConflictReviewId = button.dataset.conflictReviewId;
+      state.conflictReview = findConflictReview(state.selectedConflictReviewId);
+      openScreen("divergence-review");
+    });
+  });
+}
+
+function redactionSummaryText(summary) {
+  if (!summary) return "";
+  return `${summary.secret_fields_redacted || 0} secret-like fields redacted; ${summary.private_profile_fields_redacted || 0} private profile fields redacted. Excluded: ${(summary.categories_removed || []).join(", ")}.`;
+}
+
+function renderEventBusMonitor() {
+  return `<div class="monitor-controls">
+      <label>Severity
+        <select id="monitor-severity" class="placeholder-control" aria-label="Filter runtime events by severity">
+          ${option("", "All", state.monitorFilters.severity)}
+          ${["trace", "debug", "info", "warn", "error"].map((value) => option(value, value, state.monitorFilters.severity)).join("")}
+        </select>
+      </label>
+      <label>Category
+        <select id="monitor-category" class="placeholder-control" aria-label="Filter runtime events by category">
+          ${option("", "All", state.monitorFilters.category)}
+          ${["ui", "plugin", "sync", "rig", "network", "proposal", "projection", "diagnostics", "app"]
+            .map((value) => option(value, value, state.monitorFilters.category))
+            .join("")}
+        </select>
+      </label>
+      <label>Source
+        <input id="monitor-source" class="placeholder-control" aria-label="Filter runtime events by source" value="${state.monitorFilters.source}" />
+      </label>
+      <label>Search
+        <input id="monitor-text" class="placeholder-control" aria-label="Search runtime events" value="${state.monitorFilters.text}" />
+      </label>
+    </div>
+    <div class="monitor-actions">
+      <button id="monitor-pause" class="toolbar-button" type="button">${state.streamPaused ? "Resume" : "Pause"}</button>
+      <button id="monitor-clear" class="toolbar-button" type="button">Clear View</button>
+      <button id="monitor-copy" class="toolbar-button" type="button">Copy Selected</button>
+      <button id="monitor-export" class="toolbar-button" type="button">Export JSONL</button>
+    </div>
+    <div class="event-list">${state.runtimeEvents.map(renderRuntimeEvent).join("") || `<p class="muted">No runtime events match the current filters.</p>`}</div>`;
+}
+
+function option(value, label, selectedValue) {
+  return `<option value="${value}" ${value === selectedValue ? "selected" : ""}>${label}</option>`;
+}
+
+function bindPanelControls() {
+  document.querySelectorAll(".event-row").forEach((row) => {
+    row.addEventListener("click", () => {
+      state.selectedEventId = row.dataset.eventId;
+      render();
+    });
+  });
+
+  const severity = byId("monitor-severity");
+  if (severity) {
+    severity.addEventListener("change", (event) => updateMonitorFilter("severity", event.target.value));
+    byId("monitor-category").addEventListener("change", (event) => updateMonitorFilter("category", event.target.value));
+    byId("monitor-source").addEventListener("change", (event) => updateMonitorFilter("source", event.target.value));
+    byId("monitor-text").addEventListener("change", (event) => updateMonitorFilter("text", event.target.value));
+    byId("monitor-pause").addEventListener("click", toggleRuntimeStream);
+    byId("monitor-clear").addEventListener("click", () => {
+      state.runtimeEvents = [];
+      state.selectedEventId = null;
+      render();
+    });
+    byId("monitor-copy").addEventListener("click", copySelectedRuntimeEvent);
+    byId("monitor-export").addEventListener("click", exportVisibleRuntimeEvents);
+  }
+
+  const qsoForm = byId("qso-create-form");
+  if (qsoForm) {
+    qsoForm.addEventListener("submit", submitQsoCreate);
+    qsoForm.addEventListener("input", () => {
+      updateQsoDraftFromForm();
+      updateDuplicateWarning();
+    });
+    byId("lookup-callsign-button")?.addEventListener("click", () => lookupCallsign(byId("callsign-entry-input")?.value || ""));
+    byId("accept-lookup-button")?.addEventListener("click", acceptLookupSuggestion);
+    byId("use-rig-button")?.addEventListener("click", () => acceptRigSuggestion(true));
+    byId("refresh-rig-button")?.addEventListener("click", refreshRigState);
+  }
+  const activationForm = byId("activation-start-form");
+  if (activationForm) activationForm.addEventListener("submit", submitActivationStart);
+  const portableForm = byId("portable-qso-form");
+  if (portableForm) portableForm.addEventListener("submit", submitPortableQsoCreate);
+  byId("portable-lookup-button")?.addEventListener("click", () => lookupCallsign(byId("portable-callsign-input")?.value || ""));
+  byId("portable-accept-lookup-button")?.addEventListener("click", acceptLookupSuggestion);
+  byId("portable-use-rig-button")?.addEventListener("click", () => acceptRigSuggestion(true));
+  byId("portable-refresh-rig-button")?.addEventListener("click", refreshRigState);
+  byId("activation-end-button")?.addEventListener("click", endCurrentActivation);
+  byId("rig-connect-button")?.addEventListener("click", connectRig);
+  byId("rig-disconnect-button")?.addEventListener("click", disconnectRig);
+  byId("rig-refresh-button")?.addEventListener("click", refreshRigState);
+  byId("rig-use-button")?.addEventListener("click", () => acceptRigSuggestion(true));
+  byId("rig-mock-apply-button")?.addEventListener("click", applyMockRigSettings);
+  byId("credential-create-form")?.addEventListener("submit", submitCredentialCreate);
+  document.querySelectorAll("[data-credential-test]").forEach((button) => {
+    button.addEventListener("click", () => testCredential(button.dataset.credentialTest));
+  });
+  document.querySelectorAll("[data-credential-revoke]").forEach((button) => {
+    button.addEventListener("click", () => revokeCredential(button.dataset.credentialRevoke));
+  });
+  byId("net-session-start-form")?.addEventListener("submit", submitNetSessionStart);
+  byId("net-end-button")?.addEventListener("click", endActiveNet);
+  byId("net-checkin-form")?.addEventListener("submit", submitNetCheckin);
+  byId("net-traffic-form")?.addEventListener("submit", submitNetTraffic);
+  byId("net-report-export")?.addEventListener("click", exportNetReport);
+  document.querySelectorAll("[data-net-checkin-delete]").forEach((button) => {
+    button.addEventListener("click", () => deleteNetCheckin(button.dataset.netCheckinDelete));
+  });
+
+  document.querySelectorAll("[data-qso-action]").forEach((button) => {
+    button.addEventListener("click", () => {
+      runQsoAction(button.dataset.qsoAction, button.dataset.qsoId);
+    });
+  });
+  document.querySelectorAll("[data-panel-close]").forEach((button) => {
+    button.addEventListener("click", () => closePanelCard(button.dataset.panelClose));
+  });
+  document.querySelectorAll("[data-panel-move]").forEach((button) => {
+    button.addEventListener("click", () => movePanelCard(button.dataset.panelId, button.dataset.panelMove));
+  });
+  document.querySelectorAll("[data-panel-open-button]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const region = button.dataset.panelOpenButton;
+      const panelId = document.querySelector(`[data-panel-open-region="${region}"]`)?.value;
+      if (panelId) openPanelCard(panelId, region);
+    });
+  });
+  document.querySelectorAll("[data-provider-toggle]").forEach((button) => {
+    button.addEventListener("click", () =>
+      updateServiceProvider(button.dataset.providerToggle, { enabled: button.dataset.providerEnabled === "true" }),
+    );
+  });
+  document.querySelectorAll("[data-provider-priority-save]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const providerId = button.dataset.providerPrioritySave;
+      const value = Number.parseInt(document.querySelector(`[data-provider-priority="${providerId}"]`)?.value || "", 10);
+      if (Number.isFinite(value)) updateServiceProvider(providerId, { priority: value });
+    });
+  });
+  document.querySelectorAll("[data-online-action]").forEach((button) => {
+    button.addEventListener("click", () => runOnlineProviderAction(button.dataset.onlineAction));
+  });
+  document.querySelectorAll("[data-map-layer]").forEach((control) => {
+    control.addEventListener("change", () => toggleMapLayer(control.dataset.mapLayer, control.checked));
+  });
+  byId("map-refresh-button")?.addEventListener("click", () => refreshMapState().then(render));
+
+  document.querySelectorAll("[data-peer-id]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.selectedPeerId = button.dataset.peerId;
+      render();
+    });
+  });
+  const start = byId("sync-start-discovery");
+  if (start) {
+    start.addEventListener("click", startDiscovery);
+    byId("sync-stop-discovery").addEventListener("click", stopDiscovery);
+    byId("sync-scan-network").addEventListener("click", scanNetwork);
+    byId("sync-refresh-peers").addEventListener("click", refreshPeers);
+    byId("sync-add-peer").addEventListener("click", addManualPeer);
+    byId("sync-handshake").addEventListener("click", handshakeSelectedPeer);
+    byId("sync-preview-pull").addEventListener("click", previewPullSelectedPeer);
+    byId("sync-pull-events").addEventListener("click", pullSelectedPeer);
+    byId("sync-issue-pairing").addEventListener("click", issueLanPairingCode);
+    byId("sync-trust-peer").addEventListener("click", trustSelectedPeer);
+    byId("sync-generate-auth-code")?.addEventListener("click", generateSelectedPeerAuthCode);
+    byId("sync-rotate-auth").addEventListener("click", rotateSelectedPeerAuth);
+    byId("sync-revoke-peer").addEventListener("click", revokeSelectedPeer);
+    byId("sync-recover-queue").addEventListener("click", recoverOfflineQueue);
+    byId("sync-copy-identity").addEventListener("click", copyLocalSyncIdentity);
+    byId("cloud-connect").addEventListener("click", connectCloudSyncFromPrompt);
+    byId("cloud-push").addEventListener("click", pushCloudEvents);
+    byId("cloud-preview").addEventListener("click", previewCloudPull);
+    byId("cloud-pull").addEventListener("click", pullCloudEvents);
+  }
+  bindSearchControls();
+  bindUploadControls();
+}
+
+function closePanelCard(panelId) {
+  const layout = workspaceLayoutState();
+  layout.hidden = Array.from(new Set([...(layout.hidden || []), panelId]));
+  savePanelLayouts();
+  render();
+}
+
+function openPanelCard(panelId, region) {
+  const layout = workspaceLayoutState();
+  layout.hidden = (layout.hidden || []).filter((hiddenPanelId) => hiddenPanelId !== panelId);
+  movePanelPlacement(layout, panelId, region);
+  savePanelLayouts();
+  render();
+}
+
+function movePanelCard(panelId, region) {
+  const layout = workspaceLayoutState();
+  layout.hidden = (layout.hidden || []).filter((hiddenPanelId) => hiddenPanelId !== panelId);
+  movePanelPlacement(layout, panelId, region);
+  savePanelLayouts();
+  render();
+}
+
+function movePanelPlacement(layout, panelId, region) {
+  const placements = layout.placements || [];
+  const maxOrder = placements
+    .filter((placement) => placement.region === region)
+    .reduce((max, placement) => Math.max(max, placement.order || 0), 0);
+  const existing = placements.find((placement) => placement.panel_id === panelId);
+  if (existing) {
+    existing.region = region;
+    existing.order = maxOrder + 10;
+  } else {
+    placements.push({ panel_id: panelId, region, order: maxOrder + 10 });
+  }
+  layout.placements = placements;
+}
+
+async function updateServiceProvider(providerId, patch) {
+  const response = await fetch("/api/services/provider/update", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ provider_id: providerId, ...patch }),
+  });
+  const result = await response.json();
+  if (response.ok) {
+    state.serviceProviders = result;
+  } else {
+    state.importSummary = result;
+  }
+  await refreshRuntimeEvents();
+  render();
+}
+
+async function runOnlineProviderAction(action) {
+  const messages = {
+    "dx-cluster-connect": "DX Cluster bounded session marked for connect/status refresh.",
+    "dx-cluster-read": "DX Cluster read-once status refreshed.",
+    "dx-cluster-disconnect": "DX Cluster bounded session marked disconnected.",
+    "dx-cluster-status": "DX Cluster status refreshed.",
+    "pota-fetch": "POTA spot feed refreshed.",
+    "sota-status": "SOTAWatch remains fixture/status only pending API approval.",
+  };
+  state.importSummary = {
+    ok: true,
+    provider_action: action,
+    message: messages[action] || "Provider status refreshed.",
+    credential_values_redacted: true,
+  };
+  await refreshOnlineServices();
+  render();
+}
+
+function updateMonitorFilter(key, value) {
+  state.monitorFilters[key] = value;
+  refreshRuntimeEvents();
+}
+
+function toggleRuntimeStream() {
+  state.streamPaused = !state.streamPaused;
+  render();
+}
+
+async function refreshRuntimeEvents() {
+  if (state.streamPaused) return;
+  const payload = await fetch(`/api/runtime-events?${runtimeQuery()}`).then((response) => response.json());
+  state.runtimeEvents = payload.runtime_events;
+  state.runtimeStatus = payload.runtime_status;
+  state.busConnected = payload.runtime_status.connected;
+  if (!isLoggerFormFocused()) render();
+}
+
+function startRuntimeEventPolling() {
+  refreshRuntimeEvents();
+  setInterval(refreshRuntimeEvents, 2000);
+}
+
+function runtimeQuery() {
+  const params = new URLSearchParams();
+  Object.entries(state.monitorFilters).forEach(([key, value]) => {
+    if (value) params.set(key, value);
+  });
+  return params.toString();
+}
+
+function copySelectedRuntimeEvent() {
+  const event = state.runtimeEvents.find((candidate) => candidate.event_id === state.selectedEventId) || state.runtimeEvents[0];
+  if (!event) return;
+  navigator.clipboard?.writeText(JSON.stringify(event, null, 2));
+}
+
+function copyLatestError() {
+  const event = state.runtimeEvents.find((candidate) => candidate.severity === "error" || candidate.error);
+  if (event) navigator.clipboard?.writeText(JSON.stringify(event, null, 2));
+}
+
+async function exportVisibleRuntimeEvents() {
+  const response = await fetch(`/api/runtime-events/export?${runtimeQuery()}`);
+  const blob = await response.blob();
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = "runtime-events.jsonl";
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
+function renderRigControl() {
+  const status = state.rigStatus;
+  if (!status) return `<p class="muted">Rig state loading.</p>`;
+  const device = status.devices?.[0] || {};
+  const rig = status.active_state || {};
+  return `<div class="qso-form">
+    <label>Provider
+      <select class="placeholder-control" aria-label="Rig provider" disabled>
+        <option selected>MockRigProvider</option>
+        <option>HamlibProviderStub</option>
+      </select>
+    </label>
+    <p><strong>${device.display_name || "Mock HF Rig"}</strong><br /><small>${device.provider || "mock"} / ${device.connection_type || "mock"}</small></p>
+    <p>Status: ${device.connection_status || "disconnected"}</p>
+    <p>Frequency: ${formatKhz(rig.frequency_hz) || "unknown"} kHz</p>
+    <p>Band / Mode: ${rig.band || "unknown"} / ${rig.mode || "unknown"} ${rig.submode || ""}</p>
+    <p>Split: ${rig.split_enabled ? "on" : "off"} / PTT: ${rig.ptt ? "on" : "off"}</p>
+    <p>Last update: ${rig.timestamp ? new Date(rig.timestamp).toLocaleTimeString() : "never"}</p>
+    ${device.error ? `<p class="event-error">${device.error}</p>` : ""}
+    <div class="monitor-actions">
+      <button id="rig-connect-button" class="toolbar-button" type="button">Connect</button>
+      <button id="rig-disconnect-button" class="toolbar-button" type="button">Disconnect</button>
+      <button id="rig-refresh-button" class="toolbar-button" type="button">Refresh</button>
+      <button id="rig-use-button" class="toolbar-button" type="button" ${status.autofill_suggestion ? "" : "disabled"}>Use In Logger</button>
+    </div>
+    <label>Mock Frequency kHz
+      <input id="rig-mock-frequency" class="placeholder-control" inputmode="decimal" value="${formatKhz(rig.frequency_hz) || 14250}" />
+    </label>
+    <label>Mock Mode
+      <input id="rig-mock-mode" class="placeholder-control" value="${rig.mode || "SSB"}" />
+    </label>
+    <label>Mock PTT <input id="rig-mock-ptt" type="checkbox" ${rig.ptt ? "checked" : ""} /></label>
+    <button id="rig-mock-apply-button" class="toolbar-button" type="button">Apply Mock State</button>
+    <p class="muted">Hamlib is represented by a build-safe stub for now; no radio hardware is required.</p>
+  </div>`;
+}
+
+function renderCallsignEntry() {
+  const draft = state.qsoDraft || {};
+  const mode = draft.mode || state.acceptedRigFields?.mode || "";
+  const frequency = draft.frequency_khz || formatKhz(state.acceptedRigFields?.frequency_hz);
+  const band = draft.band || state.acceptedRigFields?.band || "";
+  return `<form id="qso-create-form" class="qso-form">
+      ${renderStationSummary()}
+      <label>Contacted callsign
+        <input id="callsign-entry-input" name="contacted_callsign" class="placeholder-control" aria-label="Contacted callsign" placeholder="K1ABC" value="${escapeHtml(draft.contacted_callsign || "")}" required />
+      </label>
+      <p id="duplicate-warning" class="event-error" ${state.duplicateWarning ? "" : "hidden"}>${state.duplicateWarning || ""}</p>
+      <div class="monitor-actions">
+        <button id="lookup-callsign-button" class="toolbar-button" type="button">Lookup</button>
+        <button id="accept-lookup-button" class="toolbar-button" type="button" ${state.lookupSuggestion ? "" : "disabled"}>Accept Suggestions</button>
+      </div>
+      ${renderLookupSuggestion()}
+      <label>Mode
+        <input name="mode" class="placeholder-control" aria-label="Mode" placeholder="SSB" value="${escapeHtml(mode)}" required />
+      </label>
+      <label>Frequency kHz
+        <input name="frequency_khz" class="placeholder-control" aria-label="Frequency kHz" placeholder="14250" inputmode="decimal" value="${escapeHtml(frequency)}" />
+      </label>
+      <label>Band
+        <input name="band" class="placeholder-control" aria-label="Band" placeholder="20m" value="${escapeHtml(band)}" />
+      </label>
+      <div class="monitor-actions">
+        <button id="refresh-rig-button" class="toolbar-button" type="button">Refresh Rig</button>
+        <button id="use-rig-button" class="toolbar-button" type="button" ${state.rigStatus?.autofill_suggestion ? "" : "disabled"}>Use Rig Frequency/Mode</button>
+      </div>
+      ${renderRigSuggestion()}
+      <label>Notes
+        <input name="notes" class="placeholder-control" aria-label="Notes" placeholder="Optional note" value="${escapeHtml(draft.notes || "")}" />
+      </label>
+      <button class="toolbar-button" type="submit">Submit QSO Proposal</button>
+      ${state.qsoError ? `<p class="event-error">${state.qsoError}</p>` : ""}
+    </form>
+    <p>Submits a proposal to ham-core; the GUI does not write official events directly.</p>`;
+}
+
+function renderActivationSetup() {
+  const active = state.activeActivation;
+  return `<form id="activation-start-form" class="qso-form">
+      <label>Activation Type
+        <select name="activation_type" class="placeholder-control">
+          <option value="pota">POTA</option>
+          <option value="sota">SOTA</option>
+          <option value="portable">Generic Portable</option>
+        </select>
+      </label>
+      <label>Park/Summit Reference
+        <input name="reference" class="placeholder-control" placeholder="US-1234 or W8O/NE-001" required />
+      </label>
+      <label>Station Callsign
+        <input name="station_callsign" class="placeholder-control" value="KE8YGW" required />
+      </label>
+      <label>Operator Callsign
+        <input name="operator_callsign" class="placeholder-control" value="KE8YGW" required />
+      </label>
+      <label>Grid / Location
+        <input name="grid" class="placeholder-control" placeholder="EN91" />
+      </label>
+      <label>Notes
+        <input name="notes" class="placeholder-control" placeholder="Optional activation note" />
+      </label>
+      <button class="toolbar-button" type="submit">Start Activation</button>
+    </form>
+    <div class="monitor-actions">
+      <button id="activation-end-button" class="toolbar-button" type="button" ${active ? "" : "disabled"}>End Current Activation</button>
+    </div>`;
+}
+
+function renderActivationProgress() {
+  const active = state.activeActivation;
+  if (!active) return `<p class="muted">No active activation.</p>`;
+  const started = active.payload.started_at ? new Date(active.payload.started_at) : null;
+  const elapsed = started ? `${Math.max(0, Math.round((Date.now() - started.getTime()) / 60000))} min` : "unknown";
+  const reference = active.payload.park_id || active.payload.summit_id || active.payload.reference || "";
+  return `<div class="sync-summary">
+    <p><strong>${active.payload.activation_type?.toUpperCase() || "Portable"} ${reference}</strong></p>
+    <p>Status: ${active.status}</p>
+    <p>Elapsed: ${elapsed}</p>
+    <p>QSOs: ${active.qso_count} / Unique: ${active.unique_callsign_count}</p>
+    <p>Bands: ${Object.entries(active.band_summary).map(([band, count]) => `${band} ${count}`).join(", ") || "none"}</p>
+    <p>Modes: ${Object.entries(active.mode_summary).map(([mode, count]) => `${mode} ${count}`).join(", ") || "none"}</p>
+  </div>`;
+}
+
+function renderActivationRecentQsos() {
+  const active = state.activeActivation;
+  if (!active) return `<p class="muted">Start an activation to see linked QSOs.</p>`;
+  const qsos = state.qsos.filter((qso) => qso.payload.activation_id === active.activation_id);
+  if (!qsos.length) return `<p class="muted">No QSOs linked to this activation yet.</p>`;
+  return `<div class="qso-list">${qsos
+    .map((qso) => `<article class="qso-row"><strong>${qso.payload.contacted_callsign}</strong><span>${qso.payload.mode || ""} ${qso.payload.band || ""}</span><small>${qso.payload.started_at || ""}</small></article>`)
+    .join("")}</div>`;
+}
+
+function renderPortableLoggerEntry() {
+  const active = state.activeActivation;
+  return `<form id="portable-qso-form" class="qso-form">
+      <p class="muted">${active ? `Logging against ${active.payload.park_id || active.payload.summit_id || active.activation_id}` : "No active activation; QSO will be portable-source only."}</p>
+      <label>Callsign <input id="portable-callsign-input" name="contacted_callsign" class="placeholder-control" required /></label>
+      <div class="monitor-actions">
+        <button id="portable-lookup-button" class="toolbar-button" type="button">Lookup</button>
+        <button id="portable-accept-lookup-button" class="toolbar-button" type="button" ${state.lookupSuggestion ? "" : "disabled"}>Accept Suggestions</button>
+      </div>
+      ${renderLookupSuggestion()}
+      <label>Mode <input name="mode" class="placeholder-control" value="${state.acceptedRigFields?.mode || "SSB"}" required /></label>
+      <label>Band <input name="band" class="placeholder-control" placeholder="20m" value="${state.acceptedRigFields?.band || ""}" /></label>
+      <label>Frequency kHz <input name="frequency_khz" class="placeholder-control" inputmode="decimal" value="${formatKhz(state.acceptedRigFields?.frequency_hz)}" /></label>
+      <div class="monitor-actions">
+        <button id="portable-refresh-rig-button" class="toolbar-button" type="button">Refresh Rig</button>
+        <button id="portable-use-rig-button" class="toolbar-button" type="button" ${state.rigStatus?.autofill_suggestion ? "" : "disabled"}>Use Rig Frequency/Mode</button>
+      </div>
+      ${renderRigSuggestion()}
+      <label>Notes <input name="notes" class="placeholder-control" /></label>
+      <button class="toolbar-button" type="submit">Submit Portable QSO</button>
+    </form>`;
+}
+
+function renderLookupSuggestion() {
+  const suggestion = state.lookupSuggestion;
+  if (!suggestion) return `<p class="muted">Lookup suggestions will appear here and are not written until accepted.</p>`;
+  const fields = suggestion.suggested_fields || {};
+  return `<div class="sync-summary">
+    <p><strong>${suggestion.normalized_callsign}</strong> from ${suggestion.provider} (${Math.round((suggestion.confidence || 0) * 100)}%)</p>
+    <p>${fields.name || ""} ${fields.qth || ""}</p>
+    <p>${fields.grid || ""} ${fields.country || ""} ${fields.dxcc ? `DXCC ${fields.dxcc}` : ""}</p>
+  </div>`;
+}
+
+function renderRigSuggestion() {
+  const suggestion = state.rigStatus?.autofill_suggestion;
+  if (!suggestion) return `<p class="muted">Connect or refresh a rig to suggest frequency, band, and mode.</p>`;
+  return `<div class="sync-summary">
+    <p><strong>Rig suggestion</strong> from ${suggestion.source}</p>
+    <p>${formatKhz(suggestion.frequency_hz) || "unknown"} kHz / ${suggestion.band || "unknown"} / ${suggestion.mode || "unknown"} ${suggestion.submode || ""}</p>
+    <p class="muted">${state.acceptedRigFields ? "Accepted into this form. Submit to create an official QSO proposal." : "Advisory only until accepted."}</p>
+  </div>`;
+}
+
+function renderStationSummary() {
+  const profile = activeStationProfile();
+  const config = activeStationConfiguration();
+  if (!profile) return `<p class="muted">No station profile configured.</p>`;
+  return `<div class="sync-summary">
+    <p><strong>${profile.display_name}</strong></p>
+    <p>${profile.station_callsign} ${profile.operator_callsign ? `/ ${profile.operator_callsign}` : ""}</p>
+    <p>${profile.default_grid || ""} ${profile.default_qth || ""}</p>
+    <p>${config ? `Config: ${config.name}` : "No configuration selected"}</p>
+    <div class="monitor-actions">
+      <button class="toolbar-button" type="button" onclick="openScreen('station-profiles')">Profiles</button>
+      <button class="toolbar-button" type="button" onclick="openScreen('equipment')">Equipment</button>
+    </div>
+  </div>`;
+}
+
+function renderStationProfiles() {
+  const profiles = state.station?.profiles || [];
+  if (!profiles.length) return `<p class="muted">No station profiles yet.</p>`;
+  return `<div class="qso-list">${profiles
+    .map((profile) => `<article class="qso-row">
+      <strong>${profile.display_name}</strong>
+      <span>${profile.station_callsign} ${profile.operator_callsign ? `/ ${profile.operator_callsign}` : ""}</span>
+      <small>${profile.default_grid || ""} ${profile.active ? "Active" : ""}</small>
+      <button class="toolbar-button" type="button" onclick="selectStationProfile('${profile.station_profile_id}')">Use Profile</button>
+    </article>`)
+    .join("")}</div>`;
+}
+
+function renderEquipmentManager() {
+  const equipment = state.station?.equipment || [];
+  if (!equipment.length) return `<p class="muted">No equipment records yet.</p>`;
+  return `<div class="qso-list">${equipment
+    .map((item) => `<article class="qso-row">
+      <strong>${item.display_name}</strong>
+      <span>${item.equipment_type} ${item.manufacturer || ""} ${item.model || ""}</span>
+      <small>${item.status}</small>
+    </article>`)
+    .join("")}</div>`;
+}
+
+function renderAwardsSummary() {
+  const progress = state.awards?.progress || [];
+  if (!progress.length) return `<p class="muted">Award progress will appear after QSOs are logged.</p>`;
+  return `<div class="plugin-grid">${progress
+    .map((award) => `<article class="plugin-card">
+      <h3>${award.name}</h3>
+      <p><strong>${award.credit_count}</strong> credits</p>
+      <p class="muted">${award.confirmed_credit_count} confirmed</p>
+      <details><summary>Credits</summary>
+        <div class="stack">${(award.credits || []).slice(0, 20).map((credit) => `<span class="pill">${credit.display_name}</span>`).join("")}</div>
+      </details>
+    </article>`)
+    .join("")}</div>`;
+}
+
+function renderGlobalSearch() {
+  const rows = state.search?.results || [];
+  return `<div class="stack">
+    <form id="global-search-form" class="qso-form">
+      <label>Search
+        <input id="global-search-input" class="placeholder-control" name="query" value="${state.search?.query || ""}" placeholder="callsign:K1ABC band:20m portable" />
+      </label>
+      <button class="toolbar-button" type="submit">Search</button>
+    </form>
+    <div class="qso-list">${rows
+      .map((result) => `<article class="qso-row">
+        <strong>${result.payload.contacted_callsign || result.qso_id}</strong>
+        <span>${result.payload.mode || ""} ${result.payload.band || ""} ${result.deleted ? "(deleted)" : ""}</span>
+        <small>${(result.matched_fields || []).join(", ")}</small>
+      </article>`)
+      .join("") || `<p class="muted">No search results.</p>`}</div>
+  </div>`;
+}
+
+function renderUploads() {
+  const queue = state.uploads || { targets: [], jobs: [] };
+  return `<div class="stack">
+    <div class="monitor-actions">
+      <button class="toolbar-button" type="button" data-upload-all>Queue All Not Uploaded</button>
+      <button class="toolbar-button" type="button" onclick="exportAdifFromPrompt()">Export Upload ADIF</button>
+    </div>
+    <h4>Targets</h4>
+    <div class="qso-list">${(queue.targets || [])
+      .map((target) => `<article class="qso-row"><strong>${target.display_name}</strong><span>${target.provider_id}</span><small>${target.enabled ? "Enabled" : "Disabled"}</small></article>`)
+      .join("")}</div>
+    <h4>Jobs</h4>
+    <div class="qso-list">${(queue.jobs || [])
+      .map((job) => `<article class="qso-row"><strong>${job.target_id}</strong><span>${job.status}</span><small>${job.qso_ids.length} QSOs</small></article>`)
+      .join("") || `<p class="muted">No upload jobs queued.</p>`}</div>
+  </div>`;
+}
+
+function renderNetSessionControl() {
+  const active = state.netControl?.active_session;
+  return `<div class="stack">
+    <form id="net-session-start-form" class="qso-form">
+      <label>Net Name <input name="net_name" class="placeholder-control" value="ARES Weekly Net" required /></label>
+      <label>Station Callsign <input name="station_callsign" class="placeholder-control" value="${activeStationProfile()?.station_callsign || "KE8YGW"}" required /></label>
+      <label>Net Control Operator <input name="net_control_operator_id" class="placeholder-control" value="${activeStationProfile()?.operator_callsign || activeStationProfile()?.station_callsign || "KE8YGW"}" required /></label>
+      <label>Frequency kHz <input name="frequency_khz" class="placeholder-control" inputmode="decimal" value="${formatKhz(state.acceptedRigFields?.frequency_hz)}" /></label>
+      <label>Band <input name="band" class="placeholder-control" value="${state.acceptedRigFields?.band || ""}" /></label>
+      <label>Mode <input name="mode" class="placeholder-control" value="${state.acceptedRigFields?.mode || "FM"}" /></label>
+      <label>Notes <input name="notes" class="placeholder-control" /></label>
+      <button class="toolbar-button" type="submit" ${active ? "disabled" : ""}>Start Net</button>
+    </form>
+    <div class="sync-summary">
+      <p><strong>${active?.payload?.net_name || "No active net"}</strong></p>
+      <p>Status: ${active?.status || "inactive"} / Check-ins: ${active?.checkin_count || 0} / Traffic: ${active?.traffic_count || 0}</p>
+      <button id="net-end-button" class="toolbar-button" type="button" ${active ? "" : "disabled"}>End Net</button>
+    </div>
+  </div>`;
+}
+
+function renderNetCheckinEntry() {
+  const active = state.netControl?.active_session;
+  return `<form id="net-checkin-form" class="qso-form">
+    <p class="muted">${active ? `Checking into ${active.payload.net_name}` : "Start a net before accepting check-ins."}</p>
+    <label>Callsign <input id="net-checkin-callsign" name="callsign" class="placeholder-control" placeholder="K1ABC" /></label>
+    <label>Name <input name="operator_name" class="placeholder-control" /></label>
+    <label>Location <input name="location" class="placeholder-control" /></label>
+    <label>Grid <input name="grid" class="placeholder-control" /></label>
+    <label>Tactical Callsign <input name="tactical_callsign" class="placeholder-control" /></label>
+    <label>Status
+      <select name="status" class="placeholder-control">
+        <option value="checked_in">Checked In</option>
+        <option value="late">Late</option>
+        <option value="excused">Excused</option>
+        <option value="left">Left</option>
+      </select>
+    </label>
+    <label>Traffic
+      <select name="traffic" class="placeholder-control">
+        <option value="none">None</option>
+        <option value="listed">Listed</option>
+        <option value="priority">Priority</option>
+        <option value="emergency">Emergency</option>
+      </select>
+    </label>
+    <label>Notes <input name="notes" class="placeholder-control" /></label>
+    <button class="toolbar-button" type="submit" ${active ? "" : "disabled"}>Submit Check-In</button>
+  </form>`;
+}
+
+function renderNetRoster() {
+  const checkins = state.netControl?.checkins || [];
+  const warnings = state.netControl?.active_session?.duplicate_warnings || [];
+  return `<div class="stack">
+    ${warnings.map((warning) => `<p class="event-error">${warning}</p>`).join("")}
+    <div class="qso-list">${checkins
+      .map((checkin) => `<article class="qso-row">
+        <strong>${checkin.payload.callsign || checkin.payload.tactical_callsign || "Tactical only"}</strong>
+        <span>${checkin.payload.operator_name || ""} ${checkin.payload.location || ""}</span>
+        <small>${checkin.status} / ${checkin.traffic}</small>
+        <button class="toolbar-button" type="button" data-net-checkin-delete="${checkin.checkin_id}">Delete</button>
+      </article>`)
+      .join("") || `<p class="muted">No check-ins yet.</p>`}</div>
+  </div>`;
+}
+
+function renderNetTrafficQueue() {
+  const active = state.netControl?.active_session;
+  const traffic = state.netControl?.traffic || [];
+  return `<div class="stack">
+    <form id="net-traffic-form" class="qso-form">
+      <label>From <input name="from_callsign" class="placeholder-control" /></label>
+      <label>To <input name="to_callsign" class="placeholder-control" /></label>
+      <label>Precedence
+        <select name="precedence" class="placeholder-control">
+          <option value="routine">Routine</option>
+          <option value="priority">Priority</option>
+          <option value="emergency">Emergency</option>
+        </select>
+      </label>
+      <label>Summary <input name="summary" class="placeholder-control" required /></label>
+      <button class="toolbar-button" type="submit" ${active ? "" : "disabled"}>Add Traffic</button>
+    </form>
+    <div class="qso-list">${traffic
+      .map((item) => `<article class="qso-row ${item.precedence === "emergency" ? "event-error" : ""}">
+        <strong>${item.precedence}</strong>
+        <span>${item.summary}</span>
+        <small>${item.status || "listed"}</small>
+      </article>`)
+      .join("") || `<p class="muted">No listed traffic.</p>`}</div>
+  </div>`;
+}
+
+function renderNetReport() {
+  const active = state.netControl?.active_session;
+  return `<div class="stack">
+    <div class="monitor-actions">
+      <button id="net-report-export" class="toolbar-button" type="button" ${active ? "" : "disabled"}>Export Report Event</button>
+    </div>
+    <pre class="path-block">${state.netControl?.report_preview || "Start a net to build a report."}</pre>
+  </div>`;
+}
+
+function renderRecentQsos() {
+  if (!state.qsos.length) {
+    return `<p class="muted">No visible QSOs yet. Create one from Callsign Entry.</p>`;
+  }
+  return `<div class="qso-list">
+    ${state.qsos
+      .map((qso) => {
+        const payload = qso.payload;
+        const activation = state.activations.find((activation) => activation.activation_id === payload.activation_id);
+        const activationLabel = activation ? activation.payload.park_id || activation.payload.summit_id || activation.payload.reference || "Activation" : "";
+        return `<article class="qso-row">
+          <strong>${payload.contacted_callsign || "Unknown"}</strong>
+          <span>${payload.mode || ""} ${payload.band || ""} ${payload.frequency_hz ? `${formatKhz(payload.frequency_hz)} kHz` : ""} ${activationLabel ? `<span class="pill">${activationLabel}</span>` : ""}</span>
+          <small>${payload.started_at || ""}</small>
+          <small>Notes: ${qso.note_history.length}</small>
+          <div class="monitor-actions">
+            ${
+              qso.deleted
+                ? `<button class="toolbar-button" type="button" data-qso-action="restore" data-qso-id="${qso.qso_id}">Restore</button>`
+                : `<button class="toolbar-button" type="button" data-qso-action="delete" data-qso-id="${qso.qso_id}">Delete</button>
+                   <button class="toolbar-button" type="button" data-qso-action="note" data-qso-id="${qso.qso_id}">Add Note</button>`
+            }
+          </div>
+        </article>`;
+      })
+      .join("")}
+  </div>`;
+}
+
+function renderInteractiveMap() {
+  const map = state.mapState;
+  if (!map) return `<p class="muted">Map state is loading.</p>`;
+  const qsoMarkers = (map.qso_objects || []).filter((object) => object.marker);
+  const paths = (map.qso_objects || []).filter((object) => object.path);
+  const activeLayers = (map.layers?.layers || []).filter((layer) => layer.enabled);
+  return `<div class="map-canvas" role="img" aria-label="Operator map preview">
+      <div class="map-grid-lines"></div>
+      <div class="map-hud">
+        <strong>${map.status?.grid || "Grid unknown"}</strong>
+        <span>${formatCoordinate(map.status?.coordinates)}</span>
+        <span>${qsoMarkers.length} QSO markers / ${paths.length} paths</span>
+      </div>
+      <div class="map-marker-cloud">
+        ${qsoMarkers
+          .slice(0, 12)
+          .map((object, index) => `<span class="map-dot" style="left:${12 + ((index * 17) % 76)}%;top:${18 + ((index * 29) % 64)}%" title="${object.marker.title}"></span>`)
+          .join("")}
+        ${(map.station_markers || [])
+          .slice(0, 6)
+          .map((marker, index) => `<span class="map-dot station-dot" style="left:${45 + index * 5}%;top:${42 + index * 4}%" title="${marker.title}"></span>`)
+          .join("")}
+      </div>
+    </div>
+    <div class="metric-grid">
+      <span>Distance ${map.status?.distance || "n/a"}</span>
+      <span>Bearing ${map.status?.bearing || "n/a"}</span>
+      <span>Zoom ${map.status?.zoom || "n/a"}</span>
+      <span>Layer ${map.status?.selected_layer || "none"}</span>
+    </div>
+    <p class="muted">Enabled layers: ${activeLayers.map((layer) => layer.title).join(", ") || "none"}</p>
+    <button id="map-refresh-button" class="toolbar-button" type="button">Refresh Map State</button>`;
+}
+
+function renderMapLayers() {
+  const layers = state.mapState?.layers?.layers || [];
+  if (!layers.length) return `<p class="muted">No map layers are registered.</p>`;
+  return `<div class="stack">${layers
+    .sort((left, right) => left.order - right.order)
+    .map((layer) => `<label class="check-row">
+      <input type="checkbox" data-map-layer="${layer.layer_id}" ${layer.enabled ? "checked" : ""} />
+      <span><strong>${layer.title}</strong><br /><small>${layer.kind} / ${layer.source_plugin_id}</small></span>
+    </label>`)
+    .join("")}</div>`;
+}
+
+function renderMapSelectedObject() {
+  const selected = (state.mapState?.qso_objects || []).find((object) => object.marker) || null;
+  if (!selected) return `<p class="muted">Select a mapped QSO or station to inspect it.</p>`;
+  const marker = selected.marker;
+  return `<div class="sync-summary">
+    <p><strong>${marker.title}</strong></p>
+    <p>${marker.description}</p>
+    <p>Grid: ${selected.grid || "unknown"} / Entity: ${selected.entity || "unknown"}</p>
+    <p>Distance: ${selected.distance ? `${selected.distance.kilometers.toFixed(1)} km` : "n/a"}</p>
+    <p>Bearing: ${selected.bearing ? `${selected.bearing.initial_degrees.toFixed(0)} deg` : "n/a"}</p>
+    <p>Layer: ${marker.layer_id}</p>
+  </div>`;
+}
+
+function renderMapSearch() {
+  const providers = (state.mapState?.providers || []).filter((provider) => provider.metadata?.service_type === "geocoding");
+  return `<label>Map Search
+      <input class="placeholder-control" type="search" placeholder="Grid, callsign, park, summit, or place" aria-label="Map search" />
+    </label>
+    <p class="muted">Geocoding providers: ${providers.map((provider) => provider.metadata.display_name).join(", ") || "none"}</p>`;
+}
+
+function renderMapFilters() {
+  return `<div class="filter-grid">
+    <label>Band<input class="placeholder-control" placeholder="20m" /></label>
+    <label>Mode<input class="placeholder-control" placeholder="FT8" /></label>
+    <label>Date<input class="placeholder-control" placeholder="2026-07-01..2026-07-06" /></label>
+    <label>Entity<input class="placeholder-control" placeholder="Japan" /></label>
+  </div>
+  <p class="muted">Filters are modeled for QSO, station, activation, and future APRS/satellite overlays.</p>`;
+}
+
+function renderPropagation() {
+  const forecast = state.mapState?.propagation;
+  if (!forecast) return `<p class="muted">Propagation data is unavailable.</p>`;
+  return `<div class="metric-grid">
+      <span>SFI ${forecast.solar?.sfi ?? "n/a"}</span>
+      <span>A ${forecast.solar?.a_index ?? "n/a"}</span>
+      <span>K ${forecast.solar?.k_index ?? "n/a"}</span>
+      <span>X-ray ${forecast.solar?.xray_class || "n/a"}</span>
+    </div>
+    <div class="qso-list">${(forecast.bands || [])
+      .map((band) => `<article class="qso-row"><strong>${band.band}</strong><span>${band.day_rating} day / ${band.night_rating} night</span><small>${band.notes || ""}</small></article>`)
+      .join("")}</div>`;
+}
+
+function renderWeather() {
+  const weather = state.mapState?.weather;
+  if (!weather) return `<p class="muted">Weather data is unavailable.</p>`;
+  return `<div class="metric-grid">
+      <span>${weather.temperature_c ?? "n/a"} C</span>
+      <span>${weather.wind?.speed_kph ?? "n/a"} kph ${weather.wind?.direction_degrees ?? ""} deg</span>
+      <span>${weather.conditions || "unknown"}</span>
+      <span>${weather.provider_id}</span>
+    </div>
+    <p class="muted">Lightning and radar overlays are placeholders for future providers.</p>`;
+}
+
+function renderOnlineAccounts() {
+  const credentials = state.onlineServices?.dashboard?.credentials || [];
+  if (!credentials.length) return `<p class="muted">No credential metadata is configured. Add credentials from Credential Manager before enabling real network providers.</p>`;
+  return `<div class="qso-list">${credentials
+    .map((credential) => `<article class="qso-row">
+      <strong>${credential.label}</strong>
+      <span>${credential.provider_id} / ${credential.service_type}</span>
+      <small>Status: ${credential.status}</small>
+    </article>`)
+    .join("")}</div>`;
+}
+
+function renderOnlineProviders() {
+  const providers = state.onlineServices?.dashboard?.providers || [];
+  const apiStatus = state.onlineServices?.api_status || {};
+  return `<div class="qso-list">${providers
+    .map((provider) => {
+      const runtime = apiStatus[provider.provider_id] || apiStatus[provider.provider_id?.replace("-", "_")] || "fake_ready";
+      const limitation = provider.provider_id === "lotw"
+        ? "LoTW live upload remains deferred until a TQSL/certificate-signing flow is modeled."
+        : provider.provider_id === "sotawatch"
+          ? "SOTAWatch live access remains deferred pending explicit API approval and terms handling."
+          : "";
+      return `<article class="qso-row">
+      <strong>${provider.display_name}</strong>
+      <span>${provider.provider_id} / ${provider.service_type}</span>
+      <small>${provider.requires_network_access ? "Network" : "Offline"} / priority ${provider.priority} / ${runtime}</small>
+      <small>Capabilities: ${(provider.capabilities || []).join(", ")}</small>
+      ${limitation ? `<small class="event-error">${limitation}</small>` : ""}
+    </article>`;
+    })
+    .join("") || `<p class="muted">No online providers registered.</p>`}</div>`;
+}
+
+function renderOnlineUploadQueue() {
+  const stats = state.onlineServices?.dashboard?.upload_stats || {};
+  const jobs = state.uploads?.jobs || [];
+  return `<div class="metric-grid">
+      <span>Queued ${stats.queued || 0}</span>
+      <span>Running ${stats.running || 0}</span>
+      <span>Done ${stats.completed || 0}</span>
+      <span>Failed ${stats.failed || 0}</span>
+    </div>
+    <div class="qso-list">${jobs
+      .map((job) => `<article class="qso-row"><strong>${job.target_id}</strong><span>${job.status}</span><small>${job.qso_ids?.length || 0} QSOs</small></article>`)
+      .join("") || `<p class="muted">No upload jobs queued.</p>`}</div>`;
+}
+
+function renderOnlineDownloads() {
+  const confirmations = state.onlineServices?.confirmation_status?.confirmations || [];
+  return `<p>${confirmations.length} confirmation records in the latest sample download.</p>
+    <p class="muted">LoTW, QRZ, eQSL, and Club Log confirmation downloads append official status events after provider verification.</p>`;
+}
+
+function renderConfirmationStatus() {
+  const confirmation = state.onlineServices?.confirmation_status;
+  return `<div class="sync-summary">
+    <p><strong>${confirmation?.provider_id || "No provider"}</strong></p>
+    <p>Fetched: ${confirmation?.fetched_at ? new Date(confirmation.fetched_at).toLocaleString() : "never"}</p>
+    <p>Accepted: ${confirmation?.confirmations?.length || 0} / Rejected: ${confirmation?.rejected_count || 0}</p>
+  </div>`;
+}
+
+function renderProviderHealth() {
+  const health = state.onlineServices?.dashboard?.health || [];
+  const apiStatus = state.onlineServices?.api_status || {};
+  return `<div class="qso-list">${health
+    .map((item) => `<article class="qso-row">
+      <strong>${item.provider_id}</strong>
+      <span>${item.status}</span>
+      <small>${item.message}</small>
+      <small>Runtime: ${apiStatus[item.provider_id] || "fake/status only"}</small>
+      ${item.last_error_code ? `<small>Error code: ${item.last_error_code}</small>` : ""}
+      ${item.retry_after_seconds ? `<small>Retry in ${item.retry_after_seconds}s</small>` : ""}
+    </article>`)
+    .join("") || `<p class="muted">No provider health records.</p>`}</div>`;
+}
+
+function renderServiceCachePanel() {
+  const count = state.onlineServices?.dashboard?.cache_entries || 0;
+  return `<p>${count} service cache entries.</p>
+    <button class="toolbar-button" type="button" onclick="clearServiceCache()">Clear Service Cache</button>
+    <p class="muted">Provider cache is support data, expires independently, and is not official log data.</p>`;
+}
+
+function renderOnlineAutomation() {
+  const tasks = state.onlineServices?.dashboard?.automation_tasks || [];
+  return `<div class="qso-list">${tasks
+    .map((task) => `<article class="qso-row">
+      <strong>${task.name}</strong>
+      <span>${task.enabled ? "enabled" : "disabled"} / every ${task.interval_seconds}s</span>
+      <small>${task.service_type}</small>
+    </article>`)
+    .join("")}</div>`;
+}
+
+function renderOnlineNotifications() {
+  const notifications = state.onlineServices?.dashboard?.notifications || [];
+  return `<div class="qso-list">${notifications
+    .map((notification) => `<article class="qso-row">
+      <strong>${notification.title}</strong>
+      <span>${notification.message}</span>
+      <small>${notification.severity} / ${new Date(notification.created_at).toLocaleTimeString()}</small>
+    </article>`)
+    .join("") || `<p class="muted">No online service notifications.</p>`}</div>`;
+}
+
+function renderDxCluster() {
+  const spots = state.onlineServices?.spots?.dx_cluster || [];
+  return `<div class="toolbar">
+      <button class="toolbar-button" type="button" data-online-action="dx-cluster-connect">Connect</button>
+      <button class="toolbar-button" type="button" data-online-action="dx-cluster-read">Read</button>
+      <button class="toolbar-button" type="button" data-online-action="dx-cluster-disconnect">Disconnect</button>
+      <button class="toolbar-button" type="button" data-online-action="dx-cluster-status">Status</button>
+    </div>
+    ${renderSpotList(spots, "DX Cluster read-once mode is available; persistent background reconnect is deferred.")}`;
+}
+
+function renderPortableSpots() {
+  const pota = state.onlineServices?.spots?.pota || [];
+  const sota = state.onlineServices?.spots?.sota || [];
+  return `<div class="toolbar">
+      <button class="toolbar-button" type="button" data-online-action="pota-fetch">Fetch POTA</button>
+      <button class="toolbar-button" type="button" data-online-action="sota-status">SOTAWatch Status</button>
+    </div>
+    ${renderSpotList([...pota, ...sota], "POTA fake/live fetch uses the normalized spot model; SOTAWatch remains fixture/status only.")}`;
+}
+
+function renderSpotList(spots, emptyText) {
+  if (!spots.length) return `<p class="muted">${emptyText}</p>`;
+  return `<div class="qso-list">${spots
+    .map((spot) => `<article class="qso-row">
+      <strong>${spot.spotted_callsign}</strong>
+      <span>${formatKhz(spot.frequency_hz)} kHz ${spot.mode || ""} ${spot.reference ? `<span class="pill">${spot.reference}</span>` : ""}</span>
+      <small>${spot.source?.label || spot.source?.provider_id || ""} / ${new Date(spot.spotted_at).toLocaleTimeString()}</small>
+      <div class="monitor-actions">
+        <button class="toolbar-button" type="button" onclick="switchWorkspace('maps')">Map Center</button>
+        <button class="toolbar-button" type="button" onclick="lookupCallsign('${spot.spotted_callsign}')">Lookup</button>
+      </div>
+    </article>`)
+    .join("")}</div>`;
+}
+
+function formatCoordinate(coordinate) {
+  if (!coordinate) return "unknown";
+  const lat = Number(coordinate.latitude).toFixed(3);
+  const lon = Number(coordinate.longitude).toFixed(3);
+  return `${lat}, ${lon}`;
+}
+
+async function refreshMapState() {
+  state.mapState = await fetch("/api/maps/state").then((response) => response.json());
+}
+
+async function refreshOnlineServices() {
+  state.onlineServices = await fetch("/api/online-services").then((response) => response.json());
+}
+
+async function toggleMapLayer(layerId, enabled = null) {
+  const layer = (state.mapState?.layers?.layers || []).find((candidate) => candidate.layer_id === layerId);
+  const nextEnabled = enabled ?? !layer?.enabled;
+  state.mapState = await fetch("/api/maps/layer/toggle", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ layer_id: layerId, enabled: nextEnabled }),
+  }).then((response) => response.json());
+  await refreshRuntimeEvents();
+  render();
+}
+
+async function refreshQsos(includeDeleted = false) {
+  const payload = await fetch(`/api/qsos?include_deleted=${includeDeleted}`).then((response) => response.json());
+  state.qsos = payload.qsos;
+}
+
+async function refreshActivations() {
+  const payload = await fetch("/api/activations").then((response) => response.json());
+  state.activations = payload.activations;
+  state.activeActivation = payload.active_activation;
+}
+
+async function refreshPluginPermissions() {
+  state.permissionState = await fetch("/api/plugins/permissions").then((response) => response.json());
+}
+
+async function refreshStation() {
+  state.station = await fetch("/api/station").then((response) => response.json());
+}
+
+async function refreshAwards() {
+  state.awards = await fetch("/api/awards").then((response) => response.json());
+}
+
+async function refreshUploads() {
+  state.uploads = await fetch("/api/uploads").then((response) => response.json());
+}
+
+async function refreshCredentials() {
+  state.credentials = await fetch("/api/credentials").then((response) => response.json());
+}
+
+async function refreshNetControl() {
+  state.netControl = await fetch("/api/net-control").then((response) => response.json());
+}
+
+function activeStationProfile() {
+  const id = state.station?.active_profile_id;
+  return (state.station?.profiles || []).find((profile) => profile.station_profile_id === id) || null;
+}
+
+function activeStationConfiguration() {
+  const id = state.station?.active_configuration_id;
+  return (state.station?.configurations || []).find((config) => config.configuration_id === id) || null;
+}
+
+async function selectStationProfile(stationProfileId) {
+  await fetch("/api/station/select-profile", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ station_profile_id: stationProfileId }),
+  });
+  await refreshStation();
+  await refreshRuntimeEvents();
+  render();
+}
+
+function switchStationProfileFromPrompt() {
+  const profiles = state.station?.profiles || [];
+  const callsign = window.prompt(`Station profile callsign (${profiles.map((profile) => profile.station_callsign).join(", ")})`);
+  const profile = profiles.find((candidate) => candidate.station_callsign.toLowerCase() === (callsign || "").toLowerCase());
+  if (profile) selectStationProfile(profile.station_profile_id);
+}
+
+function bindSearchControls() {
+  byId("global-search-form")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const query = new FormData(event.currentTarget).get("query")?.toString() || "";
+    await runSearch(query);
+    openScreen("search");
+  });
+}
+
+async function runSearch(query) {
+  state.search.query = query;
+  state.search = await fetch(`/api/search?q=${encodeURIComponent(query)}`).then((response) => response.json());
+  state.search.query = query;
+  await refreshRuntimeEvents();
+}
+
+function runSearchPrompt(prefix = "") {
+  const query = window.prompt("Search QSOs", prefix);
+  if (query == null) return;
+  runSearch(query).then(() => openScreen("search"));
+}
+
+function bindUploadControls() {
+  document.querySelectorAll("[data-upload-all]").forEach((button) => {
+    button.addEventListener("click", queueNotUploadedQsos);
+  });
+}
+
+async function queueNotUploadedQsos() {
+  const target = state.uploads?.targets?.[0]?.target_id;
+  if (!target) return;
+  state.importSummary = await fetch("/api/uploads/queue", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ target_id: target, qso_ids: [], all_not_uploaded: true }),
+  }).then((response) => response.json());
+  await refreshUploads();
+  await refreshRuntimeEvents();
+  openScreen("uploads");
+}
+
+async function submitCredentialCreate(event) {
+  event.preventDefault();
+  const form = new FormData(event.currentTarget);
+  const payload = {
+    provider_id: form.get("provider_id")?.toString() || "",
+    account_id: form.get("account_id")?.toString() || "local-account",
+    service_type: form.get("service_type")?.toString() || "log_upload",
+    label: form.get("label")?.toString() || "Credential",
+    secret: form.get("secret")?.toString() || "",
+    metadata: { source: "gui" },
+  };
+  state.importSummary = await fetch("/api/credentials/create", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  }).then((response) => response.json());
+  await refreshCredentials();
+  await refreshRuntimeEvents();
+  openScreen("credentials");
+}
+
+async function testCredential(credentialId) {
+  state.importSummary = await fetch("/api/credentials/test", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ credential_id: credentialId }),
+  }).then((response) => response.json());
+  await refreshCredentials();
+  await refreshRuntimeEvents();
+  openScreen("credentials");
+}
+
+async function testFirstCredential() {
+  const credentialId = state.credentials?.credentials?.[0]?.credential_id;
+  if (credentialId) await testCredential(credentialId);
+  else openScreen("credentials");
+}
+
+async function revokeCredential(credentialId) {
+  state.importSummary = await fetch("/api/credentials/revoke", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ credential_id: credentialId }),
+  }).then((response) => response.json());
+  await refreshCredentials();
+  await refreshRuntimeEvents();
+  openScreen("credentials");
+}
+
+async function submitNetSessionStart(event) {
+  event.preventDefault();
+  const form = new FormData(event.currentTarget);
+  const payload = {
+    net_name: form.get("net_name")?.toString() || "Net",
+    station_callsign: form.get("station_callsign")?.toString() || "KE8YGW",
+    net_control_operator_id: form.get("net_control_operator_id")?.toString() || "KE8YGW",
+    frequency_hz: khzToHz(form.get("frequency_khz")),
+    band: emptyToNull(form.get("band")),
+    mode: emptyToNull(form.get("mode")),
+    notes: emptyToNull(form.get("notes")),
+  };
+  state.importSummary = await fetch("/api/net/session/start", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  }).then((response) => response.json());
+  await refreshNetControl();
+  await refreshRuntimeEvents();
+  render();
+}
+
+function startNetFromPrompt() {
+  switchWorkspace("net-control");
+  requestAnimationFrame(() => byId("net-session-start-form")?.requestSubmit());
+}
+
+async function endActiveNet() {
+  const sessionId = state.netControl?.active_session?.net_session_id;
+  if (!sessionId) return;
+  state.importSummary = await fetch("/api/net/session/end", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ credential_id: sessionId }),
+  }).then((response) => response.json());
+  await refreshNetControl();
+  await refreshRuntimeEvents();
+  render();
+}
+
+async function submitNetCheckin(event) {
+  event.preventDefault();
+  const active = state.netControl?.active_session;
+  if (!active) return;
+  const form = new FormData(event.currentTarget);
+  const payload = {
+    net_session_id: active.net_session_id,
+    callsign: emptyToNull(form.get("callsign")),
+    operator_name: emptyToNull(form.get("operator_name")),
+    location: emptyToNull(form.get("location")),
+    grid: emptyToNull(form.get("grid")),
+    tactical_callsign: emptyToNull(form.get("tactical_callsign")),
+    status: form.get("status")?.toString() || "checked_in",
+    traffic: form.get("traffic")?.toString() || "none",
+    notes: emptyToNull(form.get("notes")),
+  };
+  state.importSummary = await fetch("/api/net/checkin/create", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  }).then((response) => response.json());
+  await refreshNetControl();
+  await refreshRuntimeEvents();
+  render();
+}
+
+async function addLateCheckinFromPrompt() {
+  const active = state.netControl?.active_session;
+  if (!active) {
+    switchWorkspace("net-control");
+    return;
+  }
+  const callsign = window.prompt("Late check-in callsign");
+  if (!callsign) return;
+  state.importSummary = await fetch("/api/net/checkin/create", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      net_session_id: active.net_session_id,
+      callsign,
+      status: "late",
+      traffic: "none",
+    }),
+  }).then((response) => response.json());
+  await refreshNetControl();
+  await refreshRuntimeEvents();
+  render();
+}
+
+async function deleteNetCheckin(checkinId) {
+  state.importSummary = await fetch("/api/net/checkin/delete", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ credential_id: checkinId }),
+  }).then((response) => response.json());
+  await refreshNetControl();
+  await refreshRuntimeEvents();
+  render();
+}
+
+async function submitNetTraffic(event) {
+  event.preventDefault();
+  const active = state.netControl?.active_session;
+  if (!active) return;
+  const form = new FormData(event.currentTarget);
+  state.importSummary = await fetch("/api/net/traffic/create", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      net_session_id: active.net_session_id,
+      from_callsign: emptyToNull(form.get("from_callsign")),
+      to_callsign: emptyToNull(form.get("to_callsign")),
+      precedence: form.get("precedence")?.toString() || "routine",
+      summary: form.get("summary")?.toString() || "",
+    }),
+  }).then((response) => response.json());
+  await refreshNetControl();
+  await refreshRuntimeEvents();
+  render();
+}
+
+async function exportNetReport() {
+  const sessionId = state.netControl?.active_session?.net_session_id;
+  if (!sessionId) return;
+  state.importSummary = await fetch("/api/net/report/export", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ credential_id: sessionId }),
+  }).then((response) => response.json());
+  await refreshNetControl();
+  await refreshRuntimeEvents();
+  render();
+}
+
+function emptyToNull(value) {
+  const text = value?.toString() || "";
+  return text.trim() ? text : null;
+}
+
+function numberOrNull(value) {
+  const text = value?.toString() || "";
+  if (!text.trim()) return null;
+  const parsed = Number.parseInt(text, 10);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function updateQsoDraftFromForm() {
+  const form = byId("qso-create-form");
+  if (!form) return;
+  const data = new FormData(form);
+  state.qsoDraft = {
+    contacted_callsign: data.get("contacted_callsign")?.toString() || "",
+    mode: data.get("mode")?.toString() || "",
+    frequency_khz: data.get("frequency_khz")?.toString() || "",
+    band: data.get("band")?.toString() || "",
+    notes: data.get("notes")?.toString() || "",
+  };
+}
+
+function clearQsoDraft() {
+  state.qsoDraft = {
+    contacted_callsign: "",
+    mode: "",
+    frequency_khz: "",
+    band: "",
+    notes: "",
+  };
+}
+
+function isLoggerFormFocused() {
+  const active = document.activeElement;
+  if (!active) return false;
+  return ["qso-create-form", "portable-qso-form"].some((formId) => {
+    const form = byId(formId);
+    return Boolean(form && form.contains(active));
+  });
+}
+
+function clearQsoForm() {
+  byId("qso-create-form")?.reset();
+  clearQsoDraft();
+  state.acceptedLookupFields = null;
+  state.acceptedRigFields = null;
+  state.lookupSuggestion = null;
+  state.duplicateWarning = "";
+  state.qsoError = "";
+  render();
+}
+
+async function updatePluginPermission(action, pluginId, permissionId) {
+  const endpoint = `/api/plugins/permissions/${action}`;
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      plugin_id: pluginId,
+      permission_id: permissionId,
+      reason: "Local admin MVP decision",
+    }),
+  });
+  const result = await response.json();
+  if (response.ok && result.permissions) state.permissionState = result.permissions;
+  state.importSummary = result;
+  await refreshRuntimeEvents();
+  openScreen("plugins");
+}
+
+async function approveLowRiskPermissions(pluginId) {
+  const plugin = state.plugins.find((candidate) => candidate.plugin_id === pluginId);
+  if (!plugin) return;
+  for (const permissionId of plugin.requested_permissions || []) {
+    const metadata = permissionMetadata(permissionId);
+    if (metadata?.risk_level === "low") {
+      await fetch("/api/plugins/permissions/grant", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          plugin_id: pluginId,
+          permission_id: permissionId,
+          reason: "Approved all low-risk permissions",
+        }),
+      });
+    }
+  }
+  await refreshPluginPermissions();
+  await refreshRuntimeEvents();
+  openScreen("plugins");
+}
+
+async function refreshRigStatus() {
+  state.rigStatus = await fetch("/api/rig/status").then((response) => response.json());
+}
+
+async function submitQsoCreate(event) {
+  event.preventDefault();
+  const form = new FormData(event.currentTarget);
+  const frequencyHz = khzToHz(form.get("frequency_khz"));
+  const payload = {
+    ...(state.acceptedLookupFields || {}),
+    ...(state.acceptedRigFields || {}),
+    contacted_callsign: form.get("contacted_callsign")?.toString() || "",
+    mode: form.get("mode")?.toString() || "",
+    band: form.get("band")?.toString() || "",
+    notes: form.get("notes")?.toString() || "",
+    frequency_hz: frequencyHz,
+  };
+  updateQsoDraftFromForm();
+  updateDuplicateWarning();
+  const response = await fetch("/api/qso/create", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const result = await response.json();
+  if (!response.ok) {
+    state.qsoError = result.error || "QSO proposal rejected";
+    await refreshRuntimeEvents();
+    render();
+    return;
+  } else {
+    state.qsoError = "";
+    event.currentTarget.reset();
+    clearQsoDraft();
+    if (result.projection?.qsos) {
+      state.qsos = result.projection.qsos;
+    }
+  }
+  if (!result.projection?.qsos) await refreshQsos();
+  await refreshActivations();
+  await refreshAwards();
+  await refreshRigStatus();
+  await refreshRuntimeEvents();
+  state.acceptedLookupFields = null;
+  state.acceptedRigFields = null;
+  state.lookupSuggestion = null;
+  state.duplicateWarning = "";
+  render();
+}
+
+function updateDuplicateWarning() {
+  const callsign = byId("callsign-entry-input")?.value?.trim()?.toUpperCase();
+  if (!callsign) {
+    state.duplicateWarning = "";
+    return;
+  }
+  const duplicate = state.qsos.find((qso) => {
+    const payload = qso.payload || {};
+    return !qso.deleted && (payload.contacted_callsign || "").toUpperCase() === callsign;
+  });
+  state.duplicateWarning = duplicate
+    ? `Possible duplicate: ${callsign} was logged ${duplicate.payload.started_at || "recently"}.`
+    : "";
+  const warning = byId("duplicate-warning");
+  if (warning) {
+    warning.textContent = state.duplicateWarning;
+    warning.hidden = !state.duplicateWarning;
+  }
+}
+
+async function submitPortableQsoCreate(event) {
+  event.preventDefault();
+  const form = new FormData(event.currentTarget);
+  const frequencyHz = khzToHz(form.get("frequency_khz"));
+  await fetch("/api/qso/portable-create", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      contacted_callsign: form.get("contacted_callsign")?.toString() || "",
+      mode: form.get("mode")?.toString() || "",
+      band: form.get("band")?.toString() || "",
+      notes: form.get("notes")?.toString() || "",
+      frequency_hz: frequencyHz,
+      ...(state.acceptedLookupFields || {}),
+      ...(state.acceptedRigFields || {}),
+    }),
+  });
+  event.currentTarget.reset();
+  await refreshQsos();
+  await refreshActivations();
+  await refreshAwards();
+  await refreshRigStatus();
+  await refreshRuntimeEvents();
+  state.acceptedLookupFields = null;
+  state.acceptedRigFields = null;
+  state.lookupSuggestion = null;
+  render();
+}
+
+async function lookupCallsign(callsign) {
+  if (!callsign) return;
+  const payload = await fetch(`/api/lookup/callsign?callsign=${encodeURIComponent(callsign)}`).then((response) => response.json());
+  state.lookupSuggestion = payload.suggestion || null;
+  await refreshRuntimeEvents();
+  render();
+}
+
+function acceptLookupSuggestion() {
+  if (!state.lookupSuggestion) return;
+  const fields = state.lookupSuggestion.suggested_fields || {};
+  state.acceptedLookupFields = {
+    name: fields.name || null,
+    qth: fields.qth || null,
+    grid: fields.grid || null,
+    country: fields.country || null,
+    dxcc: fields.dxcc || null,
+    cq_zone: fields.cq_zone || null,
+    itu_zone: fields.itu_zone || null,
+    lookup_source: fields.lookup_source || state.lookupSuggestion.provider,
+    lookup_confidence: fields.lookup_confidence || state.lookupSuggestion.confidence,
+    enriched_fields: fields.enriched_fields || [],
+  };
+  render();
+}
+
+function lookupCallsignFromPrompt() {
+  const callsign = window.prompt("Callsign to look up");
+  if (callsign) lookupCallsign(callsign);
+}
+
+async function clearLookupCache() {
+  state.importSummary = await fetch("/api/lookup/cache/clear", { method: "POST" }).then((response) => response.json());
+  await refreshServiceProviders();
+  await refreshRuntimeEvents();
+  openScreen("import-summary");
+}
+
+async function clearServiceCache() {
+  state.importSummary = await fetch("/api/services/cache/clear", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({}),
+  }).then((response) => response.json());
+  await refreshServiceProviders();
+  await refreshRuntimeEvents();
+  openScreen("import-summary");
+}
+
+async function showLookupProviderStatus() {
+  state.importSummary = await fetch("/api/lookup/status").then((response) => response.json());
+  openScreen("import-summary");
+}
+
+async function refreshServiceProviders() {
+  state.serviceProviders = await fetch("/api/services/providers").then((response) => response.json());
+}
+
+async function openReportProblemScreen() {
+  await refreshReportPreview();
+  openScreen("report-problem");
+}
+
+async function refreshReportPreview() {
+  const reportType = byId("report-type")?.value || "basic";
+  state.reportPreview = await fetch(`/api/diagnostics/report-preview?type=${encodeURIComponent(reportType)}`).then((response) =>
+    response.json(),
+  );
+  if (!byId("report-type")) return;
+  openScreen("report-problem");
+}
+
+async function exportDiagnosticZipFromScreen() {
+  const reportType = byId("report-type")?.value || "basic";
+  const path =
+    byId("report-output-path")?.value ||
+    (await chooseSavePath("diagnostic-bundle", "Path to write diagnostic ZIP"));
+  if (!path) return;
+  const response = await fetch("/api/diagnostics/report/export", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      report_type: reportType,
+      path,
+      user_notes: byId("report-notes")?.value || "",
+      short_description: byId("report-description")?.value || "",
+    }),
+  });
+  state.importSummary = await response.json();
+  await refreshRuntimeEvents();
+  openScreen("report-problem");
+}
+
+async function uploadDiagnosticReportFromScreen() {
+  const reportType = byId("report-type")?.value || "basic";
+  const response = await fetch("/api/diagnostics/report/upload", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      report_type: reportType,
+      user_notes: byId("report-notes")?.value || "",
+      short_description: byId("report-description")?.value || "",
+    }),
+  });
+  const result = await response.json();
+  state.importSummary = result;
+  if (response.ok) state.lastReport = result.upload;
+  await refreshRuntimeEvents();
+  openScreen("report-problem");
+}
+
+function copyLastReportId() {
+  const reportId = state.lastReport?.report_id || state.lastReport?.upload?.report_id;
+  if (reportId) navigator.clipboard?.writeText(reportId);
+}
+
+async function connectRig() {
+  await fetch("/api/rig/connect", { method: "POST" });
+  await refreshRigStatus();
+  await refreshRuntimeEvents();
+  render();
+}
+
+async function disconnectRig() {
+  await fetch("/api/rig/disconnect", { method: "POST" });
+  state.acceptedRigFields = null;
+  await refreshRigStatus();
+  await refreshRuntimeEvents();
+  render();
+}
+
+async function refreshRigState() {
+  await fetch("/api/rig/refresh", { method: "POST" });
+  await refreshRigStatus();
+  await refreshRuntimeEvents();
+  render();
+}
+
+async function applyMockRigSettings() {
+  const frequency = byId("rig-mock-frequency")?.value?.trim();
+  const mode = byId("rig-mock-mode")?.value?.trim();
+  await fetch("/api/rig/mock/set", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      frequency_hz: khzToHz(frequency),
+      mode: mode || null,
+      ptt: Boolean(byId("rig-mock-ptt")?.checked),
+    }),
+  });
+  await refreshRigStatus();
+  await refreshRuntimeEvents();
+  render();
+}
+
+function acceptRigSuggestion(explicit = false) {
+  const suggestion = state.rigStatus?.autofill_suggestion;
+  if (!suggestion) return;
+  state.acceptedRigFields = {
+    frequency_hz: suggestion.frequency_hz || null,
+    band: suggestion.band || null,
+    mode: suggestion.mode || null,
+    submode: suggestion.submode || null,
+    rig_source: explicit ? "rig/manual-refresh" : suggestion.source,
+    rig_id: suggestion.rig_id || null,
+    rig_enriched_fields: suggestion.suggested_fields || [],
+  };
+  state.qsoDraft = {
+    ...state.qsoDraft,
+    frequency_khz: formatKhz(suggestion.frequency_hz) || state.qsoDraft.frequency_khz,
+    band: suggestion.band || state.qsoDraft.band,
+    mode: suggestion.mode || state.qsoDraft.mode,
+  };
+  render();
+}
+
+async function submitActivationStart(event) {
+  event.preventDefault();
+  const form = new FormData(event.currentTarget);
+  await fetch("/api/activation/start", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      activation_type: form.get("activation_type")?.toString() || "pota",
+      reference: form.get("reference")?.toString() || "",
+      station_callsign: form.get("station_callsign")?.toString() || "KE8YGW",
+      operator_callsign: form.get("operator_callsign")?.toString() || "KE8YGW",
+      grid: form.get("grid")?.toString() || "",
+      notes: form.get("notes")?.toString() || "",
+    }),
+  });
+  event.currentTarget.reset();
+  await refreshActivations();
+  await refreshRuntimeEvents();
+  render();
+}
+
+function startActivationFromPrompt(kind) {
+  const reference = window.prompt(`${kind.toUpperCase()} reference`);
+  if (!reference) return;
+  const profile = activeStationProfile();
+  fetch("/api/activation/start", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      activation_type: kind,
+      reference,
+      station_callsign: profile?.station_callsign || "KE8YGW",
+      operator_callsign: profile?.operator_callsign || profile?.station_callsign || "KE8YGW",
+    }),
+  }).then(async () => {
+    await refreshActivations();
+    render();
+  });
+}
+
+async function endCurrentActivation() {
+  if (!state.activeActivation) return;
+  await fetch("/api/activation/end", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ activation_id: state.activeActivation.activation_id }),
+  });
+  await refreshActivations();
+  await refreshRuntimeEvents();
+  render();
+}
+
+async function exportActivationAdifFromPrompt() {
+  const path = window.prompt("Path to write activation ADIF export");
+  if (!path) return;
+  state.importSummary = await fetch("/api/activation/export-adif", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ path, include_deleted: false }),
+  }).then((response) => response.json());
+  await refreshRuntimeEvents();
+  openScreen("import-summary");
+}
+
+async function runQsoAction(action, qsoId) {
+  let endpoint = `/api/qso/${action}`;
+  let payload = { qso_id: qsoId };
+  if (action === "note") {
+    const note = window.prompt("Add note to QSO");
+    if (!note) return;
+    endpoint = "/api/qso/note";
+    payload = { qso_id: qsoId, note };
+  }
+  await fetch(endpoint, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  await refreshQsos(action === "restore");
+  await refreshActivations();
+  await refreshAwards();
+  await refreshRuntimeEvents();
+  render();
+}
+
+async function importAdifFromPrompt() {
+  const path = await chooseOpenPath("adif", "Path to ADIF file to import");
+  if (!path) return;
+  const response = await fetch("/api/adif/import", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ path }),
+  });
+  state.importSummary = await response.json();
+  await refreshQsos();
+  await refreshAwards();
+  await refreshRuntimeEvents();
+  openScreen("import-summary");
+  render();
+}
+
+async function exportAdifFromPrompt() {
+  const path = (await chooseSavePath("adif", "Path to write ADIF export")) || "";
+  if (!path) return;
+  const response = await fetch("/api/adif/export", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ path, include_deleted: false }),
+  });
+  state.importSummary = await response.json();
+  await refreshRuntimeEvents();
+  openScreen("import-summary");
+}
+
+async function chooseSavePath(kind, promptLabel) {
+  const invoke = tauriInvoke();
+  const commands = {
+    adif: "export_adif_dialog",
+    backup: "export_backup_dialog",
+    "diagnostic-bundle": "export_diagnostic_bundle_dialog",
+    "divergence-report": "export_divergence_report_dialog",
+  };
+  if (invoke) {
+    try {
+      const selected = selectedPathFromDialogResult(await invoke(commands[kind]));
+      if (selected) return selected;
+    } catch (_) {
+      // Browser fallback keeps web/server mode independent from Tauri.
+    }
+  }
+  return window.prompt(promptLabel);
+}
+
+async function chooseOpenPath(kind, promptLabel) {
+  const invoke = tauriInvoke();
+  const commands = {
+    adif: "import_adif_dialog",
+    backup: "import_backup_dialog",
+  };
+  if (invoke) {
+    try {
+      const selected = selectedPathFromDialogResult(await invoke(commands[kind]));
+      if (selected) return selected;
+    } catch (_) {
+      // Browser fallback keeps web/server mode independent from Tauri.
+    }
+  }
+  return window.prompt(promptLabel);
+}
+
+async function chooseBackupExportPath() {
+  const path = await chooseSavePath("backup", "Path to write backup JSON");
+  if (path) byId("backup-export-path").value = path;
+}
+
+async function chooseBackupImportPath() {
+  const path = await chooseOpenPath("backup", "Path to backup JSON to restore");
+  if (path) byId("backup-import-path").value = path;
+}
+
+async function exportBackupFromScreen() {
+  let path = byId("backup-export-path")?.value;
+  if (!path) path = await chooseSavePath("backup", "Path to write backup JSON");
+  if (!path) return;
+  const response = await fetch("/api/backup/export", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ path }),
+  });
+  state.backupState.lastBackup = await response.json();
+  state.importSummary = state.backupState.lastBackup;
+  openScreen("backups");
+}
+
+async function dryRunBackupRestoreFromScreen() {
+  let path = byId("backup-import-path")?.value;
+  if (!path) path = await chooseOpenPath("backup", "Path to backup JSON to validate");
+  if (!path) return;
+  const response = await fetch("/api/backup/import/dry-run", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ path }),
+  });
+  state.backupState.dryRun = await response.json();
+  state.backupState.importResult = null;
+  openScreen("backups");
+}
+
+async function importBackupFromScreen() {
+  const path = byId("backup-import-path")?.value;
+  if (!path || !state.backupState.dryRun?.ok) return;
+  const response = await fetch("/api/backup/import", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ path, confirm_dry_run: true }),
+  });
+  state.backupState.importResult = await response.json();
+  await refreshQsos();
+  await refreshStation();
+  await refreshUploads();
+  await refreshMapState();
+  await refreshRuntimeEvents();
+  openScreen("backups");
+  render();
+}
+
+async function refreshDivergenceReview() {
+  const [divergenceReview, conflictReviews] = await Promise.all([
+    fetch("/api/sync/divergence/review").then((response) => response.json()),
+    fetch("/api/sync/conflict-reviews").then((response) => response.json()),
+  ]);
+  state.divergenceReview = divergenceReview;
+  if (!state.syncState) await refreshSyncState();
+  if (conflictReviews.ok && state.syncState) {
+    state.syncState.conflict_reviews = conflictReviews.conflict_reviews;
+    state.syncState.conflict_reviews_error = null;
+  } else if (state.syncState) {
+    state.syncState.conflict_reviews_error = conflictReviews.error || "conflict review state unavailable";
+  }
+  const selected = selectedConflictReview();
+  state.selectedConflictReviewId = selected?.review_id || state.selectedConflictReviewId;
+  state.conflictReview = selected || state.conflictReview;
+  openScreen("divergence-review");
+}
+
+async function openDivergenceReview() {
+  await refreshDivergenceReview();
+}
+
+async function exportDivergenceReportFromScreen() {
+  const path = await chooseSavePath("divergence-report", "Path to write divergence report JSON");
+  if (!path) return;
+  const response = await fetch("/api/sync/divergence/export", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ path }),
+  });
+  state.importSummary = await response.json();
+  state.divergenceReview = state.importSummary.report || state.divergenceReview;
+  openScreen("divergence-review");
+}
+
+async function saveConflictReview() {
+  const result = await syncPost("/api/sync/conflict-reviews/create");
+  if (result.ok === false) {
+    state.importSummary = result;
+    openScreen("divergence-review");
+    return;
+  }
+  state.conflictReview = result.conflict_review || state.conflictReview;
+  state.selectedConflictReviewId = state.conflictReview?.review_id || state.selectedConflictReviewId;
+  state.importSummary = state.conflictReview || result;
+  openScreen("divergence-review");
+}
+
+async function resolveConflictReview(choice) {
+  const review = await ensureOpenConflictReview();
+  if (!review) return;
+  const note = byId("conflict-resolution-note")?.value || "";
+  const result = await syncPost("/api/sync/conflict-reviews/resolve", {
+    review_id: review.review_id,
+    resolution: {
+      choice,
+      operator_note: note || "",
+      corrective_event_hashes: [],
+      resolved_by_device_id: state.syncState?.identity?.device_id || null,
+    },
+  });
+  if (result.ok === false) {
+    state.importSummary = result;
+    openScreen("divergence-review");
+    return;
+  }
+  state.conflictReview = result.conflict_review || state.conflictReview;
+  state.selectedConflictReviewId = state.conflictReview?.review_id || state.selectedConflictReviewId;
+  state.importSummary = state.conflictReview || result;
+  openScreen("divergence-review");
+}
+
+async function createCorrectiveConflictNote(event) {
+  event?.preventDefault();
+  const review = await ensureOpenConflictReview();
+  if (!review) return;
+  const qsoId = byId("conflict-corrective-qso-id")?.value?.trim();
+  const note = byId("conflict-corrective-note")?.value?.trim();
+  const reviewNote = byId("conflict-corrective-review-note")?.value || "";
+  if (!qsoId || !note) {
+    state.importSummary = { ok: false, error: "corrective QSO ID and note are required" };
+    openScreen("divergence-review");
+    return;
+  }
+  const result = await syncPost("/api/sync/conflict-reviews/corrective-events", {
+    review_id: review.review_id,
+    operator_note: reviewNote || "",
+    proposals: [
+      {
+        proposal_type: "proposal.qso.note.add",
+        entity_id: qsoId.trim(),
+        payload: {
+          note: note.trim(),
+        },
+      },
+    ],
+  });
+  if (result.ok === false) {
+    state.importSummary = result;
+    openScreen("divergence-review");
+    return;
+  }
+  state.conflictReview = result.conflict_review || state.conflictReview;
+  state.selectedConflictReviewId = state.conflictReview?.review_id || state.selectedConflictReviewId;
+  state.importSummary = result.conflict_review || result;
+  await refreshQsos();
+  openScreen("divergence-review");
+}
+
+async function ensureOpenConflictReview() {
+  const selected = selectedConflictReview();
+  if (isOpenReview(selected)) return selected;
+  const openReview = (state.syncState?.conflict_reviews?.reviews || []).find(isOpenReview);
+  if (openReview) {
+    state.conflictReview = openReview;
+    state.selectedConflictReviewId = openReview.review_id;
+    return openReview;
+  }
+  await saveConflictReview();
+  return isOpenReview(state.conflictReview) ? state.conflictReview : null;
+}
+
+async function verifyLogChain() {
+  state.importSummary = await fetch("/api/log/verify").then((response) => response.json());
+  openScreen("import-summary");
+}
+
+async function rebuildProjections() {
+  state.importSummary = await fetch("/api/projections/rebuild", { method: "POST" }).then((response) => response.json());
+  await refreshQsos();
+  openScreen("import-summary");
+}
+
+function renderSyncStatus() {
+  const sync = state.syncState;
+  if (!sync) return `<p class="muted">Sync state loading.</p>`;
+  const queue = sync.offline_queue?.health || {};
+  const reviews = sync.conflict_reviews?.health || {};
+  const trustedDevices = sync.lan_trust?.trusted_devices || [];
+  const trustedCount = trustedDevices.filter((device) => !device.revoked_at).length;
+  return `<div class="sync-panel">
+    <p><strong>LAN discovery:</strong> ${sync.discovery_running ? "running" : "stopped"}</p>
+    <p><strong>Network scan:</strong> ${renderScanSummary(sync)}</p>
+    <p><strong>Local identity:</strong> ${sync.identity.display_name}<br /><small>${sync.identity.device_id}</small></p>
+    <div class="qso-form">
+      <label>Peer HTTP URL
+        <input id="sync-peer-address" class="placeholder-control" placeholder="http://127.0.0.1:9468" />
+      </label>
+      <button id="sync-add-peer" class="toolbar-button" type="button">Add Peer</button>
+    </div>
+    <div class="monitor-actions">
+      <button id="sync-start-discovery" class="toolbar-button" type="button">Start</button>
+      <button id="sync-stop-discovery" class="toolbar-button" type="button">Stop</button>
+      <button id="sync-scan-network" class="toolbar-button" type="button"${sync.scan_running ? " disabled" : ""}>${sync.scan_running ? "Scanning..." : "Scan Network"}</button>
+      <button id="sync-refresh-peers" class="toolbar-button" type="button">Refresh Peers</button>
+      <button id="sync-handshake" class="toolbar-button" type="button">Handshake</button>
+      <button id="sync-preview-pull" class="toolbar-button" type="button">Preview Pull</button>
+      <button id="sync-pull-events" class="toolbar-button" type="button">Pull Missing</button>
+      <button id="sync-copy-identity" class="toolbar-button" type="button">Copy Identity</button>
+    </div>
+    <div class="sync-summary">
+      <p><strong>Offline queue:</strong> total ${queue.total || 0} / pending ${queue.pending || 0} / retrying ${queue.retrying || 0} / blocked ${queue.blocked || 0} / failed ${queue.failed || 0} / action ${queue.user_action_required || 0}</p>
+      <p><strong>Ready:</strong> ${queue.ready_to_send || 0} / accepted ${queue.accepted || 0}</p>
+      ${sync.offline_queue_error ? `<p class="event-error">${sync.offline_queue_error}</p>` : ""}
+      <div class="monitor-actions">
+        <button id="sync-recover-queue" class="toolbar-button" type="button">Recover Queue</button>
+      </div>
+    </div>
+    <div class="sync-summary">
+      <p><strong>Conflict reviews:</strong> open ${reviews.open || 0} / resolved ${reviews.resolved || 0} / total ${reviews.total || 0}</p>
+      ${sync.conflict_reviews_error ? `<p class="event-error">${sync.conflict_reviews_error}</p>` : ""}
+      <div class="monitor-actions">
+        <button class="toolbar-button" type="button" onclick="openDivergenceReview()">Open Review</button>
+      </div>
+    </div>
+    ${renderLanPairingPanel(sync)}
+    <div class="sync-summary">
+      <p><strong>LAN trust:</strong> ${trustedCount} trusted / ${(sync.lan_trust?.trusted_devices || []).length} known devices</p>
+      ${sync.lan_trust_error ? `<p class="event-error">${sync.lan_trust_error}</p>` : ""}
+      ${
+        trustedDevices.length
+          ? `<pre class="path-block">${JSON.stringify(trustedDevices, null, 2)}</pre>`
+          : `<p class="muted">No trusted LAN peers yet.</p>`
+      }
+    </div>
+    <div class="sync-summary">
+      <p><strong>Cloud:</strong> ${sync.cloud_connection_state} / ${sync.cloud_config?.sync_server_url || "not configured"}</p>
+      <p><strong>Account:</strong> ${sync.cloud_account_id || "not paired"}</p>
+      <p><strong>Cloud head:</strong> <small>${sync.cloud_status?.accessible_logbooks?.[0]?.head_hash || "unknown"}</small></p>
+      <p><strong>Last cloud push:</strong> ${sync.last_cloud_push_time || "never"}</p>
+      <p><strong>Last cloud pull:</strong> ${sync.last_cloud_pull_time || "never"}</p>
+      ${sync.cloud_divergence ? `<p class="event-error"><strong>Cloud divergence:</strong> ${sync.cloud_divergence}</p>` : ""}
+      ${
+        sync.latest_cloud_preview
+          ? `<p><strong>Cloud preview:</strong> ${sync.latest_cloud_preview.status} / ${sync.latest_cloud_preview.missing_event_count} events pending</p>`
+          : ""
+      }
+      ${
+        sync.latest_cloud_push
+          ? `<p><strong>Cloud push:</strong> ${sync.latest_cloud_push.status} / accepted ${sync.latest_cloud_push.accepted_count}, rejected ${sync.latest_cloud_push.rejected_count}</p>`
+          : ""
+      }
+      <div class="monitor-actions">
+        <button id="cloud-connect" class="toolbar-button" type="button">Connect Cloud</button>
+        <button id="cloud-push" class="toolbar-button" type="button">Push Now</button>
+        <button id="cloud-preview" class="toolbar-button" type="button">Preview Cloud Pull</button>
+        <button id="cloud-pull" class="toolbar-button" type="button">Pull Cloud</button>
+      </div>
+    </div>
+    <div class="sync-summary">
+      <p><strong>Local head:</strong> <small>${sync.local_head?.head_hash || "genesis"}</small></p>
+      <p><strong>Remote head:</strong> <small>${sync.remote_head?.head_hash || "unknown"}</small></p>
+      <p><strong>Last sync:</strong> ${sync.last_sync_time || "never"}</p>
+      ${sync.divergence ? `<p class="event-error"><strong>Divergence:</strong> ${sync.divergence}</p>` : ""}
+      ${
+        sync.latest_preview
+          ? `<p><strong>Preview:</strong> ${sync.latest_preview.status} / ${sync.latest_preview.missing_event_count} events available</p>`
+          : ""
+      }
+      ${
+        sync.latest_pull
+          ? `<p><strong>Pull:</strong> ${sync.latest_pull.status} / accepted ${sync.latest_pull.accepted_count}, rejected ${sync.latest_pull.rejected_count}</p>`
+          : ""
+      }
+    </div>
+    <div class="qso-list">
+      ${
+        sync.peers.length
+          ? sync.peers
+              .map(
+                (peer) => `<button class="event-row ${state.selectedPeerId === peer.peer_id ? "is-selected" : ""}" type="button" data-peer-id="${peer.peer_id}">
+                  <span class="event-main"><strong>${peer.display_name}</strong><span>${peer.connection_state} / ${peer.sync_state}</span></span>
+                  <span class="event-meta"><small>${peer.addresses.join(", ")}</small><small>${peer.protocol_version}</small></span>
+                </button>`,
+              )
+              .join("")
+          : `<p class="muted">No peers discovered yet.</p>`
+      }
+    </div>
+    <pre class="path-block">${sync.latest_handshake ? JSON.stringify(sync.latest_handshake, null, 2) : "No handshake yet."}</pre>
+    <pre class="path-block">${sync.latest_preview ? JSON.stringify(sync.latest_preview, null, 2) : "No pull preview yet."}</pre>
+  </div>`;
+}
+
+function renderLanPairingPanel(sync) {
+  const peer = selectedPeer();
+  const trustedDevice = selectedTrustedDevice();
+  const issued = state.lanPairingIssued;
+  const activeTokens = (sync.lan_trust?.pairing_tokens || []).filter((token) => !token.consumed_at);
+  return `<div class="sync-summary">
+    <p><strong>LAN pairing:</strong> ${peer ? escapeHtml(peer.display_name) : "select or add a peer first"}</p>
+    <p><strong>Active local tokens:</strong> ${activeTokens.length}</p>
+    ${
+      issued
+        ? `<div class="lan-pairing-issued">
+            <p><strong>Give this one-time code to the other device.</strong></p>
+            <p>Token ID: <small>${escapeHtml(issued.token_id)}</small></p>
+            <p>Pairing code: <code>${escapeHtml(issued.pairing_code)}</code></p>
+            <p>Expires: ${escapeHtml(issued.expires_at || "unknown")}</p>
+          </div>`
+        : `<p class="muted">Issue a local token here, or enter a peer token and code to complete reciprocal trust.</p>`
+    }
+    <div class="qso-form lan-pairing-grid">
+      <button id="sync-issue-pairing" class="toolbar-button" type="button">Issue Local Code</button>
+      <label>Peer Token ID
+        <input id="sync-pairing-token-id" class="placeholder-control" autocomplete="off" />
+      </label>
+      <label>Peer Pairing Code
+        <input id="sync-pairing-code" class="placeholder-control" autocomplete="off" spellcheck="false" />
+      </label>
+      <label>Peer Public-Key Fingerprint
+        <input id="sync-pairing-fingerprint" class="placeholder-control" autocomplete="off" />
+      </label>
+      <button id="sync-trust-peer" class="toolbar-button" type="button" ${peer ? "" : "disabled"}>Complete Pairing</button>
+    </div>
+    <div class="qso-form lan-pairing-grid">
+      <p><strong>Selected trusted peer:</strong> ${trustedDevice ? `${escapeHtml(trustedDevice.display_name)} / <small>${escapeHtml(trustedDevice.device_id)}</small>` : "none"}</p>
+      <label>Replacement LAN Auth Code
+        <input id="sync-rotate-auth-code" class="placeholder-control" autocomplete="off" spellcheck="false" />
+      </label>
+      <button id="sync-generate-auth-code" class="toolbar-button" type="button" ${trustedDevice ? "" : "disabled"}>Generate Code</button>
+      <button id="sync-rotate-auth" class="toolbar-button" type="button" ${trustedDevice ? "" : "disabled"}>Rotate Auth</button>
+      <button id="sync-revoke-peer" class="toolbar-button" type="button" ${trustedDevice ? "" : "disabled"}>Revoke Selected</button>
+    </div>
+  </div>`;
+}
+
+async function refreshSyncState() {
+  state.syncState = await fetch("/api/sync/state").then((response) => response.json());
+}
+
+async function syncPost(path, body = {}) {
+  const response = await fetch(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const result = await response.json();
+  await refreshSyncState();
+  await refreshRuntimeEvents();
+  render();
+  return result;
+}
+
+function renderScanSummary(sync) {
+  if (sync.scan_running) return "scanning the local network for other instances...";
+  const scan = sync.last_scan;
+  if (!scan) return "never run";
+  const where = scan.local_addresses.length ? scan.local_addresses.join(", ") : "no LAN address";
+  const error = scan.multicast_error ? ` / multicast: ${scan.multicast_error}` : "";
+  return `${scan.peers_found} instance(s) at ${scan.finished_at} / ${scan.multicast_observations} announcement(s), ${scan.probed_responses} of ${scan.probed_addresses} probed address(es) answered on ports ${scan.scanned_ports.join(", ")} from ${where}${error}`;
+}
+
+function startDiscovery() {
+  syncPost("/api/sync/discovery/start");
+}
+
+// The scan runs on the desktop side and reports peers as it finds them, so poll the
+// sync state until it reports the scan finished instead of blocking on one request.
+async function scanNetwork() {
+  await syncPost("/api/sync/discovery/scan");
+  while (state.syncState?.scan_running) {
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    await refreshSyncState();
+    render();
+  }
+}
+
+function stopDiscovery() {
+  syncPost("/api/sync/discovery/stop");
+}
+
+function refreshPeers() {
+  syncPost("/api/sync/peers/refresh");
+}
+
+async function addManualPeer() {
+  const address = byId("sync-peer-address")?.value?.trim();
+  if (!address) return;
+  const result = await syncPost("/api/sync/peers/add", { address });
+  state.importSummary = result.peer_identity || result;
+  if (result.peer_identity) {
+    await refreshSyncState();
+    const peer = (state.syncState?.peers || []).find((candidate) => candidate.device_id === result.peer_identity.device_id);
+    if (peer) state.selectedPeerId = peer.peer_id;
+  }
+  render();
+}
+
+function handshakeSelectedPeer() {
+  syncPost("/api/sync/handshake", { peer_id: state.selectedPeerId });
+}
+
+async function previewPullSelectedPeer() {
+  const result = await syncPost("/api/sync/preview-pull", { peer_id: state.selectedPeerId });
+  state.importSummary = result.preview || result;
+}
+
+async function pullSelectedPeer() {
+  const result = await syncPost("/api/sync/pull-events", { peer_id: state.selectedPeerId, replay_nonce: randomNonce() });
+  state.importSummary = result.pull || result;
+  await refreshQsos();
+  render();
+}
+
+async function issueLanPairingCode() {
+  const pairing = await syncPost("/api/sync/lan/pairing-token", {
+    approved_by_operator: true,
+    display_name: state.syncState?.identity?.display_name || "KE8YGW Logger Local",
+  });
+  state.lanPairingIssued = pairing.pairing || null;
+  state.importSummary = pairing.pairing || pairing;
+  render();
+}
+
+async function trustSelectedPeer() {
+  const peer = selectedPeer();
+  if (!peer) return;
+  const tokenId = byId("sync-pairing-token-id")?.value?.trim();
+  const pairingCode = byId("sync-pairing-code")?.value?.trim();
+  const publicKeyFingerprint = byId("sync-pairing-fingerprint")?.value?.trim() || null;
+  if (!tokenId || !pairingCode) {
+    state.importSummary = { ok: false, error: "peer token ID and pairing code are required" };
+    render();
+    return;
+  }
+  const authCode = strongLocalAuthCode();
+  const trusted = await syncPost("/api/sync/lan/pairing-complete", {
+    peer_id: peer.peer_id,
+    token_id: tokenId,
+    pairing_code: pairingCode,
+    auth_code: authCode,
+    public_key_fingerprint: publicKeyFingerprint,
+  });
+  state.importSummary = trusted.trusted_device || trusted;
+  render();
+}
+
+async function revokeSelectedPeer() {
+  const peer = selectedPeer();
+  if (!peer) return;
+  const result = await syncPost("/api/sync/lan/revoke", { device_id: peer.device_id });
+  state.importSummary = result.trusted_device || result;
+  render();
+}
+
+async function rotateSelectedPeerAuth() {
+  const trustedDevice = selectedTrustedDevice();
+  if (!trustedDevice) return;
+  const pairingCode = byId("sync-rotate-auth-code")?.value?.trim();
+  if (!pairingCode) {
+    state.importSummary = { ok: false, error: "replacement LAN auth code is required" };
+    render();
+    return;
+  }
+  const result = await syncPost("/api/sync/lan/rotate-auth", {
+    device_id: trustedDevice.device_id,
+    pairing_code: pairingCode,
+  });
+  state.importSummary = result.rotation || result.trusted_device || result;
+  render();
+}
+
+function generateSelectedPeerAuthCode() {
+  const input = byId("sync-rotate-auth-code");
+  if (!input) return;
+  input.value = strongLocalAuthCode();
+  input.focus();
+  input.select?.();
+}
+
+async function recoverOfflineQueue() {
+  const result = await syncPost("/api/sync/offline-queue/recover");
+  state.importSummary = result.offline_queue || result;
+}
+
+function selectedPeer() {
+  const peers = state.syncState?.peers || [];
+  return peers.find((peer) => peer.peer_id === state.selectedPeerId) || peers[0] || null;
+}
+
+function selectedTrustedDevice() {
+  const trustedDevices = (state.syncState?.lan_trust?.trusted_devices || []).filter((device) => !device.revoked_at);
+  const peer = selectedPeer();
+  return trustedDevices.find((device) => device.device_id === peer?.device_id) || trustedDevices[0] || null;
+}
+
+function randomNonce() {
+  if (window.crypto?.randomUUID) return window.crypto.randomUUID();
+  return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function strongLocalAuthCode() {
+  if (window.crypto?.randomUUID) {
+    return `${window.crypto.randomUUID().replace(/-/g, "")}${window.crypto.randomUUID().replace(/-/g, "")}`;
+  }
+  return `${Date.now().toString(36)}${Math.random().toString(36).slice(2)}${Math.random().toString(36).slice(2)}`;
+}
+
+function copyLocalSyncIdentity() {
+  if (state.syncState) navigator.clipboard?.writeText(JSON.stringify(state.syncState.identity, null, 2));
+}
+
+async function connectCloudSyncFromSettings() {
+  const payload = {
+    server_url: byId("cloud-server-url")?.value,
+    device_name: byId("cloud-device-name")?.value,
+    pairing_code: window.prompt("Pairing code", "local-dev-pairing-code") || "",
+    account_id: "local-account",
+    user_id: "local-user",
+    enable_cloud_sync: Boolean(byId("cloud-enabled")?.checked),
+    prefer_lan_sync: Boolean(byId("cloud-prefer-lan")?.checked),
+    auto_push_enabled: Boolean(byId("cloud-auto-push")?.checked),
+    auto_pull_enabled: Boolean(byId("cloud-auto-pull")?.checked),
+    sync_interval_seconds: Number(byId("cloud-sync-interval")?.value || 300),
+  };
+  await syncPost("/api/sync/cloud/connect", payload);
+}
+
+function connectCloudSyncFromPrompt() {
+  const pairing_code = window.prompt("Cloud pairing code", "local-dev-pairing-code");
+  if (!pairing_code) return;
+  syncPost("/api/sync/cloud/connect", {
+    pairing_code,
+    account_id: "local-account",
+    user_id: "local-user",
+    enable_cloud_sync: true,
+  });
+}
+
+async function pushCloudEvents() {
+  const result = await syncPost("/api/sync/cloud/push");
+  state.importSummary = result.push || result;
+}
+
+async function previewCloudPull() {
+  const result = await syncPost("/api/sync/cloud/preview-pull");
+  state.importSummary = result.preview || result;
+}
+
+async function pullCloudEvents() {
+  const result = await syncPost("/api/sync/cloud/pull");
+  state.importSummary = result.local_pull || result.server_pull || result;
+  await refreshQsos();
+  render();
+}
+
+function copyCloudSyncDiagnosticSummary() {
+  if (!state.syncState) return;
+  const summary = {
+    config: state.syncState.cloud_config,
+    connection_state: state.syncState.cloud_connection_state,
+    account_id: state.syncState.cloud_account_id,
+    status: state.syncState.cloud_status,
+    latest_preview: state.syncState.latest_cloud_preview,
+    latest_pull: state.syncState.latest_cloud_pull,
+    latest_push: state.syncState.latest_cloud_push,
+    divergence: state.syncState.cloud_divergence,
+  };
+  navigator.clipboard?.writeText(JSON.stringify(summary, null, 2));
+}
+
+function copySyncDiagnosticSummary() {
+  if (state.syncState) navigator.clipboard?.writeText(JSON.stringify(state.syncState, null, 2));
+}
+
+boot().catch((error) => {
+  state.busConnected = false;
+  // escapeHtml keeps markup inside the message (an HTML error body, for example) from
+  // being parsed away by innerHTML and truncating the report.
+  document.body.innerHTML = `<main class="screen"><div class="screen-body"><h1>GUI failed to start</h1><pre>${escapeHtml(
+    error,
+  )}</pre></div></main>`;
+});
+// ---------------------------------------------------------------------------
+// Hosted account and session screen
+// ---------------------------------------------------------------------------
+
+const ACCOUNT_STATE_LABELS = {
+  signed_out: "Signed out",
+  pending_email_verification: "Waiting for email verification",
+  signed_in: "Signed in",
+  session_expired: "Session expired",
+  device_revoked: "Device revoked",
+};
+
+const ACCOUNT_OUTCOME_LABELS = {
+  accepted: "Accepted",
+  authentication_required: "Sign in again",
+  email_verification_required: "Verify the account email",
+  registration_closed: "Registration is closed on this server",
+  token_expired: "Token expired",
+  token_replayed: "Token already used",
+  human_verification_failed: "Human verification failed",
+  rate_limited: "Rate limited",
+  validation_failed: "Request rejected",
+  transient_failure: "Temporary failure",
+  permanent_failure: "Request failed",
+};
+
+async function refreshAccount() {
+  try {
+    const payload = await fetch("/api/account/state").then((response) => response.json());
+    state.account = payload.account || null;
+    state.accountBackend = payload.credential_backend || null;
+    state.accountError = payload.error || null;
+  } catch (error) {
+    state.accountError = String(error);
+  }
+}
+
+function accountSnapshot() {
+  return state.account || null;
+}
+
+function accountIsSignedIn() {
+  return accountSnapshot()?.connection_state === "signed_in";
+}
+
+async function accountRequest(path, body) {
+  if (state.accountBusy) return;
+  state.accountBusy = true;
+  state.accountError = null;
+  renderAccountScreenBody();
+  try {
+    const response = await fetch(path, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body || {}),
+    });
+    const payload = await response.json();
+    if (payload.account_result) {
+      state.accountResult = payload.account_result;
+      state.account = payload.account_result.snapshot;
+    } else if (payload.account) {
+      state.account = payload.account;
+      state.accountResult = null;
+    }
+    if (payload.error) {
+      state.accountError = payload.error;
+    }
+  } catch (error) {
+    state.accountError = String(error);
+  } finally {
+    state.accountBusy = false;
+    await refreshAccount();
+    renderAccountScreenBody();
+    render();
+  }
+}
+
+function renderAccountScreenBody() {
+  const body = byId("screen-body");
+  if (!body || byId("overlay").hidden) return;
+  if (byId("account-screen")) {
+    body.innerHTML = renderAccountScreen();
+    bindAccountControls();
+  }
+}
+
+function renderAccountStatusBanner() {
+  const snapshot = accountSnapshot();
+  if (!snapshot) {
+    return `<p class="muted">Hosted account state is loading.</p>`;
+  }
+  const stateLabel = ACCOUNT_STATE_LABELS[snapshot.connection_state] || snapshot.connection_state;
+  const result = state.accountResult;
+  const backend = state.accountBackend || {};
+  return `<div class="sync-summary">
+    <p><strong>${escapeHtml(stateLabel)}</strong>${snapshot.email ? ` &middot; ${escapeHtml(snapshot.email)}` : ""}</p>
+    <p>Server: ${escapeHtml(snapshot.base_url || "not configured")}</p>
+    <p>Device: ${escapeHtml(snapshot.device_name || "unnamed")}${snapshot.device_id ? ` (${escapeHtml(snapshot.device_id)})` : ""}</p>
+    ${snapshot.session_expires_at ? `<p>Session expires: ${escapeHtml(snapshot.session_expires_at)}</p>` : ""}
+    ${snapshot.pending_email_verification_for ? `<p class="event-error">Verification pending for ${escapeHtml(snapshot.pending_email_verification_for)}.</p>` : ""}
+    ${backend.available === false ? `<p class="event-error">Credential backend unavailable: ${escapeHtml(backend.message || "no secure storage")}. Sign-in cannot store a session token.</p>` : ""}
+    ${state.accountBusy ? `<p class="muted">Contacting the hosted server&hellip;</p>` : ""}
+    ${state.accountError ? `<p class="event-error">${escapeHtml(state.accountError)}</p>` : ""}
+    ${result ? `<p class="${result.outcome === "accepted" ? "muted" : "event-error"}">${escapeHtml(ACCOUNT_OUTCOME_LABELS[result.outcome] || result.outcome)}: ${escapeHtml(result.message)}${result.request_id ? ` (request ${escapeHtml(result.request_id)})` : ""}</p>` : ""}
+    ${result && result.retryable ? `<p class="muted">This request can be retried without any account changes.</p>` : ""}
+  </div>`;
+}
+
+function renderAccountDevices() {
+  const snapshot = accountSnapshot();
+  const devices = snapshot?.devices || [];
+  if (!accountIsSignedIn()) {
+    return `<p class="muted">Sign in to review and revoke hosted devices.</p>`;
+  }
+  if (devices.length === 0) {
+    return `<p class="muted">No hosted devices loaded yet. Refresh the device list.</p>`;
+  }
+  return `<div class="qso-list">${devices
+    .map(
+      (device) => `<article class="qso-row">
+        <strong>${escapeHtml(device.device_name)}</strong>
+        <span>${escapeHtml(device.device_id)}</span>
+        <small>${device.current ? "This device / " : ""}${device.revoked ? "Revoked" : "Active"}${device.trusted ? " / Trusted" : ""}</small>
+        <div class="monitor-actions">
+          <button class="toolbar-button" type="button" data-account-revoke-device="${escapeHtml(device.device_id)}" ${device.revoked ? "disabled" : ""}>Revoke</button>
+        </div>
+      </article>`
+    )
+    .join("")}</div>`;
+}
+
+function renderAccountLogbooks() {
+  const logbooks = accountSnapshot()?.logbooks || [];
+  if (logbooks.length === 0) {
+    return `<p class="muted">No hosted logbook memberships are cached.</p>`;
+  }
+  return `<ul class="stack">${logbooks
+    .map(
+      (logbook) =>
+        `<li>${escapeHtml(logbook.name || "Logbook")} &middot; ${escapeHtml(logbook.logbook_id)}${logbook.role ? ` &middot; ${escapeHtml(logbook.role)}` : ""}</li>`
+    )
+    .join("")}</ul>`;
+}
+
+function renderAccountScreen() {
+  const snapshot = accountSnapshot();
+  const signedIn = accountIsSignedIn();
+  const busy = state.accountBusy ? "disabled" : "";
+  return `<div id="account-screen" class="stack">
+    ${renderAccountStatusBanner()}
+
+    <details open>
+      <summary>Hosted server</summary>
+      <form id="account-configure-form" class="qso-form">
+        <label>Server URL <input name="base_url" class="placeholder-control" value="${escapeHtml(snapshot?.base_url || "")}" placeholder="https://logger.example" required /></label>
+        <label>Device name <input name="device_name" class="placeholder-control" value="${escapeHtml(snapshot?.device_name || "")}" placeholder="Shack Desktop" required /></label>
+        <button class="toolbar-button" type="submit" ${busy}>Save Server</button>
+      </form>
+    </details>
+
+    <details ${signedIn ? "" : "open"}>
+      <summary>Sign in</summary>
+      <form id="account-login-form" class="qso-form">
+        <label>Email <input name="email" class="placeholder-control" type="email" autocomplete="username" value="${escapeHtml(snapshot?.email || "")}" required /></label>
+        <label>Display name <input name="display_name" class="placeholder-control" autocomplete="name" value="${escapeHtml(snapshot?.display_name || "")}" /></label>
+        <button class="toolbar-button" type="submit" ${busy}>Sign In</button>
+      </form>
+      <p class="muted">The hosted server issues the session; the token is stored in the operating-system credential backend and is never shown here.</p>
+    </details>
+
+    <details>
+      <summary>Claim server administrator (first run)</summary>
+      <form id="account-bootstrap-form" class="qso-form">
+        <label>Email <input name="email" class="placeholder-control" type="email" autocomplete="username" required /></label>
+        <label>Display name <input name="display_name" class="placeholder-control" autocomplete="name" /></label>
+        <button class="toolbar-button" type="submit" ${busy}>Claim Administrator</button>
+      </form>
+      <p class="muted">Works once, on a server with no accounts yet. It creates the first administrator and signs in. Use the Admin screen afterwards.</p>
+    </details>
+
+    <details>
+      <summary>Create an account</summary>
+      <form id="account-register-form" class="qso-form">
+        <label>Email <input name="email" class="placeholder-control" type="email" autocomplete="username" required /></label>
+        <label>Display name <input name="display_name" class="placeholder-control" autocomplete="name" /></label>
+        <label>Invitation token <input name="invitation_token" class="placeholder-control" placeholder="Required on invite-only servers" /></label>
+        <label>Turnstile token <input name="turnstile_token" class="placeholder-control" placeholder="Required on open public servers" /></label>
+        <button class="toolbar-button" type="submit" ${busy}>Register</button>
+      </form>
+      <form id="account-verify-form" class="qso-form">
+        <label>Email verification token <input name="token" class="placeholder-control" required /></label>
+        <button class="toolbar-button" type="submit" ${busy}>Verify Email</button>
+      </form>
+    </details>
+
+    <details>
+      <summary>Account recovery</summary>
+      <form id="account-recovery-start-form" class="qso-form">
+        <label>Email <input name="email" class="placeholder-control" type="email" required /></label>
+        <button class="toolbar-button" type="submit" ${busy}>Send Recovery Token</button>
+      </form>
+      <form id="account-recovery-complete-form" class="qso-form">
+        <label>Recovery token <input name="token" class="placeholder-control" required /></label>
+        <button class="toolbar-button" type="submit" ${busy}>Complete Recovery</button>
+      </form>
+    </details>
+
+    <details ${signedIn ? "open" : ""}>
+      <summary>Session</summary>
+      <div class="monitor-actions">
+        <button class="toolbar-button" type="button" data-account-action="/api/account/session/refresh" ${signedIn ? busy : "disabled"}>Refresh Session</button>
+        <button class="toolbar-button" type="button" data-account-action="/api/account/session/rotate" ${signedIn ? busy : "disabled"}>Rotate Session</button>
+        <button class="toolbar-button" type="button" data-account-action="/api/account/logout" ${signedIn ? busy : "disabled"}>Sign Out</button>
+        <button class="toolbar-button" type="button" data-account-action="/api/account/logout-all" ${signedIn ? busy : "disabled"}>Sign Out Everywhere</button>
+      </div>
+      ${renderAccountLogbooks()}
+    </details>
+
+    <details ${signedIn ? "open" : ""}>
+      <summary>Devices</summary>
+      <div class="monitor-actions">
+        <button class="toolbar-button" type="button" data-account-action="/api/account/devices/refresh" ${signedIn ? busy : "disabled"}>Refresh Devices</button>
+        <button class="toolbar-button" type="button" data-account-confirm="/api/account/devices/revoke-all" ${signedIn ? busy : "disabled"}>Revoke All Devices</button>
+      </div>
+      ${renderAccountDevices()}
+    </details>
+
+    <details>
+      <summary>Delete account</summary>
+      <p class="muted">Account deletion is permanent on the hosted server. Local official logs are not deleted.</p>
+      <button class="toolbar-button" type="button" data-account-confirm="/api/account/delete" ${signedIn ? busy : "disabled"}>Delete Hosted Account</button>
+    </details>
+  </div>`;
+}
+
+function accountFormValues(form) {
+  const data = new FormData(form);
+  const values = {};
+  data.forEach((value, key) => {
+    const trimmed = String(value).trim();
+    if (trimmed.length > 0) values[key] = trimmed;
+  });
+  return values;
+}
+
+function bindAccountControls() {
+  const forms = [
+    ["account-configure-form", "/api/account/configure"],
+    ["account-login-form", "/api/account/login"],
+    ["account-bootstrap-form", "/api/account/bootstrap"],
+    ["account-register-form", "/api/account/register"],
+    ["account-verify-form", "/api/account/verify-email"],
+    ["account-recovery-start-form", "/api/account/recovery/start"],
+    ["account-recovery-complete-form", "/api/account/recovery/complete"],
+  ];
+  forms.forEach(([id, path]) => {
+    byId(id)?.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      await accountRequest(path, accountFormValues(event.target));
+    });
+  });
+  document.querySelectorAll("[data-account-action]").forEach((button) => {
+    button.addEventListener("click", () => accountRequest(button.dataset.accountAction, {}));
+  });
+  document.querySelectorAll("[data-account-confirm]").forEach((button) => {
+    button.addEventListener("click", () => {
+      if (!window.confirm("This cannot be undone on the hosted server. Continue?")) return;
+      accountRequest(button.dataset.accountConfirm, {});
+    });
+  });
+  document.querySelectorAll("[data-account-revoke-device]").forEach((button) => {
+    button.addEventListener("click", () => {
+      if (!window.confirm("Revoke this hosted device?")) return;
+      accountRequest("/api/account/devices/revoke", {
+        device_id: button.dataset.accountRevokeDevice,
+      });
+    });
+  });
+}
+
+async function openAccountScreen() {
+  await refreshAccount();
+  openScreen("account");
+}
+
+// ---------------------------------------------------------------------------
+// Hosted server administration screen
+// ---------------------------------------------------------------------------
+
+const ADMIN_OPERATION_MODES = [
+  ["personal_hosted", "Personal hosted"],
+  ["public_hosted", "Public hosted"],
+  ["self_hosted", "Self hosted"],
+];
+
+const ADMIN_REGISTRATION_MODES = [
+  ["invite_only", "Invite only"],
+  ["open", "Open"],
+  ["disabled", "Disabled"],
+];
+
+const ADMIN_ROLES = [
+  ["viewer", "Viewer"],
+  ["operator", "Operator"],
+  ["admin", "Admin"],
+  ["owner", "Owner"],
+];
+
+const ADMIN_INVITATION_STATUS_LABELS = {
+  pending: "Pending",
+  accepted: "Accepted",
+  revoked: "Revoked",
+  expired: "Expired",
+};
+
+async function refreshAdmin() {
+  try {
+    const payload = await fetch("/api/admin/state").then((response) => response.json());
+    state.admin = payload.admin || null;
+    state.adminSignedIn = payload.signed_in === true;
+    state.adminAccountEmail = payload.account_email || null;
+    state.adminError = payload.error || null;
+  } catch (error) {
+    state.adminError = String(error);
+  }
+}
+
+function adminSnapshot() {
+  return state.admin || null;
+}
+
+function adminIsAdministrator() {
+  return adminSnapshot()?.administrator === true;
+}
+
+// Mirrors the Rust invitation status so the list reads the same on every surface.
+function adminInvitationStatus(invitation) {
+  if (!invitation) return "pending";
+  if (invitation.accepted_at) return "accepted";
+  if (invitation.revoked_at) return "revoked";
+  if (invitation.expires_at && new Date(invitation.expires_at) <= new Date()) return "expired";
+  return "pending";
+}
+
+async function adminRequest(path, body) {
+  if (state.adminBusy) return;
+  state.adminBusy = true;
+  state.adminError = null;
+  // A new request always clears the previously issued one-time token so it is
+  // never left on screen next to an unrelated result.
+  state.adminInvitationToken = null;
+  renderAdminScreenBody();
+  try {
+    const response = await fetch(path, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body || {}),
+    });
+    const payload = await response.json();
+    if (payload.admin_result) {
+      state.adminResult = payload.admin_result;
+      state.admin = payload.admin_result.snapshot;
+    }
+    if (payload.invitation_token) {
+      state.adminInvitationToken = payload.invitation_token;
+    }
+    if (payload.error) {
+      state.adminError = payload.error;
+    }
+  } catch (error) {
+    state.adminError = String(error);
+  } finally {
+    state.adminBusy = false;
+    renderAdminScreenBody();
+    render();
+  }
+}
+
+function renderAdminScreenBody() {
+  const body = byId("screen-body");
+  if (!body || byId("overlay").hidden) return;
+  if (byId("admin-screen")) {
+    body.innerHTML = renderAdminScreen();
+    bindAdminControls();
+  }
+}
+
+function renderAdminStatusBanner() {
+  const snapshot = adminSnapshot();
+  const result = state.adminResult;
+  let rights = "Administrator rights have not been checked yet.";
+  if (snapshot?.administrator === true) {
+    rights = "Signed in as a server administrator.";
+  } else if (snapshot?.administrator === false) {
+    rights = "The signed-in account is not a server administrator.";
+  }
+  return `<div class="sync-summary">
+    <p><strong>${escapeHtml(rights)}</strong></p>
+    <p>Server: ${escapeHtml(snapshot?.base_url || "not configured")}</p>
+    <p>Account: ${escapeHtml(state.adminAccountEmail || "not signed in")}</p>
+    ${!state.adminSignedIn ? `<p class="event-error">Sign in on the Hosted Account screen before administering this server.</p>` : ""}
+    ${state.adminBusy ? `<p class="muted">Contacting the hosted server&hellip;</p>` : ""}
+    ${state.adminError ? `<p class="event-error">${escapeHtml(state.adminError)}</p>` : ""}
+    ${result ? `<p class="${result.outcome === "accepted" ? "muted" : "event-error"}">${escapeHtml(ACCOUNT_OUTCOME_LABELS[result.outcome] || result.outcome)}: ${escapeHtml(result.message)}${result.request_id ? ` (request ${escapeHtml(result.request_id)})` : ""}</p>` : ""}
+    ${result && result.retryable ? `<p class="muted">This request can be retried without any server changes.</p>` : ""}
+  </div>`;
+}
+
+// Renders the single-use invitation token exactly once. The token is not stored
+// by Rust, the browser, or the support record, so it disappears as soon as
+// another administration request runs.
+function renderAdminInvitationToken() {
+  if (!state.adminInvitationToken) return "";
+  return `<div class="sync-summary">
+    <p><strong>Single-use invitation token</strong></p>
+    <p><code>${escapeHtml(state.adminInvitationToken)}</code></p>
+    <p class="muted">Shown once and never stored. The hosted server also emailed it to the invitee. Copy it now if you need to deliver it yourself.</p>
+  </div>`;
+}
+
+function renderAdminHosting() {
+  const hosting = adminSnapshot()?.hosting;
+  if (!hosting) {
+    return `<p class="muted">No hosting configuration loaded yet. Refresh to read it from the server.</p>`;
+  }
+  return `<div class="sync-summary">
+    <p>Operation mode: ${escapeHtml(hosting.operation_mode || "unknown")}</p>
+    <p>Registration mode: ${escapeHtml(hosting.registration_mode || "unknown")}</p>
+    <p>Bootstrap administrator: ${hosting.bootstrap_admin_completed ? "completed" : "not completed"}</p>
+    <p>Session lifetime: ${escapeHtml(String(hosting.session_ttl_seconds ?? "unset"))}s &middot; refresh ${escapeHtml(String(hosting.refresh_ttl_seconds ?? "unset"))}s</p>
+    <p>Invitation lifetime: ${escapeHtml(String(hosting.invitation_ttl_seconds ?? "unset"))}s</p>
+    <p>Verification lifetime: ${escapeHtml(String(hosting.verification_ttl_seconds ?? "unset"))}s &middot; recovery ${escapeHtml(String(hosting.recovery_ttl_seconds ?? "unset"))}s</p>
+    <p>Email delivery: ${escapeHtml(hosting.email?.mode || "unknown")}${hosting.email?.from_address ? ` from ${escapeHtml(hosting.email.from_address)}` : ""}</p>
+    <p>Email webhook configured: ${hosting.email?.webhook_configured ? "yes" : "no"} &middot; credential configured: ${hosting.email?.credential_reference_configured ? "yes" : "no"}</p>
+    <p>Turnstile on open registration: ${hosting.turnstile?.enabled_for_open_registration ? "enabled" : "disabled"} &middot; secret configured: ${hosting.turnstile?.secret_configured ? "yes" : "no"}</p>
+    ${hosting.updated_at ? `<p>Last updated: ${escapeHtml(hosting.updated_at)}</p>` : ""}
+  </div>`;
+}
+
+function renderAdminOptions(options, selected) {
+  return [`<option value="">Leave unchanged</option>`]
+    .concat(
+      options.map(
+        ([value, label]) =>
+          `<option value="${escapeHtml(value)}"${value === selected ? " selected" : ""}>${escapeHtml(label)}</option>`,
+      ),
+    )
+    .join("");
+}
+
+function renderAdminInvitations() {
+  const invitations = adminSnapshot()?.invitations || [];
+  if (invitations.length === 0) {
+    return `<p class="muted">No invitations loaded yet. Refresh to read them from the server.</p>`;
+  }
+  return `<div class="qso-list">${invitations
+    .map((invitation) => {
+      const status = adminInvitationStatus(invitation);
+      const canResend = status === "pending" || status === "expired";
+      const canChange = status === "pending";
+      return `<article class="qso-row">
+        <strong>${escapeHtml(invitation.invited_email || "unknown")}</strong>
+        <span>${escapeHtml(invitation.role || "unknown")} &middot; ${escapeHtml(ADMIN_INVITATION_STATUS_LABELS[status] || status)}</span>
+        <small>Expires ${escapeHtml(invitation.expires_at || "never")} / resent ${escapeHtml(String(invitation.resend_count ?? 0))} times</small>
+        <div class="monitor-actions">
+          <button class="toolbar-button" type="button" data-admin-invitation="inspect" data-invite-id="${escapeHtml(invitation.invite_id)}">Inspect</button>
+          <button class="toolbar-button" type="button" data-admin-invitation="resend" data-invite-id="${escapeHtml(invitation.invite_id)}" ${canResend ? "" : "disabled"}>Resend</button>
+          <button class="toolbar-button" type="button" data-admin-invitation="expire" data-invite-id="${escapeHtml(invitation.invite_id)}" ${canChange ? "" : "disabled"}>Expire</button>
+          <button class="toolbar-button" type="button" data-admin-confirm="revoke" data-invite-id="${escapeHtml(invitation.invite_id)}" ${canChange ? "" : "disabled"}>Revoke</button>
+        </div>
+      </article>`;
+    })
+    .join("")}</div>`;
+}
+
+function renderAdminAudits() {
+  const audits = adminSnapshot()?.audits || [];
+  if (audits.length === 0) {
+    return `<p class="muted">No audit records loaded yet. Refresh to read them from the server.</p>`;
+  }
+  return `<div class="stack">
+    ${audits.length > 100 ? `<p class="muted">Showing the 100 most recent of ${escapeHtml(String(audits.length))} loaded records.</p>` : ""}
+    <div class="qso-list">${audits
+      .slice(0, 100)
+      .map(
+        (audit) => `<article class="qso-row">
+          <strong>${escapeHtml(audit.action || "unknown")}</strong>
+          <span>${escapeHtml(audit.outcome || "unknown")}${audit.target ? ` &middot; ${escapeHtml(audit.target)}` : ""}</span>
+          <small>${escapeHtml(audit.occurred_at || "unknown time")}${audit.request_id ? ` / request ${escapeHtml(audit.request_id)}` : ""}</small>
+        </article>`,
+      )
+      .join("")}</div>
+  </div>`;
+}
+
+function renderAdminScreen() {
+  const hosting = adminSnapshot()?.hosting;
+  const busy = state.adminBusy ? "disabled" : "";
+  return `<div id="admin-screen" class="stack">
+    ${renderAdminStatusBanner()}
+    ${renderAdminInvitationToken()}
+
+    <details open>
+      <summary>Hosting configuration</summary>
+      <div class="stack">
+        ${renderAdminHosting()}
+        <button type="button" data-admin-action="/api/admin/hosting/refresh" ${busy}>Refresh Hosting Configuration</button>
+        <form id="admin-hosting-form" class="stack">
+          <label>Operation mode
+            <select name="operation_mode">${renderAdminOptions(ADMIN_OPERATION_MODES, hosting?.operation_mode)}</select>
+          </label>
+          <label>Registration mode
+            <select name="registration_mode">${renderAdminOptions(ADMIN_REGISTRATION_MODES, hosting?.registration_mode)}</select>
+          </label>
+          <label>Session lifetime seconds <input name="session_ttl_seconds" type="number" min="1" class="placeholder-control" placeholder="leave blank to keep" /></label>
+          <label>Refresh lifetime seconds <input name="refresh_ttl_seconds" type="number" min="1" class="placeholder-control" placeholder="leave blank to keep" /></label>
+          <label>Invitation lifetime seconds <input name="invitation_ttl_seconds" type="number" min="1" class="placeholder-control" placeholder="leave blank to keep" /></label>
+          <label>Verification lifetime seconds <input name="verification_ttl_seconds" type="number" min="1" class="placeholder-control" placeholder="leave blank to keep" /></label>
+          <label>Recovery lifetime seconds <input name="recovery_ttl_seconds" type="number" min="1" class="placeholder-control" placeholder="leave blank to keep" /></label>
+          <button type="submit" ${busy}>Update Hosting Configuration</button>
+          <p class="muted">Only the fields you change are sent. Blank fields are left exactly as the server has them.</p>
+        </form>
+      </div>
+    </details>
+
+    <details open>
+      <summary>Invitations</summary>
+      <div class="stack">
+        ${renderAdminInvitations()}
+        <button type="button" data-admin-action="/api/admin/invitations/refresh" ${busy}>Refresh Invitations</button>
+        <form id="admin-invitation-form" class="stack">
+          <label>Logbook ID <input name="logbook_id" class="placeholder-control" placeholder="00000000-0000-4000-8000-000000000001" required /></label>
+          <label>Invited email <input name="email" type="email" class="placeholder-control" placeholder="operator@example.test" required /></label>
+          <label>Role
+            <select name="role">${ADMIN_ROLES.map(([value, label]) => `<option value="${escapeHtml(value)}">${escapeHtml(label)}</option>`).join("")}</select>
+          </label>
+          <button type="submit" ${busy}>Create Invitation</button>
+          <p class="muted">The server emails the invitee and returns a single-use token that is shown here once and never stored.</p>
+        </form>
+      </div>
+    </details>
+
+    <details>
+      <summary>Audit log</summary>
+      <div class="stack">
+        ${renderAdminAudits()}
+        <button type="button" data-admin-action="/api/admin/audits/refresh" ${busy}>Refresh Audit Log</button>
+      </div>
+    </details>
+  </div>`;
+}
+
+function adminFormValues(form) {
+  const values = {};
+  new FormData(form).forEach((value, key) => {
+    const text = String(value).trim();
+    if (!text) return;
+    values[key] = key.endsWith("_seconds") ? Number(text) : text;
+  });
+  return values;
+}
+
+function bindAdminControls() {
+  byId("admin-hosting-form")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    await adminRequest("/api/admin/hosting/update", adminFormValues(event.target));
+  });
+  byId("admin-invitation-form")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    await adminRequest("/api/admin/invitations/create", adminFormValues(event.target));
+  });
+  document.querySelectorAll("[data-admin-action]").forEach((button) => {
+    button.addEventListener("click", () => adminRequest(button.dataset.adminAction, {}));
+  });
+  document.querySelectorAll("[data-admin-invitation]").forEach((button) => {
+    button.addEventListener("click", () =>
+      adminRequest(`/api/admin/invitations/${button.dataset.adminInvitation}`, {
+        invite_id: button.dataset.inviteId,
+      }),
+    );
+  });
+  document.querySelectorAll("[data-admin-confirm]").forEach((button) => {
+    button.addEventListener("click", () => {
+      if (!window.confirm("Revoking an invitation cannot be undone on the hosted server. Continue?")) return;
+      adminRequest(`/api/admin/invitations/${button.dataset.adminConfirm}`, {
+        invite_id: button.dataset.inviteId,
+      });
+    });
+  });
+}
+
+async function openAdminScreen() {
+  await refreshAdmin();
+  openScreen("admin");
+}

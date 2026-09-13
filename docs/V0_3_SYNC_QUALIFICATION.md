@@ -37,6 +37,25 @@ repeatable evidence checklist.
 | Physical LAN trust | #30, #31 | Two desktop peers, iOS plus desktop peer, IPv4 and IPv6 networks where available | Pairing tokens are single-use and expire, generated endpoint auth is distinct from one-time pairing codes, trusted peers can read signed LAN event ranges, revoked peers fail immediately, replayed nonces fail, wrong-logbook peers fail, and untrusted peers cannot read or write. |
 | Migration and recovery matrix | #31 | Hosted web/server, desktop, iOS, self-hosted server | v0.2 absent/legacy queue state, corrupt queue state, interrupted sending state, partial push accepted-prefix/rejected-tail, expired auth, revoked auth, restore, duplicate delivery, reordered delivery, clock skew, and concurrent edits preserve valid chains and projections. |
 
+## Automated Evidence Already Covered
+
+These rows still need physical-device confirmation, but the repository-side
+behavior they depend on is proven by deterministic tests. Re-run them before a
+qualification pass and record the output instead of re-deriving the behavior by
+hand.
+
+| Behavior | Command | Test |
+| --- | --- | --- |
+| Hosted push refuses cross-logbook event batches | `cargo test -p ham-server sync_push_` | `sync_push_rejects_events_scoped_to_another_logbook` |
+| Hosted push reports divergence with the shared status vocabulary and reconciles after a pull | `cargo test -p ham-server sync_push_` | `sync_push_reports_divergence_with_the_shared_replication_vocabulary` |
+| Self-hosted HTTP push refuses a divergent branch, keeps the durable head, and recovers by pull-then-reapply | `cargo test -p ham-server self_hosted_wire` | `self_hosted_wire_endpoint_rejects_divergent_branch_and_reconciles_after_pull` |
+| iOS first-launch queue initialization, legacy `version: 0` migration, corrupt-queue quarantine, and interrupted atomic-write promotion | `cargo test -p ham-ios-ffi sync_offline_queue_recover` | `sync_offline_queue_recover_*` |
+
+Known harness limitation: the durable self-hosted metadata store keeps its
+SurrealKV lock for the life of the process, so a server restart cannot be
+exercised in-process. Restart, upgrade, and restore rows must be qualified with
+a real process restart on the target machine.
+
 ## Evidence To Capture
 
 - Tested commit SHA and build number.

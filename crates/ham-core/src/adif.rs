@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
+use crate::plugin_sdk::{ProposalEnvelope, PROPOSAL_QSO_CREATE};
 use chrono::{DateTime, NaiveDate, NaiveTime, TimeZone, Utc};
-use ham_plugin_sdk::{ProposalEnvelope, PROPOSAL_QSO_CREATE};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use uuid::Uuid;
@@ -459,7 +459,7 @@ fn append_date_time(output: &mut String, payload: &Value) {
 
 #[cfg(test)]
 mod tests {
-    use ham_plugin_sdk::{PluginCapability, PluginManifest};
+    use crate::plugin_sdk::{PluginCapability, PluginManifest};
 
     use crate::{InMemoryEventBus, InMemoryLogbookEventStore, OperatorRole};
     use crate::{LogbookEventStore, NewLogbookEvent};
@@ -535,7 +535,7 @@ mod tests {
         let device_id = Uuid::new_v4();
         store
             .append_event(NewLogbookEvent {
-                event_type: ham_plugin_sdk::OFFICIAL_LOG_QSO_CREATED.to_owned(),
+                event_type: crate::plugin_sdk::OFFICIAL_LOG_QSO_CREATED.to_owned(),
                 logbook_id,
                 entity_id: Some(qso_id),
                 author_operator_id: None,
@@ -558,7 +558,7 @@ mod tests {
             .unwrap();
         store
             .append_event(NewLogbookEvent {
-                event_type: ham_plugin_sdk::OFFICIAL_LOG_QSO_DELETED.to_owned(),
+                event_type: crate::plugin_sdk::OFFICIAL_LOG_QSO_DELETED.to_owned(),
                 logbook_id,
                 entity_id: Some(qso_id),
                 author_operator_id: None,

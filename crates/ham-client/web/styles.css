@@ -1,0 +1,1311 @@
+/* ---------------------------------------------------------------------------
+   Theme tokens.
+
+   Light is the base definition so a page rendered before the theme attribute is
+   applied still has a complete palette. `data-theme="system"` (the default)
+   follows the host through the media query; `data-theme="light"` and
+   `data-theme="dark"` are explicit operator choices that win over the host.
+   Every component below reads tokens only, so a layout never has to know which
+   theme is active.
+--------------------------------------------------------------------------- */
+:root {
+  color-scheme: light;
+  --bg: #eef1f5;
+  --deck: #f7f9fb;
+  --panel: #ffffff;
+  --panel-strong: #eef2f7;
+  --well: #ffffff;
+  --line: #d5dce5;
+  --line-strong: #bcc6d3;
+  --text: #131922;
+  --muted: #4d5a6b;
+  --faint: #78859a;
+  --accent: #a5540b;
+  --accent-ink: #fff6e6;
+  --accent-wash: rgba(165, 84, 11, 0.1);
+  --accent-edge: rgba(165, 84, 11, 0.45);
+  --accent-strong: #7d3f07;
+  --ok: #136c46;
+  --ok-wash: rgba(19, 108, 70, 0.1);
+  --info: #0d5f86;
+  --info-wash: rgba(13, 95, 134, 0.12);
+  --warn: #8a5a00;
+  --warn-wash: rgba(138, 90, 0, 0.13);
+  --danger: #a52a21;
+  --danger-wash: rgba(165, 42, 33, 0.12);
+  --violet: #5c3fbe;
+  --violet-wash: rgba(92, 63, 190, 0.12);
+  --shadow: 0 1px 2px rgba(19, 25, 34, 0.06), 0 12px 30px rgba(19, 25, 34, 0.08);
+  --row-alt: rgba(19, 25, 34, 0.022);
+  --sun-bg: var(--accent-wash);
+  --sun-fg: var(--accent);
+  --moon-bg: transparent;
+  --moon-fg: var(--faint);
+  --system-bg: transparent;
+  --system-fg: var(--faint);
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg: #0b0e13;
+    --deck: #11151c;
+    --panel: #161b23;
+    --panel-strong: #1c222c;
+    --well: #0a0e14;
+    --line: #262e3a;
+    --line-strong: #333d4d;
+    --text: #e8edf5;
+    --muted: #8b98ab;
+    --faint: #5c6878;
+    --accent: #ffb545;
+    --accent-ink: #221503;
+    --accent-wash: rgba(255, 181, 69, 0.14);
+    --accent-edge: rgba(255, 181, 69, 0.45);
+    --accent-strong: #ffd08a;
+    --ok: #3ddc97;
+    --ok-wash: rgba(61, 220, 151, 0.12);
+    --info: #4ecdff;
+    --info-wash: rgba(78, 205, 255, 0.14);
+    --warn: #f5c56f;
+    --warn-wash: rgba(245, 197, 111, 0.15);
+    --danger: #ff8f8f;
+    --danger-wash: rgba(255, 143, 143, 0.14);
+    --violet: #a78bfa;
+    --violet-wash: rgba(167, 139, 250, 0.15);
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 14px 34px rgba(0, 0, 0, 0.42);
+    --row-alt: rgba(255, 255, 255, 0.014);
+    --moon-bg: var(--accent-wash);
+    --moon-fg: var(--accent);
+    --sun-bg: transparent;
+    --sun-fg: var(--faint);
+  }
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #0b0e13;
+  --deck: #11151c;
+  --panel: #161b23;
+  --panel-strong: #1c222c;
+  --well: #0a0e14;
+  --line: #262e3a;
+  --line-strong: #333d4d;
+  --text: #e8edf5;
+  --muted: #8b98ab;
+  --faint: #5c6878;
+  --accent: #ffb545;
+  --accent-ink: #221503;
+  --accent-wash: rgba(255, 181, 69, 0.14);
+  --accent-edge: rgba(255, 181, 69, 0.45);
+  --accent-strong: #ffd08a;
+  --ok: #3ddc97;
+  --ok-wash: rgba(61, 220, 151, 0.12);
+  --info: #4ecdff;
+  --info-wash: rgba(78, 205, 255, 0.14);
+  --warn: #f5c56f;
+  --warn-wash: rgba(245, 197, 111, 0.15);
+  --danger: #ff8f8f;
+  --danger-wash: rgba(255, 143, 143, 0.14);
+  --violet: #a78bfa;
+  --violet-wash: rgba(167, 139, 250, 0.15);
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 14px 34px rgba(0, 0, 0, 0.42);
+  --row-alt: rgba(255, 255, 255, 0.014);
+  --moon-bg: var(--accent-wash);
+  --moon-fg: var(--accent);
+  --sun-bg: transparent;
+  --sun-fg: var(--faint);
+}
+
+:root[data-theme="system"] .theme-option[data-theme-option="system"],
+:root:not([data-theme="light"]):not([data-theme="dark"]) .theme-option[data-theme-option="system"] {
+  background: var(--accent-wash);
+  color: var(--accent);
+}
+
+:root[data-theme="light"] .theme-option[data-theme-option="light"],
+:root[data-theme="dark"] .theme-option[data-theme-option="dark"] {
+  background: var(--accent-wash);
+  color: var(--accent);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+  background: var(--bg);
+  color: var(--text);
+}
+
+button,
+select,
+input {
+  font: inherit;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ---------------------------------------------------------------------------
+   Shell frame. Every layout uses the same five regions; the layout skins near
+   the bottom of this file decide which ones are visible and how they are sized.
+--------------------------------------------------------------------------- */
+.app-shell {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: 56px auto minmax(0, 1fr) var(--bottom-height, 190px) 28px;
+  height: 100vh;
+}
+
+/* ---------------------------------------------------------------------------
+   Top menu bar. This replaces the old left activity rail: navigation lives on
+   the vertical axis now, so the horizontal axis belongs entirely to the log.
+--------------------------------------------------------------------------- */
+.menubar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 0 14px;
+  border-bottom: 1px solid var(--line);
+  background: var(--deck);
+  overflow: hidden;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding-right: 14px;
+  border-right: 1px solid var(--line);
+  flex: none;
+}
+
+.brand-mark {
+  display: grid;
+  width: 26px;
+  height: 26px;
+  place-items: center;
+  border-radius: 7px;
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.brand-text b {
+  display: block;
+  font-size: 13.5px;
+  line-height: 1.15;
+}
+
+.brand-text span {
+  color: var(--faint);
+  font-size: 10.5px;
+}
+
+.modes {
+  display: flex;
+  gap: 2px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.mode-button {
+  border: 0;
+  border-radius: 7px;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 9px 12px;
+  font-size: 12.5px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.mode-button:hover {
+  color: var(--text);
+  background: var(--panel-strong);
+}
+
+.mode-button.is-active {
+  background: var(--accent-wash);
+  color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent-edge);
+}
+
+.menubar-right {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  flex: none;
+}
+
+.omni {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--well);
+  color: var(--faint);
+  cursor: pointer;
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+
+.omni kbd {
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  padding: 2px 5px;
+  font-size: 9.5px;
+  font-weight: 700;
+}
+
+.theme-toggle {
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--well);
+}
+
+.theme-option {
+  width: 28px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--faint);
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.menubar-select select {
+  min-height: 30px;
+  max-width: 180px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--well);
+  color: var(--text);
+  padding: 0 8px;
+  font-size: 12px;
+}
+
+.chip-row {
+  display: flex;
+  gap: 6px;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background: var(--well);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.chip .dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--faint);
+}
+
+.chip .dot.ok {
+  background: var(--ok);
+}
+
+.chip .dot.warn {
+  background: var(--warn);
+}
+
+.chip .dot.danger {
+  background: var(--danger);
+}
+
+.chip .dot.info {
+  background: var(--info);
+}
+
+.menu-more {
+  position: relative;
+}
+
+.more-menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  z-index: 40;
+  display: grid;
+  min-width: 190px;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+}
+
+.more-menu[hidden] {
+  display: none;
+}
+
+.more-item {
+  border: 0;
+  border-radius: 7px;
+  background: none;
+  color: var(--text);
+  cursor: pointer;
+  padding: 8px 10px;
+  text-align: left;
+  font-size: 12.5px;
+}
+
+.more-item:hover {
+  background: var(--panel-strong);
+}
+
+.toolbar-button {
+  min-height: 30px;
+  padding: 0 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--text);
+  cursor: pointer;
+  font-size: 12.5px;
+}
+
+.toolbar-button:hover {
+  border-color: var(--accent-edge);
+  background: var(--accent-wash);
+}
+
+/* ---------------------------------------------------------------------------
+   Workspace heading
+--------------------------------------------------------------------------- */
+.workspace-title-row {
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+  padding: 12px 18px 10px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg);
+}
+
+.workspace-title-row h1 {
+  margin: 0;
+  font-size: 20px;
+  line-height: 1.2;
+}
+
+.workspace-description {
+  margin: 0;
+  color: var(--faint);
+  font-size: 12.5px;
+}
+
+.eyebrow {
+  margin: 0;
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+/* ---------------------------------------------------------------------------
+   Regions
+--------------------------------------------------------------------------- */
+.workspace-shell {
+  display: grid;
+  grid-template-columns: var(--rail-width, 0) minmax(0, 1fr) var(--inspector-width, 320px);
+  min-height: 0;
+}
+
+.panel-region {
+  min-width: 0;
+  min-height: 0;
+  padding: 14px;
+  overflow: auto;
+}
+
+/* Regions claim their column explicitly: a hidden rail must leave a gap that
+   collapses, not shove the log into the rail's narrow column. */
+.rail-region {
+  grid-column: 1;
+  border-right: 1px solid var(--line);
+  background: var(--deck);
+}
+
+.center-region {
+  grid-column: 2;
+}
+
+.rail-region[hidden] {
+  display: none;
+}
+
+/* A layout only pays for the rail when the workspace has something to put in
+   it, so an empty rail takes no width at all. */
+.app-shell[data-rail="empty"] {
+  --rail-width: 0;
+}
+
+.inspector-region {
+  grid-column: 3;
+  border-left: 1px solid var(--line);
+  background: var(--deck);
+}
+
+.bottom-region {
+  border-top: 1px solid var(--line);
+  background: var(--deck);
+  overflow: auto;
+  padding: 12px 14px;
+}
+
+.panel-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(var(--card-min, 280px), 1fr));
+  gap: var(--card-gap, 12px);
+  /* Cards size to their content instead of stretching to the tallest sibling,
+     which is what made the dense layouts read as mostly empty. */
+  align-items: start;
+}
+
+.stack {
+  display: grid;
+  gap: var(--card-gap, 12px);
+  align-content: start;
+}
+
+.horizontal {
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+}
+
+.region-heading {
+  margin-bottom: 10px;
+  color: var(--faint);
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.panel-card {
+  min-height: 148px;
+  border: 1px solid var(--line);
+  border-radius: var(--card-radius, 8px);
+  background: var(--panel);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+
+.panel-card header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel-strong);
+}
+
+.panel-card h3 {
+  margin: 0;
+  font-size: 15px;
+}
+
+.panel-card .source {
+  color: var(--faint);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.panel-card-actions,
+.panel-opener {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.panel-opener {
+  /* The "open a card" control is a strip above the cards, never a card-sized
+     hole in the grid. */
+  grid-column: 1 / -1;
+  align-self: start;
+  align-items: center;
+  padding: 8px;
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--card-radius, 8px);
+  background: var(--panel-strong);
+}
+
+.panel-open-select {
+  min-width: 180px;
+}
+
+.icon-button {
+  display: inline-grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: var(--well);
+  color: var(--text);
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.icon-button:disabled {
+  cursor: default;
+  opacity: 0.35;
+}
+
+.panel-content {
+  padding: var(--card-padding, 12px);
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.map-canvas {
+  position: relative;
+  min-height: 300px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+  background:
+    linear-gradient(90deg, var(--info-wash) 1px, transparent 1px),
+    linear-gradient(0deg, var(--info-wash) 1px, transparent 1px),
+    var(--well);
+  background-size: 42px 42px;
+}
+
+.map-hud {
+  position: absolute;
+  left: 12px;
+  top: 12px;
+  display: grid;
+  gap: 4px;
+  max-width: calc(100% - 24px);
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--text);
+}
+
+.map-dot {
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--well);
+  border-radius: 50%;
+  background: var(--ok);
+  box-shadow: 0 0 0 4px var(--ok-wash);
+}
+
+.station-dot {
+  width: 16px;
+  height: 16px;
+  background: var(--warn);
+  box-shadow: 0 0 0 4px var(--warn-wash);
+}
+
+.metric-grid,
+.filter-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.metric-grid span,
+.check-row {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--well);
+  padding: 8px;
+}
+
+.check-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--text);
+}
+
+.placeholder-control {
+  width: 100%;
+  min-height: 38px;
+  margin-top: 8px;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: var(--well);
+  color: var(--text);
+  padding: 0 10px;
+}
+
+/* ---------------------------------------------------------------------------
+   Status bar. The four signals that can interrupt an operator come first; the
+   map cursor readouts only appear where a map is actually on screen.
+--------------------------------------------------------------------------- */
+.status-bar {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  padding: 0 12px;
+  border-top: 1px solid var(--line);
+  background: var(--deck);
+  color: var(--muted);
+  font-size: 12px;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.status-primary {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.status-secondary,
+.status-map {
+  color: var(--faint);
+}
+
+.status-map {
+  display: none;
+}
+
+.app-shell[data-show-map-status="true"] .status-map {
+  display: inline;
+}
+
+/* ---------------------------------------------------------------------------
+   Command palette and overlay screens
+--------------------------------------------------------------------------- */
+.command-palette {
+  width: min(720px, calc(100vw - 32px));
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel);
+  color: var(--text);
+  box-shadow: var(--shadow);
+}
+
+.command-palette::backdrop {
+  background: rgba(0, 0, 0, 0.55);
+}
+
+.palette-inner {
+  display: grid;
+  gap: 10px;
+}
+
+.command-palette input {
+  min-height: 36px;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: var(--well);
+  color: var(--text);
+  padding: 0 10px;
+}
+
+.command-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  padding: 10px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.command-row.is-selected {
+  border: 1px solid var(--accent-edge);
+  background: var(--accent-wash);
+}
+
+.command-row small,
+.muted {
+  color: var(--muted);
+}
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(0, 0, 0, 0.58);
+  z-index: 50;
+}
+
+.overlay[hidden] {
+  display: none;
+}
+
+.screen {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  width: min(960px, 100%);
+  max-height: min(720px, calc(100vh - 40px));
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+
+.screen h2 {
+  margin: 0;
+  font-size: 20px;
+  line-height: 1.2;
+}
+
+.screen-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel-strong);
+}
+
+.screen-body {
+  display: grid;
+  min-height: 0;
+  gap: 14px;
+  padding: 16px;
+  overflow: auto;
+}
+
+.settings-grid,
+.plugin-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+}
+
+.settings-card,
+.plugin-card {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px;
+  background: var(--panel-strong);
+}
+
+.plugin-card h3,
+.settings-card h3 {
+  margin: 0 0 8px;
+  font-size: 15px;
+}
+
+/* Appearance picker inside Settings */
+.layout-choices {
+  display: grid;
+  gap: 8px;
+  margin: 10px 0;
+}
+
+.layout-choice {
+  display: grid;
+  gap: 3px;
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  background: var(--well);
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+}
+
+.layout-choice.is-active {
+  border-color: var(--accent-edge);
+  background: var(--accent-wash);
+}
+
+.layout-choice b {
+  font-size: 13.5px;
+}
+
+.layout-choice small {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.layout-choice .layout-flags {
+  display: flex;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.layout-flag {
+  border-radius: 4px;
+  padding: 2px 6px;
+  background: var(--panel-strong);
+  color: var(--faint);
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.layout-flag.entry {
+  background: var(--ok-wash);
+  color: var(--ok);
+}
+
+.layout-flag.no-entry {
+  background: var(--warn-wash);
+  color: var(--warn);
+}
+
+.theme-choices {
+  display: flex;
+  gap: 8px;
+}
+
+.theme-choice {
+  flex: 1;
+  min-height: 36px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--well);
+  color: var(--text);
+  cursor: pointer;
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.theme-choice.is-active {
+  border-color: var(--accent-edge);
+  background: var(--accent-wash);
+  color: var(--accent);
+}
+
+.monitor-controls {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 8px;
+}
+
+.monitor-controls label {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.monitor-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 10px 0;
+}
+
+.event-list {
+  display: grid;
+  gap: 8px;
+  max-height: 360px;
+  overflow: auto;
+}
+
+.event-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--well);
+  color: var(--text);
+  padding: 8px;
+  text-align: left;
+}
+
+.event-row.is-selected {
+  border-color: var(--accent-edge);
+  background: var(--accent-wash);
+}
+
+.event-main,
+.event-meta {
+  display: grid;
+  gap: 4px;
+}
+
+.event-main span,
+.event-meta small {
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.event-error {
+  color: var(--danger);
+}
+
+.severity {
+  justify-self: end;
+  border-radius: 999px;
+  padding: 2px 8px;
+  color: var(--accent-ink);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.severity-trace,
+.severity-debug {
+  background: var(--faint);
+}
+
+.severity-info {
+  background: var(--info);
+}
+
+.severity-warn {
+  background: var(--warn);
+}
+
+.severity-error {
+  background: var(--danger);
+}
+
+.path-block {
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--well);
+  padding: 12px;
+}
+
+.qso-form,
+.qso-list {
+  display: grid;
+  gap: 10px;
+}
+
+.qso-form label {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.qso-row {
+  display: grid;
+  gap: 4px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--well);
+  padding: 10px;
+}
+
+.qso-row span,
+.qso-row small {
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.sync-panel {
+  display: grid;
+  gap: 10px;
+}
+
+.sync-summary {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 10px;
+  background: var(--well);
+}
+
+.sync-summary p {
+  margin: 0 0 8px;
+}
+
+.sync-summary small {
+  overflow-wrap: anywhere;
+}
+
+.conflict-review-list,
+.conflict-list,
+.conflict-resolution-panel {
+  display: grid;
+  gap: 10px;
+}
+
+.conflict-report {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.conflict-item {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--well);
+  padding: 10px;
+}
+
+.conflict-note {
+  min-height: 76px;
+  resize: vertical;
+}
+
+.lan-pairing-grid {
+  margin-top: 10px;
+}
+
+.lan-pairing-issued {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--well);
+  padding: 10px;
+}
+
+.lan-pairing-issued code {
+  overflow-wrap: anywhere;
+}
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  margin: 4px 4px 0 0;
+  border-radius: 999px;
+  background: var(--panel-strong);
+  color: var(--muted);
+  padding: 0 8px;
+  font-size: 12px;
+}
+
+/* ---------------------------------------------------------------------------
+   Layout skins.
+
+   Each layout rearranges the same regions. The custom properties above are the
+   only knobs a skin needs, so adding a sixth layout means adding one block here
+   plus one entry in the Rust catalog.
+--------------------------------------------------------------------------- */
+
+/* Operating Deck: entry deck welded to the bottom, context rail on the left. */
+.app-shell[data-layout="operating-deck"] {
+  --rail-width: 236px;
+  --inspector-width: 316px;
+  --bottom-height: 210px;
+  --card-min: 260px;
+  --card-gap: 10px;
+  --card-radius: 8px;
+}
+
+.app-shell[data-layout="operating-deck"] .bottom-region {
+  border-top: 2px solid var(--accent);
+}
+
+.app-shell[data-layout="operating-deck"] .panel-card {
+  min-height: 130px;
+}
+
+/* Command Center: the map owns the window and panels float above it. */
+.app-shell[data-layout="command-center"] {
+  --rail-width: 0;
+  --inspector-width: 344px;
+  --bottom-height: 168px;
+  --card-min: 320px;
+  --card-gap: 14px;
+  --card-radius: 16px;
+}
+
+.app-shell[data-layout="command-center"] .rail-region {
+  display: none;
+}
+
+.app-shell[data-layout="command-center"] .center-region {
+  background:
+    radial-gradient(1200px 700px at 30% 30%, var(--info-wash), transparent 60%),
+    var(--bg);
+}
+
+.app-shell[data-layout="command-center"] .panel-card,
+.app-shell[data-layout="command-center"] .panel-opener {
+  border-color: var(--line-strong);
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.22);
+}
+
+.app-shell[data-layout="command-center"] .inspector-region,
+.app-shell[data-layout="command-center"] .bottom-region {
+  background: var(--panel);
+}
+
+/* Field Notebook: relaxed card board, no rail, generous spacing. */
+.app-shell[data-layout="field-notebook"] {
+  --rail-width: 0;
+  --inspector-width: 340px;
+  --bottom-height: 200px;
+  --card-min: 340px;
+  --card-gap: 18px;
+  --card-radius: 16px;
+  --card-padding: 16px;
+}
+
+.app-shell[data-layout="field-notebook"] .rail-region {
+  display: none;
+}
+
+.app-shell[data-layout="field-notebook"] .panel-region {
+  padding: 20px;
+}
+
+.app-shell[data-layout="field-notebook"] .panel-card {
+  min-height: 170px;
+}
+
+.app-shell[data-layout="field-notebook"] .panel-card header {
+  padding: 15px 16px;
+  background: var(--panel);
+  border-bottom-color: var(--line);
+}
+
+.app-shell[data-layout="field-notebook"] .workspace-title-row h1 {
+  font-size: 24px;
+}
+
+/* Focus Console: one centred column, everything else collapsed. */
+.app-shell[data-layout="focus-console"] {
+  --rail-width: 0;
+  --inspector-width: 300px;
+  --bottom-height: 0px;
+  --card-min: 100%;
+  --card-gap: 14px;
+  --card-radius: 14px;
+}
+
+.app-shell[data-layout="focus-console"] .rail-region,
+.app-shell[data-layout="focus-console"] .bottom-region {
+  display: none;
+}
+
+.app-shell[data-layout="focus-console"] .center-region {
+  padding: 28px 24px;
+}
+
+.app-shell[data-layout="focus-console"] .panel-grid {
+  max-width: 840px;
+  margin: 0 auto;
+}
+
+.app-shell[data-layout="focus-console"] .status-secondary {
+  display: none;
+}
+
+/* Tabbed Workbench: explorer rail, dense centre, tall inspector split. */
+.app-shell[data-layout="tabbed-workbench"] {
+  --rail-width: 262px;
+  --inspector-width: 330px;
+  --bottom-height: 300px;
+  --card-min: 300px;
+  --card-gap: 8px;
+  --card-radius: 6px;
+  --card-padding: 10px;
+}
+
+.app-shell[data-layout="tabbed-workbench"] .panel-region {
+  padding: 10px;
+}
+
+.app-shell[data-layout="tabbed-workbench"] .panel-card {
+  min-height: 118px;
+}
+
+.app-shell[data-layout="tabbed-workbench"] .panel-card header {
+  padding: 8px 10px;
+}
+
+.app-shell[data-layout="tabbed-workbench"] .panel-card h3 {
+  font-size: 13.5px;
+}
+
+.app-shell[data-layout="tabbed-workbench"] .workspace-title-row {
+  padding: 8px 14px;
+}
+
+.app-shell[data-layout="tabbed-workbench"] .workspace-title-row h1 {
+  font-size: 16px;
+}
+
+/* ---------------------------------------------------------------------------
+   Narrow windows: the menu bar wraps and the side regions step aside before the
+   log does.
+--------------------------------------------------------------------------- */
+@media (max-width: 1180px) {
+  .app-shell {
+    --rail-width: 0 !important;
+  }
+
+  .rail-region {
+    display: none;
+  }
+}
+
+@media (max-width: 900px) {
+  .app-shell {
+    grid-template-rows: auto auto minmax(0, 1fr) var(--bottom-height, 180px) 42px;
+    --inspector-width: 0 !important;
+  }
+
+  .menubar {
+    flex-wrap: wrap;
+    padding: 8px 12px;
+    height: auto;
+    overflow: visible;
+  }
+
+  .workspace-shell {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .inspector-region {
+    display: none;
+  }
+
+  .status-bar {
+    flex-wrap: wrap;
+    gap: 8px 14px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation: none !important;
+    transition: none !important;
+  }
+}

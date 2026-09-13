@@ -6,9 +6,9 @@
 
 use std::collections::HashMap;
 
+use crate::plugin_sdk::{PluginCapability, PluginManifest, ServiceType};
 use async_trait::async_trait;
 use chrono::{DateTime, Duration, Utc};
-use ham_plugin_sdk::{PluginCapability, PluginManifest, ServiceType};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use thiserror::Error;

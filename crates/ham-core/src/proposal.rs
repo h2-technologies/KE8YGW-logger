@@ -1,9 +1,17 @@
-use chrono::{DateTime, Utc};
-use ham_plugin_sdk::{
+use crate::plugin_sdk::{
     PluginCapability, PluginManifest, ProposalEnvelope, OFFICIAL_LOG_ACTIVATION_CANCELLED,
     OFFICIAL_LOG_ACTIVATION_CREATED, OFFICIAL_LOG_ACTIVATION_ENDED,
     OFFICIAL_LOG_ACTIVATION_NOTE_ADDED, OFFICIAL_LOG_ACTIVATION_STARTED,
-    OFFICIAL_LOG_ACTIVATION_UPDATED, OFFICIAL_LOG_NET_CHECKIN_CREATED,
+    OFFICIAL_LOG_ACTIVATION_UPDATED, OFFICIAL_LOG_EMCOMM_ACTIVITY_LOGGED,
+    OFFICIAL_LOG_EMCOMM_ASSIGNMENT_CREATED, OFFICIAL_LOG_EMCOMM_ASSIGNMENT_RELEASED,
+    OFFICIAL_LOG_EMCOMM_ASSIGNMENT_UPDATED, OFFICIAL_LOG_EMCOMM_INCIDENT_CLOSED,
+    OFFICIAL_LOG_EMCOMM_INCIDENT_OPENED, OFFICIAL_LOG_EMCOMM_INCIDENT_UPDATED,
+    OFFICIAL_LOG_EMCOMM_MESSAGE_ACKNOWLEDGED, OFFICIAL_LOG_EMCOMM_MESSAGE_CANCELLED,
+    OFFICIAL_LOG_EMCOMM_MESSAGE_CREATED, OFFICIAL_LOG_EMCOMM_MESSAGE_RECEIVED,
+    OFFICIAL_LOG_EMCOMM_MESSAGE_TRANSMITTED, OFFICIAL_LOG_EMCOMM_MESSAGE_UPDATED,
+    OFFICIAL_LOG_EMCOMM_PERIOD_CLOSED, OFFICIAL_LOG_EMCOMM_PERIOD_OPENED,
+    OFFICIAL_LOG_EMCOMM_PERSON_CHECKED_IN, OFFICIAL_LOG_EMCOMM_PERSON_CHECKED_OUT,
+    OFFICIAL_LOG_EMCOMM_PERSON_UPDATED, OFFICIAL_LOG_NET_CHECKIN_CREATED,
     OFFICIAL_LOG_NET_CHECKIN_DELETED, OFFICIAL_LOG_NET_CHECKIN_UPDATED,
     OFFICIAL_LOG_NET_REPORT_EXPORTED, OFFICIAL_LOG_NET_SESSION_CANCELLED,
     OFFICIAL_LOG_NET_SESSION_ENDED, OFFICIAL_LOG_NET_SESSION_STARTED,
@@ -13,14 +21,22 @@ use ham_plugin_sdk::{
     OFFICIAL_LOG_QSO_CORRECTED, OFFICIAL_LOG_QSO_CREATED, OFFICIAL_LOG_QSO_DELETED,
     OFFICIAL_LOG_QSO_NOTE_ADDED, OFFICIAL_LOG_QSO_RESTORED, PROPOSAL_ACTIVATION_CANCEL,
     PROPOSAL_ACTIVATION_CREATE, PROPOSAL_ACTIVATION_END, PROPOSAL_ACTIVATION_NOTE_ADD,
-    PROPOSAL_ACTIVATION_START, PROPOSAL_ACTIVATION_UPDATE, PROPOSAL_NET_CHECKIN_CREATE,
-    PROPOSAL_NET_CHECKIN_DELETE, PROPOSAL_NET_CHECKIN_UPDATE, PROPOSAL_NET_REPORT_EXPORT,
-    PROPOSAL_NET_SESSION_CANCEL, PROPOSAL_NET_SESSION_END, PROPOSAL_NET_SESSION_START,
-    PROPOSAL_NET_TEMPLATE_CREATE, PROPOSAL_NET_TEMPLATE_UPDATE, PROPOSAL_NET_TRAFFIC_CREATE,
-    PROPOSAL_NET_TRAFFIC_UPDATE, PROPOSAL_QSO_ACTIVATION_LINK, PROPOSAL_QSO_ACTIVATION_UNLINK,
-    PROPOSAL_QSO_CORRECT, PROPOSAL_QSO_CREATE, PROPOSAL_QSO_DELETE, PROPOSAL_QSO_NOTE_ADD,
-    PROPOSAL_QSO_RESTORE,
+    PROPOSAL_ACTIVATION_START, PROPOSAL_ACTIVATION_UPDATE, PROPOSAL_EMCOMM_ACTIVITY_LOG,
+    PROPOSAL_EMCOMM_ASSIGNMENT_CREATE, PROPOSAL_EMCOMM_ASSIGNMENT_RELEASE,
+    PROPOSAL_EMCOMM_ASSIGNMENT_UPDATE, PROPOSAL_EMCOMM_INCIDENT_CLOSE,
+    PROPOSAL_EMCOMM_INCIDENT_OPEN, PROPOSAL_EMCOMM_INCIDENT_UPDATE,
+    PROPOSAL_EMCOMM_MESSAGE_ACKNOWLEDGE, PROPOSAL_EMCOMM_MESSAGE_CANCEL,
+    PROPOSAL_EMCOMM_MESSAGE_CREATE, PROPOSAL_EMCOMM_MESSAGE_RECEIVE,
+    PROPOSAL_EMCOMM_MESSAGE_TRANSMIT, PROPOSAL_EMCOMM_MESSAGE_UPDATE, PROPOSAL_EMCOMM_PERIOD_CLOSE,
+    PROPOSAL_EMCOMM_PERIOD_OPEN, PROPOSAL_EMCOMM_PERSON_CHECK_IN, PROPOSAL_EMCOMM_PERSON_CHECK_OUT,
+    PROPOSAL_EMCOMM_PERSON_UPDATE, PROPOSAL_NET_CHECKIN_CREATE, PROPOSAL_NET_CHECKIN_DELETE,
+    PROPOSAL_NET_CHECKIN_UPDATE, PROPOSAL_NET_REPORT_EXPORT, PROPOSAL_NET_SESSION_CANCEL,
+    PROPOSAL_NET_SESSION_END, PROPOSAL_NET_SESSION_START, PROPOSAL_NET_TEMPLATE_CREATE,
+    PROPOSAL_NET_TEMPLATE_UPDATE, PROPOSAL_NET_TRAFFIC_CREATE, PROPOSAL_NET_TRAFFIC_UPDATE,
+    PROPOSAL_QSO_ACTIVATION_LINK, PROPOSAL_QSO_ACTIVATION_UNLINK, PROPOSAL_QSO_CORRECT,
+    PROPOSAL_QSO_CREATE, PROPOSAL_QSO_DELETE, PROPOSAL_QSO_NOTE_ADD, PROPOSAL_QSO_RESTORE,
 };
+use chrono::{DateTime, Utc};
 use serde_json::Value;
 use thiserror::Error;
 use uuid::Uuid;
@@ -72,6 +88,24 @@ impl OperatorRole {
                     | PROPOSAL_NET_TRAFFIC_CREATE
                     | PROPOSAL_NET_TRAFFIC_UPDATE
                     | PROPOSAL_NET_REPORT_EXPORT
+                    | PROPOSAL_EMCOMM_INCIDENT_OPEN
+                    | PROPOSAL_EMCOMM_INCIDENT_UPDATE
+                    | PROPOSAL_EMCOMM_INCIDENT_CLOSE
+                    | PROPOSAL_EMCOMM_PERIOD_OPEN
+                    | PROPOSAL_EMCOMM_PERIOD_CLOSE
+                    | PROPOSAL_EMCOMM_PERSON_CHECK_IN
+                    | PROPOSAL_EMCOMM_PERSON_UPDATE
+                    | PROPOSAL_EMCOMM_PERSON_CHECK_OUT
+                    | PROPOSAL_EMCOMM_ASSIGNMENT_CREATE
+                    | PROPOSAL_EMCOMM_ASSIGNMENT_UPDATE
+                    | PROPOSAL_EMCOMM_ASSIGNMENT_RELEASE
+                    | PROPOSAL_EMCOMM_MESSAGE_CREATE
+                    | PROPOSAL_EMCOMM_MESSAGE_UPDATE
+                    | PROPOSAL_EMCOMM_MESSAGE_TRANSMIT
+                    | PROPOSAL_EMCOMM_MESSAGE_RECEIVE
+                    | PROPOSAL_EMCOMM_MESSAGE_ACKNOWLEDGE
+                    | PROPOSAL_EMCOMM_MESSAGE_CANCEL
+                    | PROPOSAL_EMCOMM_ACTIVITY_LOG
             ),
         }
     }
@@ -313,6 +347,25 @@ fn required_capability(proposal_type: &str) -> Result<PluginCapability, Proposal
             Ok(PluginCapability::NetTrafficManage)
         }
         PROPOSAL_NET_REPORT_EXPORT => Ok(PluginCapability::NetReportExport),
+        PROPOSAL_EMCOMM_INCIDENT_OPEN
+        | PROPOSAL_EMCOMM_INCIDENT_UPDATE
+        | PROPOSAL_EMCOMM_INCIDENT_CLOSE => Ok(PluginCapability::EmCommIncidentManage),
+        PROPOSAL_EMCOMM_PERIOD_OPEN | PROPOSAL_EMCOMM_PERIOD_CLOSE => {
+            Ok(PluginCapability::EmCommPeriodManage)
+        }
+        PROPOSAL_EMCOMM_PERSON_CHECK_IN
+        | PROPOSAL_EMCOMM_PERSON_UPDATE
+        | PROPOSAL_EMCOMM_PERSON_CHECK_OUT => Ok(PluginCapability::EmCommPersonManage),
+        PROPOSAL_EMCOMM_ASSIGNMENT_CREATE
+        | PROPOSAL_EMCOMM_ASSIGNMENT_UPDATE
+        | PROPOSAL_EMCOMM_ASSIGNMENT_RELEASE => Ok(PluginCapability::EmCommAssignmentManage),
+        PROPOSAL_EMCOMM_MESSAGE_CREATE
+        | PROPOSAL_EMCOMM_MESSAGE_UPDATE
+        | PROPOSAL_EMCOMM_MESSAGE_TRANSMIT
+        | PROPOSAL_EMCOMM_MESSAGE_RECEIVE
+        | PROPOSAL_EMCOMM_MESSAGE_ACKNOWLEDGE
+        | PROPOSAL_EMCOMM_MESSAGE_CANCEL => Ok(PluginCapability::EmCommMessageManage),
+        PROPOSAL_EMCOMM_ACTIVITY_LOG => Ok(PluginCapability::EmCommActivityLog),
         other => Err(ProposalValidationError::UnsupportedProposalType(
             other.to_owned(),
         )),
@@ -563,6 +616,112 @@ where
         }
         PROPOSAL_NET_REPORT_EXPORT => {
             require_existing_net_session(store, proposal).await?;
+            Ok(())
+        }
+        PROPOSAL_EMCOMM_INCIDENT_OPEN => {
+            require_string(payload, "incident_name", "an incident")?;
+            require_string(payload, "opened_at", "an incident")?;
+            Ok(())
+        }
+        PROPOSAL_EMCOMM_INCIDENT_UPDATE | PROPOSAL_EMCOMM_INCIDENT_CLOSE => {
+            require_entity_id(proposal)?;
+            require_non_empty_correction(payload, "an incident update")?;
+            Ok(())
+        }
+        PROPOSAL_EMCOMM_PERIOD_OPEN => {
+            require_string(payload, "incident_id", "an operational period")?;
+            require_string(payload, "started_at", "an operational period")?;
+            if !payload
+                .get("period_number")
+                .is_some_and(|value| value.is_number() || value.is_string())
+            {
+                return Err(ProposalValidationError::InvalidSchema(
+                    "an operational period requires period_number".to_owned(),
+                ));
+            }
+            Ok(())
+        }
+        PROPOSAL_EMCOMM_PERIOD_CLOSE => {
+            require_entity_id(proposal)?;
+            require_string(payload, "ended_at", "closing an operational period")?;
+            Ok(())
+        }
+        PROPOSAL_EMCOMM_PERSON_CHECK_IN => {
+            for field in ["incident_id", "name", "checked_in_at"] {
+                require_string(payload, field, "an ICS 211 check-in")?;
+            }
+            Ok(())
+        }
+        PROPOSAL_EMCOMM_PERSON_UPDATE => {
+            require_entity_id(proposal)?;
+            require_non_empty_correction(payload, "a check-in correction")?;
+            Ok(())
+        }
+        PROPOSAL_EMCOMM_PERSON_CHECK_OUT => {
+            require_entity_id(proposal)?;
+            require_string(payload, "checked_out_at", "a check-out")?;
+            Ok(())
+        }
+        PROPOSAL_EMCOMM_ASSIGNMENT_CREATE => {
+            for field in ["incident_id", "person_id", "assignment"] {
+                require_string(payload, field, "an assignment")?;
+            }
+            Ok(())
+        }
+        PROPOSAL_EMCOMM_ASSIGNMENT_UPDATE => {
+            require_entity_id(proposal)?;
+            require_non_empty_correction(payload, "an assignment correction")?;
+            Ok(())
+        }
+        PROPOSAL_EMCOMM_ASSIGNMENT_RELEASE => {
+            require_entity_id(proposal)?;
+            require_string(payload, "released_at", "releasing an assignment")?;
+            Ok(())
+        }
+        PROPOSAL_EMCOMM_MESSAGE_CREATE => {
+            for field in ["incident_id", "message_number", "from", "to", "body"] {
+                require_string(payload, field, "an incident message")?;
+            }
+            validate_message_number(payload)?;
+            validate_message_precedence(payload)?;
+            Ok(())
+        }
+        PROPOSAL_EMCOMM_MESSAGE_UPDATE => {
+            require_entity_id(proposal)?;
+            require_non_empty_correction(payload, "a message correction")?;
+            if payload.contains_key("message_number") {
+                return Err(ProposalValidationError::InvalidSchema(
+                    "a message number is assigned once and cannot be corrected".to_owned(),
+                ));
+            }
+            validate_message_precedence(payload)?;
+            Ok(())
+        }
+        PROPOSAL_EMCOMM_MESSAGE_TRANSMIT => {
+            require_entity_id(proposal)?;
+            require_string(payload, "transmitted_at", "transmitting a message")?;
+            Ok(())
+        }
+        PROPOSAL_EMCOMM_MESSAGE_RECEIVE => {
+            require_entity_id(proposal)?;
+            require_string(payload, "received_at", "receiving a message")?;
+            Ok(())
+        }
+        PROPOSAL_EMCOMM_MESSAGE_ACKNOWLEDGE => {
+            require_entity_id(proposal)?;
+            require_string(payload, "acknowledged_at", "acknowledging a message")?;
+            Ok(())
+        }
+        PROPOSAL_EMCOMM_MESSAGE_CANCEL => {
+            require_entity_id(proposal)?;
+            require_string(payload, "cancelled_at", "cancelling a message")?;
+            require_string(payload, "reason", "cancelling a message")?;
+            Ok(())
+        }
+        PROPOSAL_EMCOMM_ACTIVITY_LOG => {
+            for field in ["incident_id", "occurred_at", "summary"] {
+                require_string(payload, field, "an ICS 214 activity entry")?;
+            }
             Ok(())
         }
         other => Err(ProposalValidationError::UnsupportedProposalType(
@@ -961,6 +1120,78 @@ fn to_official_event(
             OFFICIAL_LOG_NET_REPORT_EXPORTED.to_owned(),
             Some(require_entity_id(&proposal)?),
         ),
+        PROPOSAL_EMCOMM_INCIDENT_OPEN => (
+            OFFICIAL_LOG_EMCOMM_INCIDENT_OPENED.to_owned(),
+            proposal.entity_id.or_else(|| Some(Uuid::new_v4())),
+        ),
+        PROPOSAL_EMCOMM_INCIDENT_UPDATE => (
+            OFFICIAL_LOG_EMCOMM_INCIDENT_UPDATED.to_owned(),
+            Some(require_entity_id(&proposal)?),
+        ),
+        PROPOSAL_EMCOMM_INCIDENT_CLOSE => (
+            OFFICIAL_LOG_EMCOMM_INCIDENT_CLOSED.to_owned(),
+            Some(require_entity_id(&proposal)?),
+        ),
+        PROPOSAL_EMCOMM_PERIOD_OPEN => (
+            OFFICIAL_LOG_EMCOMM_PERIOD_OPENED.to_owned(),
+            proposal.entity_id.or_else(|| Some(Uuid::new_v4())),
+        ),
+        PROPOSAL_EMCOMM_PERIOD_CLOSE => (
+            OFFICIAL_LOG_EMCOMM_PERIOD_CLOSED.to_owned(),
+            Some(require_entity_id(&proposal)?),
+        ),
+        PROPOSAL_EMCOMM_PERSON_CHECK_IN => (
+            OFFICIAL_LOG_EMCOMM_PERSON_CHECKED_IN.to_owned(),
+            proposal.entity_id.or_else(|| Some(Uuid::new_v4())),
+        ),
+        PROPOSAL_EMCOMM_PERSON_UPDATE => (
+            OFFICIAL_LOG_EMCOMM_PERSON_UPDATED.to_owned(),
+            Some(require_entity_id(&proposal)?),
+        ),
+        PROPOSAL_EMCOMM_PERSON_CHECK_OUT => (
+            OFFICIAL_LOG_EMCOMM_PERSON_CHECKED_OUT.to_owned(),
+            Some(require_entity_id(&proposal)?),
+        ),
+        PROPOSAL_EMCOMM_ASSIGNMENT_CREATE => (
+            OFFICIAL_LOG_EMCOMM_ASSIGNMENT_CREATED.to_owned(),
+            proposal.entity_id.or_else(|| Some(Uuid::new_v4())),
+        ),
+        PROPOSAL_EMCOMM_ASSIGNMENT_UPDATE => (
+            OFFICIAL_LOG_EMCOMM_ASSIGNMENT_UPDATED.to_owned(),
+            Some(require_entity_id(&proposal)?),
+        ),
+        PROPOSAL_EMCOMM_ASSIGNMENT_RELEASE => (
+            OFFICIAL_LOG_EMCOMM_ASSIGNMENT_RELEASED.to_owned(),
+            Some(require_entity_id(&proposal)?),
+        ),
+        PROPOSAL_EMCOMM_MESSAGE_CREATE => (
+            OFFICIAL_LOG_EMCOMM_MESSAGE_CREATED.to_owned(),
+            proposal.entity_id.or_else(|| Some(Uuid::new_v4())),
+        ),
+        PROPOSAL_EMCOMM_MESSAGE_UPDATE => (
+            OFFICIAL_LOG_EMCOMM_MESSAGE_UPDATED.to_owned(),
+            Some(require_entity_id(&proposal)?),
+        ),
+        PROPOSAL_EMCOMM_MESSAGE_TRANSMIT => (
+            OFFICIAL_LOG_EMCOMM_MESSAGE_TRANSMITTED.to_owned(),
+            Some(require_entity_id(&proposal)?),
+        ),
+        PROPOSAL_EMCOMM_MESSAGE_RECEIVE => (
+            OFFICIAL_LOG_EMCOMM_MESSAGE_RECEIVED.to_owned(),
+            Some(require_entity_id(&proposal)?),
+        ),
+        PROPOSAL_EMCOMM_MESSAGE_ACKNOWLEDGE => (
+            OFFICIAL_LOG_EMCOMM_MESSAGE_ACKNOWLEDGED.to_owned(),
+            Some(require_entity_id(&proposal)?),
+        ),
+        PROPOSAL_EMCOMM_MESSAGE_CANCEL => (
+            OFFICIAL_LOG_EMCOMM_MESSAGE_CANCELLED.to_owned(),
+            Some(require_entity_id(&proposal)?),
+        ),
+        PROPOSAL_EMCOMM_ACTIVITY_LOG => (
+            OFFICIAL_LOG_EMCOMM_ACTIVITY_LOGGED.to_owned(),
+            proposal.entity_id.or_else(|| Some(Uuid::new_v4())),
+        ),
         other => {
             return Err(ProposalValidationError::UnsupportedProposalType(
                 other.to_owned(),
@@ -985,6 +1216,23 @@ fn to_official_event(
             "checkin_id"
         }
         PROPOSAL_NET_TRAFFIC_CREATE | PROPOSAL_NET_TRAFFIC_UPDATE => "traffic_id",
+        PROPOSAL_EMCOMM_INCIDENT_OPEN
+        | PROPOSAL_EMCOMM_INCIDENT_UPDATE
+        | PROPOSAL_EMCOMM_INCIDENT_CLOSE => "incident_id",
+        PROPOSAL_EMCOMM_PERIOD_OPEN | PROPOSAL_EMCOMM_PERIOD_CLOSE => "period_id",
+        PROPOSAL_EMCOMM_PERSON_CHECK_IN
+        | PROPOSAL_EMCOMM_PERSON_UPDATE
+        | PROPOSAL_EMCOMM_PERSON_CHECK_OUT => "person_id",
+        PROPOSAL_EMCOMM_ASSIGNMENT_CREATE
+        | PROPOSAL_EMCOMM_ASSIGNMENT_UPDATE
+        | PROPOSAL_EMCOMM_ASSIGNMENT_RELEASE => "assignment_id",
+        PROPOSAL_EMCOMM_MESSAGE_CREATE
+        | PROPOSAL_EMCOMM_MESSAGE_UPDATE
+        | PROPOSAL_EMCOMM_MESSAGE_TRANSMIT
+        | PROPOSAL_EMCOMM_MESSAGE_RECEIVE
+        | PROPOSAL_EMCOMM_MESSAGE_ACKNOWLEDGE
+        | PROPOSAL_EMCOMM_MESSAGE_CANCEL => "message_id",
+        PROPOSAL_EMCOMM_ACTIVITY_LOG => "activity_id",
         _ => "qso_id",
     };
     payload[entity_key] = serde_json::json!(entity_id);
@@ -1040,4 +1288,50 @@ where
     )))
     .await?;
     Ok(())
+}
+
+fn require_non_empty_correction(
+    payload: &serde_json::Map<String, Value>,
+    label: &str,
+) -> Result<(), ProposalValidationError> {
+    if payload.is_empty() {
+        return Err(ProposalValidationError::InvalidSchema(format!(
+            "{label} must change at least one field"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_message_number(
+    payload: &serde_json::Map<String, Value>,
+) -> Result<(), ProposalValidationError> {
+    let raw = payload
+        .get("message_number")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    crate::emcomm::MessageNumber::parse(raw).map_err(|_| {
+        ProposalValidationError::InvalidSchema(
+            "message_number must be a station-scoped number such as `KE8YGW-0007`".to_owned(),
+        )
+    })?;
+    Ok(())
+}
+
+fn validate_message_precedence(
+    payload: &serde_json::Map<String, Value>,
+) -> Result<(), ProposalValidationError> {
+    let Some(value) = payload.get("precedence") else {
+        return Ok(());
+    };
+    let precedence = value.as_str().unwrap_or_default().to_ascii_lowercase();
+    if matches!(
+        precedence.as_str(),
+        "emergency" | "priority" | "immediate" | "routine"
+    ) {
+        Ok(())
+    } else {
+        Err(ProposalValidationError::InvalidSchema(
+            "precedence must be emergency, priority, immediate, or routine".to_owned(),
+        ))
+    }
 }

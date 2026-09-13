@@ -1,10 +1,10 @@
 # KE8YGW Logger Tauri Runtime
 
 This directory contains the Tauri v2 desktop runtime for the shared
-`crates/ham-gui/web` UI.
+`crates/ham-client/web` UI.
 
 The package is a root workspace member so `cargo check --workspace --all-targets`
-also checks the desktop wrapper. Release mode bundles `../crates/ham-gui/web`
+also checks the desktop wrapper. Release mode bundles `../crates/ham-client/web`
 through `frontendDist` and does not require a frontend dev server.
 
 ## Runtime Behavior
@@ -12,14 +12,17 @@ through `frontendDist` and does not require a frontend dev server.
 The desktop shell loads bundled static assets and connects to a configured API
 endpoint:
 
-- `HAM_DESKTOP_SERVER_URL` sets the desktop API base.
+- `HAM_DESKTOP_SERVER_URL` sets the desktop API base. A non-loopback target
+  requires that `ham-gui` instance to run with
+  `HAM_GUI_ALLOW_REMOTE_CONTROL_API=1`; its control plane is loopback-only by
+  default.
 - Default API base: `http://127.0.0.1:9467`.
 - The web UI can override the base with `localStorage.ham.desktopServerUrl`.
 
 For local development, start the local GUI/API server separately:
 
 ```powershell
-cargo run -p ham-gui --bin ham-gui
+cargo run -p ham-client --bin ham-client -- serve
 ```
 
 Then run the desktop app:
@@ -44,7 +47,7 @@ The runtime exposes:
 - `export_divergence_report_dialog`
 - `select_app_data_directory_dialog`
 
-Dialog commands call `ham-desktop` helper functions and return typed
+Dialog commands call `ham_core::desktop` helper functions and return typed
 `DesktopDialogResult` values. Cancellation is non-fatal. Browser/server mode
 continues to use path prompts when Tauri commands are unavailable.
 

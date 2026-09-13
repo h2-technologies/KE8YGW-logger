@@ -1,4 +1,4 @@
-use ham_desktop::{
+use ham_core::desktop::{
     desktop_dialog_open, desktop_dialog_save, desktop_runtime_config,
     desktop_select_app_data_directory, DesktopCommandError, DesktopDialogKind,
     DesktopDialogRequest, DesktopDialogResult, DialogSpec, NativeDialogBackend,
@@ -14,7 +14,7 @@ struct DesktopRuntimePayload {
     hosted_server_url_env: String,
     server_url: String,
     release_requires_dev_server: bool,
-    native_dialog_commands: Vec<ham_desktop::NativeDialogCommand>,
+    native_dialog_commands: Vec<ham_core::desktop::NativeDialogCommand>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

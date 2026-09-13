@@ -32,6 +32,11 @@ Plugin permissions and operator role permissions are independent:
 - Diagnostics upload is separate from diagnostics export.
 - Rig read is separate from rig write and PTT.
 - Sync pull and sync push are separate.
+- Sync push authorizes the request logbook and additionally requires every
+  pushed official event envelope to carry that same `logbook_id`. Hosted and
+  self-hosted push both refuse mixed-logbook batches instead of appending them,
+  so a session authorized for one logbook cannot write official history into
+  another.
 - Service provider registration/configuration/enablement is separate from
   provider data access.
 - Service cache clear is separate from service cache read/write.
@@ -73,7 +78,7 @@ permission and operator role checks pass.
 The current implementation includes native OS credential backends for Windows Credential Manager, macOS Keychain, and Linux Secret Service/libsecret tooling, plus an explicit opt-in insecure development fallback. Production online integrations must continue to use native OS credential backends for real provider secrets.
 
 Hosted account session and refresh tokens follow the same rule. The shared
-`ham_sync::account` client returns an issued token exactly once, and the
+`ham_core::sync::account` client returns an issued token exactly once, and the
 durable hosted account record stores only the credential identifier for it.
 Desktop, hosted web, and the CLI write the secret through `CredentialStore`
 under the `hosted-account` provider; native iOS writes it to the Keychain under
@@ -140,5 +145,6 @@ Future work:
 - The GUI assumes a local-admin posture for permission review.
 - The self-hosted sync/report server now uses durable local storage by default; production migration, retention, and hosted-operations hardening still remain.
 - LAN sync writes are trust-gated and protected LAN reads require HMAC-SHA256 request proof after pairing, but the LAN HTTP transport is not encrypted and must stay on trusted local networks.
+- The GUI listener serves the browser UI and an unauthenticated local control plane alongside the LAN read endpoints. Only the LAN peer endpoints (identity probe, signed trust-gated reads, and one-time-token reciprocal pairing accept) are served to non-loopback requesters; everything else requires a loopback requester or the explicit `HAM_GUI_ALLOW_REMOTE_CONTROL_API=1` opt-in. There is still no per-request authentication for the control plane itself, so a LAN-reachable bind plus that opt-in remains an operator decision for trusted networks only.
 - Native OS credential backends are implemented, but clean release-runner and packaged-app validation still remain.
 - Net Control template UI and ICS-style exports are not complete.

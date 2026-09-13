@@ -1,5 +1,6 @@
 import Foundation
 import SwiftData
+import SwiftUI
 
 @Model
 final class AppSettings: Identifiable {
@@ -8,6 +9,10 @@ final class AppSettings: Identifiable {
     var defaultBand: String
     var defaultMode: String
     var appearance: String
+    /// Which of the shipped phone dashboards to draw. Optional so a logbook
+    /// created before layout switching existed opens on the default instead of
+    /// failing to migrate.
+    var dashboardLayout: String?
     var accentColorName: String
     var operatorCallsign: String
     var additionalCallsignsJSON: String?
@@ -70,6 +75,7 @@ final class AppSettings: Identifiable {
         defaultBand: String = "20m",
         defaultMode: String = "SSB",
         appearance: String = "system",
+        dashboardLayout: String? = DashboardLayout.liquidGlass.rawValue,
         accentColorName: String = "blue",
         operatorCallsign: String = "KE8YGW",
         additionalCallsignsJSON: String? = "[]",
@@ -131,6 +137,7 @@ final class AppSettings: Identifiable {
         self.defaultBand = defaultBand
         self.defaultMode = defaultMode
         self.appearance = appearance
+        self.dashboardLayout = dashboardLayout
         self.accentColorName = accentColorName
         self.operatorCallsign = operatorCallsign
         self.additionalCallsignsJSON = additionalCallsignsJSON
@@ -191,6 +198,18 @@ final class AppSettings: Identifiable {
 
 extension AppSettings {
     static let currentSchemaVersion = 4
+
+    /// The dashboard the app should draw. An unknown value — a logbook synced
+    /// from a newer build, say — falls back to the default rather than leaving
+    /// the operator on a blank screen.
+    var effectiveDashboardLayout: DashboardLayout {
+        DashboardLayout(rawValue: dashboardLayout ?? "") ?? .liquidGlass
+    }
+
+    /// The colour scheme to force, or nil to follow the system.
+    var effectiveColorScheme: ColorScheme? {
+        AppearanceMode(rawValue: appearance)?.colorScheme ?? nil
+    }
 
     var effectiveUseDeviceLocation: Bool {
         get { useDeviceLocation ?? true }
@@ -328,6 +347,7 @@ extension AppSettings {
     func apply(rust settings: RustApplicationSettings) {
         settingsSchemaVersion = settings.schemaVersion
         appearance = settings.display.appearance
+        dashboardLayout = settings.display.mobileDashboardLayout ?? dashboardLayout
         accentColorName = settings.display.accentColorName
         operatorCallsign = settings.operator.primaryCallsign
         setAdditionalCallsigns(settings.operator.additionalCallsigns)
@@ -460,6 +480,8 @@ extension AppSettings {
             display: RustDisplaySettings(
                 appearance: appearance,
                 accentColorName: accentColorName,
+                desktopShellLayout: nil,
+                mobileDashboardLayout: effectiveDashboardLayout.rawValue,
                 mapDefaultLayer: mapDefaultLayer ?? "Stations",
                 showQsoMapObjects: showQSOMapObjects ?? true,
                 showStationMapMarkers: showStationMapMarkers ?? true

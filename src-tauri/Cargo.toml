@@ -5,7 +5,7 @@ license.workspace = true
 version.workspace = true
 
 [dependencies]
-ham-desktop = { path = "../crates/ham-desktop" }
+ham-core = { path = "../crates/ham-core" }
 rfd = { version = "0.17.2", default-features = false, features = ["xdg-portal"] }
 serde.workspace = true
 tauri = { version = "2", features = [] }

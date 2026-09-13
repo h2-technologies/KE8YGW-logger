@@ -4,8 +4,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use crate::plugin_sdk::{PluginCapability, PluginManifest};
 use chrono::{DateTime, Utc};
-use ham_plugin_sdk::{PluginCapability, PluginManifest};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use uuid::Uuid;
@@ -904,6 +904,69 @@ impl PermissionRegistry {
                 "Export net session summaries and rosters.",
             ),
             (
+                PluginCapability::EmCommView,
+                "EmComm",
+                "View Incidents",
+                PermissionRiskLevel::Low,
+                true,
+                false,
+                "Read incidents, operational periods, rosters, assignments, and messages.",
+            ),
+            (
+                PluginCapability::EmCommIncidentManage,
+                "EmComm",
+                "Manage Incidents",
+                PermissionRiskLevel::Medium,
+                true,
+                false,
+                "Open, correct, and close incidents.",
+            ),
+            (
+                PluginCapability::EmCommPeriodManage,
+                "EmComm",
+                "Manage Operational Periods",
+                PermissionRiskLevel::Medium,
+                true,
+                false,
+                "Open and close operational periods for an incident.",
+            ),
+            (
+                PluginCapability::EmCommPersonManage,
+                "EmComm",
+                "Manage Incident Personnel",
+                PermissionRiskLevel::Medium,
+                true,
+                false,
+                "Check people in and out and correct ICS 211 check-in records.",
+            ),
+            (
+                PluginCapability::EmCommAssignmentManage,
+                "EmComm",
+                "Manage Assignments",
+                PermissionRiskLevel::Medium,
+                true,
+                false,
+                "Create, correct, and release incident assignments.",
+            ),
+            (
+                PluginCapability::EmCommMessageManage,
+                "EmComm",
+                "Manage Incident Messages",
+                PermissionRiskLevel::High,
+                false,
+                true,
+                "Draft, correct, transmit, receive, acknowledge, and cancel ICS 213 and 213RR messages.",
+            ),
+            (
+                PluginCapability::EmCommActivityLog,
+                "EmComm",
+                "Record Activity Log Entries",
+                PermissionRiskLevel::Medium,
+                true,
+                false,
+                "Append ICS 214 activity and communications log entries.",
+            ),
+            (
                 PluginCapability::UiPanelRegister,
                 "UI",
                 "Register Panels",
@@ -1115,7 +1178,7 @@ pub fn grant_builtin_defaults(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ham_plugin_sdk::PluginManifest;
+    use crate::plugin_sdk::PluginManifest;
 
     #[test]
     fn permission_registry_contains_required_permissions() {

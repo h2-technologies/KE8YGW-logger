@@ -32,7 +32,7 @@ wrapper is not the iOS client. See `V1_RELEASE_PLAN.md`,
    - IPv4/IPv6 LAN discovery, peer registry, handshake, head comparison, safe preview pull and pull missing events over LAN, GUI Sync Status, tests.
    - Status: implemented as protocol/model layer with MVP GUI/demo paths. A
      durable LAN trust store with single-use tokens, replay nonce checks, and
-     revocation is implemented in `ham-sync` and exposed through GUI endpoints;
+     revocation is implemented in `ham_core::sync` and exposed through client endpoints;
      LAN list/head/event read endpoints are guarded by trust-scoped requester
      device ID, replay nonce, and HMAC-SHA256 signature headers;
      manual direct LAN HTTP preview/pull is available between GUI instances;

@@ -43,9 +43,30 @@ This catalog lists event types implemented or planned. Official events are appen
 - `official.log.net.traffic.updated`
 - `official.log.net.report.exported`
 
+### EmComm
+
+- `official.log.emcomm.incident.opened`
+- `official.log.emcomm.incident.updated` - append an incident correction.
+- `official.log.emcomm.incident.closed`
+- `official.log.emcomm.period.opened`
+- `official.log.emcomm.period.closed`
+- `official.log.emcomm.person.checked_in` - ICS 211 check-in.
+- `official.log.emcomm.person.updated` - append a check-in correction.
+- `official.log.emcomm.person.checked_out`
+- `official.log.emcomm.assignment.created`
+- `official.log.emcomm.assignment.updated`
+- `official.log.emcomm.assignment.released`
+- `official.log.emcomm.message.created` - draft an ICS 213 or 213RR message.
+- `official.log.emcomm.message.updated` - append a message correction.
+- `official.log.emcomm.message.transmitted`
+- `official.log.emcomm.message.received`
+- `official.log.emcomm.message.acknowledged`
+- `official.log.emcomm.message.cancelled`
+- `official.log.emcomm.activity.logged` - ICS 214 activity entry.
+
 ### Planned
 
-- Award submissions, EmComm forms, contest contacts, map annotations, and conflict-resolution branch metadata.
+- Award submissions, contest contacts, map annotations, and conflict-resolution branch metadata.
 
 ## Proposal Events
 
@@ -81,6 +102,27 @@ This catalog lists event types implemented or planned. Official events are appen
 - `proposal.net.traffic.create`
 - `proposal.net.traffic.update`
 - `proposal.net.report.export`
+
+### EmComm
+
+- `proposal.emcomm.incident.open`
+- `proposal.emcomm.incident.update`
+- `proposal.emcomm.incident.close`
+- `proposal.emcomm.period.open`
+- `proposal.emcomm.period.close`
+- `proposal.emcomm.person.check_in`
+- `proposal.emcomm.person.update`
+- `proposal.emcomm.person.check_out`
+- `proposal.emcomm.assignment.create`
+- `proposal.emcomm.assignment.update`
+- `proposal.emcomm.assignment.release`
+- `proposal.emcomm.message.create`
+- `proposal.emcomm.message.update`
+- `proposal.emcomm.message.transmit`
+- `proposal.emcomm.message.receive`
+- `proposal.emcomm.message.acknowledge`
+- `proposal.emcomm.message.cancel`
+- `proposal.emcomm.activity.log`
 
 ## Runtime Events
 
@@ -141,6 +183,9 @@ Runtime event categories are dotted strings. Current and planned category roots:
 
 - `network.discovery.started`
 - `network.discovery.stopped`
+- `network.scan.started`
+- `network.scan.completed`
+- `network.scan.multicast_failed`
 - `network.peer.discovered`
 - `network.peer.updated`
 - `network.peer.expired`

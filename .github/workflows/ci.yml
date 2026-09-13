@@ -15,7 +15,10 @@ permissions: {}
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  # Superseded pull request runs are safe to cancel. Branch pushes are not: each
+  # commit on dev and main needs its own verdict, and a production tag is only
+  # released when the tagged commit has a completed successful main CI run.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CARGO_INCREMENTAL: "0"
@@ -27,32 +30,29 @@ jobs:
     name: Main promotion policy
     if: github.event_name == 'pull_request' && github.base_ref == 'main'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
+      # Default (merge ref) checkout. A pull_request event already runs the
+      # workflow file from the merge commit, so pinning the policy script to
+      # the base commit would add no protection the workflow itself lacks,
+      # while breaking every pull request that edits the policy — including
+      # the one that introduces it. A pull request that rewrites its own gate
+      # is caught in review, like any other workflow change.
+      - name: Checkout
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          persist-credentials: false
+
       - name: Require dev promotion or documented hotfix
         shell: bash
         env:
-          PR_HEAD_REF: ${{ github.head_ref }}
-        run: |
-          set -euo pipefail
-          head_ref="$PR_HEAD_REF"
-          body_file="$GITHUB_EVENT_PATH"
-          if [[ "$head_ref" == "dev" ]]; then
-            echo "Main promotion originates from dev."
-            exit 0
-          fi
-
-          if [[ "$head_ref" == hotfix/* ]]; then
-            body="$(jq -r '.pull_request.body // ""' "$body_file")"
-            if grep -Eiq 'sync(ing)? (back )?(to|into) dev|follow-up.*dev|backport.*dev' <<<"$body"; then
-              echo "Documented hotfix exception accepted for $head_ref."
-              exit 0
-            fi
-            echo "Hotfix PRs to main must document the immediate follow-up sync back into dev." >&2
-            exit 1
-          fi
-
-          echo "Normal PRs targeting main must originate from dev. Use hotfix/* only for documented emergency fixes." >&2
-          exit 1
+          BASE_BRANCH: ${{ github.base_ref }}
+          HEAD_BRANCH: ${{ github.head_ref }}
+          BASE_REPOSITORY: ${{ github.repository }}
+          HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: bash scripts/check-promotion-policy.sh
 
   changes:
     name: Detect changed areas
@@ -66,7 +66,6 @@ jobs:
       docs_links: ${{ steps.detect.outputs.docs_links }}
       version: ${{ steps.detect.outputs.version }}
       tauri: ${{ steps.detect.outputs.tauri }}
-      ios: ${{ steps.detect.outputs.ios }}
       container: ${{ steps.detect.outputs.container }}
     steps:
       - name: Checkout
@@ -102,7 +101,6 @@ jobs:
           docs_links=false
           version=false
           tauri=false
-          ios=false
           container=false
           all_expensive=false
 
@@ -114,7 +112,7 @@ jobs:
             if [[ "$file" == *.md ]]; then
               docs_links=true
             fi
-            if [[ "$file" == openapi/* || "$file" == scripts/check_api_contract.py || "$file" == crates/ham-api-contract/* || "$file" == crates/ham-server/* ]]; then
+            if [[ "$file" == openapi/* || "$file" == scripts/check_api_contract.py || "$file" == crates/ham-core/src/api_contract.rs || "$file" == crates/ham-server/* ]]; then
               api=true
               rust=true
             fi
@@ -127,13 +125,10 @@ jobs:
             if [[ "$file" == crates/* || "$file" == src-tauri/* ]]; then
               rust=true
             fi
-            if [[ "$file" == src-tauri/* || "$file" == crates/ham-desktop/* || "$file" == crates/ham-gui/* || "$file" == crates/ham-core/* ]]; then
+            if [[ "$file" == src-tauri/* || "$file" == crates/ham-client/* || "$file" == crates/ham-core/* ]]; then
               tauri=true
             fi
-            if [[ "$file" == ios/* || "$file" == scripts/ios/* || "$file" == crates/ham-ios-ffi/* || "$file" == crates/ham-core/* || "$file" == crates/ham-sync/* || "$file" == Cargo.toml || "$file" == Cargo.lock || "$file" == rust-toolchain.toml ]]; then
-              ios=true
-            fi
-            if [[ "$file" == Dockerfile.sync-server || "$file" == .dockerignore || "$file" == crates/ham-sync-server/* || "$file" == crates/ham-sync/* || "$file" == crates/ham-core/* || "$file" == crates/ham-api-contract/* || "$file" == Cargo.toml || "$file" == Cargo.lock || "$file" == rust-toolchain.toml ]]; then
+            if [[ "$file" == Dockerfile.server || "$file" == .dockerignore || "$file" == crates/ham-server/* || "$file" == crates/ham-core/* || "$file" == Cargo.toml || "$file" == Cargo.lock || "$file" == rust-toolchain.toml ]]; then
               container=true
             fi
           done <<< "$files"
@@ -145,7 +140,6 @@ jobs:
             docs_links=true
             version=true
             tauri=true
-            ios=true
             container=true
           fi
 
@@ -156,7 +150,6 @@ jobs:
             echo "docs_links=$docs_links"
             echo "version=$version"
             echo "tauri=$tauri"
-            echo "ios=$ios"
             echo "container=$container"
           } >> "$GITHUB_OUTPUT"
 
@@ -207,8 +200,11 @@ jobs:
         shell: pwsh
         run: ./scripts/governance-check.ps1
 
+      # Every scope, not just the ones checked in this job: tauri-validation and
+      # container-validation are separate jobs, so claiming nothing was selected
+      # while either of them runs would be wrong.
       - name: No expensive work selected
-        if: needs.changes.outputs.rust != 'true' && needs.changes.outputs.api != 'true' && needs.changes.outputs.governance != 'true' && needs.changes.outputs.docs_links != 'true' && needs.changes.outputs.version != 'true'
+        if: needs.changes.outputs.rust != 'true' && needs.changes.outputs.api != 'true' && needs.changes.outputs.governance != 'true' && needs.changes.outputs.docs_links != 'true' && needs.changes.outputs.version != 'true' && needs.changes.outputs.tauri != 'true' && needs.changes.outputs.container != 'true'
         run: echo "Only files outside CI validation scopes changed."
 
   rust-quality:
@@ -252,7 +248,7 @@ jobs:
         run: cargo test --locked --workspace
 
       - name: JavaScript syntax
-        run: node --check crates/ham-gui/web/app.js
+        run: node --check crates/ham-client/web/app.js
 
   platform-validation:
     name: Platform validation (${{ matrix.os }})
@@ -286,7 +282,7 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/main' }}
 
       - name: Compile platform binaries
-        run: cargo build --locked -p ham-gui --bin ham-gui -p ham-sync-server --bin ham-sync-server
+        run: cargo build --locked -p ham-client --bin ham-client -p ham-server --bin ham-server
 
       - name: Platform credential tests
         run: cargo test --locked -p ham-core credential
@@ -332,7 +328,7 @@ jobs:
         run: cargo check --locked -p ke8ygw-logger-desktop --all-targets
 
   container-validation:
-    name: Sync server container
+    name: Server container
     runs-on: ubuntu-latest
     needs:
       - changes
@@ -345,16 +341,16 @@ jobs:
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
 
       - name: Build image
-        run: docker build -f Dockerfile.sync-server -t ham-sync-server:ci .
+        run: docker build -f Dockerfile.server -t ham-server:ci .
 
       - name: Smoke image
         shell: bash
         run: |
           set -euo pipefail
-          container_id="$(docker run -d ham-sync-server:ci)"
+          container_id="$(docker run -d ham-server:ci)"
           trap 'docker rm -f "$container_id" >/dev/null 2>&1 || true' EXIT
           for _ in {1..10}; do
-            if docker logs "$container_id" 2>&1 | grep -q "ham-sync-server listening"; then
+            if docker logs "$container_id" 2>&1 | grep -q "ham-server listening"; then
               exit 0
             fi
             if ! docker inspect -f '{{.State.Running}}' "$container_id" | grep -q true; then
@@ -371,6 +367,7 @@ jobs:
     if: always()
     runs-on: ubuntu-latest
     needs:
+      - changes
       - promotion-policy
       - preflight
       - rust-quality
@@ -381,6 +378,7 @@ jobs:
       - name: Check required job results
         shell: bash
         env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
           PROMOTION_RESULT: ${{ needs.promotion-policy.result }}
           PREFLIGHT_RESULT: ${{ needs.preflight.result }}
           RUST_RESULT: ${{ needs.rust-quality.result }}
@@ -389,6 +387,17 @@ jobs:
           CONTAINER_RESULT: ${{ needs.container-validation.result }}
         run: |
           set -euo pipefail
+          # Change detection decides which validation jobs run at all, so it is
+          # the one job that must actually succeed. Skipping it is not a pass:
+          # if it fails, every job downstream of it is skipped and treating
+          # those skips as success would report a green CI that validated
+          # nothing.
+          if [[ "$CHANGES_RESULT" != "success" ]]; then
+            echo "Change detection did not succeed: $CHANGES_RESULT" >&2
+            echo "No validation job can be trusted, so CI cannot pass." >&2
+            exit 1
+          fi
+
           for result in "$PROMOTION_RESULT" "$PREFLIGHT_RESULT" "$RUST_RESULT" "$PLATFORM_RESULT" "$TAURI_RESULT" "$CONTAINER_RESULT"; do
             case "$result" in
               success|skipped) ;;
@@ -404,6 +413,8 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
     needs: ci-result
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - name: Checkout
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
@@ -438,6 +449,8 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: ci-result
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - name: Checkout
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0

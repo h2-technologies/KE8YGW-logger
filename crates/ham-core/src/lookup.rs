@@ -8,12 +8,12 @@ use thiserror::Error;
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
+use crate::plugin_sdk::ServiceType;
 use crate::{
     cache_entry_for_value, local_prefix_provider_metadata, publish_service_runtime_event,
     ProviderSelectionCriteria, ServiceCache, ServiceRegistry,
 };
 use crate::{BusEvent, EventBus, EventBusError, RuntimeEventEnvelope, RuntimeEventSeverity};
-use ham_plugin_sdk::ServiceType;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LookupResult {
@@ -840,7 +840,7 @@ mod tests {
         let service_cache = ServiceCache::new();
         let mut registry = crate::default_service_registry();
         registry
-            .set_preferred_provider(ham_plugin_sdk::ServiceType::CallsignLookup, "mock")
+            .set_preferred_provider(crate::plugin_sdk::ServiceType::CallsignLookup, "mock")
             .unwrap();
         registry.set_enabled("mock", false).unwrap();
         let provider = MockLookupProvider::new(Some(sample_result()));
@@ -914,7 +914,7 @@ mod tests {
         let suggestion = suggestion_from_result(&sample_result());
         let event = store
             .append_event(NewLogbookEvent {
-                event_type: ham_plugin_sdk::OFFICIAL_LOG_QSO_CREATED.to_owned(),
+                event_type: crate::plugin_sdk::OFFICIAL_LOG_QSO_CREATED.to_owned(),
                 logbook_id,
                 entity_id: Some(Uuid::new_v4()),
                 author_operator_id: None,

@@ -1,3 +1,16 @@
+//! Server: the hosted API boundary and the self-hosted sync service.
+//!
+//! Both route trees are served by one binary on one port; see [`http`].
+
+pub mod http;
+pub mod sync_router;
+pub mod sync_storage;
+
+pub use ham_core::sync::{
+    CloudServerConfig, CloudServiceMode, DEFAULT_CLOUD_SYNC_SESSION_TTL_SECONDS,
+};
+pub use http::MergedServer;
+
 use std::{
     collections::{HashMap, HashSet},
     fs,
@@ -8,7 +21,19 @@ use std::{
 };
 
 use chrono::{DateTime, Duration, Utc};
-use ham_api_contract::{hosted_route_strings, ApiErrorBody, ApiErrorCode};
+use ham_core::api_contract::{hosted_route_strings, ApiErrorBody, ApiErrorCode};
+use ham_core::plugin_sdk::{
+    PluginCapability, PluginManifest, ProposalEnvelope, PROPOSAL_ACTIVATION_CREATE,
+    PROPOSAL_ACTIVATION_END, PROPOSAL_ACTIVATION_START, PROPOSAL_ACTIVATION_UPDATE,
+    PROPOSAL_NET_CHECKIN_CREATE, PROPOSAL_NET_CHECKIN_UPDATE, PROPOSAL_NET_SESSION_END,
+    PROPOSAL_NET_SESSION_START, PROPOSAL_NET_TRAFFIC_CREATE, PROPOSAL_QSO_CORRECT,
+    PROPOSAL_QSO_CREATE, PROPOSAL_QSO_DELETE, PROPOSAL_QSO_NOTE_ADD, PROPOSAL_QSO_RESTORE,
+};
+use ham_core::sync::{
+    metadata_for_event, preview_pull_from_events, push_replication_status, CloudPullEventsResponse,
+    CloudPushEventsRequest, CloudPushEventsResponse, LogbookHeadSummary, PreviewPullRequest,
+    ReplicationStatus,
+};
 use ham_core::{
     adif_for_upload_job, default_credential_store, default_log_directory, default_service_registry,
     execute_dx_cluster_read_once, execute_tier_one_lookup, execute_tier_one_upload, export_adif,
@@ -21,17 +46,6 @@ use ham_core::{
     ProviderLookupInput, ProviderRuntimeStatus, ProviderSpotExecution, ProviderSpotInput,
     ProviderUploadExecution, ProviderUploadInput, RegisteredServiceProvider, StationProfile,
     UploadJobStatus,
-};
-use ham_plugin_sdk::{
-    PluginCapability, PluginManifest, ProposalEnvelope, PROPOSAL_ACTIVATION_CREATE,
-    PROPOSAL_ACTIVATION_END, PROPOSAL_ACTIVATION_START, PROPOSAL_ACTIVATION_UPDATE,
-    PROPOSAL_NET_CHECKIN_CREATE, PROPOSAL_NET_CHECKIN_UPDATE, PROPOSAL_NET_SESSION_END,
-    PROPOSAL_NET_SESSION_START, PROPOSAL_NET_TRAFFIC_CREATE, PROPOSAL_QSO_CORRECT,
-    PROPOSAL_QSO_CREATE, PROPOSAL_QSO_DELETE, PROPOSAL_QSO_NOTE_ADD, PROPOSAL_QSO_RESTORE,
-};
-use ham_sync::{
-    metadata_for_event, preview_pull_from_events, CloudPullEventsResponse, CloudPushEventsRequest,
-    LogbookHeadSummary, PreviewPullRequest, ReplicationStatus,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value as JsonValue};
@@ -5311,6 +5325,13 @@ impl HostedServer {
             .await?;
         self.enforce_sync_operation_limit(request, &auth.session)
             .await?;
+        if input
+            .events
+            .iter()
+            .any(|event| event.logbook_id != input.logbook_id)
+        {
+            return Err(ApiError::Forbidden);
+        }
         let mut accepted_count = 0usize;
         let mut ignored_duplicate_count = 0usize;
         let mut errors = Vec::new();
@@ -5346,13 +5367,13 @@ impl HostedServer {
             .get_head(input.logbook_id)
             .await
             .map_err(|error| ApiError::Store(error.to_string()))?;
-        Ok(json!({
-            "status": if errors.is_empty() { "pulled" } else { "rejected" },
-            "accepted_count": accepted_count,
-            "ignored_duplicate_count": ignored_duplicate_count,
-            "rejected_count": errors.len(),
-            "server_head_hash": server_head_hash,
-            "errors": errors
+        Ok(json!(CloudPushEventsResponse {
+            status: push_replication_status(&errors),
+            accepted_count,
+            ignored_duplicate_count,
+            rejected_count: errors.len(),
+            server_head_hash,
+            errors,
         }))
     }
 
@@ -8544,7 +8565,7 @@ mod tests {
         let catalog: RouteCatalogResponse = response.json();
         assert_eq!(
             catalog.implemented,
-            ham_api_contract::hosted_route_strings()
+            ham_core::api_contract::hosted_route_strings()
         );
         assert!(catalog
             .implemented
@@ -10359,7 +10380,7 @@ mod tests {
                     "POST",
                     "/api/v1/sync/push",
                     &CloudPushEventsRequest {
-                        auth: ham_sync::CloudAuth {
+                        auth: ham_core::sync::CloudAuth {
                             sync_token: "unused-by-hosted-bearer".to_owned(),
                         },
                         logbook_id,
@@ -10416,6 +10437,197 @@ mod tests {
             )
             .await;
         assert_eq!(revoked_pull.status, 401);
+    }
+
+    fn remote_qso_event(
+        logbook_id: Uuid,
+        previous_hash: Option<String>,
+        callsign: &str,
+    ) -> CoreEventEnvelope {
+        let qso_id = Uuid::new_v4();
+        let device_id = Uuid::new_v4();
+        CoreEventEnvelope::from_new(
+            ham_core::NewLogbookEvent {
+                event_type: ham_core::plugin_sdk::OFFICIAL_LOG_QSO_CREATED.to_owned(),
+                logbook_id,
+                entity_id: Some(qso_id),
+                author_operator_id: None,
+                station_callsign: "KE8YGW".to_owned(),
+                operator_callsign: Some("KE8YGW".to_owned()),
+                author_device_id: device_id,
+                source_device_id: device_id,
+                correlation_id: Uuid::new_v4(),
+                source_plugin_id: Some("hosted-sync-test".to_owned()),
+                schema_version: 1,
+                payload: json!({
+                    "qso_id": qso_id,
+                    "station_callsign": "KE8YGW",
+                    "operator_callsign": "KE8YGW",
+                    "contacted_callsign": callsign,
+                    "started_at": "2026-07-08T01:00:00Z",
+                    "band": "20m",
+                    "mode": "SSB"
+                }),
+            },
+            previous_hash,
+        )
+    }
+
+    #[tokio::test]
+    async fn sync_push_rejects_events_scoped_to_another_logbook() {
+        let server = HostedServer::new();
+        let (owner_token, owner_logbook, _) = login(&server, "owner@example.test").await;
+        let (other_token, other_logbook, _) = login(&server, "other@example.test").await;
+        assert_ne!(owner_logbook, other_logbook);
+
+        let injected = remote_qso_event(owner_logbook, None, "K1INJECT");
+        let push = server
+            .handle(
+                ApiRequest::json(
+                    "POST",
+                    "/api/v1/sync/push",
+                    &CloudPushEventsRequest {
+                        auth: ham_core::sync::CloudAuth {
+                            sync_token: "unused-by-hosted-bearer".to_owned(),
+                        },
+                        logbook_id: other_logbook,
+                        events: vec![injected.clone()],
+                    },
+                )
+                .with_bearer(&other_token),
+            )
+            .await;
+        assert_eq!(
+            push.status, 403,
+            "sync push must not append events for a logbook the caller did not authorize"
+        );
+
+        let owner_pull = server
+            .handle(
+                ApiRequest::json(
+                    "POST",
+                    "/api/v1/sync/pull",
+                    &PreviewSyncRequest {
+                        logbook_id: owner_logbook,
+                        local_head_hash: None,
+                    },
+                )
+                .with_bearer(&owner_token),
+            )
+            .await;
+        assert_eq!(owner_pull.status, 200);
+        let owner_pull: CloudPullEventsResponse = owner_pull.json();
+        assert!(
+            owner_pull.events.is_empty(),
+            "another account's logbook must stay empty after a rejected cross-logbook push"
+        );
+        assert_eq!(owner_pull.preview.remote_head_hash, None);
+
+        let other_pull = server
+            .handle(
+                ApiRequest::json(
+                    "POST",
+                    "/api/v1/sync/pull",
+                    &PreviewSyncRequest {
+                        logbook_id: other_logbook,
+                        local_head_hash: None,
+                    },
+                )
+                .with_bearer(&other_token),
+            )
+            .await;
+        assert_eq!(other_pull.status, 200);
+        let other_pull: CloudPullEventsResponse = other_pull.json();
+        assert!(other_pull.events.is_empty());
+    }
+
+    #[tokio::test]
+    async fn sync_push_reports_divergence_with_the_shared_replication_vocabulary() {
+        let server = HostedServer::new();
+        let (token, logbook_id, _) = login(&server, "owner@example.test").await;
+        let created = create_qso(&server, &token, logbook_id).await;
+        let head = created["event"]["event_hash"]
+            .as_str()
+            .expect("hosted QSO creation should return an event hash")
+            .to_owned();
+
+        let divergent = remote_qso_event(logbook_id, None, "K1BRANCH");
+        let response = server
+            .handle(
+                ApiRequest::json(
+                    "POST",
+                    "/api/v1/sync/push",
+                    &CloudPushEventsRequest {
+                        auth: ham_core::sync::CloudAuth {
+                            sync_token: "unused-by-hosted-bearer".to_owned(),
+                        },
+                        logbook_id,
+                        events: vec![divergent.clone()],
+                    },
+                )
+                .with_bearer(&token),
+            )
+            .await;
+        assert_eq!(response.status, 200);
+        let push: CloudPushEventsResponse = response.json();
+        assert_eq!(
+            push.status,
+            ReplicationStatus::Diverged,
+            "hosted push must report divergence the same way self-hosted push does, \
+             so clients stop unattended retry and open a manual review"
+        );
+        assert_eq!(push.accepted_count, 0);
+        assert_eq!(push.rejected_count, 1);
+        assert_eq!(push.server_head_hash, Some(head.clone()));
+
+        let reconciled = remote_qso_event(logbook_id, Some(head.clone()), "K1REPAIR");
+        let response = server
+            .handle(
+                ApiRequest::json(
+                    "POST",
+                    "/api/v1/sync/push",
+                    &CloudPushEventsRequest {
+                        auth: ham_core::sync::CloudAuth {
+                            sync_token: "unused-by-hosted-bearer".to_owned(),
+                        },
+                        logbook_id,
+                        events: vec![reconciled.clone()],
+                    },
+                )
+                .with_bearer(&token),
+            )
+            .await;
+        assert_eq!(response.status, 200);
+        let push: CloudPushEventsResponse = response.json();
+        assert_eq!(push.status, ReplicationStatus::Pulled);
+        assert_eq!(push.accepted_count, 1);
+        assert_eq!(push.server_head_hash, Some(reconciled.event_hash.clone()));
+
+        let pull = server
+            .handle(
+                ApiRequest::json(
+                    "POST",
+                    "/api/v1/sync/pull",
+                    &PreviewSyncRequest {
+                        logbook_id,
+                        local_head_hash: None,
+                    },
+                )
+                .with_bearer(&token),
+            )
+            .await;
+        assert_eq!(pull.status, 200);
+        let pull: CloudPullEventsResponse = pull.json();
+        let pulled_hashes = pull
+            .events
+            .iter()
+            .map(|event| event.event_hash.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(pulled_hashes, vec![head, reconciled.event_hash]);
+        assert!(
+            !pulled_hashes.contains(&divergent.event_hash),
+            "a rejected divergent branch must never become official history"
+        );
     }
 
     #[tokio::test]

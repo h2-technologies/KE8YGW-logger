@@ -180,33 +180,45 @@ struct SyncWorkspaceView: View {
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
                     .keyboardType(.URL)
+                // A List row makes its whole area one tap target, so several buttons
+                // sharing a row all fire from a single tap. The borderless style gives
+                // each button its own hit region.
                 HStack {
                     Button(lanDiscovery.isRunning ? "Stop Discovery" : "Scan LAN") {
                         toggleLanDiscovery()
                     }
+                    Spacer()
                     Button("Issue Code") {
                         Task { await issueLanPairingToken() }
                     }
+                    Spacer()
                     Button("Accept Code") {
                         Task { await acceptLanPairingToken() }
                     }
+                }
+                .buttonStyle(.borderless)
+                HStack {
                     Button("Pair With URL") {
                         Task { await completeLanPairing() }
                     }
+                    Spacer()
                     Button("Trust Peer") {
                         Task { await trustLanPeer() }
                     }
                 }
+                .buttonStyle(.borderless)
                 HStack {
                     Button("Rotate Auth") {
                         Task { await rotateLanAuth() }
                     }
                     .disabled(selectedLanDeviceId() == nil)
+                    Spacer()
                     Button("Revoke") {
                         Task { await revokeLanPeer() }
                     }
                     .disabled(selectedLanDeviceId() == nil)
                 }
+                .buttonStyle(.borderless)
             }
 
             Section("Actions") {
