@@ -165,19 +165,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
 
-      - name: Install Rust
+      - name: Set up Rust
         if: needs.changes.outputs.rust == 'true'
-        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
+        uses: ./.github/actions/setup-rust
         with:
-          toolchain: 1.96.0
-          components: rustfmt, clippy
-
-      - name: Cache Cargo
-        if: needs.changes.outputs.rust == 'true'
-        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
-        with:
-          shared-key: linux-debug
-          save-if: ${{ github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/main' }}
+          cache-shared-key: linux-debug
+          cache-save-if: ${{ github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/main' }}
 
       - name: Format
         if: needs.changes.outputs.rust == 'true'
@@ -220,11 +213,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
+      - name: Set up Rust
+        uses: ./.github/actions/setup-rust
         with:
-          toolchain: 1.96.0
-          components: rustfmt, clippy
+          cache-shared-key: linux-debug
+          cache-save-if: ${{ github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/main' }}
 
       - name: Install Linux desktop dependencies
         run: |
@@ -234,12 +227,6 @@ jobs:
             libayatana-appindicator3-dev \
             librsvg2-dev \
             patchelf
-
-      - name: Cache Cargo
-        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
-        with:
-          shared-key: linux-debug
-          save-if: ${{ github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/main' }}
 
       - name: Clippy
         run: cargo clippy --locked --workspace --all-targets -- -D warnings
@@ -269,17 +256,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
+      - name: Set up Rust
+        uses: ./.github/actions/setup-rust
         with:
-          toolchain: 1.96.0
-          components: rustfmt, clippy
-
-      - name: Cache Cargo
-        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
-        with:
-          shared-key: ${{ runner.os }}-debug
-          save-if: ${{ github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/main' }}
+          cache-shared-key: ${{ runner.os }}-debug
+          cache-save-if: ${{ github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/main' }}
 
       - name: Compile platform binaries
         run: cargo build --locked -p ham-client --bin ham-client -p ham-server --bin ham-server
@@ -303,11 +284,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
+      - name: Set up Rust
+        uses: ./.github/actions/setup-rust
         with:
-          toolchain: 1.96.0
-          components: rustfmt, clippy
+          cache-shared-key: linux-debug
+          cache-save-if: ${{ github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/main' }}
 
       - name: Install Linux desktop dependencies
         run: |
@@ -317,12 +298,6 @@ jobs:
             libayatana-appindicator3-dev \
             librsvg2-dev \
             patchelf
-
-      - name: Cache Cargo
-        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
-        with:
-          shared-key: linux-debug
-          save-if: ${{ github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/main' }}
 
       - name: Check Tauri runtime crate
         run: cargo check --locked -p ke8ygw-logger-desktop --all-targets

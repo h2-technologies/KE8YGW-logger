@@ -16,7 +16,12 @@ updates:
           - minor
 
   - package-ecosystem: github-actions
-    directory: /
+    # Both the workflows and the first-party composite actions they call. "/"
+    # alone covers .github/workflows only, which would leave the action SHAs
+    # pinned inside .github/actions/*/action.yml without update coverage.
+    directories:
+      - /
+      - /.github/actions/*
     target-branch: dev
     schedule:
       interval: weekly
