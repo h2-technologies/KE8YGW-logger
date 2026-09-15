@@ -220,13 +220,7 @@ jobs:
           cache-save-if: ${{ github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/main' }}
 
       - name: Install Linux desktop dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libwebkit2gtk-4.1-dev \
-            libayatana-appindicator3-dev \
-            librsvg2-dev \
-            patchelf
+        uses: ./.github/actions/linux-desktop-deps
 
       - name: Clippy
         run: cargo clippy --locked --workspace --all-targets -- -D warnings
@@ -291,13 +285,7 @@ jobs:
           cache-save-if: ${{ github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/main' }}
 
       - name: Install Linux desktop dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libwebkit2gtk-4.1-dev \
-            libayatana-appindicator3-dev \
-            librsvg2-dev \
-            patchelf
+        uses: ./.github/actions/linux-desktop-deps
 
       - name: Check Tauri runtime crate
         run: cargo check --locked -p ke8ygw-logger-desktop --all-targets
