@@ -33,6 +33,19 @@
 - Renamed `Dockerfile.sync-server` to `Dockerfile.server`; it now builds
   `ham-server` and exposes port 9750.
 - Release archives now package the `ham-client` binary instead of `ham-gui`.
+- Deduplicated the GitHub Actions configuration into three first-party
+  composite actions under `.github/actions/`. `setup-rust` replaces the
+  toolchain-install and cargo-cache pair that six jobs across `ci.yml`,
+  `ios.yml`, and `security.yml` each repeated with their own copy of the
+  `1.96.0` pin; `linux-desktop-deps` replaces the byte-identical apt block in
+  `rust-quality` and `tauri-validation`; `build-manifest` replaces the
+  near-identical `internal-artifact` and `beta-artifact` job bodies and returns
+  the artifact name as a step output rather than through `$GITHUB_ENV`.
+  Dependabot's `github-actions` ecosystem now scans `/.github/actions/*` as well
+  as `/`, so the SHAs pinned inside the composite actions stay updated. No
+  trigger, permission scope, secret, or concurrency group changed, and
+  `release.yml` was left inline because its release job checks out the tagged
+  commit. See `docs/CI_ACTIONS_DEDUP_AUDIT.md`.
 ## 0.5.1
 
 ### Added

@@ -1,16 +1,18 @@
 # GitHub Actions Duplication Audit
 
-Audit of `.github/workflows/` for duplicated configuration, with a proposed
-conservative refactor. **No workflow file was modified for this audit.** Every
-change below is a proposal pending maintainer approval.
+Audit of `.github/workflows/` for duplicated configuration, and the refactor
+that followed. Findings F1–F3 and the Dependabot scope change are **implemented**;
+F4–F9 were deliberately left alone. See [Outcome](#7-outcome) for what moved
+where.
 
 Companion document: [CI_OPTIMIZATION.md](CI_OPTIMIZATION.md) describes why the
 jobs are shaped the way they are. This document only addresses repetition.
 
 ## 1. Inventory
 
-Six workflows, 1037 lines total. No composite actions exist yet
-(`.github/actions/` is absent).
+As audited: six workflows, 1037 lines total, and no composite actions
+(`.github/actions/` was absent). Line counts in the table below are the
+pre-refactor figures the findings reference.
 
 | Workflow | Lines | Triggers | Jobs |
 | --- | --- | --- | --- |
@@ -95,18 +97,18 @@ would be a 2-line call replacing a 2-line `uses:` — zero saving — and would 
 the pinned SHA out of Dependabot's default scan path. Leave as is; Dependabot
 already keeps the 17 pins in lockstep.
 
-## 3. Proposed refactor
+## 3. Refactor
 
 Three changes, in preference order from the audit brief. All three are composite
 actions (option 2); no shared *job* is used across workflow files, so no
 reusable workflow (option 1) is warranted, and no near-duplicate job survives
 that a `strategy.matrix` (option 3) would serve better — see the note on F3.
 
-### Resulting structure
+### Structure
 
 ```
 .github/
-├── actions/                          # new
+├── actions/                          # added
 │   ├── setup-rust/
 │   │   └── action.yml                # F1: toolchain pin + optional cargo cache
 │   ├── linux-desktop-deps/
@@ -118,7 +120,7 @@ that a `strategy.matrix` (option 3) would serve better — see the note on F3.
     ├── branch-promotion-policy.yml   # unchanged
     ├── ci.yml                        # uses setup-rust ×4, linux-desktop-deps ×2, build-manifest ×2
     ├── ios.yml                       # uses setup-rust ×1
-    ├── release.yml                   # uses setup-rust ×1
+    ├── release.yml                   # unchanged — see below
     ├── scorecard.yml                 # unchanged
     └── security.yml                  # uses setup-rust ×1
 ```
@@ -138,15 +140,31 @@ Call sites and the inputs each must pass to stay behaviour-identical:
 | `ci.yml` `platform-validation` | default | default | `${{ runner.os }}-debug` | trunk expression |
 | `ci.yml` `tauri-validation` | default | default | `linux-debug` | trunk expression |
 | `ios.yml` `ios` | `rustfmt` | default | default | default |
-| `release.yml` `release` | `''` | default | default | default |
 | `security.yml` `rust-dependencies` | `''` | `false` | — | — |
+
+`release.yml` is **excluded**. Its `release` job checks out the tagged commit
+(`ref: ${{ needs.validate-production-tag.outputs.sha }}`), so a local composite
+action would be resolved from the tag's tree. The documented `workflow_dispatch`
+path — "Existing production tag to validate without publishing" — runs the
+current workflow file against an old checkout, so every tag created before this
+refactor would fail to find `.github/actions/setup-rust`. Three saved lines are
+not worth breaking tag re-validation, so `release.yml` keeps its inline setup
+and the only remaining copy of the `1.96.0` pin.
 
 "Trunk expression" is
 `${{ github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/main' }}`.
-It is still written at four `ci.yml` sites. To single-source it, hoist it into
-`ci.yml`'s existing top-level `env:` as e.g. `CARGO_CACHE_SAVE` and pass
-`cache-save-if: ${{ env.CARGO_CACHE_SAVE }}` — workflow-level `env` may use the
-`github` context, so this is safe.
+It is still written at four `ci.yml` sites.
+
+> **Correction.** This audit originally proposed hoisting that expression into
+> `ci.yml`'s top-level `env:` as `CARGO_CACHE_SAVE`. Verification against
+> `Swatinem/rust-cache` at its pinned SHA disproved that: `src/config.ts` lines
+> 118 and 127 hash every environment variable whose name starts with `CARGO`
+> (also `CC`, `CFLAGS`, `CXX`, `CMAKE`, `RUST`) into the cache key. A variable
+> whose value is `false` on pull requests and `true` on trunk would put pull
+> request runs on a different cache key from the trunk runs that save the
+> cache, silently ending all cache reuse in CI. The expression stays at the
+> four call sites. Any future workflow-level variable must avoid those six
+> prefixes.
 
 `preflight` keeps its step-level `if: needs.changes.outputs.rust == 'true'` on
 the composite call, which preserves the conditional exactly.
@@ -158,9 +176,12 @@ Two behaviour details to verify in review:
 - `shared-key: ''` must be a no-op for `Swatinem/rust-cache`, matching
   `ios.yml` and `release.yml`.
 
-Both actions read these via `core.getInput`, which returns `''` for an omitted
-input, so passing `''` explicitly is equivalent — but this is the one assumption
-in the whole refactor that a real run should confirm.
+Both were confirmed against the pinned SHAs rather than assumed:
+
+- `dtolnay/rust-toolchain`'s `flags` step builds its `--component` arguments by
+  iterating the comma-separated list, so an empty value contributes no flag.
+- `Swatinem/rust-cache` gates on `if (sharedKey)` in `src/config.ts` line 77,
+  so `''` is falsy and selects the automatic job-based key.
 
 The payoff is not line count. It is that `1.96.0` currently appears in seven
 workflow sites plus [rust-toolchain.toml](../rust-toolchain.toml); after this it
@@ -207,63 +228,118 @@ that introduces the first composite action.
 This is not optional and is easy to miss; it is the main hidden cost of choosing
 composite actions here.
 
-## 4. Expected line-count effect
+## 4. Measured line-count effect
 
-Composite actions move lines rather than delete them. Honest accounting:
+Composite actions move lines rather than delete them. Measured, not estimated:
 
-| | Workflow lines | Action lines | Net |
+| File | Before | After | Delta |
 | --- | --- | --- | --- |
-| F1 `setup-rust` | −31 | +40 | +9 |
-| F2 `linux-desktop-deps` | −12 | +13 | +1 |
-| F3 `build-manifest` | −34 | +42 | +8 |
-| **Total** | **−77** | **+95** | **+18** |
+| `.github/workflows/ci.yml` | 481 | 424 | −57 |
+| `.github/workflows/ios.yml` | 96 | 92 | −4 |
+| `.github/workflows/security.yml` | 117 | 118 | +1 |
+| `.github/workflows/` (all six) | **1037** | **977** | **−60** |
+| `.github/actions/` (new) | 0 | 118 | +118 |
+| **Total Actions configuration** | **1037** | **1095** | **+58** |
 
-`.github/workflows/` drops from 1037 to ~960 lines; the Actions configuration as
-a whole grows by ~18 lines. The duplication removed is what matters: the Rust
-toolchain pin goes from 7 copies to 1, the apt package list from 2 to 1, and the
-build-manifest schema from 2 to 1.
+`security.yml` grows by one line because its job installs no cache, so the call
+site spends two lines saying so (`components: ""`, `cache: "false"`) where the
+old block spent one on the toolchain version. It still drops a copy of the pin.
 
-If a net line *increase* is not an acceptable outcome, F2 alone is close to
-break-even and F1 is the only change that removes a real drift hazard; F3 could
-be deferred.
+The duplication removed is what matters, and it is not a line count:
 
-## 5. Verification plan
+| Thing | Before | After |
+| --- | --- | --- |
+| Copies of the `1.96.0` toolchain pin in workflows | 7 | 1 (`release.yml` only) |
+| Copies of the apt package list | 2 | 1 |
+| Copies of the build-manifest schema | 2 | 1 |
+| Pinned third-party action SHAs outside Dependabot's scan scope | 0 | 0 |
+
+## 5. Verification
 
 The repo's own `Workflow lint` job (`security.yml`, `raven-actions/actionlint`)
-covers syntax. Behaviour equivalence needs more than that:
+covers syntax. Behaviour equivalence needed more than that. What was checked
+before pushing:
 
-1. Land each change as its own commit, per the brief.
-2. Open a PR into `dev`. This fires `CI`, `Security scanning`, and `iOS Native`,
-   which between them exercise every `setup-rust` call site except
-   `release.yml`'s.
-3. Because the PR touches `.github/workflows/*`, `ci.yml`'s change detector sets
-   `all_expensive=true` (ci.yml lines 109–111), so every gated job runs — the
-   refactor gets full coverage automatically.
-4. Compare the per-step logs against a pre-refactor run on the same base:
-   resolved `rustc --version`, the restored cache key, and the apt package set
-   must match.
-5. `release.yml`'s `setup-rust` site is **not** covered by a PR run. Validate it
-   via `workflow_dispatch` with the `tag` input against an existing production
-   tag — that path runs `validate-production-tag` and `release` but skips
-   `attest-release-artifacts` and `publish-release` (both gated on
-   `github.event_name == 'push'`), so it builds and packages without publishing.
-6. Confirm the uploaded artifact names from `internal-artifact` on a `dev` push
-   match the pre-refactor naming exactly.
+1. **actionlint 1.7.7** — clean across all six workflows after each commit.
+2. **YAML parse** — every workflow, every `action.yml`, and `dependabot.yml`.
+3. **Upstream input semantics** — `dtolnay/rust-toolchain` and
+   `Swatinem/rust-cache` were fetched at their pinned SHAs and read, rather
+   than assumed, to confirm `components: ""` and `shared-key: ""` are exact
+   no-ops. See the note under F1. The same reading is what caught the
+   `CARGO_*` cache-key hazard recorded above.
+4. **Footprint diff** — a script parsed each workflow before and after and
+   compared triggers, top-level and job-level `permissions`, `concurrency`,
+   workflow `env`, job names, `if` conditions, `runs-on`, `needs`, `strategy`,
+   `outputs`, and secret references. All six workflows: identical.
+5. **Effective step sequence diff** — the same script expanded every local
+   composite action call back into its underlying steps (resolving input
+   defaults and the `inputs.cache` condition) and compared the flattened
+   sequence per job. Eighteen of twenty jobs: identical. The two exceptions
+   are `rust-quality` and `tauri-validation`, reported as `REORDERED` with the
+   same multiset of steps — the intended cache-before-apt reordering.
+6. **Manifest output equivalence** — the old inline script and the new action
+   body were both executed locally against the same `GITHUB_SHA`,
+   `GITHUB_RUN_NUMBER`, and `GITHUB_RUN_ID`. Both channels produced
+   byte-identical `BUILD-MANIFEST.txt` files and the same artifact names
+   (`internal-dev-0.5.1-…`, `beta-main-0.5.1-…`).
 
-Nothing is removed until the replacement has run green.
+What local checking cannot cover, and what a real run must confirm:
 
+- That the runners resolve `./.github/actions/*` as expected. Opening a pull
+  request into `dev` exercises every new call site: the PR touches
+  `.github/workflows/*`, so `ci.yml`'s change detector sets `all_expensive=true`
+  (`ci.yml` lines 109–111) and every gated job runs.
+- Actual cache hit rates. Compare the restored cache key in the `Cache Cargo`
+  step logs against a pre-refactor run on the same base; `linux-debug` and
+  `<os>-debug` must be unchanged.
+
+`release.yml` needs no run-time validation because it was not modified.
 ## 6. Trigger, permission, and secret footprint
 
-The proposed refactor changes **no** trigger, `permissions:` block, secret, or
-`concurrency` group in any workflow. No workflow file is deleted or renamed. No
-new third-party marketplace action is introduced — all three composite actions
-wrap actions the repo already uses at their existing pinned SHAs.
+The refactor changes **no** trigger, `permissions:` block, secret, or
+`concurrency` group in any workflow — verified mechanically, see §5 item 4. No
+workflow file was deleted or renamed. No new third-party marketplace action was
+introduced: all three composite actions wrap actions the repo already used, at
+their existing pinned SHAs.
 
 The two findings that *would* have changed that footprint (F4 promotion-policy
 consolidation, F7 permissions hoisting) are recommended against above and are
 not part of this proposal.
 
-## 7. Status
+## 7. Outcome
 
-Audit complete; **no files under `.github/` have been modified.** Implementation
-of F1–F3 and the Dependabot scope change awaits maintainer approval.
+Implemented across three commits, one logical change each:
+
+| Commit | Change |
+| --- | --- |
+| `ci: extract composite action for Rust setup` | `.github/actions/setup-rust/` + six call sites in `ci.yml`, `ios.yml`, `security.yml`; Dependabot scope |
+| `ci: extract composite action for Linux desktop dependencies` | `.github/actions/linux-desktop-deps/` + two call sites in `ci.yml` |
+| `ci: extract composite action for channel build manifests` | `.github/actions/build-manifest/` + `internal-artifact` and `beta-artifact` |
+
+What moved where:
+
+- The Rust toolchain version and cache wiring moved from six job bodies into
+  `.github/actions/setup-rust/action.yml`. Call sites now declare only what
+  differs: components, cache key, and whether the cache may be saved.
+- The Ubuntu desktop package list moved from two `ci.yml` jobs into
+  `.github/actions/linux-desktop-deps/action.yml`.
+- The build-manifest schema moved from two `ci.yml` jobs into
+  `.github/actions/build-manifest/action.yml`, which now returns the artifact
+  name as a step output instead of via `$GITHUB_ENV`.
+- `.github/dependabot.yml` switched its `github-actions` ecosystem from
+  `directory: /` to a `directories` list that also covers `/.github/actions/*`.
+
+Deliberately not changed: F4 through F9, for the reasons in §2. `release.yml` is
+untouched for the tag-checkout reason in §3.
+
+### Follow-ups a maintainer may want
+
+- **`release.yml`'s toolchain pin.** It is the last copy. Migrating it safely
+  means either accepting that pre-refactor tags can no longer be re-validated by
+  dispatch, or checking the action out separately from the workflow ref.
+- **Sourcing the toolchain from `rust-toolchain.toml`.** `setup-rust` could read
+  the channel from the file that already pins it, removing the version from the
+  workflows entirely. That is a behaviour change, so it was left out of a
+  refactor commit.
+- **F4's redundant execution.** Still runs the promotion policy twice on every
+  pull request into `main`. Removing it is a branch-protection change first.
