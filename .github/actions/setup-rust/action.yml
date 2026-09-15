@@ -1,0 +1,53 @@
+name: Set up Rust
+description: >-
+  Install the pinned Rust toolchain and, by default, restore the Cargo cache.
+  Single-sources the toolchain version so it cannot drift between workflows.
+
+inputs:
+  toolchain:
+    description: >-
+      Rust toolchain to install. Keep in step with the channel pinned in
+      rust-toolchain.toml.
+    required: false
+    default: "1.96.0"
+  components:
+    description: >-
+      Comma-separated rustup components. Pass an empty string to install none;
+      dtolnay/rust-toolchain builds its --component flags by iterating the list,
+      so an empty value adds no flag.
+    required: false
+    default: "rustfmt, clippy"
+  cache:
+    description: >-
+      Whether to restore the Cargo cache. Set to "false" for jobs that install
+      their own tooling and would not benefit from a workspace cache.
+    required: false
+    default: "true"
+  cache-shared-key:
+    description: >-
+      Stable cache key shared across jobs. An empty value selects
+      Swatinem/rust-cache's automatic job-based key, matching an omitted input.
+    required: false
+    default: ""
+  cache-save-if:
+    description: >-
+      Whether the cache may be saved, as opposed to only restored. Defaults to
+      Swatinem/rust-cache's own default.
+    required: false
+    default: "true"
+
+runs:
+  using: composite
+  steps:
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
+      with:
+        toolchain: ${{ inputs.toolchain }}
+        components: ${{ inputs.components }}
+
+    - name: Cache Cargo
+      if: inputs.cache == 'true'
+      uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      with:
+        shared-key: ${{ inputs.cache-shared-key }}
+        save-if: ${{ inputs.cache-save-if }}

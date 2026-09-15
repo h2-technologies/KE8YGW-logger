@@ -146,11 +146,24 @@ def check_release_workflow(version: str, errors: list[str]) -> None:
     ci = read_text(ci_path)
     for fragment in (
         "python scripts/check_versions.py",
-        "internal-dev-${version}-${GITHUB_SHA}-${GITHUB_RUN_NUMBER}",
-        "beta-main-${version}-${GITHUB_SHA}-${GITHUB_RUN_NUMBER}",
+        "channel: internal-dev",
+        "channel: beta-main",
     ):
         if fragment not in ci:
             errors.append(f"{rel(ci_path)} is missing channel artifact/version fragment: {fragment}")
+
+    # The channel artifact naming scheme itself lives in the composite action
+    # both channel jobs call, so that is where it is asserted. Together with the
+    # two `channel:` inputs above this is the same guarantee the two inlined
+    # `internal-dev-${version}-...` literals used to give.
+    manifest_path = ROOT / ".github" / "actions" / "build-manifest" / "action.yml"
+    manifest = read_text(manifest_path)
+    for fragment in (
+        "python scripts/check_versions.py --print-version",
+        "${CHANNEL}-${version}-${GITHUB_SHA}-${GITHUB_RUN_NUMBER}",
+    ):
+        if fragment not in manifest:
+            errors.append(f"{rel(manifest_path)} is missing channel artifact/version fragment: {fragment}")
 
 
 def check_release_tag(version: str, release_tag: str | None, errors: list[str]) -> None:

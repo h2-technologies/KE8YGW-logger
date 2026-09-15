@@ -1,0 +1,48 @@
+name: Write channel build manifest
+description: >-
+  Write the BUILD-MANIFEST.txt for a non-production channel artifact and return
+  the name the upload step should publish it under.
+
+inputs:
+  channel:
+    description: >-
+      Channel identifier recorded in the manifest and used as the artifact name
+      prefix.
+    required: true
+  directory:
+    description: Directory the manifest is written to.
+    required: true
+  note:
+    description: Human-readable note recorded in the manifest.
+    required: true
+
+outputs:
+  artifact:
+    description: Name for the uploaded artifact.
+    value: ${{ steps.manifest.outputs.artifact }}
+
+runs:
+  using: composite
+  steps:
+    - name: Write build manifest
+      id: manifest
+      shell: bash
+      env:
+        CHANNEL: ${{ inputs.channel }}
+        DIRECTORY: ${{ inputs.directory }}
+        NOTE: ${{ inputs.note }}
+      run: |
+        set -euo pipefail
+        version="$(python scripts/check_versions.py --print-version)"
+        mkdir -p "$DIRECTORY"
+        artifact="${CHANNEL}-${version}-${GITHUB_SHA}-${GITHUB_RUN_NUMBER}"
+        {
+          echo "channel=${CHANNEL}"
+          echo "version=${version}"
+          echo "sha=${GITHUB_SHA}"
+          echo "run_number=${GITHUB_RUN_NUMBER}"
+          echo "run_id=${GITHUB_RUN_ID}"
+          echo "artifact=${artifact}"
+          echo "note=${NOTE}"
+        } > "${DIRECTORY}/BUILD-MANIFEST.txt"
+        echo "artifact=${artifact}" >> "$GITHUB_OUTPUT"
