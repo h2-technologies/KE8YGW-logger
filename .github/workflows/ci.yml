@@ -383,27 +383,17 @@ jobs:
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
 
       - name: Write internal build manifest
-        shell: bash
-        run: |
-          set -euo pipefail
-          version="$(python scripts/check_versions.py --print-version)"
-          mkdir -p dist/internal
-          artifact="internal-dev-${version}-${GITHUB_SHA}-${GITHUB_RUN_NUMBER}"
-          {
-            echo "channel=internal-dev"
-            echo "version=${version}"
-            echo "sha=${GITHUB_SHA}"
-            echo "run_number=${GITHUB_RUN_NUMBER}"
-            echo "run_id=${GITHUB_RUN_ID}"
-            echo "artifact=${artifact}"
-            echo "note=Internal validation artifact only. Not a beta or production release."
-          } > dist/internal/BUILD-MANIFEST.txt
-          echo "ARTIFACT_NAME=${artifact}" >> "$GITHUB_ENV"
+        id: manifest
+        uses: ./.github/actions/build-manifest
+        with:
+          channel: internal-dev
+          directory: dist/internal
+          note: "Internal validation artifact only. Not a beta or production release."
 
       - name: Upload internal build manifest
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: ${{ env.ARTIFACT_NAME }}
+          name: ${{ steps.manifest.outputs.artifact }}
           path: dist/internal
           retention-days: 7
 
@@ -419,26 +409,16 @@ jobs:
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
 
       - name: Write beta build manifest
-        shell: bash
-        run: |
-          set -euo pipefail
-          version="$(python scripts/check_versions.py --print-version)"
-          mkdir -p dist/beta
-          artifact="beta-main-${version}-${GITHUB_SHA}-${GITHUB_RUN_NUMBER}"
-          {
-            echo "channel=beta-main"
-            echo "version=${version}"
-            echo "sha=${GITHUB_SHA}"
-            echo "run_number=${GITHUB_RUN_NUMBER}"
-            echo "run_id=${GITHUB_RUN_ID}"
-            echo "artifact=${artifact}"
-            echo "note=Beta tester artifact metadata only. Not a production release."
-          } > dist/beta/BUILD-MANIFEST.txt
-          echo "ARTIFACT_NAME=${artifact}" >> "$GITHUB_ENV"
+        id: manifest
+        uses: ./.github/actions/build-manifest
+        with:
+          channel: beta-main
+          directory: dist/beta
+          note: "Beta tester artifact metadata only. Not a production release."
 
       - name: Upload beta build manifest
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: ${{ env.ARTIFACT_NAME }}
+          name: ${{ steps.manifest.outputs.artifact }}
           path: dist/beta
           retention-days: 30
