@@ -134,7 +134,8 @@ pub use permissions::{
     PermissionRegistry, PermissionRiskLevel, PermissionSettings,
 };
 pub use projection::{
-    ActivationProjection, ActivationRecord, Projection, QsoCurrentStateProjection, QsoRecord,
+    projection_touch, ActivationProjection, ActivationRecord, Projection, ProjectionTouch,
+    QsoCurrentStateProjection, QsoRecord,
 };
 pub use proposal::{
     submit_proposal, OperatorRole, ProposalContext, ProposalOutcome, ProposalValidationError,
