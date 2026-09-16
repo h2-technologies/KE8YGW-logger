@@ -1,0 +1,946 @@
+<!doctype html>
+<html lang="en" data-resolution="landscape">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=1920, height=1080" />
+    <title>KE8YGW Logger — brag</title>
+    <script src="assets/vendor/gsap.min.js"></script>
+    <style>
+      @font-face {
+        font-family: "InterBrag";
+        src: url("assets/fonts/Inter.woff2") format("woff2");
+        font-weight: 100 900;
+        font-style: normal;
+        font-display: block;
+      }
+      @font-face {
+        font-family: "MonoBrag";
+        src: url("assets/fonts/JetBrainsMono.woff2") format("woff2");
+        font-weight: 100 800;
+        font-style: normal;
+        font-display: block;
+      }
+
+      /* Palette lifted verbatim from crates/ham-client/web/styles.css
+         :root[data-theme="dark"] — this is the product's own night console. */
+      :root {
+        --bg: #0b0e13;
+        --deck: #11151c;
+        --panel: #161b23;
+        --well: #0a0e14;
+        --line: #262e3a;
+        --line-strong: #333d4d;
+        --text: #e8edf5;
+        --muted: #8b98ab;
+        --accent: #ffb545;
+        --accent-strong: #ffd08a;
+        --accent-wash: rgba(255, 181, 69, 0.14);
+        --accent-edge: rgba(255, 181, 69, 0.45);
+        --ok: #3ddc97;
+        --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 14px 34px rgba(0, 0, 0, 0.42);
+      }
+
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        width: 1920px;
+        height: 1080px;
+        overflow: hidden;
+        background: var(--bg);
+      }
+      #root {
+        position: relative;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        font-family: InterBrag, sans-serif;
+        color: var(--text);
+        font-feature-settings: "cv05", "ss01";
+      }
+
+      #bg {
+        position: absolute;
+        inset: 0;
+        background:
+          radial-gradient(120% 80% at 50% 8%, rgba(255, 181, 69, 0.045), rgba(255, 181, 69, 0) 62%),
+          radial-gradient(100% 70% at 50% 100%, rgba(0, 0, 0, 0.55), rgba(0, 0, 0, 0) 70%),
+          var(--bg);
+      }
+
+      .scene {
+        position: absolute;
+        inset: 0;
+      }
+      .scene-inner {
+        position: absolute;
+        inset: 0;
+      }
+
+      /* ---------- shared brand mark ---------- */
+      .mark-wrap {
+        position: relative;
+        width: 148px;
+        height: 148px;
+        flex: none;
+      }
+      .mark-wrap.big {
+        width: 168px;
+        height: 168px;
+      }
+      .bloom,
+      .pulse {
+        position: absolute;
+        inset: -110px;
+        border-radius: 50%;
+        pointer-events: none;
+      }
+      .bloom {
+        background: radial-gradient(circle, rgba(255, 181, 69, 0.3), rgba(255, 181, 69, 0) 66%);
+      }
+      .pulse {
+        background: radial-gradient(circle, rgba(255, 181, 69, 0.42), rgba(255, 181, 69, 0) 58%);
+        opacity: 0;
+      }
+      .mark {
+        position: absolute;
+        inset: 0;
+        display: grid;
+        place-items: center;
+        border-radius: 28px;
+        background: var(--accent-wash);
+        border: 1px solid var(--accent-edge);
+        color: var(--accent);
+        font-size: 62px;
+        font-weight: 700;
+        letter-spacing: 0.04em;
+      }
+      .mark-wrap.big .mark {
+        font-size: 70px;
+        border-radius: 32px;
+      }
+
+      .eyebrow {
+        font-size: 20px;
+        font-weight: 600;
+        letter-spacing: 0.26em;
+        text-transform: uppercase;
+        color: var(--accent);
+      }
+
+      /* ---------- scene 1 ---------- */
+      .s1-inner {
+        display: grid;
+        place-items: center;
+      }
+      .lockup {
+        display: flex;
+        align-items: center;
+        gap: 46px;
+      }
+      .s1-call {
+        font-size: 82px;
+        font-weight: 700;
+        letter-spacing: -0.022em;
+        line-height: 1;
+        color: var(--text);
+      }
+      .s1-sub {
+        font-size: 30px;
+        font-weight: 400;
+        color: var(--muted);
+        margin-top: 18px;
+        letter-spacing: 0.02em;
+      }
+      .s1-status {
+        position: absolute;
+        left: 0;
+        right: 0;
+        bottom: 138px;
+        text-align: center;
+        font-size: 27px;
+        font-weight: 500;
+        color: var(--muted);
+        letter-spacing: 0.2em;
+      }
+
+      /* ---------- scene 2: the operating deck ---------- */
+      .app {
+        position: absolute;
+        inset: 74px 80px;
+        background: var(--deck);
+        border: 1px solid var(--line);
+        border-radius: 18px;
+        box-shadow: var(--shadow);
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+      }
+      .menubar {
+        height: 94px;
+        flex: none;
+        padding: 0 32px;
+        background: var(--panel);
+        border-bottom: 1px solid var(--line);
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+      }
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 18px;
+      }
+      .brand .mark-wrap {
+        width: 54px;
+        height: 54px;
+      }
+      .brand .mark {
+        font-size: 24px;
+        border-radius: 12px;
+      }
+      .brand-call {
+        font-size: 25px;
+        font-weight: 700;
+        letter-spacing: -0.01em;
+      }
+      .brand-ctx {
+        font-size: 17px;
+        color: var(--muted);
+        margin-top: 3px;
+      }
+      .omni {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        padding: 13px 18px;
+        border-radius: 12px;
+        border: 1px solid var(--line-strong);
+        background: var(--well);
+        color: var(--muted);
+        font-size: 20px;
+        font-weight: 500;
+      }
+      .omni .glyph {
+        color: var(--accent);
+        font-size: 21px;
+      }
+      .omni kbd {
+        font-family: MonoBrag, monospace;
+        font-size: 16px;
+        padding: 4px 9px;
+        border-radius: 7px;
+        border: 1px solid var(--line-strong);
+        color: var(--muted);
+      }
+      .modes {
+        flex: none;
+        padding: 22px 32px 4px;
+        display: flex;
+        gap: 12px;
+      }
+      .mode {
+        padding: 12px 20px;
+        border-radius: 11px;
+        border: 1px solid var(--line);
+        color: var(--muted);
+        font-size: 22px;
+        font-weight: 500;
+        white-space: nowrap;
+      }
+      .mode.is-active {
+        background: var(--accent-wash);
+        border-color: var(--accent-edge);
+        color: var(--accent);
+      }
+      .title-row {
+        flex: none;
+        padding: 24px 32px 18px;
+      }
+      .title-row h1 {
+        font-size: 60px;
+        font-weight: 700;
+        letter-spacing: -0.025em;
+        margin-top: 12px;
+      }
+      .panel-grid {
+        flex: 1;
+        min-height: 0;
+        padding: 0 32px 22px;
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 20px;
+      }
+      .panelcard {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        padding: 22px 24px;
+        display: flex;
+        flex-direction: column;
+        gap: 16px;
+      }
+      .panelhead {
+        font-size: 24px;
+        font-weight: 600;
+        color: var(--text);
+      }
+      .rows {
+        flex: 1;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+      }
+      .row {
+        height: 38px;
+        flex: none;
+        border-radius: 9px;
+        background: var(--well);
+        border: 1px solid var(--line);
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 0 12px;
+      }
+      .bar {
+        display: block;
+        height: 9px;
+        border-radius: 5px;
+        background: var(--line-strong);
+      }
+      .bar.w90 { width: 90%; }
+      .bar.w75 { width: 75%; }
+      .bar.w60 { width: 60%; }
+      .bar.w45 { width: 45%; }
+      .bar.w30 { width: 30%; }
+      .bar.amber { background: rgba(255, 181, 69, 0.55); }
+      .bar.ok { background: rgba(61, 220, 151, 0.5); }
+      .statusbar {
+        height: 62px;
+        flex: none;
+        padding: 0 32px;
+        border-top: 1px solid var(--line);
+        background: var(--deck);
+        display: flex;
+        align-items: center;
+        gap: 42px;
+        font-size: 20px;
+        color: var(--muted);
+      }
+
+      /* ---------- scene 3: a plugin proposes ---------- */
+      .s3-inner {
+        display: grid;
+        place-items: center;
+      }
+      .s3-stack {
+        width: 1080px;
+        display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 34px;
+      }
+      .entry {
+        width: 100%;
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 16px;
+        box-shadow: var(--shadow);
+        padding: 28px 32px 32px;
+      }
+      .field {
+        margin-top: 22px;
+        background: var(--well);
+        border: 1px solid var(--line-strong);
+        border-radius: 12px;
+        padding: 22px 26px;
+        display: flex;
+        align-items: center;
+        gap: 28px;
+      }
+      .field-label {
+        font-size: 20px;
+        font-weight: 500;
+        letter-spacing: 0.18em;
+        text-transform: uppercase;
+        color: var(--muted);
+      }
+      .field-value {
+        position: relative;
+        font-family: MonoBrag, monospace;
+        font-size: 58px;
+        font-weight: 500;
+        letter-spacing: 0.02em;
+        color: var(--text);
+        line-height: 1.1;
+        min-height: 64px;
+      }
+      .field-value .ch {
+        opacity: 0;
+      }
+      .caret {
+        position: absolute;
+        top: 4px;
+        left: 0;
+        width: 4px;
+        height: 58px;
+        background: var(--accent);
+        border-radius: 2px;
+      }
+      .checks {
+        display: flex;
+        flex-direction: column;
+        gap: 18px;
+        padding-left: 4px;
+      }
+      .check {
+        display: flex;
+        align-items: center;
+        gap: 20px;
+      }
+      .check .tick {
+        width: 38px;
+        height: 38px;
+        flex: none;
+        display: grid;
+        place-items: center;
+        border-radius: 10px;
+        background: rgba(61, 220, 151, 0.14);
+        color: var(--ok);
+        font-size: 22px;
+        font-weight: 700;
+      }
+      .check code {
+        font-family: MonoBrag, monospace;
+        font-size: 31px;
+        font-weight: 400;
+        color: var(--text);
+        letter-spacing: -0.005em;
+      }
+
+      /* ---------- scene 4: the core decides ---------- */
+      .s4-inner {
+        display: grid;
+        place-items: center;
+      }
+      .s4-stack {
+        width: 1180px;
+        display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 40px;
+      }
+      .s4-line {
+        font-size: 56px;
+        font-weight: 600;
+        letter-spacing: -0.02em;
+        color: var(--text);
+      }
+      .s4-line em {
+        font-style: normal;
+        color: var(--accent);
+      }
+      .qsos {
+        position: relative;
+        width: 100%;
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 16px;
+        box-shadow: var(--shadow);
+        padding: 26px 30px 30px;
+      }
+      .qso-glow {
+        position: absolute;
+        inset: -46px;
+        border-radius: 46px;
+        background: radial-gradient(60% 60% at 50% 50%, rgba(255, 181, 69, 0.26), rgba(255, 181, 69, 0) 70%);
+        opacity: 0;
+        pointer-events: none;
+      }
+      .qso-list {
+        position: relative;
+        margin-top: 20px;
+        height: 250px; /* three 74px slots + two 14px gaps */
+      }
+      .qso-stack {
+        position: absolute;
+        inset: 0;
+      }
+      .qso {
+        display: grid;
+        grid-template-columns: 240px 140px 140px 1fr;
+        align-items: center;
+        height: 74px;
+        padding: 0 22px;
+        border-radius: 11px;
+        border: 1px solid var(--line);
+        background: var(--well);
+        margin-bottom: 14px;
+        font-family: MonoBrag, monospace;
+        font-size: 28px;
+        color: var(--muted);
+        overflow: hidden;
+      }
+      .qso .call-cell {
+        font-size: 32px;
+        font-weight: 500;
+        color: var(--text);
+        letter-spacing: 0.01em;
+      }
+      .qso.is-new {
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        border-color: var(--accent-edge);
+        opacity: 0;
+      }
+      .qso.is-new .call-cell {
+        color: var(--accent);
+      }
+      .s4-status {
+        display: flex;
+        gap: 44px;
+        font-size: 24px;
+        color: var(--muted);
+        padding-left: 4px;
+      }
+      .ev-wrap {
+        position: relative;
+        display: inline-block;
+        min-width: 260px;
+      }
+      .ev-wrap .ev1 {
+        position: absolute;
+        left: 0;
+        top: 0;
+        opacity: 0;
+        color: var(--accent);
+      }
+
+      /* ---------- scene 5: lockup ---------- */
+      .s5-inner {
+        display: grid;
+        place-items: center;
+      }
+      .s5-stack {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+      }
+      .s5-name {
+        margin-top: 46px;
+        font-size: 84px;
+        font-weight: 700;
+        letter-spacing: -0.025em;
+        line-height: 1;
+        color: var(--text);
+      }
+      .s5-tag {
+        margin-top: 24px;
+        font-size: 34px;
+        font-weight: 400;
+        color: var(--muted);
+        letter-spacing: 0.01em;
+      }
+      .s5-foot {
+        position: absolute;
+        left: 0;
+        right: 0;
+        bottom: 126px;
+        text-align: center;
+        font-size: 26px;
+        font-weight: 500;
+        color: var(--muted);
+        letter-spacing: 0.12em;
+      }
+    </style>
+  </head>
+  <body>
+    <div
+      id="root"
+      data-composition-id="main"
+      data-start="0"
+      data-duration="23.46"
+      data-width="1920"
+      data-height="1080"
+      data-fps="30"
+    >
+      <div id="bg"></div>
+
+      <!-- ===== Scene 1 — Power on (0.00 → 3.62, content out 3.12) ===== -->
+      <section id="s1" class="clip scene" data-start="0" data-duration="3.62" data-track-index="0">
+        <div class="scene-inner s1-inner" id="s1-inner">
+          <div class="lockup">
+            <div class="mark-wrap">
+              <div class="bloom" id="s1-bloom" data-layout-allow-overflow="true"></div>
+              <div class="pulse" id="s1-pulse" data-layout-allow-overflow="true"></div>
+              <div class="mark" id="s1-mark">K8</div>
+            </div>
+            <div>
+              <div class="s1-call" id="s1-call">KE8YGW</div>
+              <div class="s1-sub" id="s1-sub">Local station</div>
+            </div>
+          </div>
+          <div class="s1-status" id="s1-status">Sync: Local only</div>
+        </div>
+      </section>
+
+      <!-- ===== Scene 2 — The Operating Deck (3.12 → 8.74) ===== -->
+      <section id="s2" class="clip scene" data-start="3.12" data-duration="5.62" data-track-index="1">
+        <div class="scene-inner s2-inner" id="s2-inner">
+          <div class="app" id="s2-app">
+            <header class="menubar">
+              <div class="brand">
+                <div class="mark-wrap"><div class="mark">K8</div></div>
+                <div>
+                  <div class="brand-call">KE8YGW</div>
+                  <div class="brand-ctx">Local station</div>
+                </div>
+              </div>
+              <div class="omni">
+                <span class="glyph">&#8984;</span>
+                <span>Search or run a command</span>
+                <kbd>Ctrl K</kbd>
+              </div>
+            </header>
+
+            <nav class="modes" id="s2-modes">
+              <span class="mode is-active" data-g="0">Dashboard</span>
+              <span class="mode" data-g="0">Casual Logger</span>
+              <span class="mode" data-g="0">POTA/SOTA</span>
+              <span class="mode" data-g="1">Maps</span>
+              <span class="mode" data-g="1">Awards</span>
+              <span class="mode" data-g="1">Online Services</span>
+              <span class="mode" data-g="2">Net Control</span>
+              <span class="mode" data-g="2">EmComm</span>
+              <span class="mode" data-g="2">Contesting</span>
+            </nav>
+
+            <div class="title-row" id="s2-title">
+              <div class="eyebrow">KE8YGW Logger</div>
+              <h1>Dashboard</h1>
+            </div>
+
+            <div class="panel-grid">
+              <div class="panelcard">
+                <div class="panelhead">Recent QSOs</div>
+                <div class="rows">
+                  <div class="row"><span class="bar w30"></span></div>
+                  <div class="row"><span class="bar w45"></span></div>
+                  <div class="row"><span class="bar w30"></span></div>
+                  <div class="row"><span class="bar w60"></span></div>
+                  <div class="row"><span class="bar w30"></span></div>
+                  <div class="row"><span class="bar w45"></span></div>
+                  <div class="row"><span class="bar w30"></span></div>
+                  <div class="row"><span class="bar w45"></span></div>
+                </div>
+              </div>
+              <div class="panelcard">
+                <div class="panelhead">Callsign Entry</div>
+                <div class="rows">
+                  <div class="row"><span class="bar w45 amber"></span></div>
+                  <div class="row"><span class="bar w45"></span></div>
+                  <div class="row"><span class="bar w60"></span></div>
+                  <div class="row"><span class="bar w30"></span></div>
+                  <div class="row"><span class="bar w75"></span></div>
+                  <div class="row"><span class="bar w45"></span></div>
+                  <div class="row"><span class="bar w30"></span></div>
+                  <div class="row"><span class="bar w60"></span></div>
+                </div>
+              </div>
+              <div class="panelcard">
+                <div class="panelhead">Rig Control</div>
+                <div class="rows">
+                  <div class="row"><span class="bar w45"></span></div>
+                  <div class="row"><span class="bar w30"></span></div>
+                  <div class="row"><span class="bar w75"></span></div>
+                  <div class="row"><span class="bar w45"></span></div>
+                  <div class="row"><span class="bar w30"></span></div>
+                  <div class="row"><span class="bar w60"></span></div>
+                  <div class="row"><span class="bar w45"></span></div>
+                  <div class="row"><span class="bar w30"></span></div>
+                </div>
+              </div>
+              <div class="panelcard">
+                <div class="panelhead">Sync Status</div>
+                <div class="rows">
+                  <div class="row"><span class="bar w45 ok"></span></div>
+                  <div class="row"><span class="bar w60"></span></div>
+                  <div class="row"><span class="bar w45"></span></div>
+                  <div class="row"><span class="bar w30"></span></div>
+                  <div class="row"><span class="bar w45"></span></div>
+                  <div class="row"><span class="bar w75"></span></div>
+                  <div class="row"><span class="bar w30"></span></div>
+                  <div class="row"><span class="bar w45"></span></div>
+                </div>
+              </div>
+            </div>
+
+            <footer class="statusbar" id="s2-status">
+              <span>Sync: Local only</span>
+              <span>Discovery: stopped / 0 peers</span>
+              <span>Runtime events: 0</span>
+              <span>Errors: 0</span>
+            </footer>
+          </div>
+        </div>
+      </section>
+
+      <!-- ===== Scene 3 — A plugin proposes (8.74 → 14.20) ===== -->
+      <section id="s3" class="clip scene" data-start="8.74" data-duration="5.46" data-track-index="2">
+        <div class="scene-inner s3-inner" id="s3-inner">
+          <div class="s3-stack">
+            <div class="eyebrow" id="s3-eyebrow">A plugin proposes</div>
+
+            <div class="entry" id="s3-entry">
+              <div class="panelhead">Callsign Entry</div>
+              <div class="field">
+                <span class="field-label">Callsign</span>
+                <span class="field-value" id="s3-field"
+                  ><span class="ch" id="ch0">K</span><span class="ch" id="ch1">1</span><span
+                    class="ch"
+                    id="ch2"
+                    >A</span
+                  ><span class="ch" id="ch3">B</span><span class="ch" id="ch4">C</span
+                  ><span class="caret" id="s3-caret"></span
+                ></span>
+              </div>
+            </div>
+
+            <div class="checks">
+              <div class="check" id="chk1">
+                <span class="tick">&#10003;</span><code>plugin_has_required_permission</code>
+              </div>
+              <div class="check" id="chk2">
+                <span class="tick">&#10003;</span><code>operator_role_allows_permission</code>
+              </div>
+              <div class="check" id="chk3">
+                <span class="tick">&#10003;</span
+                ><code>scope_allows_target_account_logbook_or_station</code>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ===== Scene 4 — The core decides (14.20 → 19.96, content out 19.46) ===== -->
+      <section id="s4" class="clip scene" data-start="14.20" data-duration="5.76" data-track-index="3" data-layout-allow-overlap="true">
+        <div class="scene-inner s4-inner" id="s4-inner">
+          <div class="s4-stack">
+            <div class="s4-line" id="s4-line">The core decides what becomes <em>official</em>.</div>
+
+            <div class="qsos" id="s4-qsos">
+              <div class="qso-glow" id="s4-glow"></div>
+              <div class="panelhead">Recent QSOs</div>
+              <div class="qso-list">
+                <div class="qso-stack" id="qso-stack">
+                  <div class="qso">
+                    <span class="call-cell">N0BAD</span><span>40m</span><span>CW</span><span>599/599</span>
+                  </div>
+                  <div class="qso">
+                    <span class="call-cell">W8ABC</span><span>20m</span><span>FT8</span><span>-09/-12</span>
+                  </div>
+                </div>
+                <div class="qso is-new" id="qso-new">
+                  <span class="call-cell">K1ABC</span><span>20m</span><span>SSB</span><span>59/59</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="s4-status" id="s4-statusrow">
+              <span class="ev-wrap" data-layout-allow-overlap="true"
+                ><span class="ev0" id="ev0">Runtime events: 0</span
+                ><span class="ev1" id="ev1">Runtime events: 1</span></span
+              >
+              <span>Errors: 0</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ===== Scene 5 — Lockup (19.46 → 23.46) ===== -->
+      <section id="s5" class="clip scene" data-start="19.46" data-duration="4" data-track-index="4" data-layout-allow-overlap="true">
+        <div class="scene-inner s5-inner" id="s5-inner">
+          <div class="s5-stack">
+            <div class="mark-wrap big">
+              <div class="bloom" id="s5-bloom" data-layout-allow-overflow="true"></div>
+              <div class="pulse" id="s5-pulse" data-layout-allow-overflow="true"></div>
+              <div class="mark" id="s5-mark">K8</div>
+            </div>
+            <div class="s5-name" id="s5-name">KE8YGW Logger</div>
+            <div class="s5-tag" id="s5-tag">Ham Radio Operations Platform</div>
+          </div>
+          <div class="s5-foot" id="s5-foot">
+            Local-first &middot; Append-only &middot; Desktop &middot; iOS &middot; Web &middot; CLI
+          </div>
+        </div>
+      </section>
+
+      <!-- ===== Audio ===== -->
+      <audio
+        id="bgm"
+        src="assets/music/happy-beats-business-moves-vol-12-by-ende-dot-app.mp3"
+        data-start="0"
+        data-duration="23.46"
+        data-volume="1"
+        data-track-index="10"
+      ></audio>
+
+      <audio id="sfx-mark" src="assets/sfx/impact/impactSoft_medium_000.ogg" data-start="0.56" data-duration="0.12" data-volume="1.12" data-track-index="11"></audio>
+
+      <audio id="sfx-g1" src="assets/sfx/ui/click2.ogg" data-start="4.39" data-duration="0.05" data-volume="0.76" data-track-index="12"></audio>
+      <audio id="sfx-g2" src="assets/sfx/ui/rollover2.ogg" data-start="6" data-duration="0.05" data-volume="0.76" data-track-index="13"></audio>
+      <audio id="sfx-g3" src="assets/sfx/ui/click2.ogg" data-start="7.09" data-duration="0.05" data-volume="0.76" data-track-index="14"></audio>
+
+      <audio id="sfx-k0" src="assets/sfx/keyboard/keypress-003.wav" data-start="9.3" data-duration="0.25" data-volume="0.58" data-track-index="15"></audio>
+      <audio id="sfx-k1" src="assets/sfx/keyboard/keypress-011.wav" data-start="9.52" data-duration="0.25" data-volume="0.54" data-track-index="16"></audio>
+      <audio id="sfx-k2" src="assets/sfx/keyboard/keypress-019.wav" data-start="9.74" data-duration="0.25" data-volume="0.58" data-track-index="17"></audio>
+      <audio id="sfx-k3" src="assets/sfx/keyboard/keypress-007.wav" data-start="9.96" data-duration="0.25" data-volume="0.54" data-track-index="18"></audio>
+      <audio id="sfx-k4" src="assets/sfx/keyboard/keypress-023.wav" data-start="10.18" data-duration="0.25" data-volume="0.63" data-track-index="19"></audio>
+
+      <audio id="sfx-c1" src="assets/sfx/interface/switch_005.ogg" data-start="10.37" data-duration="0.62" data-volume="0.67" data-track-index="20"></audio>
+      <audio id="sfx-c2" src="assets/sfx/interface/switch_006.ogg" data-start="11.46" data-duration="0.62" data-volume="0.67" data-track-index="21"></audio>
+      <audio id="sfx-c3" src="assets/sfx/interface/switch_007.ogg" data-start="12.55" data-duration="0.62" data-volume="0.72" data-track-index="22"></audio>
+
+      <audio id="sfx-row" src="assets/sfx/impact/impactSoft_medium_001.ogg" data-start="17.47" data-duration="0.19" data-volume="1.23" data-track-index="23"></audio>
+      <audio id="sfx-bell" src="assets/sfx/impact/impactBell_heavy_000.ogg" data-start="19.66" data-duration="1.49" data-volume="1.01" data-track-index="24"></audio>
+    </div>
+
+    <script>
+      // Per-frame audio energy pre-extracted from the bed with
+      // hyperframes-creative/scripts/extract-audio-data.py, reduced to
+      // [bass, rms] per frame and normalised over the first 710 frames.
+      var AUDIO_DATA = {"fps":30,"totalFrames":710,"frames":[[0.177,0.462],[0.349,0.517],[0.365,0.499],[0.331,0.51],[0.208,0.454],[0.065,0.378],[0.022,0.356],[0.007,0.242],[0.009,0.328],[0.006,0.279],[0.003,0.224],[0.004,0.124],[0.012,0.374],[0.003,0.306],[0.002,0.158],[0.004,0.101],[0.01,0.507],[0.007,0.393],[0.007,0.341],[0.004,0.276],[0.002,0.202],[0.002,0.1],[0.001,0.049],[0.002,0.042],[0.018,0.236],[0.013,0.279],[0.004,0.172],[0.003,0.157],[0.008,0.282],[0.011,0.421],[0.003,0.319],[0.003,0.286],[0.003,0.241],[0.003,0.135],[0.001,0.082],[0.002,0.066],[0.006,0.064],[0.008,0.482],[0.002,0.335],[0.001,0.285],[0.002,0.245],[0.006,0.175],[0.008,0.107],[0.004,0.089],[0.01,0.103],[0.015,0.427],[0.009,0.362],[0.003,0.337],[0.007,0.361],[0.016,0.5],[0.005,0.41],[0.007,0.319],[0.005,0.324],[0.002,0.315],[0.001,0.293],[0.001,0.266],[0.002,0.065],[0.015,0.293],[0.007,0.36],[0.001,0.307],[0.001,0.273],[0.001,0.24],[0.001,0.178],[0.001,0.093],[0.002,0.135],[0.009,0.395],[0.006,0.322],[0.002,0.269],[0.003,0.247],[0.022,0.316],[0.019,0.391],[0.002,0.314],[0.002,0.275],[0.013,0.339],[0.009,0.337],[0.002,0.301],[0.001,0.181],[0.007,0.284],[0.006,0.349],[0.002,0.25],[0.002,0.19],[0.011,0.35],[0.009,0.485],[0.004,0.394],[0.002,0.321],[0.001,0.217],[0.001,0.104],[0.001,0.097],[0.001,0.081],[0.019,0.058],[0.151,0.507],[0.26,0.519],[0.253,0.459],[0.21,0.353],[0.111,0.419],[0.014,0.305],[0.005,0.283],[0.009,0.254],[0.009,0.169],[0.007,0.074],[0.01,0.047],[0.009,0.05],[0.009,0.329],[0.007,0.388],[0.009,0.342],[0.013,0.285],[0.014,0.228],[0.015,0.148],[0.012,0.1],[0.012,0.087],[0.027,0.354],[0.017,0.406],[0.002,0.337],[0.004,0.255],[0.012,0.452],[0.006,0.39],[0.005,0.33],[0.004,0.301],[0.002,0.295],[0.002,0.301],[0.003,0.314],[0.003,0.226],[0.01,0.078],[0.012,0.47],[0.003,0.351],[0.002,0.298],[0.001,0.243],[0.002,0.194],[0.002,0.176],[0.001,0.147],[0.017,0.135],[0.187,0.491],[0.367,0.542],[0.364,0.533],[0.329,0.462],[0.189,0.479],[0.047,0.388],[0.018,0.349],[0.013,0.229],[0.012,0.324],[0.005,0.282],[0.002,0.214],[0.003,0.109],[0.009,0.354],[0.003,0.264],[0.001,0.139],[0.006,0.099],[0.015,0.544],[0.006,0.424],[0.002,0.384],[0.002,0.401],[0.001,0.222],[0.002,0.1],[0.002,0.053],[0.003,0.038],[0.015,0.241],[0.008,0.271],[0.002,0.175],[0.002,0.15],[0.006,0.348],[0.007,0.4],[0.004,0.313],[0.004,0.28],[0.002,0.225],[0.001,0.131],[0.002,0.079],[0.002,0.066],[0.01,0.16],[0.013,0.46],[0.002,0.316],[0.002,0.261],[0.002,0.223],[0.007,0.15],[0.006,0.091],[0.004,0.084],[0.008,0.117],[0.015,0.447],[0.004,0.359],[0.002,0.344],[0.007,0.398],[0.009,0.478],[0.007,0.384],[0.003,0.313],[0.002,0.305],[0.002,0.295],[0.003,0.289],[0.002,0.249],[0.003,0.062],[0.016,0.333],[0.006,0.356],[0.002,0.305],[0.001,0.267],[0.001,0.237],[0.001,0.148],[0.001,0.083],[0.002,0.132],[0.019,0.407],[0.009,0.317],[0.002,0.247],[0.002,0.24],[0.026,0.356],[0.021,0.38],[0.002,0.313],[0.002,0.289],[0.017,0.364],[0.009,0.33],[0.002,0.292],[0.002,0.183],[0.009,0.312],[0.008,0.34],[0.002,0.251],[0.001,0.169],[0.012,0.354],[0.008,0.488],[0.003,0.402],[0.001,0.319],[0.001,0.209],[0.001,0.094],[0.001,0.091],[0.001,0.077],[0.028,0.063],[0.177,0.557],[0.268,0.49],[0.259,0.439],[0.229,0.374],[0.127,0.446],[0.015,0.31],[0.01,0.273],[0.011,0.249],[0.009,0.147],[0.008,0.067],[0.01,0.045],[0.007,0.051],[0.008,0.353],[0.005,0.362],[0.009,0.322],[0.013,0.28],[0.015,0.204],[0.016,0.143],[0.011,0.101],[0.014,0.09],[0.027,0.371],[0.014,0.437],[0.002,0.353],[0.004,0.276],[0.007,0.454],[0.009,0.39],[0.007,0.321],[0.003,0.303],[0.003,0.299],[0.002,0.31],[0.002,0.302],[0.003,0.218],[0.007,0.113],[0.008,0.467],[0.003,0.356],[0.002,0.289],[0.001,0.241],[0.001,0.201],[0.001,0.177],[0.001,0.141],[0.169,0.459],[0.808,1.0],[1.0,0.874],[0.705,0.607],[0.287,0.418],[0.216,0.489],[0.278,0.509],[0.314,0.507],[0.326,0.412],[0.318,0.422],[0.317,0.384],[0.322,0.346],[0.334,0.377],[0.339,0.464],[0.341,0.396],[0.341,0.371],[0.336,0.37],[0.716,0.906],[0.953,0.88],[0.863,0.639],[0.503,0.449],[0.312,0.356],[0.286,0.296],[0.291,0.31],[0.305,0.318],[0.31,0.395],[0.314,0.368],[0.289,0.312],[0.287,0.294],[0.304,0.444],[0.292,0.444],[0.282,0.407],[0.291,0.397],[0.47,0.714],[1.0,1.0],[1.0,0.71],[0.63,0.492],[0.284,0.348],[0.274,0.515],[0.351,0.529],[0.346,0.477],[0.312,0.401],[0.303,0.338],[0.303,0.342],[0.311,0.332],[0.317,0.346],[0.301,0.512],[0.287,0.427],[0.289,0.427],[0.269,0.558],[0.624,0.846],[1.0,0.845],[0.796,0.648],[0.35,0.395],[0.24,0.376],[0.262,0.377],[0.27,0.323],[0.238,0.263],[0.116,0.471],[0.15,0.509],[0.189,0.52],[0.214,0.531],[0.245,0.455],[0.243,0.456],[0.234,0.453],[0.213,0.426],[0.614,0.894],[1.0,0.947],[0.902,0.722],[0.46,0.419],[0.139,0.407],[0.064,0.497],[0.021,0.433],[0.015,0.429],[0.01,0.441],[0.014,0.411],[0.006,0.421],[0.01,0.351],[0.016,0.434],[0.01,0.414],[0.01,0.393],[0.008,0.356],[0.23,0.627],[0.799,0.896],[0.934,0.767],[0.561,0.581],[0.151,0.292],[0.038,0.273],[0.007,0.287],[0.007,0.278],[0.047,0.241],[0.242,0.63],[0.34,0.569],[0.348,0.538],[0.313,0.464],[0.288,0.52],[0.255,0.481],[0.247,0.443],[0.28,0.452],[0.785,0.923],[1.0,0.897],[0.875,0.655],[0.459,0.359],[0.264,0.471],[0.241,0.481],[0.252,0.452],[0.259,0.408],[0.268,0.376],[0.268,0.358],[0.266,0.372],[0.262,0.371],[0.25,0.447],[0.247,0.502],[0.251,0.385],[0.239,0.401],[0.508,0.774],[0.936,0.907],[0.915,0.749],[0.594,0.482],[0.25,0.393],[0.211,0.42],[0.219,0.414],[0.225,0.325],[0.236,0.379],[0.227,0.449],[0.235,0.445],[0.245,0.416],[0.239,0.381],[0.252,0.375],[0.248,0.378],[0.24,0.352],[0.267,0.581],[0.819,0.943],[0.999,0.854],[0.65,0.603],[0.284,0.438],[0.203,0.489],[0.264,0.488],[0.301,0.479],[0.309,0.424],[0.315,0.435],[0.319,0.357],[0.333,0.372],[0.348,0.366],[0.352,0.453],[0.349,0.402],[0.348,0.365],[0.342,0.382],[0.77,0.917],[0.997,0.892],[0.865,0.658],[0.46,0.424],[0.308,0.312],[0.295,0.307],[0.31,0.316],[0.317,0.309],[0.31,0.376],[0.315,0.353],[0.306,0.319],[0.298,0.32],[0.298,0.45],[0.304,0.451],[0.291,0.42],[0.291,0.386],[0.527,0.805],[1.0,0.947],[0.965,0.712],[0.589,0.464],[0.247,0.371],[0.233,0.422],[0.251,0.398],[0.274,0.363],[0.279,0.328],[0.285,0.321],[0.274,0.3],[0.274,0.299],[0.278,0.322],[0.271,0.486],[0.277,0.425],[0.274,0.44],[0.289,0.597],[0.703,0.855],[1.0,0.862],[0.739,0.628],[0.314,0.375],[0.246,0.386],[0.277,0.398],[0.314,0.381],[0.291,0.347],[0.143,0.45],[0.184,0.484],[0.224,0.524],[0.243,0.523],[0.258,0.452],[0.282,0.499],[0.301,0.599],[0.27,0.529],[0.64,0.918],[0.999,0.962],[0.848,0.638],[0.395,0.451],[0.122,0.463],[0.044,0.501],[0.011,0.499],[0.014,0.434],[0.009,0.488],[0.017,0.441],[0.007,0.418],[0.006,0.359],[0.013,0.427],[0.008,0.434],[0.009,0.374],[0.012,0.359],[0.333,0.715],[0.945,0.956],[0.929,0.74],[0.586,0.605],[0.207,0.334],[0.052,0.319],[0.011,0.328],[0.01,0.338],[0.074,0.351],[0.312,0.704],[0.383,0.687],[0.379,0.64],[0.346,0.568],[0.304,0.55],[0.256,0.497],[0.244,0.487],[0.336,0.497],[0.793,1.0],[0.999,0.842],[0.809,0.632],[0.392,0.324],[0.24,0.514],[0.243,0.524],[0.262,0.525],[0.282,0.532],[0.292,0.557],[0.264,0.408],[0.275,0.404],[0.26,0.356],[0.245,0.602],[0.263,0.567],[0.22,0.451],[0.125,0.301],[0.238,0.739],[0.373,0.706],[0.338,0.656],[0.356,0.637],[0.297,0.56],[0.126,0.399],[0.051,0.308],[0.031,0.35],[0.017,0.368],[0.009,0.421],[0.01,0.389],[0.012,0.366],[0.011,0.362],[0.007,0.343],[0.004,0.325],[0.004,0.303],[0.345,0.577],[0.904,1.0],[1.0,0.995],[0.819,0.781],[0.607,0.746],[0.63,0.785],[0.556,0.749],[0.316,0.528],[0.099,0.162],[0.014,0.242],[0.005,0.219],[0.002,0.204],[0.003,0.229],[0.007,0.405],[0.005,0.246],[0.003,0.188],[0.111,0.258],[0.834,1.0],[0.995,1.0],[0.792,0.644],[0.327,0.389],[0.052,0.315],[0.014,0.299],[0.005,0.191],[0.006,0.067],[0.035,0.245],[0.029,0.231],[0.004,0.198],[0.003,0.141],[0.006,0.438],[0.006,0.49],[0.006,0.429],[0.022,0.384],[0.545,0.855],[1.0,1.0],[0.951,0.718],[0.43,0.422],[0.079,0.29],[0.007,0.332],[0.007,0.339],[0.005,0.31],[0.09,0.386],[0.295,0.639],[0.336,0.576],[0.35,0.586],[0.341,0.587],[0.346,0.553],[0.367,0.575],[0.377,0.578],[0.407,0.735],[0.887,1.0],[0.954,0.85],[0.593,0.563],[0.195,0.292],[0.211,0.373],[0.323,0.434],[0.332,0.417],[0.353,0.479],[0.357,0.716],[0.326,0.693],[0.339,0.748],[0.333,0.66],[0.248,0.588],[0.21,0.672],[0.229,0.664],[0.257,0.632],[0.666,0.941],[0.932,0.971],[0.737,0.736],[0.356,0.5],[0.25,0.526],[0.263,0.59],[0.278,0.558],[0.288,0.6],[0.263,0.583],[0.136,0.399],[0.022,0.327],[0.007,0.286],[0.012,0.227],[0.013,0.266],[0.006,0.263],[0.015,0.223],[0.591,1.0],[1.0,1.0],[1.0,0.89],[0.521,0.523],[0.122,0.419],[0.016,0.399],[0.009,0.21],[0.004,0.072],[0.162,0.368],[0.588,0.712],[0.584,0.752],[0.537,0.589],[0.533,0.706],[0.534,0.68],[0.526,0.691],[0.514,0.694],[0.597,0.674],[0.966,1.0],[1.0,0.992],[0.81,0.564],[0.515,0.577],[0.358,0.56],[0.184,0.365],[0.045,0.278],[0.078,0.253],[0.437,0.781],[0.497,0.603],[0.487,0.703],[0.481,0.569],[0.496,0.675],[0.523,0.582],[0.544,0.633],[0.497,0.625],[0.688,0.958],[0.899,0.927],[0.796,0.671],[0.501,0.499],[0.305,0.491],[0.353,0.661],[0.391,0.553],[0.419,0.6],[0.379,0.585],[0.304,0.731],[0.294,0.663],[0.277,0.696],[0.341,0.599],[0.365,0.636],[0.406,0.661],[0.421,0.678],[0.599,0.781],[0.984,1.0],[0.947,0.877],[0.7,0.596],[0.461,0.568],[0.454,0.628],[0.48,0.614],[0.505,0.609],[0.522,0.558],[0.395,0.447],[0.204,0.218],[0.072,0.135],[0.017,0.257],[0.006,0.328],[0.004,0.249],[0.004,0.212],[0.151,0.371],[0.9,1.0],[1.0,0.966],[0.71,0.532],[0.284,0.334],[0.034,0.249],[0.01,0.25],[0.005,0.206],[0.006,0.077],[0.041,0.279],[0.026,0.225],[0.005,0.197],[0.003,0.171],[0.01,0.459],[0.007,0.418],[0.004,0.362],[0.034,0.365],[0.622,0.944],[1.0,1.0],[0.904,0.632],[0.397,0.418],[0.073,0.306],[0.011,0.303],[0.005,0.273],[0.006,0.256],[0.174,0.493],[0.438,0.663],[0.46,0.631],[0.442,0.64],[0.439,0.593],[0.435,0.55],[0.434,0.559],[0.439,0.536],[0.457,0.82],[0.859,1.0],[0.915,0.754],[0.519,0.518],[0.195,0.227],[0.239,0.428],[0.304,0.416]]};
+
+      function build() {
+        var tl = gsap.timeline({ paused: true });
+        var E_OUT = "power3.out";
+
+        /* ---------------- Scene 1 — Power on ---------------- */
+        tl.fromTo("#s1-bloom", { opacity: 0, scale: 0.72 }, { opacity: 1, scale: 1, duration: 0.95, ease: "power2.out" }, 0.46);
+        tl.fromTo("#s1-mark", { opacity: 0, scale: 0.9 }, { opacity: 1, scale: 1, duration: 0.5, ease: E_OUT }, 0.56);
+        tl.fromTo("#s1-call", { opacity: 0, y: 22 }, { opacity: 1, y: 0, duration: 0.55, ease: E_OUT }, 0.84);
+        tl.fromTo("#s1-sub", { opacity: 0, y: 14 }, { opacity: 1, y: 0, duration: 0.5, ease: E_OUT }, 1.04);
+        // beat-grid: status line at 1.64s
+        tl.fromTo("#s1-status", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.6, ease: "power2.out" }, 1.64);
+        tl.to("#s1-inner", { opacity: 0, duration: 0.46, ease: "power2.inOut" }, 3.12);
+
+        /* ---------------- Scene 2 — The Operating Deck ---------------- */
+        tl.fromTo("#s2-inner", { opacity: 0 }, { opacity: 1, duration: 0.62, ease: "power2.inOut" }, 3.12);
+        tl.fromTo("#s2-app", { y: 18, scale: 0.988 }, { y: 0, scale: 1, duration: 0.9, ease: E_OUT }, 3.12);
+        tl.fromTo("#s2-title", { opacity: 0, y: 14 }, { opacity: 1, y: 0, duration: 0.6, ease: E_OUT }, 3.66);
+        tl.fromTo(".panelcard", { opacity: 0, y: 20 }, { opacity: 1, y: 0, duration: 0.6, stagger: 0.08, ease: E_OUT }, 3.9);
+        tl.fromTo("#s2-status", { opacity: 0 }, { opacity: 1, duration: 0.6, ease: "power2.out" }, 4.2);
+
+        // beat-grid: workspace groups at 4.39s, 6.00s, 7.09s (every 3rd beat).
+        // Grouped in threes rather than one-per-beat: nine labels on nine
+        // consecutive 0.55s beats would outrun reading.
+        [[0, 4.39], [1, 6.0], [2, 7.09]].forEach(function (pair) {
+          tl.fromTo(
+            '.mode[data-g="' + pair[0] + '"]',
+            { opacity: 0, y: 12 },
+            { opacity: 1, y: 0, duration: 0.42, stagger: 0.06, ease: E_OUT },
+            pair[1],
+          );
+        });
+        // beat-locked: 8.74s — clean cut into Scene 3 on the strong cue.
+
+        /* ---------------- Scene 3 — A plugin proposes ---------------- */
+        tl.fromTo("#s3-eyebrow", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.34, ease: E_OUT }, 8.74);
+        tl.fromTo("#s3-entry", { opacity: 0, y: 20 }, { opacity: 1, y: 0, duration: 0.48, ease: E_OUT }, 8.82);
+
+        // Simulated typing of the repo's own fixture callsign (K1ABC).
+        // Characters are pre-rendered and revealed, and the caret steps a fixed
+        // monospace advance, so the whole thing is seek-safe in both directions.
+        var CH_ADVANCE = 35.4; // MonoBrag 58px, 0.6em advance
+        for (var i = 0; i < 5; i++) {
+          var at = 9.3 + i * 0.22;
+          tl.to("#ch" + i, { opacity: 1, duration: 0.01, ease: "none" }, at);
+          tl.to("#s3-caret", { x: (i + 1) * CH_ADVANCE, duration: 0.01, ease: "none" }, at);
+        }
+        // Finite caret blink (never repeat: -1).
+        tl.fromTo("#s3-caret", { opacity: 1 }, { opacity: 0.2, duration: 0.42, repeat: 11, yoyo: true, ease: "none" }, 8.9);
+
+        // beat-grid: authorization checks at 10.37s, 11.46s, 12.55s — every
+        // other beat (1.09s apart), which clears the reading floor for a code
+        // identifier. Text is verbatim from docs/SECURITY_MODEL.md.
+        [["#chk1", 10.37], ["#chk2", 11.46], ["#chk3", 12.55]].forEach(function (pair) {
+          tl.fromTo(pair[0], { opacity: 0, x: -18 }, { opacity: 1, x: 0, duration: 0.42, ease: E_OUT }, pair[1]);
+        });
+
+        /* ---------------- Scene 4 — The core decides ---------------- */
+        tl.fromTo("#s4-line", { opacity: 0, y: 18 }, { opacity: 1, y: 0, duration: 0.6, ease: E_OUT }, 14.55);
+        tl.fromTo("#s4-qsos", { opacity: 0, y: 22 }, { opacity: 1, y: 0, duration: 0.62, ease: E_OUT }, 14.9);
+        tl.fromTo("#s4-statusrow", { opacity: 0 }, { opacity: 1, duration: 0.5, ease: "power2.out" }, 15.4);
+
+        // beat-locked: 17.47s — the proposal becomes official history. The row
+        // arrival and the runtime-event tick are one simultaneous beat.
+        // Stable resting state so a seek before 17.47 never inherits a
+        // later fromTo's authored from-values (gsap_repeated_fromto_without_baseline).
+        tl.set("#qso-new", { opacity: 0, y: -18, backgroundColor: "rgba(255,181,69,0.26)" }, 0);
+        tl.set("#qso-stack", { y: 0 }, 0);
+        // Transform-only: the existing rows slide down one slot and the new row
+        // drops into the gap. No layout properties are tweened.
+        tl.fromTo("#qso-stack", { y: 0 }, { y: 88, duration: 0.42, ease: E_OUT, immediateRender: false }, 17.47);
+        tl.fromTo("#qso-new", { opacity: 0, y: -18 }, { opacity: 1, y: 0, duration: 0.42, ease: E_OUT, immediateRender: false }, 17.47);
+        tl.fromTo("#qso-new", { backgroundColor: "rgba(255,181,69,0.26)" }, { backgroundColor: "rgba(10,14,20,1)", duration: 1.1, ease: "power2.out", immediateRender: false }, 17.47);
+        tl.to("#ev0", { opacity: 0, duration: 0.22, ease: "none" }, 17.47);
+        tl.to("#ev1", { opacity: 1, duration: 0.22, ease: "none" }, 17.47);
+        tl.to("#s4-inner", { opacity: 0, duration: 0.44, ease: "power2.inOut" }, 19.46);
+
+        /* ---------------- Scene 5 — Lockup ---------------- */
+        tl.fromTo("#s5-inner", { opacity: 0 }, { opacity: 1, duration: 0.44, ease: "power2.inOut" }, 19.46);
+        // beat-locked: 19.66s — lockup lands on the strong cue with the bell.
+        tl.fromTo("#s5-bloom", { opacity: 0, scale: 0.75 }, { opacity: 1, scale: 1, duration: 1, ease: "power2.out" }, 19.56);
+        tl.fromTo("#s5-mark", { opacity: 0, scale: 0.92 }, { opacity: 1, scale: 1, duration: 0.55, ease: E_OUT }, 19.66);
+        tl.fromTo("#s5-name", { opacity: 0, y: 20 }, { opacity: 1, y: 0, duration: 0.6, ease: E_OUT }, 19.78);
+        tl.fromTo("#s5-tag", { opacity: 0, y: 14 }, { opacity: 1, y: 0, duration: 0.6, ease: E_OUT }, 20.0);
+        // beat-grid: footer at 21.28s
+        tl.fromTo("#s5-foot", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.6, ease: "power2.out" }, 21.28);
+
+        /* ---------------- Music bed ---------------- */
+        tl.fromTo("#bgm", { volume: 0 }, { volume: 0.72, duration: 0.8, ease: "none" }, 0);
+        tl.to("#bgm", { volume: 0, duration: 1.5, ease: "none" }, 21.8);
+
+        /* ---------------- Audio-reactive (subtle) ----------------
+           Amber bloom presence on the brand mark breathes with bass; the
+           Recent QSOs panel gains a soft glow with overall level. Existing
+           brand elements only — no waveform, equaliser, or strobe. */
+        var p1 = document.getElementById("s1-pulse");
+        var p5 = document.getElementById("s5-pulse");
+        var qg = document.getElementById("s4-glow");
+
+        function sampler(frame) {
+          return function () {
+            var bass = frame[0];
+            var rms = frame[1];
+            var o = 0.06 + 0.34 * bass;
+            var s = 1 + 0.1 * bass;
+            p1.style.opacity = o;
+            p1.style.transform = "scale(" + s + ")";
+            p5.style.opacity = o;
+            p5.style.transform = "scale(" + s + ")";
+            qg.style.opacity = 0.05 + 0.22 * rms;
+          };
+        }
+        for (var f = 0; f < AUDIO_DATA.totalFrames; f++) {
+          tl.call(sampler(AUDIO_DATA.frames[f]), [], f / AUDIO_DATA.fps);
+        }
+
+        window.__timelines["main"] = tl;
+        tl.seek(0);
+      }
+
+      if (document.fonts && document.fonts.ready) {
+        document.fonts.ready.then(build);
+      } else {
+        build();
+      }
+    </script>
+  </body>
+</html>

@@ -1,0 +1,1 @@
+Introducing KE8YGW Logger — a local-first ham radio operations platform where plugins propose and the core decides what becomes official. One append-only log behind casual logging, POTA/SOTA, nets, contesting and EmComm, on a shared Rust core that ships to desktop, iOS, web and CLI.

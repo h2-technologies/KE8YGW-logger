@@ -1,0 +1,10 @@
+# Bundled music from the /brag skill (latent-spaces/brag). Left untracked: that
+# skill's own assets/music/README.md says the exact license terms must be
+# verified and documented before the track is redistributed, and this is a
+# public repository. brag.mp4 already carries the mixed audio; see
+# composition/assets/music/README.md to restore the file and re-render.
+composition/assets/music/*.mp3
+
+# hyperframes init scaffold: generic agent-routing docs, not part of this deliverable
+composition/CLAUDE.md
+composition/AGENTS.md
