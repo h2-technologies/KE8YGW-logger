@@ -1539,8 +1539,10 @@ and fix PRs target `dev`; `dev` is the internal channel, `main` is beta, and
 production releases come only from validated semantic-version tags contained in
 `main`. The change-aware CI baseline covers formatting, Clippy, Rust tests,
 API contract validation, version consistency, Markdown
-links, governance/license checks, JavaScript syntax, Tauri validation,
-Windows/macOS platform checks, and server container smoke validation.
+links, governance/license checks, JavaScript syntax,
+Windows/macOS platform checks, and server container smoke validation. The
+Tauri desktop crate is covered by the workspace Clippy run rather than a job
+of its own.
 
 ```powershell
 just ci

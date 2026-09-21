@@ -41,10 +41,14 @@ jobs:
         with:
           toolchain: 1.96.0
 
+      # Prebuilt binaries rather than `cargo install`. Compiling these two from
+      # source took 4m53s of a 5m10s run — 95% of this workflow's wall clock
+      # spent building the scanners instead of scanning. The pinned versions
+      # are unchanged, so the advisories checked are identical.
       - name: Install cargo-audit and cargo-deny
-        run: |
-          cargo install cargo-audit --version "$CARGO_AUDIT_VERSION" --locked
-          cargo install cargo-deny --version "$CARGO_DENY_VERSION" --locked
+        uses: taiki-e/install-action@94c31af3204a9f15ab40b35ad084410b905bbc73 # v2.87.17
+        with:
+          tool: cargo-audit@${{ env.CARGO_AUDIT_VERSION }},cargo-deny@${{ env.CARGO_DENY_VERSION }}
 
       - name: Audit Cargo.lock
         run: cargo audit --ignore RUSTSEC-2023-0071 --ignore RUSTSEC-2026-0235

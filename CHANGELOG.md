@@ -33,6 +33,27 @@
 - Renamed `Dockerfile.sync-server` to `Dockerfile.server`; it now builds
   `ham-server` and exposes port 9750.
 - Release archives now package the `ham-client` binary instead of `ham-gui`.
+- CI installs `cargo-audit` and `cargo-deny` as prebuilt binaries instead of
+  building them with `cargo install`. The pinned versions and the advisories
+  checked are unchanged; compiling the two scanners was 4m53s of a 5m10s
+  security run.
+- `Dockerfile.server` compiles its dependency graph on an ordinary image layer
+  rather than into a BuildKit cache mount, and `ci.yml` builds it through
+  Buildx with the Actions cache attached. Cache mounts are builder-local and
+  were never populated in CI, so every run recompiled every dependency:
+  8m57s of a 9m42s run.
+- Dropped the separate Tauri validation job. `ke8ygw-logger-desktop` is a
+  workspace member, so `cargo clippy --locked --workspace --all-targets` in
+  the Rust quality job already checks it, and every change that selected the
+  Tauri job also selected that one.
+- The server container job no longer waits on the preflight job. It builds an
+  image and shares nothing with the formatting, documentation and governance
+  checks it was queued behind.
+- `ios.yml` now classifies changed files and runs its macOS job only for
+  changes reaching the iOS app, its build scripts, `ham-ios-ffi`, `ham-core`
+  or workspace-wide inputs. It previously ran on every pull request,
+  documentation-only ones included, at the macOS billing rate.
+
 ## 0.5.1
 
 ### Added

@@ -11,28 +11,47 @@ COPY crates/ham-client/Cargo.toml crates/ham-client/Cargo.toml
 COPY crates/ham-ios-ffi/Cargo.toml crates/ham-ios-ffi/Cargo.toml
 COPY src-tauri/Cargo.toml src-tauri/Cargo.toml
 
+# Placeholder sources for every target the manifests name. Cargo refuses to
+# load a workspace whose members have no target file, so all five exist even
+# though only ham-server and ham-core are compiled below. The two binaries need
+# a real `main`, not an empty file, to get through this build.
 RUN mkdir -p \
       crates/ham-core/src \
       crates/ham-server/src \
       crates/ham-client/src \
       crates/ham-ios-ffi/src \
       src-tauri/src && \
-    touch \
-      crates/ham-core/src/lib.rs \
-      crates/ham-server/src/lib.rs \
-      crates/ham-server/src/main.rs \
-      crates/ham-client/src/main.rs \
-      crates/ham-ios-ffi/src/lib.rs \
-      src-tauri/src/main.rs
+    : > crates/ham-core/src/lib.rs && \
+    : > crates/ham-server/src/lib.rs && \
+    : > crates/ham-ios-ffi/src/lib.rs && \
+    printf 'fn main() {}\n' > crates/ham-server/src/main.rs && \
+    printf 'fn main() {}\n' > crates/ham-client/src/main.rs && \
+    printf 'fn main() {}\n' > src-tauri/src/main.rs
 
-RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
-    --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
-    cargo fetch --locked
+# Compile the dependency graph on a layer of its own, against the placeholders.
+# The output stays in the image instead of a BuildKit cache mount, and that is
+# the whole point: a cache mount is local to one builder, so in CI it was always
+# empty and every run recompiled every dependency from source — 8m57s of a 9m42s
+# CI run. As an ordinary layer it is restored from the Actions cache instead.
+#
+# `cargo clean` then drops the placeholder-built workspace crates so the real
+# build below recompiles them. Removing them explicitly rather than trusting
+# timestamps is deliberate: COPY preserves mtimes from the build context, so a
+# fresh checkout can look older than this layer, and cargo would then keep the
+# placeholder objects and ship a server binary whose `main` does nothing.
+RUN cargo build --locked --release -p ham-server --bin ham-server && \
+    cargo clean --release -p ham-core -p ham-server
 
 COPY . .
-RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
-    --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
-    --mount=type=cache,target=/app/target,sharing=locked \
+# `target/` is in .dockerignore, so the COPY above cannot overwrite the
+# dependency artifacts built into the layer.
+#
+# The touch is the second half of the belt and braces described above: cargo
+# decides freshness on mtime, and COPY carries mtimes in from the build context,
+# so stamping the real sources to now guarantees they are newer than the
+# placeholder build regardless of when the checkout happened. Only workspace
+# sources are touched; dependencies are untouched and stay cached.
+RUN find crates src-tauri -name '*.rs' -exec touch {} + && \
     cargo build --locked --release -p ham-server --bin ham-server && \
     cp /app/target/release/ham-server /tmp/ham-server
 

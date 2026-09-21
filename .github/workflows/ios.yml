@@ -20,9 +20,69 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  # This workflow had no change selection at all, so a documentation-only pull
+  # request still spent five to eight minutes on a macOS runner building the
+  # Rust FFI and booting a simulator. macOS minutes bill at ten times the Linux
+  # rate, which made this the most expensive job in the repository to leave
+  # ungated. The classifier mirrors the one in ci.yml, and the expensive job
+  # skips rather than disappearing, so the check still reports.
+  changes:
+    name: Detect iOS-relevant changes
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      ios: ${{ steps.detect.outputs.ios }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          fetch-depth: 0
+
+      - name: Classify changed files
+        id: detect
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            base="${{ github.event.pull_request.base.sha }}"
+            head="${{ github.event.pull_request.head.sha }}"
+          else
+            base="${{ github.event.before }}"
+            head="${{ github.sha }}"
+            if [[ "$base" =~ ^0+$ ]]; then
+              base="$(git rev-parse "$head^" 2>/dev/null || true)"
+            fi
+          fi
+
+          if [[ -z "${base:-}" ]]; then
+            files="$(git ls-files)"
+          else
+            files="$(git diff --name-only "$base" "$head")"
+          fi
+
+          ios=false
+          while IFS= read -r file; do
+            [[ -z "$file" ]] && continue
+            # Workspace-wide inputs are treated conservatively, as in ci.yml: a
+            # lockfile or toolchain change can move the FFI build under us.
+            if [[ "$file" == .github/workflows/ios.yml || "$file" == Cargo.toml || "$file" == Cargo.lock || "$file" == rust-toolchain.toml ]]; then
+              ios=true
+            fi
+            # ham-core is the shared library the FFI wraps, so it counts too.
+            if [[ "$file" == ios/* || "$file" == scripts/ios/* || "$file" == crates/ham-ios-ffi/* || "$file" == crates/ham-core/* ]]; then
+              ios=true
+            fi
+          done <<< "$files"
+
+          echo "ios=$ios" >> "$GITHUB_OUTPUT"
+          printf '%s\n' "$files"
+
   ios:
     name: Rust FFI and iOS Simulator
     runs-on: macos-latest
+    needs: changes
+    if: needs.changes.outputs.ios == 'true'
     permissions:
       contents: read
 
