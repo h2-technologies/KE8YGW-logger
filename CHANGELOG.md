@@ -52,7 +52,10 @@
 - `ios.yml` now classifies changed files and runs its macOS job only for
   changes reaching the iOS app, its build scripts, `ham-ios-ffi`, `ham-core`
   or workspace-wide inputs. It previously ran on every pull request,
-  documentation-only ones included, at the macOS billing rate.
+  documentation-only ones included, at the macOS billing rate. An `iOS result`
+  job aggregates the workflow so a failure in the classifier fails closed
+  instead of skipping validation and reporting success, matching `CI result`
+  in ci.yml.
 - Updated `rustls` 0.23.41 to 0.23.45, which carries `aws-lc-rs` 1.17.1 to
   1.18.1, `aws-lc-sys` 0.42.0 to 0.45.0 and `rustls-webpki` 0.103.13 to
   0.103.15. This closes RUSTSEC-2026-0285, in which TLS 1.3 handshake messages

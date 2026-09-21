@@ -27,7 +27,11 @@ all expensive paths.
   only for changes to the iOS app, its build scripts, `ham-ios-ffi`,
   `ham-core`, or workspace-wide inputs. macOS minutes bill at ten times the
   Linux rate, so an ungated macOS job was the most expensive thing in the
-  repository to leave running on documentation-only pull requests.
+  repository to leave running on documentation-only pull requests. An
+  `iOS result` job aggregates that workflow the way `CI result` aggregates
+  ci.yml: a skipped job reports as success to branch protection, so the
+  aggregate fails closed when the classifier itself fails rather than letting
+  an iOS-affecting change through unvalidated.
 
 Skipped jobs still resolve as successful skipped checks rather than pending
 checks.
