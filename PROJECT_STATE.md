@@ -394,10 +394,11 @@ CI coverage:
 - `.github/workflows/ci.yml` runs change-aware Rust formatting, Clippy, tests,
   feature matrix, API contract, version consistency, documentation links,
   governance/license checks, JavaScript syntax, Windows/macOS platform checks,
-  Tauri validation, server container build/smoke, and internal/beta channel
-  manifests.
+  server container build/smoke, and internal/beta channel manifests. The Tauri
+  desktop crate is a workspace member, so the workspace Clippy run covers it.
 - `.github/workflows/ios.yml` runs Rust FFI and iOS simulator validation on
-  macOS.
+  macOS, for changes that reach the iOS app, its build scripts, the FFI crate
+  or `ham-core`.
 - `.github/workflows/branch-promotion-policy.yml` enforces the branch/channel
   promotion policy in `docs/BRANCHING_AND_RELEASE_CHANNELS.md`.
 - `.github/workflows/scorecard.yml` runs OpenSSF Scorecard supply-chain
