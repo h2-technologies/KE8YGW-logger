@@ -143,6 +143,27 @@
 - Added `network.scan.started`, `network.scan.completed`, and
   `network.scan.multicast_failed` runtime events.
 
+- Added a JSONL-to-SurrealDB projector in `ham-server` (`src/projector.rs`),
+  beside the SurrealDB storage it depends on so `ham-core` and the client and
+  iOS builds never link SurrealDB for it. It replays the append-only official
+  event log one way into `projection_qso` and `projection_activation`, verifies
+  the per-logbook hash
+  chain before projecting each entry, halts durably at a broken chain, projects
+  tombstones as projection-level removal instead of row deletion, commits rows
+  and its checkpoint in one transaction per batch, resumes from that checkpoint,
+  tails newly appended entries, records orphan-tombstone anomalies, and holds a
+  single-writer lease over the projection tables.
+- Added `ham-server --rebuild-projection` to wipe and replay the SurrealDB
+  projection explicitly. The projector otherwise resumes and tails automatically,
+  configured by `HAM_SYNC_PROJECTION_ENABLED`, `HAM_SYNC_PROJECTION_BATCH_SIZE`,
+  `HAM_SYNC_PROJECTION_POLL_SECONDS`, and `HAM_SYNC_PROJECTION_WRITER_ID`.
+- Added `ham_core::projection_touch` and
+  `ActivationProjection::activations_for_qso`, so replay consumers can ask
+  `ham-core` which projected entities an official event touches instead of
+  re-deriving the event vocabulary.
+- Added `docs/PROJECTION_PIPELINE.md` covering the projected tables, checkpoint
+  location, failure handling, full-rebuild procedure, and measured throughput.
+
 ### Changed
 
 - Dropped the unused `ios` output from CI's `Detect changed areas` job. Nothing
@@ -195,6 +216,13 @@
 - Closed the repository/architecture baseline (#3) and the accounts, API
   contract, and hosting-modes epic (#4) after auditing their remaining child
   issues against the shipped code.
+
+- `ActivationProjection::apply` now recomputes derived counters only for the
+  activations an event touches, instead of every activation on every event.
+  Replaying 40,050 events drops from about 126 seconds to about 1.2 seconds.
+  This also speeds up every other caller of `rebuild_activation_projections`,
+  including proposal validation and the hosted activation routes. Projected
+  counters are unchanged.
 
 ### Fixed
 

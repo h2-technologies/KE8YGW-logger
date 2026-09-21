@@ -3,6 +3,7 @@
 //! Both route trees are served by one binary on one port; see [`http`].
 
 pub mod http;
+pub mod projector;
 pub mod sync_router;
 pub mod sync_storage;
 

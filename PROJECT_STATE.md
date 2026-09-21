@@ -137,6 +137,17 @@ operations, and release qualification.
   maps/GIS foundations, diagnostics, runtime JSONL logs, and support storage.
 - POTA/SOTA activation proposals/projections and Net Control official events,
   proposals, projection, and report export events.
+- JSONL-to-SurrealDB projector in `ham-server` (`src/projector.rs`): one-way
+  replay of the append-only official event log into `projection_qso`,
+  `projection_activation`, `projection_checkpoint`, `projection_anomaly`, and
+  `projection_writer_lock`. Per-logbook hash-chain verification before each
+  entry is projected, a durable halt at a broken chain, tombstones projected as
+  projection-level removal rather than row deletion, batched transactions that
+  commit rows and checkpoint together, resumable incremental replay plus a
+  polling tail, an explicit `ham-server --rebuild-projection` full rebuild,
+  a single-writer lease, and recorded orphan-tombstone anomalies. Measured at
+  roughly 3,000 entries/second into embedded SurrealKV. See
+  [Projection Pipeline](docs/PROJECTION_PIPELINE.md).
 - Hosted `/api/v1` route slices for server-admin bootstrap, hosting
   configuration, invitation management, registration, verified email, recovery,
   session/device/logbook, QSO, station/equipment, ADIF, providers, uploads,

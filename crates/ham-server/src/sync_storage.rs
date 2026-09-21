@@ -130,7 +130,7 @@ impl SurrealCloudConfig {
 }
 
 #[derive(Clone)]
-enum SurrealCloudClient {
+pub(crate) enum SurrealCloudClient {
     Local(Surreal<Db>),
     Remote(Surreal<Any>),
 }
@@ -145,7 +145,7 @@ impl std::fmt::Debug for SurrealCloudClient {
 }
 
 #[derive(Debug, Clone)]
-struct SurrealCloudMetadataStore {
+pub(crate) struct SurrealCloudMetadataStore {
     runtime: Arc<std::sync::Mutex<Option<Runtime>>>,
     client: Arc<std::sync::Mutex<Option<SurrealCloudClient>>>,
 }
@@ -156,7 +156,7 @@ struct CloudPayloadRow<T> {
 }
 
 impl SurrealCloudMetadataStore {
-    fn open(config: SurrealCloudConfig) -> Result<Self, CloudSyncError> {
+    pub(crate) fn open(config: SurrealCloudConfig) -> Result<Self, CloudSyncError> {
         let (runtime, client) = thread::spawn({
             let config = config.clone();
             move || {
@@ -177,7 +177,7 @@ impl SurrealCloudMetadataStore {
         })
     }
 
-    fn run<T, Fut>(
+    pub(crate) fn run<T, Fut>(
         &self,
         operation: impl FnOnce(SurrealCloudClient) -> Fut + Send + 'static,
     ) -> Result<T, CloudSyncError>
@@ -718,6 +718,26 @@ impl DurableCloudSyncServer {
             version: env!("CARGO_PKG_VERSION").to_owned(),
             mode: self.config.mode,
         }
+    }
+
+    /// Path of the append-only official event log this server owns.
+    pub fn official_event_log_path(&self) -> &std::path::Path {
+        self.store.path()
+    }
+
+    /// Builds a projector that writes into this server's SurrealDB instance.
+    ///
+    /// The projector shares the server's client because the embedded SurrealKV
+    /// datastore allows a single instance per path. It reads the official log
+    /// and writes only the projection tables; nothing here writes back to the log.
+    pub fn projector(
+        &self,
+        config: crate::projector::ProjectorConfig,
+    ) -> Result<crate::projector::SurrealProjector, crate::projector::ProjectorError> {
+        crate::projector::SurrealProjector::open(
+            crate::projector::ProjectionStore::from_metadata(Arc::clone(&self.metadata)),
+            config,
+        )
     }
 
     pub async fn pair_device(&self, request: PairDeviceRequest) -> PairDeviceResponse {
