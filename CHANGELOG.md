@@ -53,6 +53,13 @@
   changes reaching the iOS app, its build scripts, `ham-ios-ffi`, `ham-core`
   or workspace-wide inputs. It previously ran on every pull request,
   documentation-only ones included, at the macOS billing rate.
+- Updated `rustls` 0.23.41 to 0.23.45, which carries `aws-lc-rs` 1.17.1 to
+  1.18.1, `aws-lc-sys` 0.42.0 to 0.45.0 and `rustls-webpki` 0.103.13 to
+  0.103.15. This closes RUSTSEC-2026-0285, in which TLS 1.3 handshake messages
+  were accepted across encryption level boundaries (CVSS 5.3), and it was the
+  single finding failing `cargo audit` — the other eleven entries in that
+  report are informational warnings that do not fail the check. Lockfile only;
+  no manifest constraint changed.
 
 ## 0.5.1
 
