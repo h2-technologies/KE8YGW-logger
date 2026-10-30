@@ -6,8 +6,9 @@ This repository uses three long-lived channels:
 - `main` is the beta-tester branch. It is updated by promotion pull requests from `dev`.
 - `production` is a release channel represented by immutable `vMAJOR.MINOR.PATCH` tags on commits contained in `main`.
 
-The locked v1 release ships on November 24, 2026 with hosted web, native iOS,
-and Windows/macOS/Linux desktop. v1.1 adds a TUI.
+v1 targets Winter Field Day, Jan 23-24, 2027: a Windows/macOS/Linux desktop
+GUI, a TUI, and a headless node for Raspberry Pi. See
+[the design spec](V1_DESIGN_SPEC.md).
 
 ## Normal Flow
 
@@ -40,13 +41,13 @@ Pushes to `dev` are internal integration builds. Internal artifacts must:
 - never use production credentials or production environments,
 - never overwrite production assets.
 
-The current source-controlled fallback is a GitHub Actions artifact containing internal build metadata. No external internal publishing destination is configured in this repository.
+CI does not publish internal artifacts yet; installers arrive in Milestone 6 of the design spec. No external internal publishing destination is configured in this repository.
 
 ## Promotion Pull Requests To `main`
 
 A normal PR targeting `main` must originate from `dev`. Hotfix branches must use `hotfix/*` and document follow-up synchronization into `dev`.
 
-The beta gate should include complete Rust quality validation, Windows/macOS/Linux validation, Tauri checks, iOS validation, release-mode compilation where needed, packaging validation, container validation, API contract checks, and governance checks.
+The beta gate is the CI workflow (format, Clippy and tests on Windows, macOS and Linux, plus the Raspberry Pi check, reported as `CI result`), plus installer packaging validation once Milestone 6 adds it.
 It should also include the Security scanning workflow so Cargo advisory checks,
 Semgrep SAST, and workflow linting stay current before promotion.
 
@@ -54,11 +55,11 @@ Semgrep SAST, and workflow linting stay current before promotion.
 
 Pushes to `main` represent the beta channel. Beta artifacts must be clearly named with `beta-main`, include the commit SHA and workflow run number, and must not overwrite or resemble production assets.
 
-The current fallback is a GitHub Actions beta manifest artifact. If maintainers want a GitHub prerelease or external beta publishing destination, configure that destination explicitly with a separate `beta` environment and non-production credentials.
+CI does not publish beta artifacts yet. If maintainers want a GitHub prerelease or external beta publishing destination, configure that destination explicitly with a separate `beta` environment and non-production credentials.
 
 ## Production Tags
 
-Production release automation only runs for tags matching `vMAJOR.MINOR.PATCH`. Before building, the workflow verifies:
+No production release automation exists yet; the v0 release workflow was retired with the v0 code. When Milestone 6 adds one, it runs only for tags matching `vMAJOR.MINOR.PATCH` and, before building, verifies:
 
 - the tag format,
 - sufficient git history is available,
@@ -95,8 +96,8 @@ release assets are not retroactively attested by the workflow.
 ## Version Rules
 
 Workspace version lives in `Cargo.toml` under `[workspace.package]`. It is the
-canonical product version for Cargo, Tauri, iOS marketing version, API product
-metadata, channel artifacts, and production tags. Production tags must match
+canonical product version for Cargo, installers, channel artifacts, and
+production tags. Production tags must match
 that version exactly as `v<version>`. Do not create production tags from commits
 not contained in `main`.
 

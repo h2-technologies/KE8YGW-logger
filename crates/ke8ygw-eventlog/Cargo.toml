@@ -1,0 +1,17 @@
+[package]
+name = "ke8ygw-eventlog"
+description = "Per-station hash-chained JSONL logs: append then fsync, verify, torn-write repair, and DAG heads."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+ke8ygw-types.workspace = true
+ke8ygw-hlc.workspace = true
+ke8ygw-identity.workspace = true
+
+[lints]
+workspace = true

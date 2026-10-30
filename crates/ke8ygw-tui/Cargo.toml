@@ -1,0 +1,21 @@
+[package]
+name = "ke8ygw-tui"
+description = "The ke8ygw-tui terminal UI (ratatui). It embeds a node or attaches to a headless one."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "ke8ygw-tui"
+path = "src/main.rs"
+
+[dependencies]
+ke8ygw-types.workspace = true
+ke8ygw-proposal.workspace = true
+ke8ygw-node.workspace = true
+
+[lints]
+workspace = true

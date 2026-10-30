@@ -1,4 +1,0 @@
-module HamIOSFFI {
-  header "ham_ios_ffi.h"
-  export *
-}

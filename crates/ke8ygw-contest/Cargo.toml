@@ -1,0 +1,15 @@
+[package]
+name = "ke8ygw-contest"
+description = "Contest definition loader, rule kinds, the WFD 2027 engine, and the ARRL/RAC section list."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+ke8ygw-types.workspace = true
+
+[lints]
+workspace = true

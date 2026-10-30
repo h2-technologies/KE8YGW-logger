@@ -29,18 +29,3 @@ updates:
         update-types:
           - patch
           - minor
-
-  - package-ecosystem: docker
-    directory: /
-    target-branch: dev
-    schedule:
-      interval: weekly
-      day: monday
-      time: "10:00"
-      timezone: America/New_York
-    open-pull-requests-limit: 5
-    groups:
-      docker-patch-minor:
-        update-types:
-          - patch
-          - minor

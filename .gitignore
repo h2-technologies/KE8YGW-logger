@@ -1,15 +1,6 @@
 /target/
 /dist/
 /artifacts/
-ios/KE8YGWLogger/build/
-ios/KE8YGWLogger/DerivedData/
-**/*.xcuserstate
-**/xcuserdata/
-*.xcresult/
-*.xcarchive/
-*.xcframework/
-*.ipa
-*.dSYM/
 *.pdb
 .env
 .env.*
@@ -19,7 +10,5 @@ ios/KE8YGWLogger/DerivedData/
 *.pfx
 *.key
 *.cer
-*.mobileprovision
-*.provisionprofile
 .idea/
 .vscode/

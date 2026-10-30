@@ -1,0 +1,3 @@
+# The spec's Cabrillo sample ends `END-OF-LOG: ` with the space WFDA requires
+# after the colon, so trailing whitespace is intentional in that file.
+docs/V1_DESIGN_SPEC.md whitespace=-trailing-space

@@ -1,0 +1,22 @@
+[package]
+name = "ke8ygw-relay"
+description = "The optional ke8ygw-relay binary: stores and forwards signed events over WSS and cannot forge them."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "ke8ygw-relay"
+path = "src/main.rs"
+
+[dependencies]
+ke8ygw-types.workspace = true
+ke8ygw-identity.workspace = true
+ke8ygw-eventlog.workspace = true
+ke8ygw-sync.workspace = true
+
+[lints]
+workspace = true

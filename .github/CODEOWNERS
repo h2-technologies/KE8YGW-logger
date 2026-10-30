@@ -4,6 +4,9 @@
 # Repository governance, automation, and templates.
 .github/ @ahadley1124
 .github/workflows/ @ahadley1124
+.semgrep/ @ahadley1124
+scripts/ @ahadley1124
+AGENTS.md @ahadley1124
 CODE_OF_CONDUCT.md @ahadley1124
 CONTRIBUTING.md @ahadley1124
 GOVERNANCE.md @ahadley1124
@@ -11,62 +14,32 @@ LICENSE @ahadley1124
 RELEASE.md @ahadley1124
 SECURITY.md @ahadley1124
 SUPPORT.md @ahadley1124
+deny.toml @ahadley1124
 
 # Cargo workspace metadata.
 Cargo.toml @ahadley1124
 Cargo.lock @ahadley1124
 crates/*/Cargo.toml @ahadley1124
-src-tauri/Cargo.toml @ahadley1124
 
-# Documentation and architecture decisions.
+# The design spec is the master architecture document.
 docs/ @ahadley1124
-docs/adr/ @ahadley1124
+docs/V1_DESIGN_SPEC.md @ahadley1124
 
-# Core business logic and event history.
-crates/ham-core/ @ahadley1124
-crates/ham-core/src/event.rs @ahadley1124
-crates/ham-core/src/store.rs @ahadley1124
-crates/ham-core/src/projection.rs @ahadley1124
-crates/ham-core/src/permissions.rs @ahadley1124
+# The signed log, identity and time: the source of truth.
+crates/ke8ygw-types/ @ahadley1124
+crates/ke8ygw-hlc/ @ahadley1124
+crates/ke8ygw-identity/ @ahadley1124
+crates/ke8ygw-eventlog/ @ahadley1124
+crates/ke8ygw-merge/ @ahadley1124
 
-# Server and API surface.
-crates/ham-server/ @ahadley1124
-crates/ham-core/src/api_contract.rs @ahadley1124
+# Sync, network setup and the relay: authorization-sensitive.
+crates/ke8ygw-sync/ @ahadley1124
+crates/ke8ygw-netsetup/ @ahadley1124
+crates/ke8ygw-relay/ @ahadley1124
 
-# Sync protocol and authorization-sensitive replication.
-crates/ham-core/src/sync/ @ahadley1124
+# Scoring and exports: what gets submitted to WFDA.
+crates/ke8ygw-contest/ @ahadley1124
+crates/ke8ygw-export/ @ahadley1124
 
-# Desktop, Tauri, and native integration.
-crates/ham-core/src/desktop.rs @ahadley1124
-src-tauri/ @ahadley1124
-
-# Client binary, GUI shell, and web frontend.
-crates/ham-client/ @ahadley1124
-crates/ham-core/src/gui/ @ahadley1124
-
-# Provider runtime and credential storage.
-crates/ham-core/src/online.rs @ahadley1124
-crates/ham-core/src/upload.rs @ahadley1124
-crates/ham-core/src/lookup.rs @ahadley1124
-crates/ham-core/src/map.rs @ahadley1124
-crates/ham-core/src/credential.rs @ahadley1124
-docs/security/ @ahadley1124
-docs/plugins/ @ahadley1124
-docs/plugin-map-providers/ @ahadley1124
-
-# Database, support storage, backups, and migrations.
-crates/ham-core/src/support.rs @ahadley1124
-crates/ham-core/src/diagnostics.rs @ahadley1124
-migrations/ @ahadley1124
-
-# Release workflows and packaging.
-.github/workflows/release.yml @ahadley1124
-Dockerfile.server @ahadley1124
-docs/DESKTOP_RELEASE.md @ahadley1124
-docs/HOSTED_WEB_RELEASE.md @ahadley1124
-
-# iOS and FFI planning areas.
-docs/V1_IOS_NATIVE_PLAN.md @ahadley1124
-docs/IOS_APPSTORE_READINESS.md @ahadley1124
-ios/ @ahadley1124
-ffi/ @ahadley1124
+# The architecture boundary test.
+crates/ke8ygw-testkit/tests/layering.rs @ahadley1124

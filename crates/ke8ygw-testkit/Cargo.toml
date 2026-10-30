@@ -1,0 +1,24 @@
+[package]
+name = "ke8ygw-testkit"
+description = "Test support: the simulated network, fake N3FJP and FLRig servers, and fixtures. Also holds the workspace layering test."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+ke8ygw-types.workspace = true
+ke8ygw-proposal.workspace = true
+ke8ygw-hlc.workspace = true
+ke8ygw-identity.workspace = true
+ke8ygw-eventlog.workspace = true
+ke8ygw-merge.workspace = true
+ke8ygw-sync.workspace = true
+ke8ygw-projector.workspace = true
+ke8ygw-contest.workspace = true
+ke8ygw-export.workspace = true
+
+[lints]
+workspace = true

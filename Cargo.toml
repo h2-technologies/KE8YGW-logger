@@ -1,31 +1,57 @@
 [workspace]
+resolver = "3"
 members = [
-    # One shared library: everything identical across platforms.
-    "crates/ham-core",
-    # Two binaries built on it.
-    "crates/ham-server",
-    "crates/ham-client",
-    # Platform shells: the iOS app and the desktop packaging wrapper.
-    "crates/ham-ios-ffi",
-    "src-tauri",
+    "crates/ke8ygw-types",
+    "crates/ke8ygw-hlc",
+    "crates/ke8ygw-identity",
+    "crates/ke8ygw-eventlog",
+    "crates/ke8ygw-merge",
+    "crates/ke8ygw-sync",
+    "crates/ke8ygw-netsetup",
+    "crates/ke8ygw-projector",
+    "crates/ke8ygw-contest",
+    "crates/ke8ygw-export",
+    "crates/ke8ygw-proposal",
+    "crates/ke8ygw-connector-n3fjp",
+    "crates/ke8ygw-connector-flrig",
+    "crates/ke8ygw-node",
+    "crates/ke8ygw-gui",
+    "crates/ke8ygw-tui",
+    "crates/ke8ygw-relay",
+    "crates/ke8ygw-testkit",
 ]
-resolver = "2"
 
 [workspace.package]
-edition = "2021"
+version = "1.0.0-alpha.0"
+edition = "2024"
+rust-version = "1.96"
 license = "MIT"
-version = "0.5.1"
+repository = "https://github.com/h2-technologies/KE8YGW-logger"
+publish = false
 
+# Internal crates. The allowed edges between them are enforced by
+# crates/ke8ygw-testkit/tests/layering.rs; change that table when an edge
+# changes here.
 [workspace.dependencies]
-async-trait = "0.1"
-chrono = { version = "0.4", features = ["serde"] }
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-hmac = "0.12"
-sha2 = "0.10"
-socket2 = { version = "0.6", features = ["all"] }
-surrealdb = { version = "3.2.1", default-features = false, features = ["kv-surrealkv", "kv-mem", "protocol-ws", "rustls"] }
-thiserror = "1"
-ureq = { version = "2.12", default-features = false, features = ["tls"] }
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync"] }
-uuid = { version = "1", features = ["serde", "v4"] }
+ke8ygw-types = { path = "crates/ke8ygw-types" }
+ke8ygw-hlc = { path = "crates/ke8ygw-hlc" }
+ke8ygw-identity = { path = "crates/ke8ygw-identity" }
+ke8ygw-eventlog = { path = "crates/ke8ygw-eventlog" }
+ke8ygw-merge = { path = "crates/ke8ygw-merge" }
+ke8ygw-sync = { path = "crates/ke8ygw-sync" }
+ke8ygw-netsetup = { path = "crates/ke8ygw-netsetup" }
+ke8ygw-projector = { path = "crates/ke8ygw-projector" }
+ke8ygw-contest = { path = "crates/ke8ygw-contest" }
+ke8ygw-export = { path = "crates/ke8ygw-export" }
+ke8ygw-proposal = { path = "crates/ke8ygw-proposal" }
+ke8ygw-connector-n3fjp = { path = "crates/ke8ygw-connector-n3fjp" }
+ke8ygw-connector-flrig = { path = "crates/ke8ygw-connector-flrig" }
+ke8ygw-node = { path = "crates/ke8ygw-node" }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+dbg_macro = "warn"
+todo = "warn"
+unimplemented = "warn"

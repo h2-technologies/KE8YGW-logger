@@ -9,12 +9,12 @@ publicly.
 Use the bug report issue form. Include:
 
 - version, commit, or branch
-- platform and deployment mode
+- platform and component (GUI, TUI, headless node, relay, connector)
 - reproduction steps
 - expected and actual behavior
 - relevant logs with secrets and personal data redacted
 - offline or connectivity state
-- provider involved, if applicable
+- external program involved (N3FJP, FLRig), if applicable
 
 ## Feature Requests
 
@@ -25,41 +25,36 @@ privacy implications, and alternatives considered.
 ## Usage Questions
 
 Usage questions are welcome when they are specific and include what you tried.
-For broad design questions, start with the README, developer guide, release
-plans, and ADRs.
+For broad design questions, start with the README and the design spec in
+`docs/V1_DESIGN_SPEC.md`.
 
 ## Security Reports
 
-Do not file public issues for vulnerabilities, leaked credentials, LoTW
-certificate exposure, signing key exposure, authorization bypasses, sync
-authorization failures, release signing issues, or private user/QSO data leaks.
+Do not file public issues for vulnerabilities, leaked station keys, PINs or
+join tokens, signing key exposure, role or sync authorization bypasses, release
+signing issues, or private operator/QSO data leaks.
 Use the private process in [SECURITY.md](SECURITY.md).
 
-## Provider-Specific Failures
+## Connector Failures
 
-Provider integrations can fail because of credentials, provider availability,
-network conditions, rate limits, terms of service, certificate requirements, or
-unsupported API behavior. Include the provider name, operation, fake/live mode,
-sanitized error code, and whether the same action succeeds outside the app.
+N3FJP and FLRig connectors can fail because the other program is closed, its
+API is disabled, a firewall blocks the port, or its version behaves
+differently. Include the program and version, host and port (not public
+addresses), what the station status panel shows, and whether the program
+works on its own.
 
-Do not include provider passwords, API keys, session tokens, LoTW certificate
-material, or raw provider responses that contain private data.
+## Relay Support
 
-## Self-Hosting Support
+Self-hosted relay issues should include the platform, command, sanitized logs,
+and whether stations on the same LAN sync without the relay.
 
-Self-hosting issues should include sanitized deployment mode, command, platform,
-environment variable names used, logs, and whether the problem reproduces with a
-fresh local test profile.
-
-Do not include real secrets, database files, production backups, personal QSO
-exports, sync tokens, pairing codes, or private URLs.
+Do not include join tokens, station keys, PINs, or private URLs.
 
 ## Unsupported Deployment Modifications
 
-Maintainers may decline support for modified deployments that change security
-boundaries, remove authentication, bypass authorization, alter sync validation,
-replace credential storage, alter release/update metadata, or patch generated
-artifacts without source changes.
+Maintainers may decline support for modified builds that change security
+boundaries, bypass role checks, alter sync or signature validation, or patch
+release artifacts without source changes.
 
 ## Safe Diagnostics
 
@@ -69,14 +64,12 @@ Safe diagnostic information usually includes:
 - operating system and CPU architecture
 - command run
 - sanitized error message or error code
-- provider name without credentials
-- deployment mode
-- whether the system was offline, online, or behind a proxy
+- the connector or component involved
+- whether the station was offline, on a LAN, or online
 
 Redact:
 
-- tokens, passwords, API keys, cookies, authorization headers, and pairing codes
-- LoTW certificates and signing keys
-- real account IDs, private URLs, and production hostnames when sensitive
-- personal QSO records, station profile details, backups, and diagnostic bundles
+- station keys, PINs, join tokens, and signing keys
+- real club logs and operator details beyond callsigns already public
+- private URLs and hostnames when sensitive
 - local filesystem paths that reveal private usernames when not needed
