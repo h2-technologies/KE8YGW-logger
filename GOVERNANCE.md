@@ -43,10 +43,9 @@ repository settings.
 
 ## Security-Sensitive Review
 
-Changes involving authentication, authorization, sessions, account boundaries,
-provider credentials, desktop credential stores, LoTW certificates, backups,
-diagnostics, sync authorization, release signing, auto-update metadata, or
-private user/QSO data require heightened review and documented testing.
+Changes involving station keys, signing, operator PINs, roles, join tokens,
+sync transport, the relay, network setup helpers, release signing, or private
+operator/QSO data require heightened review and documented testing.
 
 Private vulnerability work may happen on private branches, advisories, or other
 private maintainer channels until disclosure is coordinated.
@@ -59,15 +58,15 @@ known migrations, rollback guidance, release notes, and security implications.
 
 ## Architecture Decisions
 
-Architecture decisions are recorded in `docs/adr`. Use the ADR template for
-accepted or proposed decisions that materially affect architecture,
-compatibility, data, security, or release behavior. ADRs should be reviewed by a
-maintainer before acceptance.
+Architecture decisions are recorded in `docs/V1_DESIGN_SPEC.md`, the master
+design spec. A change that materially affects architecture, compatibility,
+data, security, or release behavior updates the spec in the same pull request,
+and a maintainer reviews it before merge.
 
 ## Conflict Resolution
 
 Maintainers should first resolve disagreements through written technical
-discussion in the relevant issue, pull request, or ADR. If consensus is not
+discussion in the relevant issue or pull request. If consensus is not
 clear, the project owner decides. Decisions can be revisited with new evidence,
 but repeated re-litigation without new information may be closed as out of
 scope.

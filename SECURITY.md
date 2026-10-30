@@ -15,8 +15,8 @@ maintainer through an existing private project channel and disclose only that yo
 need to report a security issue until a private channel is agreed. Do not post
 vulnerability details in public issues, discussions, pull requests, or commits.
 
-Do not include secrets, real provider passwords, LoTW certificates, signing
-keys, API tokens, or production QSO data in the first message.
+Do not include station keys, PINs, join tokens, signing keys, or real club
+logs in the first message.
 
 ## What To Include
 
@@ -27,12 +27,11 @@ Helpful reports include:
 - concise vulnerability summary
 - reproduction steps using test data
 - expected and actual security boundary
-- affected accounts, logbooks, providers, or sync peers
+- affected stations, roles, or peers
 - logs or diagnostics with secrets and personal data redacted
 - whether the issue is already public or privately shared elsewhere
 
-Do not submit secrets or real user, station, QSO, provider, backup, diagnostic,
-or sync data in plaintext. Use synthetic test data and redact logs before
+Do not submit secrets or real station, operator, or QSO data in plaintext. Use synthetic test data and redact logs before
 sharing. If maintainers need sensitive artifacts for reproduction, they will
 coordinate a private transfer path first.
 
@@ -45,8 +44,8 @@ release lines that maintainers still distribute.
 | --- | --- |
 | `dev` | Active internal integration branch for security fixes. |
 | `main` | Active beta branch; receives fixes through promotion from `dev`. |
-| Latest `v0.2.x` tag | Supported while maintainers still distribute the beta artifact. |
-| Older experimental tags and internal builds | Guidance only unless maintainers explicitly announce support. |
+| v1 release tags | Supported once published (none yet). |
+| `archive/v0` and v0.x tags | Retired Oct 30, 2026. No security fixes. |
 
 ## Response Timelines
 
@@ -56,7 +55,7 @@ days and then at least every 30 days until the issue is remediated, publicly
 disclosed, or explicitly accepted as residual risk.
 
 Severe issues involving authentication bypass, credential exposure, release
-integrity, or real user/QSO/provider data may be handled on an accelerated
+integrity, or real station, operator, or QSO data may be handled on an accelerated
 timeline.
 
 ## Coordinated Disclosure
@@ -65,9 +64,9 @@ Before remediation, do not publicly disclose:
 
 - exploit steps
 - authentication, authorization, or session bypass details
-- provider credentials, certificate material, tokens, or signing keys
-- user, station, logbook, QSO, backup, diagnostic, or sync data
-- release signing or auto-update weaknesses
+- station keys, PINs, join tokens, or signing keys
+- station, operator, or QSO data
+- release signing weaknesses
 
 After maintainers have remediated or accepted the risk, public disclosure should
 be coordinated through release notes, a security advisory, or a maintainer
@@ -77,16 +76,15 @@ approved issue.
 
 The following areas require extra care and maintainer review:
 
-- Authentication and sessions.
-- Authorization and account boundaries.
-- Provider credentials and credential references.
-- LoTW certificates and signing keys.
-- Backups, diagnostic bundles, report upload, and redaction.
-- Sync authorization, pairing, device identity, and account scoping.
-- Desktop credential stores, including Windows Credential Manager, macOS
-  Keychain, Linux Secret Service, and the explicit insecure development fallback.
+- Station keys, event signing, and hash-chain verification.
+- Operator accounts, admin/checker PINs, and the role matrix enforced at merge.
+- Join tokens, join approval, and station revocation.
+- Sync transport: TLS, certificate pinning to station keys, and handling of
+  malformed or hostile network input.
+- The relay, which must store and forward signed events without being able to
+  forge them.
+- Network setup helpers that change operating-system settings.
 - Release signing, installer packaging, and release artifact provenance.
-- Auto-update metadata and update channels.
-- User, station, logbook, QSO, provider, and support-data exposure.
+- Station, operator, and QSO data exposure.
 
 Security work should avoid broad refactors unless required for the fix.

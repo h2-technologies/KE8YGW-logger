@@ -1,6 +1,29 @@
 # Changelog
 
-## Unreleased
+## Unreleased (v1 line)
+
+### Changed
+
+- **Breaking: the v0.5.1 codebase was retired.** The hosted server, client,
+  iOS app, Tauri wrapper and their docs were deleted and replaced by the v1
+  workspace from [the design spec](docs/V1_DESIGN_SPEC.md): a peer-to-peer,
+  offline-first logger for Winter Field Day 2027. The old code is on the
+  `archive/v0` branch. Nothing from v0 is compatible with v1.
+- Milestone 0: 18-crate Rust workspace at version `1.0.0-alpha.0`, with the
+  `ke8ygw`, `ke8ygw-node`, `ke8ygw-tui` and `ke8ygw-relay` binaries answering
+  `--version` and `--help`.
+- A layering test (`crates/ke8ygw-testkit/tests/layering.rs`) enforces the
+  allowed dependencies between crates and that only `ke8ygw-netsetup` may use
+  `unsafe`.
+- CI runs format, Clippy and tests on Linux, Windows and macOS, plus an
+  aarch64 Linux check for the Raspberry Pi. The iOS and release workflows were
+  removed with the code they built.
+
+## v0 history (archived on `archive/v0`)
+
+The entries below describe the retired v0 line.
+
+### v0 Unreleased
 
 ### Changed
 

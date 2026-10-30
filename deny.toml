@@ -3,29 +3,9 @@ all-features = false
 no-default-features = false
 
 [advisories]
-ignore = [
-    { id = "RUSTSEC-2023-0071", reason = "No patched rsa release exists. Transitive through surrealdb-core -> jsonwebtoken; review by 2026-10-18 or when SurrealDB/jsonwebtoken migrates away from RustCrypto rsa." },
-    { id = "RUSTSEC-2023-0089", reason = "Informational unmaintained advisory. Target-specific transitive dependency from SurrealDB; review by 2026-10-18 or the next SurrealDB 3.x milestone." },
-    { id = "RUSTSEC-2024-0411", reason = "Informational GTK3/Wayland binding advisory from Tauri Linux desktop stack; no patched GTK3 line exists. Review by 2026-10-18 with Tauri/wry Linux backend updates." },
-    { id = "RUSTSEC-2024-0412", reason = "Informational GTK3 binding advisory from Tauri Linux desktop stack; no patched GTK3 line exists. Review by 2026-10-18 with Tauri/wry Linux backend updates." },
-    { id = "RUSTSEC-2024-0413", reason = "Informational GTK3 binding advisory from Tauri Linux desktop stack; no patched GTK3 line exists. Review by 2026-10-18 with Tauri/wry Linux backend updates." },
-    { id = "RUSTSEC-2024-0414", reason = "Informational GTK3/X11 binding advisory from Tauri Linux desktop stack; no patched GTK3 line exists. Review by 2026-10-18 with Tauri/wry Linux backend updates." },
-    { id = "RUSTSEC-2024-0415", reason = "Informational GTK3 binding advisory from Tauri Linux desktop stack; no patched GTK3 line exists. Review by 2026-10-18 with Tauri/wry Linux backend updates." },
-    { id = "RUSTSEC-2024-0416", reason = "Informational GTK3 binding advisory from Tauri Linux desktop stack; no patched GTK3 line exists. Review by 2026-10-18 with Tauri/wry Linux backend updates." },
-    { id = "RUSTSEC-2024-0417", reason = "Informational GTK3/X11 binding advisory from Tauri Linux desktop stack; no patched GTK3 line exists. Review by 2026-10-18 with Tauri/wry Linux backend updates." },
-    { id = "RUSTSEC-2024-0418", reason = "Informational GTK3 binding advisory from Tauri Linux desktop stack; no patched GTK3 line exists. Review by 2026-10-18 with Tauri/wry Linux backend updates." },
-    { id = "RUSTSEC-2024-0419", reason = "Informational GTK3 macro advisory from Tauri Linux desktop stack; no patched GTK3 line exists. Review by 2026-10-18 with Tauri/wry Linux backend updates." },
-    { id = "RUSTSEC-2024-0420", reason = "Informational GTK3 sys advisory from Tauri Linux desktop stack; no patched GTK3 line exists. Review by 2026-10-18 with Tauri/wry Linux backend updates." },
-    { id = "RUSTSEC-2024-0429", reason = "glib VariantStrIter unsoundness is transitive through Tauri GTK3 Linux backend; no repository code calls VariantStrIter. Review by 2026-10-18 with Tauri/wry Linux backend updates." },
-    { id = "RUSTSEC-2024-0370", reason = "Informational proc-macro-error advisory inherited through GTK3 macros; build-time only. Review by 2026-10-18 with Tauri/wry Linux backend updates." },
-    { id = "RUSTSEC-2025-0075", reason = "Informational rust-unic advisory inherited through Tauri urlpattern; no direct repository usage. Review by 2026-10-18 with Tauri urlpattern updates." },
-    { id = "RUSTSEC-2025-0080", reason = "Informational rust-unic advisory inherited through Tauri urlpattern; no direct repository usage. Review by 2026-10-18 with Tauri urlpattern updates." },
-    { id = "RUSTSEC-2025-0081", reason = "Informational rust-unic advisory inherited through Tauri urlpattern; no direct repository usage. Review by 2026-10-18 with Tauri urlpattern updates." },
-    { id = "RUSTSEC-2025-0098", reason = "Informational rust-unic advisory inherited through Tauri urlpattern; no direct repository usage. Review by 2026-10-18 with Tauri urlpattern updates." },
-    { id = "RUSTSEC-2025-0100", reason = "Informational rust-unic advisory inherited through Tauri urlpattern; no direct repository usage. Review by 2026-10-18 with Tauri urlpattern updates." },
-    { id = "RUSTSEC-2025-0141", reason = "Informational bincode advisory inherited through surrealdb-core -> surrealmx. Review by 2026-10-18 or the next SurrealDB 3.x milestone." },
-    { id = "RUSTSEC-2026-0235", reason = "rkyv 0.7 out-of-bounds archive validation. Reaches Cargo.lock only as an unenabled optional dependency of rust_decimal (via surrealdb-core/surrealdb-types/surrealdb-protocol/revision), so it is not in the build graph and is never compiled; cargo audit flags it because it scans the lockfile. The fix is rkyv >=0.8.17 and rust_decimal 1.42.1 is the latest release, so no upgrade path exists yet. Review by 2026-10-18 or when rust_decimal moves to rkyv 0.8." },
-]
+# Every exception needs a reason and a review date. The v0.5.1 exceptions went
+# with the old dependency tree; see the archive/v0 branch for their history.
+ignore = []
 
 [licenses]
 confidence-threshold = 0.8

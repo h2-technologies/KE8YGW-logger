@@ -16,14 +16,12 @@ permissions: {}
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
   # Superseded pull request runs are safe to cancel. Branch pushes are not: each
-  # commit on dev and main needs its own verdict, and a production tag is only
-  # released when the tagged commit has a completed successful main CI run.
+  # commit on dev and main needs its own verdict.
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CARGO_INCREMENTAL: "0"
-  CARGO_PROFILE_DEV_DEBUG: "1"
-  CARGO_PROFILE_TEST_DEBUG: "1"
+  CARGO_TERM_COLOR: always
 
 jobs:
   promotion-policy:
@@ -35,10 +33,7 @@ jobs:
     steps:
       # Default (merge ref) checkout. A pull_request event already runs the
       # workflow file from the merge commit, so pinning the policy script to
-      # the base commit would add no protection the workflow itself lacks,
-      # while breaking every pull request that edits the policy — including
-      # the one that introduces it. A pull request that rewrites its own gate
-      # is caught in review, like any other workflow change.
+      # the base commit would add no protection the workflow itself lacks.
       - name: Checkout
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
@@ -54,213 +49,24 @@ jobs:
           PR_BODY: ${{ github.event.pull_request.body }}
         run: bash scripts/check-promotion-policy.sh
 
-  changes:
-    name: Detect changed areas
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    outputs:
-      rust: ${{ steps.detect.outputs.rust }}
-      api: ${{ steps.detect.outputs.api }}
-      governance: ${{ steps.detect.outputs.governance }}
-      docs_links: ${{ steps.detect.outputs.docs_links }}
-      version: ${{ steps.detect.outputs.version }}
-      container: ${{ steps.detect.outputs.container }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
-        with:
-          fetch-depth: 0
-
-      - name: Classify changed files
-        id: detect
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
-            base="${{ github.event.pull_request.base.sha }}"
-            head="${{ github.event.pull_request.head.sha }}"
-          else
-            base="${{ github.event.before }}"
-            head="${{ github.sha }}"
-            if [[ "$base" =~ ^0+$ ]]; then
-              base="$(git rev-parse "$head^" 2>/dev/null || true)"
-            fi
-          fi
-
-          if [[ -z "${base:-}" ]]; then
-            files="$(git ls-files)"
-          else
-            files="$(git diff --name-only "$base" "$head")"
-          fi
-
-          rust=false
-          api=false
-          governance=false
-          docs_links=false
-          version=false
-          container=false
-          all_expensive=false
-
-          while IFS= read -r file; do
-            [[ -z "$file" ]] && continue
-            if [[ "$file" == .github/workflows/* || "$file" == Cargo.toml || "$file" == Cargo.lock || "$file" == rust-toolchain.toml || "$file" == rust-toolchain ]]; then
-              all_expensive=true
-            fi
-            if [[ "$file" == *.md ]]; then
-              docs_links=true
-            fi
-            if [[ "$file" == openapi/* || "$file" == scripts/check_api_contract.py || "$file" == crates/ham-core/src/api_contract.rs || "$file" == crates/ham-server/* ]]; then
-              api=true
-              rust=true
-            fi
-            if [[ "$file" == *.md || "$file" == .github/CODEOWNERS || "$file" == .github/ISSUE_TEMPLATE/* || "$file" == .github/PULL_REQUEST_TEMPLATE.md || "$file" == scripts/governance-check.ps1 ]]; then
-              governance=true
-            fi
-            if [[ "$file" == Cargo.toml || "$file" == crates/*/Cargo.toml || "$file" == src-tauri/Cargo.toml || "$file" == src-tauri/tauri.conf.json || "$file" == ios/KE8YGWLogger/KE8YGWLogger.xcodeproj/project.pbxproj || "$file" == ios/KE8YGWLogger/KE8YGWLogger/Resources/Info.plist || "$file" == openapi/api-v1.yaml || "$file" == openapi/api-v1-baseline.json || "$file" == .github/workflows/ci.yml || "$file" == .github/workflows/release.yml || "$file" == scripts/check_versions.py || "$file" == RELEASE.md || "$file" == docs/BRANCHING_AND_RELEASE_CHANNELS.md ]]; then
-              version=true
-            fi
-            if [[ "$file" == crates/* || "$file" == src-tauri/* ]]; then
-              rust=true
-            fi
-            if [[ "$file" == Dockerfile.server || "$file" == .dockerignore || "$file" == crates/ham-server/* || "$file" == crates/ham-core/* || "$file" == Cargo.toml || "$file" == Cargo.lock || "$file" == rust-toolchain.toml ]]; then
-              container=true
-            fi
-          done <<< "$files"
-
-          if [[ "$all_expensive" == true ]]; then
-            rust=true
-            api=true
-            governance=true
-            docs_links=true
-            version=true
-            container=true
-          fi
-
-          {
-            echo "rust=$rust"
-            echo "api=$api"
-            echo "governance=$governance"
-            echo "docs_links=$docs_links"
-            echo "version=$version"
-            echo "container=$container"
-          } >> "$GITHUB_OUTPUT"
-
-          printf '%s\n' "$files"
-
-  preflight:
-    name: Ubuntu preflight and policy
-    runs-on: ubuntu-latest
-    needs: changes
-    permissions:
-      contents: read
-    steps:
-      - name: Checkout
-        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
-
-      - name: Install Rust
-        if: needs.changes.outputs.rust == 'true'
-        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
-        with:
-          toolchain: 1.96.0
-          components: rustfmt, clippy
-
-      - name: Cache Cargo
-        if: needs.changes.outputs.rust == 'true'
-        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
-        with:
-          shared-key: linux-debug
-          save-if: ${{ github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/main' }}
-
-      - name: Format
-        if: needs.changes.outputs.rust == 'true'
-        run: cargo fmt --all -- --check
-
-      - name: API contract
-        if: needs.changes.outputs.api == 'true'
-        run: python scripts/check_api_contract.py
-
-      - name: Version consistency
-        if: needs.changes.outputs.version == 'true'
-        run: python scripts/check_versions.py
-
-      - name: Documentation links
-        if: needs.changes.outputs.docs_links == 'true'
-        run: python scripts/check_docs_links.py
-
-      - name: Governance
-        if: needs.changes.outputs.governance == 'true'
-        shell: pwsh
-        run: ./scripts/governance-check.ps1
-
-      # Every scope, not just the ones checked in this job: container-validation
-      # is a separate job, so claiming nothing was selected while it runs would
-      # be wrong.
-      - name: No expensive work selected
-        if: needs.changes.outputs.rust != 'true' && needs.changes.outputs.api != 'true' && needs.changes.outputs.governance != 'true' && needs.changes.outputs.docs_links != 'true' && needs.changes.outputs.version != 'true' && needs.changes.outputs.container != 'true'
-        run: echo "Only files outside CI validation scopes changed."
-
-  rust-quality:
-    name: Ubuntu Rust quality
-    runs-on: ubuntu-latest
-    needs:
-      - changes
-      - preflight
-    if: needs.changes.outputs.rust == 'true'
-    permissions:
-      contents: read
-    steps:
-      - name: Checkout
-        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
-        with:
-          toolchain: 1.96.0
-          components: rustfmt, clippy
-
-      - name: Install Linux desktop dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libwebkit2gtk-4.1-dev \
-            libayatana-appindicator3-dev \
-            librsvg2-dev \
-            patchelf
-
-      - name: Cache Cargo
-        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
-        with:
-          shared-key: linux-debug
-          save-if: ${{ github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/main' }}
-
-      - name: Clippy
-        run: cargo clippy --locked --workspace --all-targets -- -D warnings
-
-      - name: Test
-        run: cargo test --locked --workspace
-
-      - name: JavaScript syntax
-        run: node --check crates/ham-client/web/app.js
-
-  platform-validation:
-    name: Platform validation (${{ matrix.os }})
+  # Spec section 3: every crate is built and tested on Linux, Windows and macOS.
+  rust:
+    name: Rust (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    needs:
-      - changes
-      - preflight
-    if: needs.changes.outputs.rust == 'true'
     permissions:
       contents: read
     strategy:
       fail-fast: false
       matrix:
         os:
+          - ubuntu-latest
           - windows-latest
           - macos-latest
     steps:
       - name: Checkout
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          persist-credentials: false
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
@@ -274,184 +80,70 @@ jobs:
           shared-key: ${{ runner.os }}-debug
           save-if: ${{ github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/main' }}
 
-      - name: Compile platform binaries
-        run: cargo build --locked -p ham-client --bin ham-client -p ham-server --bin ham-server
+      - name: Format
+        if: runner.os == 'Linux'
+        run: cargo fmt --all -- --check
 
-      - name: Platform credential tests
-        run: cargo test --locked -p ham-core credential
+      - name: Clippy
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings
 
-      - name: Runtime log and filesystem tests
-        run: cargo test --locked -p ham-core diagnostics
+      - name: Test
+        run: cargo test --locked --workspace
 
-  # The Tauri runtime crate `ke8ygw-logger-desktop` is a workspace member, so
-  # `cargo clippy --locked --workspace --all-targets` in rust-quality already
-  # checks it, and clippy is a superset of `cargo check`. Every path that set
-  # the old `tauri` flag (src-tauri/, crates/ham-client/, crates/ham-core/)
-  # also sets `rust`, so rust-quality ran on every commit the separate Tauri
-  # job did. It was a second ~2 minute job re-proving an already-proven fact.
-
-  container-validation:
-    name: Server container
+  # The club runs headless nodes on Raspberry Pi. A cross-target check catches
+  # target-specific breakage without needing an ARM runner or a cross linker.
+  raspberry-pi:
+    name: Raspberry Pi (aarch64 Linux) check
     runs-on: ubuntu-latest
-    # Deliberately not gated on preflight: this job builds a container image and
-    # shares nothing with the formatting, docs and governance checks there, so
-    # waiting on them only delayed the longest job in the workflow.
-    needs: changes
-    if: needs.changes.outputs.container == 'true'
     permissions:
       contents: read
     steps:
       - name: Checkout
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
-
-      - name: Set up Buildx
-        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
-
-      # The image is built through Buildx with the Actions cache attached, so
-      # the dependency-compile layer in Dockerfile.server is restored instead of
-      # rebuilt. Without it every run compiled the full dependency graph from
-      # scratch, which was 8m57s of a 9m42s CI run.
-      - name: Build image
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
-          context: .
-          file: Dockerfile.server
-          tags: ham-server:ci
-          load: true
-          cache-from: type=gha,scope=ham-server
-          cache-to: type=gha,scope=ham-server,mode=max
+          persist-credentials: false
 
-      - name: Smoke image
-        shell: bash
-        run: |
-          set -euo pipefail
-          container_id="$(docker run -d ham-server:ci)"
-          trap 'docker rm -f "$container_id" >/dev/null 2>&1 || true' EXIT
-          for _ in {1..10}; do
-            if docker logs "$container_id" 2>&1 | grep -q "ham-server listening"; then
-              exit 0
-            fi
-            if ! docker inspect -f '{{.State.Running}}' "$container_id" | grep -q true; then
-              docker logs "$container_id" >&2
-              exit 1
-            fi
-            sleep 1
-          done
-          docker logs "$container_id" >&2
-          exit 1
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
+        with:
+          toolchain: 1.96.0
+          targets: aarch64-unknown-linux-gnu
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          shared-key: linux-aarch64-check
+          save-if: ${{ github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/main' }}
+
+      - name: Check
+        run: cargo check --locked --workspace --all-targets --target aarch64-unknown-linux-gnu
 
   ci-result:
     name: CI result
     if: always()
     runs-on: ubuntu-latest
     needs:
-      - changes
       - promotion-policy
-      - preflight
-      - rust-quality
-      - platform-validation
-      - container-validation
+      - rust
+      - raspberry-pi
     steps:
       - name: Check required job results
         shell: bash
         env:
-          CHANGES_RESULT: ${{ needs.changes.result }}
           PROMOTION_RESULT: ${{ needs.promotion-policy.result }}
-          PREFLIGHT_RESULT: ${{ needs.preflight.result }}
-          RUST_RESULT: ${{ needs.rust-quality.result }}
-          PLATFORM_RESULT: ${{ needs.platform-validation.result }}
-          CONTAINER_RESULT: ${{ needs.container-validation.result }}
+          RUST_RESULT: ${{ needs.rust.result }}
+          PI_RESULT: ${{ needs.raspberry-pi.result }}
         run: |
           set -euo pipefail
-          # Change detection decides which validation jobs run at all, so it is
-          # the one job that must actually succeed. Skipping it is not a pass:
-          # if it fails, every job downstream of it is skipped and treating
-          # those skips as success would report a green CI that validated
-          # nothing.
-          if [[ "$CHANGES_RESULT" != "success" ]]; then
-            echo "Change detection did not succeed: $CHANGES_RESULT" >&2
-            echo "No validation job can be trusted, so CI cannot pass." >&2
-            exit 1
-          fi
-
-          for result in "$PROMOTION_RESULT" "$PREFLIGHT_RESULT" "$RUST_RESULT" "$PLATFORM_RESULT" "$CONTAINER_RESULT"; do
-            case "$result" in
-              success|skipped) ;;
-              *)
-                echo "A required CI job did not pass: $result" >&2
-                exit 1
-                ;;
-            esac
+          # The promotion policy only runs for pull requests into main, so it
+          # may be skipped. The Rust and Pi jobs always run and must pass.
+          case "$PROMOTION_RESULT" in
+            success|skipped) ;;
+            *) echo "Main promotion policy did not pass: $PROMOTION_RESULT" >&2; exit 1 ;;
+          esac
+          for result in "$RUST_RESULT" "$PI_RESULT"; do
+            if [[ "$result" != "success" ]]; then
+              echo "A required CI job did not pass: $result" >&2
+              exit 1
+            fi
           done
-
-  internal-artifact:
-    name: Internal dev artifact
-    if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
-    needs: ci-result
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      - name: Checkout
-        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
-
-      - name: Write internal build manifest
-        shell: bash
-        run: |
-          set -euo pipefail
-          version="$(python scripts/check_versions.py --print-version)"
-          mkdir -p dist/internal
-          artifact="internal-dev-${version}-${GITHUB_SHA}-${GITHUB_RUN_NUMBER}"
-          {
-            echo "channel=internal-dev"
-            echo "version=${version}"
-            echo "sha=${GITHUB_SHA}"
-            echo "run_number=${GITHUB_RUN_NUMBER}"
-            echo "run_id=${GITHUB_RUN_ID}"
-            echo "artifact=${artifact}"
-            echo "note=Internal validation artifact only. Not a beta or production release."
-          } > dist/internal/BUILD-MANIFEST.txt
-          echo "ARTIFACT_NAME=${artifact}" >> "$GITHUB_ENV"
-
-      - name: Upload internal build manifest
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: ${{ env.ARTIFACT_NAME }}
-          path: dist/internal
-          retention-days: 7
-
-  beta-artifact:
-    name: Beta build manifest
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: ci-result
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      - name: Checkout
-        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
-
-      - name: Write beta build manifest
-        shell: bash
-        run: |
-          set -euo pipefail
-          version="$(python scripts/check_versions.py --print-version)"
-          mkdir -p dist/beta
-          artifact="beta-main-${version}-${GITHUB_SHA}-${GITHUB_RUN_NUMBER}"
-          {
-            echo "channel=beta-main"
-            echo "version=${version}"
-            echo "sha=${GITHUB_SHA}"
-            echo "run_number=${GITHUB_RUN_NUMBER}"
-            echo "run_id=${GITHUB_RUN_ID}"
-            echo "artifact=${artifact}"
-            echo "note=Beta tester artifact metadata only. Not a production release."
-          } > dist/beta/BUILD-MANIFEST.txt
-          echo "ARTIFACT_NAME=${artifact}" >> "$GITHUB_ENV"
-
-      - name: Upload beta build manifest
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: ${{ env.ARTIFACT_NAME }}
-          path: dist/beta
-          retention-days: 30

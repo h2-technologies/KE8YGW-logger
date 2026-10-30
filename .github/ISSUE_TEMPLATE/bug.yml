@@ -19,22 +19,24 @@ body:
         - Windows
         - macOS
         - Linux
-        - Web
-        - iOS
+        - Raspberry Pi
         - Other
     validations:
       required: true
   - type: dropdown
     id: deployment-mode
     attributes:
-      label: Deployment mode
+      label: Component
       options:
-        - Local GUI
-        - Tauri desktop
-        - Hosted web
-        - Self-hosted server
-        - Sync server
-        - CLI
+        - Desktop GUI (ke8ygw)
+        - CLI subcommands
+        - Terminal UI (ke8ygw-tui)
+        - Headless node (ke8ygw-node)
+        - Relay (ke8ygw-relay)
+        - N3FJP connector
+        - FLRig connector
+        - Sync between stations
+        - Scoring or exports
         - Other
     validations:
       required: true
@@ -84,7 +86,7 @@ body:
   - type: input
     id: provider
     attributes:
-      label: Provider involved
-      description: If applicable, name the provider or service. Do not include credentials.
+      label: External program involved
+      description: If applicable, name the program and its version (for example N3FJP Winter Field Day Contest Log or FLRig). Do not include credentials.
     validations:
       required: false

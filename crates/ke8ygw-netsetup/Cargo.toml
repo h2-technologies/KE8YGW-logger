@@ -1,0 +1,20 @@
+[package]
+name = "ke8ygw-netsetup"
+description = "The per-OS 'Host a station network' helper: NetworkManager on Linux, Mobile Hotspot on Windows, written steps on macOS."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+# The only crate allowed `unsafe`, and only in its OS-specific modules,
+# which opt in with `#[allow(unsafe_code)]`. It cannot inherit the
+# workspace lints because those forbid `unsafe` outright.
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+dbg_macro = "warn"
+todo = "warn"
+unimplemented = "warn"
